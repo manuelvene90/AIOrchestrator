@@ -129,6 +129,13 @@ and the app executes within ~2 s, confirming with a `FROM app` entry on your `ow
   new member (e.g. `imp-2`), brief it in `imp-2/channel.md`.
 - **Retire an implementer:** first tell it to wrap up in its channel and wait for its final report;
   then drop `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>"}`.
+- **Close the WHOLE orchestration — yours to do when the work is done.** When the owner says
+  "close the session", "we're done", "our work is completed" or anything equivalent, they mean the
+  ENTIRE orchestration — you included, card removed, topic deleted — never just the implementers.
+  Post any last one-liner first (the app kills your terminal seconds after the request), then drop
+  `{"action":"close-orchestration","orchId":"$ARGUMENTS"}`. The app closes every session, deletes
+  the Telegram topic, and keeps the folder as audit trail. Only close when the work is genuinely
+  concluded (merged or explicitly parked by the owner).
 - **Do-Not-Disturb:** if the owner asks you (by text) to stop texting them, drop
   `{"action":"set-telegram-muted","muted":true}` — this pauses ALL app→owner Telegram traffic
   suite-wide until the owner texts again (auto-unmute) or re-enables. Keep working normally:
