@@ -43,12 +43,18 @@ public static class SpawnCommand_Builder
         return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", IMPLEMENTER_TAB_COLOR, repoPath, script);
     }
 
-    /// <summary>generalHomeFolder is the general supervisor's PERMANENT working directory (its CLAUDE.md home).</summary>
+    /// <summary>
+    /// generalHomeFolder is the general supervisor's PERMANENT working directory (its CLAUDE.md home).
+    /// The role command travels WITH --continue: a resumed conversation would otherwise sit idle
+    /// (no greeting, no watcher armed) — the boot sequence is idempotent by design, so re-running
+    /// it on every launch is exactly right. The fallback covers the first-ever run (nothing to
+    /// continue → non-zero exit).
+    /// </summary>
     public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
     {
         var modelPart = Build_ModelPart(model);
         var claudeCommand =
-            $"claude{modelPart} --continue; " +
+            $"claude{modelPart} --continue '/general-supervisor'; " +
             $"if ($LASTEXITCODE -ne 0) {{ claude{modelPart} '/general-supervisor' }}";
 
         var script = Build_SessionScript("general", "general", "general", claudeCommand, pidFilePath);
@@ -90,11 +96,14 @@ public static class SpawnCommand_Builder
         // with ';' explodes into one broken tab per statement. Base64 contains nothing wt parses.
         var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
+        // --suppressApplicationTitle keeps OUR title: Claude Code retitles the terminal once it
+        // runs, which would break the app's title-based "Show session" focusing.
         List<string> arguments =
         [
             "-w", "new",
             "new-tab",
             "--title", tabTitle,
+            "--suppressApplicationTitle",
             "--tabColor", tabColor,
             "-d", workingDirectory,
             "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedScript,

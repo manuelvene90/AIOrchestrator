@@ -66,8 +66,19 @@ public class SpawnCommandBuilderTests
         Assert.Contains(SpawnCommand_Builder.GENERAL_TAB_COLOR, command.Arguments);
 
         var script = SpawnCommand_Builder.Decode_SessionScript(command);
-        Assert.Contains("claude --model sonnet --continue", script);
-        Assert.Contains("claude --model sonnet '/general-supervisor'", script);
+
+        // The role command rides WITH --continue: a resumed conversation must still boot
+        // (greet + re-arm watcher), not sit idle. The bare fallback covers the first-ever run.
+        Assert.Contains("claude --model sonnet --continue '/general-supervisor'", script);
+        Assert.Contains("{ claude --model sonnet '/general-supervisor' }", script);
+    }
+
+    [Fact]
+    public void Build_AnyCommand_SuppressesApplicationTitle_SoShowSessionFocusingWorks()
+    {
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE);
+
+        Assert.Contains("--suppressApplicationTitle", command.Arguments);
     }
 
     [Fact]

@@ -32,8 +32,42 @@ public static class TerminalWindow_Focuser
     [DllImport("user32.dll")]
     static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    const uint WM_CLOSE = 0x0010;
+
     /// <summary>Returns false when no visible window carries the fragment in its title.</summary>
     public static bool Try_Focus_ByTitleFragment(string titleFragment)
+    {
+        var foundHandle = Find_WindowHandle_ByTitleFragment(titleFragment);
+
+        if (foundHandle == IntPtr.Zero)
+            return false;
+
+        if (IsIconic(foundHandle))
+            ShowWindow(foundHandle, SW_RESTORE);
+
+        return SetForegroundWindow(foundHandle);
+    }
+
+    /// <summary>
+    /// Closes a session's terminal window. Windows Terminal keeps a pane open ("press enter to
+    /// restart") after its process is KILLED rather than exiting gracefully — so killing a session
+    /// tree must be followed by closing its window. With the process already dead, WM_CLOSE closes
+    /// the window silently.
+    /// </summary>
+    public static bool Try_Close_ByTitleFragment(string titleFragment)
+    {
+        var foundHandle = Find_WindowHandle_ByTitleFragment(titleFragment);
+
+        if (foundHandle == IntPtr.Zero)
+            return false;
+
+        return PostMessage(foundHandle, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    static IntPtr Find_WindowHandle_ByTitleFragment(string titleFragment)
     {
         var foundHandle = IntPtr.Zero;
 
@@ -54,12 +88,6 @@ public static class TerminalWindow_Focuser
             return false;
         }, IntPtr.Zero);
 
-        if (foundHandle == IntPtr.Zero)
-            return false;
-
-        if (IsIconic(foundHandle))
-            ShowWindow(foundHandle, SW_RESTORE);
-
-        return SetForegroundWindow(foundHandle);
+        return foundHandle;
     }
 }

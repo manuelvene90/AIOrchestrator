@@ -111,7 +111,9 @@
                                 HorizontalAlignment="Right" Click="ClearLogButton_Click"/>
                     </DockPanel>
                     <ListBox x:Name="ActivityLogListBox" Margin="6,0,6,6"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             MouseDoubleClick="ActivityLogListBox_MouseDoubleClick"
+                             ToolTip="Double-click a line to copy it">
                         <ListBox.ItemTemplate>
                             <DataTemplate DataType="{x:Type views:LogRowView}">
                                 <StackPanel Orientation="Horizontal" Margin="0,1">

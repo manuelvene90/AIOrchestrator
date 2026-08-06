@@ -113,6 +113,21 @@ public partial class MainWindow : Window
         _logRows.Clear();
     }
 
+    void ActivityLogListBox_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (ActivityLogListBox.SelectedItem is not LogRowView row)
+            return;
+
+        try
+        {
+            Clipboard.SetText($"{row.TimeText}  {row.Message}");
+        }
+        catch (Exception ex)
+        {
+            Add_LogRow(LogLevels.Warning, $"Clipboard copy failed: {ex.Message}");
+        }
+    }
+
     void Refresh_Orchestrations()
     {
         try

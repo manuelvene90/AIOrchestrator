@@ -84,6 +84,12 @@ public partial class App : Application
 
             if (!Directory.Exists(kitCommandsFolder))
                 log.Log_Warning("", $"Kit commands folder not found at {kitCommandsFolder} — role commands NOT installed");
+
+            var settingsFile = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
+
+            if (StatusLineSettings_Wirer.Ensure_Wired(settingsFile, statuslineTargetFile))
+                log.Log_Info("", $"Status line wired into {settingsFile} (previous file backed up); active for newly spawned sessions");
         }
         catch (Exception ex)
         {
