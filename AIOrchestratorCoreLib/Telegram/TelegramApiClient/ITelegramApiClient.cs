@@ -14,6 +14,12 @@ public interface ITelegramApiClient
     /// <summary>Deletes a topic AND its messages — closed orchestrations disappear from Telegram entirely.</summary>
     Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Telegram auto-pins the "topic created" service message on bot-created topics — the owner
+    /// wants no pins. Unpins everything in the topic and best-effort deletes the service message.
+    /// </summary>
+    Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken);
+
     Task Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken);
     Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken);
 

@@ -14,14 +14,18 @@ public class MirrorTextFormatterTests
     }
 
     [Fact]
-    public void Should_Mirror_ImplementerSpokeTraffic_NeverReachesTelegram()
+    public void Should_Mirror_ImplementerSpokeTraffic_OnlyThePresenceOneLiner()
     {
         // The briefs/reports between supervisor and implementers made topics unreadable —
-        // only the owner channel is texted; spokes live in the app.
+        // the ONLY spoke entry the owner sees is the presence line ("imp-1 online").
         var spoke = DiscoveredChannel_Factory.Create_ForImplementer("crm-2", "imp-1", "unused");
 
         Assert.False(MirrorText_Formatter.Should_Mirror(spoke, Build_Entry(ChannelAuthors.Supervisor, "TASK: fix crash", "long brief")));
         Assert.False(MirrorText_Formatter.Should_Mirror(spoke, Build_Entry(ChannelAuthors.Implementer, "report", "long report")));
+
+        var presence = Build_Entry(ChannelAuthors.Implementer, "imp-1 online, awaiting brief", "details");
+        Assert.True(MirrorText_Formatter.Should_Mirror(spoke, presence));
+        Assert.Equal("🔵 imp-1: online", MirrorText_Formatter.Format(spoke, presence));
     }
 
     [Fact]

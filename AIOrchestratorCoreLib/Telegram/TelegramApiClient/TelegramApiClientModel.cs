@@ -62,6 +62,38 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("deleteForumTopic", payload, cancellationToken);
     }
 
+    public async Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken)
+    {
+        var unpinPayload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_thread_id"] = messageThreadId,
+        };
+
+        await Post_Async("unpinAllForumTopicMessages", unpinPayload, cancellationToken);
+
+        try
+        {
+            // The service message's id equals the thread id; deleting it removes the header
+            // entirely. Cosmetic — the unpin above is the actual fix, so failures are ignored.
+            var deletePayload = new JsonObject
+            {
+                ["chat_id"] = _supergroupChatId,
+                ["message_id"] = messageThreadId,
+            };
+
+            await Post_Async("deleteMessage", deletePayload, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Requires can_delete_messages; without it the unpinned service message just stays.
+        }
+    }
+
     public async Task Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
     {
         var payload = new JsonObject

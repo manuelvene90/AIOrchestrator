@@ -17,10 +17,10 @@ public static class MirrorText_Formatter
 
     public static bool Should_Mirror(IDiscoveredChannel channel, IChannelEntry entry)
     {
-        // Implementer spokes never reach Telegram — that traffic made the topics unreadable.
-        // The owner reads it in the app when they want it.
+        // Implementer spokes: ONLY the presence one-liner ("imp-1 online") reaches Telegram —
+        // briefs and reports made the topics unreadable; the owner reads those in the app.
         if (!channel.IsOwnerChannel)
-            return false;
+            return entry.Author == ChannelAuthors.Implementer && Is_PresenceEntry(channel, entry);
 
         // Owner entries came FROM Telegram (or the owner's own terminal) — never echoed back.
         return entry.Author != ChannelAuthors.Owner;
@@ -28,6 +28,9 @@ public static class MirrorText_Formatter
 
     public static string Format(IDiscoveredChannel channel, IChannelEntry entry)
     {
+        if (!channel.IsOwnerChannel)
+            return $"🔵 {channel.SpokeName}: online";
+
         return entry.Author switch
         {
             // App entries: the subject IS the message ("orchestration 'crm-2' closed"); the body
@@ -47,6 +50,12 @@ public static class MirrorText_Formatter
     public static bool Is_StatusEntry(IChannelEntry entry)
     {
         return entry.Subject.StartsWith(STATUS_SUBJECT_PREFIX, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The implementer boot entry ("imp-1 online[, …]") — the one spoke entry the owner sees.</summary>
+    static bool Is_PresenceEntry(IDiscoveredChannel channel, IChannelEntry entry)
+    {
+        return entry.Subject.Trim().StartsWith($"{channel.SpokeName} online", StringComparison.OrdinalIgnoreCase);
     }
 
     static string Pick_Content(IChannelEntry entry)

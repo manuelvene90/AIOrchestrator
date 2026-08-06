@@ -28,8 +28,9 @@ repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
 1. Read your channel top to bottom. **You may be resuming a previous session** — the channel is
    the full history. An unanswered trailing `FROM supervisor` brief is your task; an entry that
    already has your reply is closed.
-2. Append a SHORT entry: you are online, and either what you understood your current task to be,
-   or that you await a brief.
+2. Append a SHORT entry with subject EXACTLY `<your-member-id> online` (e.g. `imp-1 online`) —
+   this exact subject is the one spoke entry mirrored to the owner's phone as `🔵 imp-1: online`.
+   Put what you understood your current task to be (or that you await a brief) in the body.
 3. If you have a task: NOW read the repo's mandated docs, then work it. Otherwise arm the watcher
    (below) and end your turn.
 

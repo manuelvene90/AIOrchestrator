@@ -389,6 +389,7 @@ internal sealed class BridgeEngineModel(
             var topicId = await _telegramClient.Create_ForumTopic_Async(channel.OrchId, cancellationToken);
             _store.Set_TelegramTopicId(channel.OrchId, topicId);
             _log.Log_Info(channel.OrchId, $"Telegram topic created (thread id {topicId})");
+            Remove_TopicCreationPin_FireAndForget(channel.OrchId, topicId);
             return topicId;
         }
         catch (OperationCanceledException)
@@ -444,6 +445,24 @@ internal sealed class BridgeEngineModel(
                 Delete_RequestFile(request.SourceFilePath);
             }
         }
+    }
+
+    void Remove_TopicCreationPin_FireAndForget(string orchId, long topicId)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var client = _telegramClient
+                    ?? throw new Exception($"Telegram client vanished while unpinning topic {topicId} of '{orchId}'");
+
+                await client.Remove_TopicCreationPin_Async(topicId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(orchId, $"Topic pin removal failed for topic {topicId}: {ex.Message}");
+            }
+        });
     }
 
     void Rename_TelegramTopic_FireAndForget(string orchId, long topicId, string newName)
