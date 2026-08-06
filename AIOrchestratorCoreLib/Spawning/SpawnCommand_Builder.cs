@@ -1,3 +1,4 @@
+using System.Text;
 using AIOrchestratorCoreLib.Spawning.SpawnCommand;
 
 namespace AIOrchestratorCoreLib.Spawning;
@@ -83,6 +84,12 @@ public static class SpawnCommand_Builder
     {
         // '-w new' gives every session its OWN terminal window: the window title equals the session
         // title, which is what lets the app's "Show session" button find and foreground it.
+        //
+        // The script goes through -EncodedCommand (base64), NEVER as raw -Command text: wt.exe
+        // treats ';' in its command line as a TAB SEPARATOR, so a raw PowerShell script chained
+        // with ';' explodes into one broken tab per statement. Base64 contains nothing wt parses.
+        var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+
         List<string> arguments =
         [
             "-w", "new",
@@ -90,10 +97,17 @@ public static class SpawnCommand_Builder
             "--title", tabTitle,
             "--tabColor", tabColor,
             "-d", workingDirectory,
-            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script,
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedScript,
         ];
 
         return SpawnCommand_Factory.Create("wt.exe", arguments, workingDirectory);
+    }
+
+    /// <summary>Decodes the -EncodedCommand payload back to the PowerShell script (used by tests).</summary>
+    public static string Decode_SessionScript(ISpawnCommand command)
+    {
+        var encoded = command.Arguments[command.Arguments.Count - 1];
+        return Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
     }
 
     static string Build_SessionScript(string role, string orchId, string memberId, string claudeCommand, string pidFilePath)

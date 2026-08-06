@@ -14,15 +14,18 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Logging;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using System.Collections.ObjectModel;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
-using LoggingLib;
 
 namespace AIOrchestrator;
 
 public partial class MainWindow : Window
 {
     const int REFRESH_INTERVAL_SECONDS = 5;
+    const int MAX_LOG_ROWS = 500;
+
+    readonly ObservableCollection<LogRowView> _logRows = [];
 
     readonly ISupervisionPaths _paths;
     readonly IOrchestratorConfig _config;
@@ -48,6 +51,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         ReposListBox.ItemsSource = config.Repos;
+        ActivityLogListBox.ItemsSource = _logRows;
         RootPathText.Text = paths.Root;
         TelegramStatusText.Text = config.Is_TelegramConfigured()
             ? "Telegram: mirror + remote input active"
@@ -71,15 +75,42 @@ public partial class MainWindow : Window
     void On_LogEntry(AIOrchestratorCoreLib.Logging.OrchestrationLogEntry.IOrchestrationLogEntry entry)
     {
         var prefix = entry.OrchId.Length == 0 ? "" : $"[{entry.OrchId}] ";
-        var tag = entry.Level switch
-        {
-            LogLevels.Info => Tags.none,
-            LogLevels.Warning => Tags.WARNING,
-            LogLevels.Error => Tags.ERROR,
-            _ => Tags.none,
-        };
+        Add_LogRow(entry.Level, $"{prefix}{entry.Message}");
+    }
 
-        ActivityLogger.Log_FireAndForget(tag, $"{prefix}{entry.Message}");
+    /// <summary>Thread-safe: log events arrive from the bridge's background threads.</summary>
+    void Add_LogRow(LogLevels level, string message)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            var row = new LogRowView
+            {
+                TimeText = DateTime.Now.ToString("HH:mm:ss"),
+                Message = message,
+                MessageBrush = Find_Brush(LogBrush_KeyFor(level)),
+            };
+
+            _logRows.Insert(0, row);
+
+            if (_logRows.Count > MAX_LOG_ROWS)
+                _logRows.RemoveAt(_logRows.Count - 1);
+        });
+    }
+
+    static string LogBrush_KeyFor(LogLevels level)
+    {
+        return level switch
+        {
+            LogLevels.Info => "TextPrimary",
+            LogLevels.Warning => "StateAwaitingReview",
+            LogLevels.Error => "StateBlocked",
+            _ => throw new Exception($"Unhandled LogLevels: {level}"),
+        };
+    }
+
+    void ClearLogButton_Click(object sender, RoutedEventArgs e)
+    {
+        _logRows.Clear();
     }
 
     void Refresh_Orchestrations()
@@ -99,7 +130,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ActivityLogger.Log_FireAndForget(Tags.ERROR, $"UI refresh failed: {ex.Message}");
+            Add_LogRow(LogLevels.Error, $"UI refresh failed: {ex.Message}");
         }
     }
 
@@ -404,7 +435,7 @@ public partial class MainWindow : Window
         var focused = AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(row.FocusTitleFragment);
 
         if (!focused)
-            ActivityLogger.Log_FireAndForget(Tags.WARNING, $"No terminal window found titled '{row.FocusTitleFragment}' — is the session running?");
+            Add_LogRow(LogLevels.Warning, $"No terminal window found titled '{row.FocusTitleFragment}' — is the session running?");
     }
 
     void AddImplementerButton_Click(object sender, RoutedEventArgs e)

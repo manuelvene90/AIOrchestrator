@@ -17,11 +17,20 @@ public class SpawnCommandBuilderTests
         Assert.Contains(SpawnCommand_Builder.SUPERVISOR_TAB_COLOR, command.Arguments);
         Assert.Contains(@"C:\repos\arb", command.Arguments);
 
-        var script = command.Arguments[command.Arguments.Count - 1];
+        var script = SpawnCommand_Builder.Decode_SessionScript(command);
         Assert.Contains("$env:AIORCH_ROLE='supervisor'", script);
         Assert.Contains("$env:AIORCH_ID='arb-fix'", script);
         Assert.Contains($"Set-Content -LiteralPath '{PID_FILE}' -Value $PID", script);
         Assert.Contains("claude --model opus '/supervisor arb-fix'", script);
+    }
+
+    [Fact]
+    public void Build_AnyCommand_NeverPassesRawScriptText_WtSplitsTabsOnSemicolons()
+    {
+        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", PID_FILE);
+
+        Assert.Contains("-EncodedCommand", command.Arguments);
+        Assert.DoesNotContain(command.Arguments, argument => argument.Contains(';', StringComparison.Ordinal));
     }
 
     [Fact]
@@ -42,7 +51,7 @@ public class SpawnCommandBuilderTests
         Assert.Contains("IMP-2 · arb-fix", command.Arguments);
         Assert.Contains(SpawnCommand_Builder.IMPLEMENTER_TAB_COLOR, command.Arguments);
 
-        var script = command.Arguments[command.Arguments.Count - 1];
+        var script = SpawnCommand_Builder.Decode_SessionScript(command);
         Assert.Contains("$env:AIORCH_MEMBER='imp-2'", script);
         Assert.Contains("claude '/implementer arb-fix/imp-2'", script);
         Assert.DoesNotContain("--model", script);
@@ -51,12 +60,12 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForGeneralSupervisor_ResumesPreviousConversationWithRoleCommandFallback()
     {
-        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision", "sonnet", PID_FILE);
+        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", PID_FILE);
 
         Assert.Contains("GENERAL", command.Arguments);
         Assert.Contains(SpawnCommand_Builder.GENERAL_TAB_COLOR, command.Arguments);
 
-        var script = command.Arguments[command.Arguments.Count - 1];
+        var script = SpawnCommand_Builder.Decode_SessionScript(command);
         Assert.Contains("claude --model sonnet --continue", script);
         Assert.Contains("claude --model sonnet '/general-supervisor'", script);
     }

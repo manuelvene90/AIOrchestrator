@@ -10,10 +10,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AIOrchestratorCoreLib\AIOrchestratorCoreLib.csproj" />
-    <!-- Suite shared libs: requires the Da-Vinci-Fintech-Suite repo checked out as a sibling
-         of this repo's parent (source\repos\manuelvene90\Da-Vinci-Fintech-Suite).
-         The installer and CLAUDE.md document this convention. -->
-    <ProjectReference Include="..\..\manuelvene90\Da-Vinci-Fintech-Suite\00_Shared\LoggingLib\LoggingLib.csproj" />
+    <!-- Suite LoggingLib was referenced in v1 for its ListBoxLoggerSimple log panel, then retired:
+         the control is hard-designed for light theme (white root, pastel per-tag rows) and cannot
+         be dark-themed from outside. The app now has its own dark log view (Views/LogRowView +
+         MainWindow's ActivityLogListBox). No suite references remain — the repo builds standalone. -->
   </ItemGroup>
 
 </Project>
