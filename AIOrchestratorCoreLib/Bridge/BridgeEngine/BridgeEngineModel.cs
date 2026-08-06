@@ -884,8 +884,10 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                // Double tick = aggregation done, message actually handed to the Sup.
+                // Double tick = aggregation done, message actually handed to the Sup — followed
+                // immediately by the "thinking" line so the owner knows the Sup has it now.
                 await _telegramClient.Send_Message_Async(target.ThreadId, "✓✓", cancellationToken);
+                await _telegramClient.Send_Message_Async(target.ThreadId, "🔴 Sup: thinking…", cancellationToken);
             }
             catch (OperationCanceledException)
             {
