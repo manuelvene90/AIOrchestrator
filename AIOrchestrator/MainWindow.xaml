@@ -107,13 +107,14 @@
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top">
                         <TextBlock Text="ACTIVITY LOG" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock x:Name="CopiedFeedbackText" Text="✓ copied" Foreground="#4ADE80" FontSize="10" FontWeight="SemiBold"
+                                   Margin="8,10,0,0" Visibility="Collapsed"/>
                         <Button Content="Clear" FontSize="10" Padding="8,2" Margin="0,8,12,0"
                                 HorizontalAlignment="Right" Click="ClearLogButton_Click"/>
                     </DockPanel>
                     <ListBox x:Name="ActivityLogListBox" Margin="6,0,6,6"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             MouseDoubleClick="ActivityLogListBox_MouseDoubleClick"
-                             ToolTip="Double-click a line to copy it">
+                             MouseDoubleClick="ActivityLogListBox_MouseDoubleClick">
                         <ListBox.ItemTemplate>
                             <DataTemplate DataType="{x:Type views:LogRowView}">
                                 <StackPanel Orientation="Horizontal" Margin="0,1">

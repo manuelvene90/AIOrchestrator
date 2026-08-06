@@ -8,6 +8,7 @@ using AIOrchestrator.Views;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
@@ -28,7 +29,7 @@ public partial class MainWindow : Window
     readonly ObservableCollection<LogRowView> _logRows = [];
 
     readonly ISupervisionPaths _paths;
-    readonly IOrchestratorConfig _config;
+    readonly IOrchestratorConfigProvider _configProvider;
     readonly IOrchestrationSessionStore _store;
     readonly IOrchestrationLauncher _launcher;
     readonly IBridgeEngine _engine;
@@ -36,26 +37,27 @@ public partial class MainWindow : Window
 
     public MainWindow(
         ISupervisionPaths paths,
-        IOrchestratorConfig config,
+        IOrchestratorConfigProvider configProvider,
         IOrchestrationSessionStore store,
         IOrchestrationLauncher launcher,
         IBridgeEngine engine,
         IOrchestrationLog log)
     {
         _paths = paths;
-        _config = config;
+        _configProvider = configProvider;
         _store = store;
         _launcher = launcher;
         _engine = engine;
 
         InitializeComponent();
 
-        ReposListBox.ItemsSource = config.Repos;
         ActivityLogListBox.ItemsSource = _logRows;
         RootPathText.Text = paths.Root;
-        TelegramStatusText.Text = config.Is_TelegramConfigured()
+        TelegramStatusText.Text = configProvider.Get_Current().Is_TelegramConfigured()
             ? "Telegram: mirror + remote input active"
-            : "Telegram: not configured (file-only mode) — run install.ps1 to set it up";
+            : "Telegram: not configured (file-only mode) — set it up in ⚙ Settings, then restart";
+
+        Refresh_ReposList();
 
         log.EntryLogged += On_LogEntry;
         engine.OrchestrationActivity += _ => Dispatcher.BeginInvoke(Refresh_Orchestrations);
@@ -121,6 +123,7 @@ public partial class MainWindow : Window
         try
         {
             Clipboard.SetText($"{row.TimeText}  {row.Message}");
+            Show_CopiedFeedback();
         }
         catch (Exception ex)
         {
@@ -128,10 +131,38 @@ public partial class MainWindow : Window
         }
     }
 
+    void Show_CopiedFeedback()
+    {
+        CopiedFeedbackText.Visibility = Visibility.Visible;
+
+        var hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        hideTimer.Tick += (_, _) =>
+        {
+            hideTimer.Stop();
+            CopiedFeedbackText.Visibility = Visibility.Collapsed;
+        };
+        hideTimer.Start();
+    }
+
+    /// <summary>
+    /// config.json changes at RUNTIME (the general supervisor seeds repos, Settings saves) —
+    /// the provider returns the same instance until the file changes, so reference equality is
+    /// the cheap change check.
+    /// </summary>
+    void Refresh_ReposList()
+    {
+        var currentRepos = _configProvider.Get_Current().Repos;
+
+        if (!ReferenceEquals(ReposListBox.ItemsSource, currentRepos))
+            ReposListBox.ItemsSource = currentRepos;
+    }
+
     void Refresh_Orchestrations()
     {
         try
         {
+            Refresh_ReposList();
+
             List<OrchestrationCardView> cards = [];
 
             var generalCard = Build_GeneralCard_OrNull();
@@ -430,8 +461,9 @@ public partial class MainWindow : Window
 
     void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        var settingsWindow = new SettingsWindow(_paths, _config) { Owner = this };
+        var settingsWindow = new SettingsWindow(_paths, _configProvider.Get_Current()) { Owner = this };
         settingsWindow.ShowDialog();
+        Refresh_ReposList();
     }
 
     void MuteTelegramCheckBox_Changed(object sender, RoutedEventArgs e)

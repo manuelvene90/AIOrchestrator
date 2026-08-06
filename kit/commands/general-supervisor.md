@@ -89,7 +89,10 @@ One level up, `~/.claude/supervision/`:
 
 ## Your powers (request files the app executes within ~2 s)
 
-Drop a `.json` file in `~/.claude/supervision/.requests/` (any unique filename):
+Drop a `.json` file in `~/.claude/supervision/.requests/` (any unique filename). **The `action`
+string must be EXACTLY one of the documented ones — a retry reuses the SAME action** (an invented
+variant like "start-orchestration-retry" is rejected as malformed; the app's log states the
+rejection reason). The app reads `config.json` LIVE, so a request right after you edit it works:
 
 - **Start an orchestration** — when the owner says "I need to work on <something>":
   1. Resolve <something> to the configured repo (colloquial mapping is YOUR job, see above).

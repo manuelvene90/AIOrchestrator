@@ -1,6 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
-using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -20,7 +20,7 @@ namespace AIOrchestratorCoreLib.Bridge.BridgeEngine;
 
 internal sealed class BridgeEngineModel(
     ISupervisionPaths paths,
-    IOrchestratorConfig config,
+    IOrchestratorConfigProvider configProvider,
     IOrchestrationSessionStore store,
     IOrchestrationLauncher launcher,
     IOrchestrationLog log,
@@ -38,7 +38,7 @@ internal sealed class BridgeEngineModel(
     const string GLOBAL_ORCH_ID = "";
 
     readonly ISupervisionPaths _paths = paths;
-    readonly IOrchestratorConfig _config = config;
+    readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
     readonly IOrchestrationLauncher _launcher = launcher;
     readonly IOrchestrationLog _log = log;
@@ -362,10 +362,10 @@ internal sealed class BridgeEngineModel(
     {
         var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
 
-        foreach (var malformedFile in pending.MalformedFiles)
+        foreach (var malformedRequest in pending.MalformedRequests)
         {
-            _log.Log_Warning(GLOBAL_ORCH_ID, $"Malformed request file deleted: {malformedFile}");
-            Delete_RequestFile(malformedFile);
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Malformed request file deleted — {malformedRequest.Reason}: {malformedRequest.FilePath}");
+            Delete_RequestFile(malformedRequest.FilePath);
         }
 
         Process_StartRequests(pending);
@@ -390,11 +390,14 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                var repo = RepoQuery_Resolver.Resolve_OrNull(request.RepoQuery, _config.Repos);
+                // Config is read LIVE: the general supervisor seeds/extends config.json at
+                // runtime, and a startup snapshot here already caused "Known repos: ." failures.
+                var repos = _configProvider.Get_Current().Repos;
+                var repo = RepoQuery_Resolver.Resolve_OrNull(request.RepoQuery, repos);
 
                 if (repo == null)
                 {
-                    var known = string.Join(", ", _config.Repos.Select(r => r.Name));
+                    var known = string.Join(", ", repos.Select(r => r.Name));
                     Append_GeneralAppEntry(
                         $"start-orchestration FAILED: '{request.RepoQuery}'",
                         $"Could not resolve repo '{request.RepoQuery}' to exactly one configured repo. Known repos: {known}. Ask the owner which one is meant, then drop a new request.");
@@ -558,10 +561,12 @@ internal sealed class BridgeEngineModel(
         var client = _telegramClient
             ?? throw new Exception("Inbound loop started without a Telegram client");
 
-        var supergroupChatId = _config.TelegramSupergroupChatId
+        var startupConfig = _configProvider.Get_Current();
+
+        var supergroupChatId = startupConfig.TelegramSupergroupChatId
             ?? throw new Exception("Inbound loop started without a supergroup chat id");
 
-        var ownerUserId = _config.TelegramOwnerUserId
+        var ownerUserId = startupConfig.TelegramOwnerUserId
             ?? throw new Exception("Inbound loop started without an owner user id");
 
         var backoffMilliseconds = INBOUND_ERROR_BACKOFF_START_MILLISECONDS;

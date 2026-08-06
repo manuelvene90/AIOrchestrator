@@ -1,5 +1,5 @@
 using AIOrchestratorCoreLib.Channels;
-using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions;
@@ -13,13 +13,13 @@ namespace AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 
 internal sealed class OrchestrationLauncherModel(
     ISupervisionPaths paths,
-    IOrchestratorConfig config,
+    IOrchestratorConfigProvider configProvider,
     IOrchestrationSessionStore store,
     ISessionSpawner spawner,
     IOrchestrationLog log) : IOrchestrationLauncher
 {
     readonly ISupervisionPaths _paths = paths;
-    readonly IOrchestratorConfig _config = config;
+    readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
     readonly ISessionSpawner _spawner = spawner;
     readonly IOrchestrationLog _log = log;
@@ -52,7 +52,7 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
 
         var command = SpawnCommand_Builder.Build_ForSupervisor(
-            orchId, session.RepoPath, _config.SupervisorModel, _paths.Get_SupervisorPidFile(orchId));
+            orchId, session.RepoPath, _configProvider.Get_Current().SupervisorModel, _paths.Get_SupervisorPidFile(orchId));
 
         var pid = _spawner.Spawn(command);
 
@@ -65,7 +65,7 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
 
         var command = SpawnCommand_Builder.Build_ForImplementer(
-            orchId, memberId, session.RepoPath, _config.ImplementerModel, _paths.Get_ImplementerPidFile(orchId, memberId));
+            orchId, memberId, session.RepoPath, _configProvider.Get_Current().ImplementerModel, _paths.Get_ImplementerPidFile(orchId, memberId));
 
         var pid = _spawner.Spawn(command);
 
@@ -81,7 +81,7 @@ internal sealed class OrchestrationLauncherModel(
         // CLAUDE.md (persistent, machine-portable knowledge) auto-loads there, and --continue
         // resumes unambiguously because only general sessions ever run in it.
         var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(
-            _paths.GeneralFolder, _config.GeneralSupervisorModel, _paths.GeneralPidFile);
+            _paths.GeneralFolder, _configProvider.Get_Current().GeneralSupervisorModel, _paths.GeneralPidFile);
 
         _spawner.Spawn(command);
 

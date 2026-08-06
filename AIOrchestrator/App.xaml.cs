@@ -1,7 +1,7 @@
 using System.IO;
 using System.Windows;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
-using AIOrchestratorCoreLib.Configuration;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Kit;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
@@ -44,20 +44,20 @@ public partial class App : Application
 
         var paths = SupervisionPaths_Factory.Create_Default();
         _paths = paths;
-        var config = OrchestratorConfig_Loader.Load_OrEmpty(paths);
+        var configProvider = OrchestratorConfigProvider_Factory.Create(paths);
         var log = OrchestrationLog_Factory.Create(paths);
 
         Ensure_KitAssetsInstalled(paths, log);
         var store = OrchestrationSessionStore_Factory.Create(paths);
         var spawner = SessionSpawner_Factory.Create();
-        var launcher = OrchestrationLauncher_Factory.Create(paths, config, store, spawner, log);
-        var engine = BridgeEngine_Factory.Create(paths, config, store, launcher, log);
+        var launcher = OrchestrationLauncher_Factory.Create(paths, configProvider, store, spawner, log);
+        var engine = BridgeEngine_Factory.Create(paths, configProvider, store, launcher, log);
 
         _engineCancellation = new CancellationTokenSource();
         var engineToken = _engineCancellation.Token;
         _ = Task.Run(() => engine.Run_Async(engineToken), engineToken);
 
-        var mainWindow = new MainWindow(paths, config, store, launcher, engine, log);
+        var mainWindow = new MainWindow(paths, configProvider, store, launcher, engine, log);
         mainWindow.Show();
     }
 

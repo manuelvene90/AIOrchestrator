@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Spawning.SessionSpawner;
@@ -10,11 +10,11 @@ public static class OrchestrationLauncher_Factory
 {
     public static IOrchestrationLauncher Create(
         ISupervisionPaths paths,
-        IOrchestratorConfig config,
+        IOrchestratorConfigProvider configProvider,
         IOrchestrationSessionStore store,
         ISessionSpawner spawner,
         IOrchestrationLog log)
     {
-        return new OrchestrationLauncherModel(paths, config, store, spawner, log);
+        return new OrchestrationLauncherModel(paths, configProvider, store, spawner, log);
     }
 }

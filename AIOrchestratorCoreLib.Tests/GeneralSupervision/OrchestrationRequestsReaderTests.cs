@@ -48,21 +48,30 @@ public class OrchestrationRequestsReaderTests : IDisposable
         var closeOrch = Assert.Single(pending.CloseOrchestrationRequests);
         Assert.Equal("old-orch", closeOrch.OrchId);
 
-        Assert.Empty(pending.MalformedFiles);
+        Assert.Empty(pending.MalformedRequests);
     }
 
     [Fact]
-    public void Read_Pending_MalformedFiles_ReportedNotThrown()
+    public void Read_Pending_MalformedFiles_ReportedWithReasonsNotThrown()
     {
         Write_Request("bad1.json", "not json at all");
         Write_Request("bad2.json", """{"action":"start-orchestration"}""");
-        Write_Request("bad3.json", """{"action":"unknown-action","orchId":"x"}""");
+        Write_Request("bad3.json", """{"action":"start-orchestration-retry","orchId":"x","repo":"crm"}""");
         Write_Request("good.json", """{"action":"add-implementer","orchId":"x"}""");
 
         var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
 
-        Assert.Equal(3, pending.MalformedFiles.Count);
+        Assert.Equal(3, pending.MalformedRequests.Count);
         Assert.Single(pending.AddImplementerRequests);
+
+        // Agents hand-write these files — the reason must name what was wrong (e.g. an invented
+        // retry action, the exact live failure that motivated this).
+        var unknownAction = pending.MalformedRequests.Single(m => m.FilePath.EndsWith("bad3.json"));
+        Assert.Contains("unknown action 'start-orchestration-retry'", unknownAction.Reason);
+        Assert.Contains("retries must reuse the SAME action", unknownAction.Reason);
+
+        var missingRepo = pending.MalformedRequests.Single(m => m.FilePath.EndsWith("bad2.json"));
+        Assert.Contains("missing 'repo'", missingRepo.Reason);
     }
 
     [Fact]
@@ -73,6 +82,6 @@ public class OrchestrationRequestsReaderTests : IDisposable
         var pending = OrchestrationRequests_Reader.Read_Pending(emptyPaths);
 
         Assert.Empty(pending.StartRequests);
-        Assert.Empty(pending.MalformedFiles);
+        Assert.Empty(pending.MalformedRequests);
     }
 }
