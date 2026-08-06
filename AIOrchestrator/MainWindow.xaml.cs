@@ -7,6 +7,7 @@ using System.Windows.Threading;
 using AIOrchestrator.Views;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Configuration;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
@@ -25,6 +26,9 @@ public partial class MainWindow : Window
 {
     const int REFRESH_INTERVAL_SECONDS = 5;
     const int MAX_LOG_ROWS = 500;
+
+    /// <summary>Open + closed cards combined — open ones always show, newest-closed fill the rest.</summary>
+    const int MAX_SESSION_CARDS = 15;
 
     readonly ObservableCollection<LogRowView> _logRows = [];
 
@@ -212,8 +216,18 @@ public partial class MainWindow : Window
             if (generalCard != null)
                 cards.Add(generalCard);
 
-            // Closed orchestrations disappear (folders stay on disk as audit trail).
-            foreach (var session in _store.Load_All().Where(s => s.ClosedUtc == null).OrderByDescending(s => s.CreatedUtc))
+            // Open cards first; recently-closed ones stay visible (disabled) until the combined
+            // list would exceed the cap — the oldest closed drop off little by little.
+            var allSessions = _store.Load_All();
+            var openSessions = allSessions.Where(s => s.ClosedUtc == null).OrderByDescending(s => s.CreatedUtc).ToList();
+            var closedSessions = allSessions.Where(s => s.ClosedUtc != null).OrderByDescending(s => s.ClosedUtc).ToList();
+
+            foreach (var session in openSessions)
+                cards.Add(Build_Card(session));
+
+            var closedSlots = Math.Max(0, MAX_SESSION_CARDS - openSessions.Count);
+
+            foreach (var session in closedSessions.Take(closedSlots))
                 cards.Add(Build_Card(session));
 
             OrchestrationsItemsControl.ItemsSource = cards;
@@ -258,12 +272,14 @@ public partial class MainWindow : Window
     {
         List<MemberRowView> rows = [Build_SupervisorRow(session)];
 
-        // Closed implementers disappear from the card (their channel stays on disk).
-        foreach (var member in session.Members.Where(m => m.ClosedUtc == null))
-            rows.Add(Build_MemberRow(session, member.MemberId));
+        // Closed implementers keep their row (disabled, no Show button) — their channel and usage
+        // stay on disk, so the chips and totals remain meaningful.
+        foreach (var member in session.Members)
+            rows.Add(Build_MemberRow(session, member));
 
         var openImplementers = session.Members.Count(m => m.ClosedUtc == null);
-        var age = DateTime.UtcNow - session.CreatedUtc;
+        var age = (session.ClosedUtc ?? DateTime.UtcNow) - session.CreatedUtc;
+        var ranWord = session.ClosedUtc == null ? "running" : "ran";
         var orchIdSuffix = session.DisplayName == null ? "" : $"· {session.OrchId} ";
 
         return new OrchestrationCardView
@@ -271,9 +287,9 @@ public partial class MainWindow : Window
             OrchId = session.OrchId,
             Title = session.DisplayName ?? session.OrchId,
             RepoName = session.RepoName,
-            SummaryText = $"{orchIdSuffix}· {openImplementers} implementer{(openImplementers == 1 ? "" : "s")} · running {Describe_Duration(age)}{Build_UsageTotalText(session)}",
+            SummaryText = $"{orchIdSuffix}· {openImplementers} implementer{(openImplementers == 1 ? "" : "s")} · {ranWord} {Describe_Duration(age)}{Build_UsageTotalText(session)}",
             IsClosed = session.ClosedUtc != null,
-            ClosedLabel = session.ClosedUtc == null ? "" : "CLOSED",
+            ClosedLabel = session.ClosedUtc == null ? "" : $"CLOSED {session.ClosedUtc.Value.ToLocalTime():dd/MM HH:mm}",
             CardOpacity = session.ClosedUtc == null ? 1.0 : 0.5,
             Members = rows,
         };
@@ -293,6 +309,7 @@ public partial class MainWindow : Window
             LastActivityText = lastActivity,
             FocusTitleFragment = $"SUP · {session.OrchId}",
             DetailText = Build_SupervisorCostText(session.OrchId),
+            ShowButtonVisibility = session.ClosedUtc == null ? Visibility.Visible : Visibility.Collapsed,
         };
     }
 
@@ -305,23 +322,29 @@ public partial class MainWindow : Window
         return cost == null ? "" : $"usage ≈${cost.Value:F2} equiv (not billed)";
     }
 
-    MemberRowView Build_MemberRow(IOrchestrationSession session, string memberId)
+    MemberRowView Build_MemberRow(IOrchestrationSession session, AIOrchestratorCoreLib.Sessions.OrchestrationMember.IOrchestrationMember member)
     {
+        var memberId = member.MemberId;
         var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, memberId);
 
         var entries = ChannelEntry_Parser.Parse_All(Read_FileText_Safe(channelFile));
         var state = MemberState_Resolver.Resolve(entries);
         var usageFile = _paths.Get_ImplementerPidFile(session.OrchId, memberId).Replace(".pid", ".usage.json");
 
+        var isClosed = member.ClosedUtc != null || session.ClosedUtc != null;
+
         return new MemberRowView
         {
             MemberLabel = memberId,
             RoleBrush = Find_Brush("AccentImplementer"),
-            StateText = Describe_State(state),
-            StateBrush = Find_Brush(Brush_KeyFor(state)),
+            StateText = isClosed ? "closed" : Describe_State(state),
+            StateBrush = isClosed ? Find_Brush("StateClosed") : Find_Brush(Brush_KeyFor(state)),
             LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",
             DetailText = Build_MemberDetailText(entries, usageFile),
             FocusTitleFragment = $"{memberId.ToUpperInvariant()} · {session.OrchId}",
+            ShowButtonVisibility = isClosed ? Visibility.Collapsed : Visibility.Visible,
+            // A closed member inside a still-open card dims on its own; closed cards dim as a whole.
+            RowOpacity = member.ClosedUtc != null && session.ClosedUtc == null ? 0.55 : 1.0,
         };
     }
 
@@ -665,5 +688,114 @@ public partial class MainWindow : Window
             : _paths.Get_OrchestrationFolder(card.OrchId);
 
         Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
+    }
+
+    // ---- Repo list drag/drop reorder (persisted into config.json's repos array) ----
+
+    IRepoEntry? _draggedRepo;
+    System.Windows.Point _dragStartPoint;
+
+    void ReposListBox_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        _dragStartPoint = e.GetPosition(null);
+        _draggedRepo = Get_RepoAtPosition_OrNull(e.GetPosition(ReposListBox));
+    }
+
+    void ReposListBox_PreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed || _draggedRepo == null)
+            return;
+
+        var moved = e.GetPosition(null) - _dragStartPoint;
+
+        var isRealDrag = Math.Abs(moved.X) >= SystemParameters.MinimumHorizontalDragDistance
+            || Math.Abs(moved.Y) >= SystemParameters.MinimumVerticalDragDistance;
+
+        if (!isRealDrag)
+            return;
+
+        // The dragged repo travels in the _draggedRepo field (the DataObject only carries the
+        // name for completeness) — Drop fires synchronously inside this call.
+        DragDrop.DoDragDrop(ReposListBox, _draggedRepo.Name, DragDropEffects.Move);
+        _draggedRepo = null;
+    }
+
+    void ReposListBox_Drop(object sender, DragEventArgs e)
+    {
+        var draggedRepo = _draggedRepo;
+
+        if (draggedRepo == null)
+            return;
+
+        try
+        {
+            var targetRepo = Get_RepoAtPosition_OrNull(e.GetPosition(ReposListBox));
+
+            if (ReferenceEquals(targetRepo, draggedRepo))
+                return;
+
+            List<IRepoEntry> reordered = [.. _configProvider.Get_Current().Repos];
+            reordered.Remove(draggedRepo);
+
+            // No row under the drop point = dropped in the empty space below the list → the end.
+            var insertIndex = targetRepo == null
+                ? reordered.Count
+                : Math.Min(reordered.Count, Find_RepoIndex(reordered, targetRepo, e.GetPosition(ReposListBox)));
+
+            reordered.Insert(insertIndex, draggedRepo);
+
+            ConfigRepos_Reorderer.Persist_Order(_paths, reordered.Select(r => r.Name).ToList());
+            Refresh_ReposList();
+        }
+        catch (Exception ex)
+        {
+            Add_LogRow(LogLevels.Warning, $"Repo reorder failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Dropping on a row's upper half inserts before it, lower half after it.</summary>
+    int Find_RepoIndex(IReadOnlyList<IRepoEntry> reposWithoutDragged, IRepoEntry targetRepo, System.Windows.Point dropPosition)
+    {
+        var index = 0;
+
+        for (var i = 0; i < reposWithoutDragged.Count; i++)
+        {
+            if (ReferenceEquals(reposWithoutDragged[i], targetRepo))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        var container = Get_ContainerOf_OrNull(targetRepo);
+
+        if (container == null)
+            return index;
+
+        var positionInTarget = dropPosition.Y - container.TranslatePoint(new System.Windows.Point(0, 0), ReposListBox).Y;
+
+        return positionInTarget > container.ActualHeight / 2 ? index + 1 : index;
+    }
+
+    IRepoEntry? Get_RepoAtPosition_OrNull(System.Windows.Point position)
+    {
+        for (var i = 0; i < ReposListBox.Items.Count; i++)
+        {
+            if (ReposListBox.ItemContainerGenerator.ContainerFromIndex(i) is not ListBoxItem container)
+                continue;
+
+            var topLeft = container.TranslatePoint(new System.Windows.Point(0, 0), ReposListBox);
+            var bounds = new Rect(topLeft, new Size(container.ActualWidth, container.ActualHeight));
+
+            if (bounds.Contains(position))
+                return ReposListBox.Items[i] as IRepoEntry;
+        }
+
+        return null;
+    }
+
+    ListBoxItem? Get_ContainerOf_OrNull(IRepoEntry repo)
+    {
+        return ReposListBox.ItemContainerGenerator.ContainerFromItem(repo) as ListBoxItem;
     }
 }

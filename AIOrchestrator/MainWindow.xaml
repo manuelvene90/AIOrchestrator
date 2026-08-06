@@ -29,7 +29,10 @@
                         <Button x:Name="SettingsButton" Content="⚙  Settings" Click="SettingsButton_Click"/>
                     </StackPanel>
 
-                    <ListBox x:Name="ReposListBox" Margin="6,0">
+                    <ListBox x:Name="ReposListBox" Margin="6,0" AllowDrop="True"
+                             PreviewMouseLeftButtonDown="ReposListBox_PreviewMouseLeftButtonDown"
+                             PreviewMouseMove="ReposListBox_PreviewMouseMove"
+                             Drop="ReposListBox_Drop">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Margin="6,4">
@@ -76,7 +79,7 @@
                                         <ItemsControl ItemsSource="{Binding Members}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type views:MemberRowView}">
-                                                    <StackPanel Margin="0,3">
+                                                    <StackPanel Margin="0,3" Opacity="{Binding RowOpacity}">
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="120"/>
@@ -94,7 +97,9 @@
                                                             </Border>
                                                             <StackPanel Grid.Column="2" Orientation="Horizontal">
                                                                 <TextBlock Text="{Binding LastActivityText}" Foreground="{StaticResource TextSecondary}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                                <Button Content="🖥 Show" FontSize="10" Padding="6,2" Tag="{Binding}" Click="ShowSessionButton_Click" ToolTip="Bring this session's terminal to the foreground"/>
+                                                                <Button Content="🖥 Show" FontSize="10" Padding="6,2" Tag="{Binding}" Click="ShowSessionButton_Click"
+                                                                        Visibility="{Binding ShowButtonVisibility}"
+                                                                        ToolTip="Bring this session's terminal to the foreground"/>
                                                             </StackPanel>
                                                         </Grid>
                                                         <TextBlock Text="{Binding DetailText}" Foreground="{StaticResource TextSecondary}" FontSize="10"

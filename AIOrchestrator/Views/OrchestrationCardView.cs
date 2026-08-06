@@ -36,4 +36,10 @@ public class MemberRowView
 
     /// <summary>Terminal window title fragment for the "Show session" button (sessions spawn one WT window each).</summary>
     public string FocusTitleFragment { get; init; } = string.Empty;
+
+    /// <summary>Collapsed on closed members/supervisors — there is no terminal left to show.</summary>
+    public System.Windows.Visibility ShowButtonVisibility { get; init; } = System.Windows.Visibility.Visible;
+
+    /// <summary>Dimmed for a closed member inside a still-open card (closed cards dim as a whole).</summary>
+    public double RowOpacity { get; init; } = 1.0;
 }
