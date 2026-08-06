@@ -53,19 +53,38 @@ public static class SpawnCommand_Builder
     /// generalHomeFolder is the general supervisor's PERMANENT working directory (its CLAUDE.md home).
     /// The role command travels WITH --continue: a resumed conversation would otherwise sit idle
     /// (no greeting, no watcher armed) — the boot sequence is idempotent by design, so re-running
-    /// it on every launch is exactly right. The fallback covers the first-ever run (nothing to
-    /// continue → non-zero exit).
+    /// it on every launch is exactly right.
+    ///
+    /// Resume-vs-fresh is decided BEFORE launching, by checking whether a previous conversation
+    /// exists (Claude Code stores each directory's sessions under ~/.claude/projects/&lt;encoded&gt;/).
+    /// An exit-code fallback is WRONG here: it cannot distinguish "could not resume" from "the
+    /// session ran and exited non-zero" (Ctrl+C, crash), and re-launched the role command a second
+    /// time after such an exit.
     /// </summary>
     public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
     {
         var claudeInvocation = Build_ClaudeInvocation(model);
+        var conversationsPattern = $"$env:USERPROFILE\\.claude\\projects\\{Encode_ClaudeProjectFolderName(generalHomeFolder)}\\*.jsonl";
+
         var claudeCommand =
-            $"{claudeInvocation} --continue '/general-supervisor'; " +
-            $"if ($LASTEXITCODE -ne 0) {{ {claudeInvocation} '/general-supervisor' }}";
+            $"if (Test-Path \"{conversationsPattern}\") " +
+            $"{{ {claudeInvocation} --continue '/general-supervisor' }} " +
+            $"else {{ {claudeInvocation} '/general-supervisor' }}";
 
         var script = Build_SessionScript("general", "general", "general", claudeCommand, pidFilePath);
 
         return Build_WindowsTerminalCommand("GENERAL", GENERAL_TAB_COLOR, generalHomeFolder, script);
+    }
+
+    /// <summary>
+    /// Claude Code's per-directory conversation folder name: the absolute path with every
+    /// non-alphanumeric character replaced by '-' (e.g. C:\Users\x\.claude\supervision\general
+    /// → C--Users-x--claude-supervision-general).
+    /// </summary>
+    public static string Encode_ClaudeProjectFolderName(string absolutePath)
+    {
+        var characters = absolutePath.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-');
+        return new string([.. characters]);
     }
 
     /// <summary>Fallback when Windows Terminal (wt.exe) is not installed: a plain PowerShell window.</summary>

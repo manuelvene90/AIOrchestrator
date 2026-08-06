@@ -83,10 +83,20 @@ public class SpawnCommandBuilderTests
 
         var script = SpawnCommand_Builder.Decode_SessionScript(command);
 
-        // The role command rides WITH --continue: a resumed conversation must still boot
-        // (greet + re-arm watcher), not sit idle. The bare fallback covers the first-ever run.
-        Assert.Contains("claude --model sonnet --dangerously-skip-permissions --continue '/general-supervisor'", script);
-        Assert.Contains("{ claude --model sonnet --dangerously-skip-permissions '/general-supervisor' }", script);
+        // Resume-vs-fresh is decided by CONVERSATION EXISTENCE, never by exit code: an exit-code
+        // fallback re-ran the role command after any non-zero session end (the double-run bug).
+        Assert.Contains(@"if (Test-Path ""$env:USERPROFILE\.claude\projects\C--Users-x--claude-supervision-general\*.jsonl"")", script);
+        Assert.Contains("{ claude --model sonnet --dangerously-skip-permissions --continue '/general-supervisor' }", script);
+        Assert.Contains("else { claude --model sonnet --dangerously-skip-permissions '/general-supervisor' }", script);
+        Assert.DoesNotContain("$LASTEXITCODE", script);
+    }
+
+    [Fact]
+    public void Encode_ClaudeProjectFolderName_MatchesClaudeCodeEncoding()
+    {
+        var encoded = SpawnCommand_Builder.Encode_ClaudeProjectFolderName(@"C:\Users\Gianpiero\.claude\supervision\general");
+
+        Assert.Equal("C--Users-Gianpiero--claude-supervision-general", encoded);
     }
 
     [Fact]
