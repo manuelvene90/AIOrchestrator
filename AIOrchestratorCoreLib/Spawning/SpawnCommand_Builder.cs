@@ -1,0 +1,126 @@
+using AIOrchestratorCoreLib.Spawning.SpawnCommand;
+
+namespace AIOrchestratorCoreLib.Spawning;
+
+/// <summary>
+/// Builds the Windows Terminal command that opens a Claude Code session with its role, id and
+/// visual identity (tab title + color; red family = supervisor, blue family = implementer,
+/// amber = general). The launched PowerShell sets the AIORCH_* env vars (read by the status line
+/// script), writes ITS OWN pid to the session's pid file (the watchdog's liveness source — the
+/// wt.exe pid is useless, wt delegates to an existing window and exits), and runs claude with the
+/// role slash command as its initial prompt. No -NoExit: the shell dies with claude, so a dead pid
+/// means a dead session.
+///
+/// Resume semantics: the GENERAL supervisor runs in the supervision root (a directory only it uses),
+/// so a restart safely resumes its previous conversation via 'claude --continue' (falling back to
+/// the role command on first-ever start). Orchestration supervisors and implementers share the
+/// repo directory, where --continue could resume the WRONG session's conversation — they restart
+/// through their role command instead, whose boot sequence re-reads the channels (the channels ARE
+/// the durable state by design).
+/// </summary>
+public static class SpawnCommand_Builder
+{
+    public const string SUPERVISOR_TAB_COLOR = "#E5484D";
+    public const string IMPLEMENTER_TAB_COLOR = "#3B82F6";
+    public const string GENERAL_TAB_COLOR = "#F5A623";
+
+    public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string pidFilePath)
+    {
+        Validate_OrchId(orchId);
+
+        var script = Build_SessionScript("supervisor", orchId, "sup", $"claude{Build_ModelPart(model)} '/supervisor {orchId}'", pidFilePath);
+
+        return Build_WindowsTerminalCommand($"SUP · {orchId}", SUPERVISOR_TAB_COLOR, repoPath, script);
+    }
+
+    public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string pidFilePath)
+    {
+        Validate_OrchId(orchId);
+
+        var script = Build_SessionScript("implementer", orchId, memberId, $"claude{Build_ModelPart(model)} '/implementer {orchId}/{memberId}'", pidFilePath);
+
+        return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", IMPLEMENTER_TAB_COLOR, repoPath, script);
+    }
+
+    public static ISpawnCommand Build_ForGeneralSupervisor(string supervisionRoot, string? model, string pidFilePath)
+    {
+        var modelPart = Build_ModelPart(model);
+        var claudeCommand =
+            $"claude{modelPart} --continue; " +
+            $"if ($LASTEXITCODE -ne 0) {{ claude{modelPart} '/general-supervisor' }}";
+
+        var script = Build_SessionScript("general", "general", "general", claudeCommand, pidFilePath);
+
+        return Build_WindowsTerminalCommand("GENERAL", GENERAL_TAB_COLOR, supervisionRoot, script);
+    }
+
+    /// <summary>Fallback when Windows Terminal (wt.exe) is not installed: a plain PowerShell window.</summary>
+    public static ISpawnCommand Build_PowershellFallback(ISpawnCommand windowsTerminalCommand)
+    {
+        // The wt argument list ends with: "powershell" "-NoProfile" "-ExecutionPolicy" "Bypass" "-Command" <script>
+        var arguments = windowsTerminalCommand.Arguments;
+        var powershellIndex = Find_PowershellIndex(arguments);
+
+        return SpawnCommand_Factory.Create(
+            "powershell.exe",
+            [.. arguments.Skip(powershellIndex + 1)],
+            windowsTerminalCommand.WorkingDirectory);
+    }
+
+    static int Find_PowershellIndex(IReadOnlyList<string> arguments)
+    {
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            if (arguments[i] == "powershell")
+                return i;
+        }
+
+        throw new Exception($"No 'powershell' token found in wt arguments: {string.Join(" ", arguments)}");
+    }
+
+    static ISpawnCommand Build_WindowsTerminalCommand(string tabTitle, string tabColor, string workingDirectory, string script)
+    {
+        // '-w new' gives every session its OWN terminal window: the window title equals the session
+        // title, which is what lets the app's "Show session" button find and foreground it.
+        List<string> arguments =
+        [
+            "-w", "new",
+            "new-tab",
+            "--title", tabTitle,
+            "--tabColor", tabColor,
+            "-d", workingDirectory,
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script,
+        ];
+
+        return SpawnCommand_Factory.Create("wt.exe", arguments, workingDirectory);
+    }
+
+    static string Build_SessionScript(string role, string orchId, string memberId, string claudeCommand, string pidFilePath)
+    {
+        return
+            $"$env:AIORCH_ROLE='{role}'; " +
+            $"$env:AIORCH_ID='{orchId}'; " +
+            $"$env:AIORCH_MEMBER='{memberId}'; " +
+            $"Set-Content -LiteralPath '{pidFilePath}' -Value $PID; " +
+            claudeCommand;
+    }
+
+    static string Build_ModelPart(string? model)
+    {
+        return string.IsNullOrWhiteSpace(model) ? string.Empty : $" --model {model}";
+    }
+
+    static void Validate_OrchId(string orchId)
+    {
+        if (string.IsNullOrWhiteSpace(orchId))
+            throw new ArgumentException("Orchestration id must be non-empty");
+
+        foreach (var character in orchId)
+        {
+            var valid = char.IsAsciiLetterOrDigit(character) || character == '-' || character == '_';
+
+            if (!valid)
+                throw new ArgumentException($"Orchestration id '{orchId}' contains invalid character '{character}' — use letters, digits, '-' or '_' (it travels through shell commands and folder names)");
+        }
+    }
+}

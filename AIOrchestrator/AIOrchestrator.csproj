@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -7,5 +7,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AIOrchestratorCoreLib\AIOrchestratorCoreLib.csproj" />
+    <!-- Suite shared libs: requires the Da-Vinci-Fintech-Suite repo checked out as a sibling
+         of this repo's parent (source\repos\manuelvene90\Da-Vinci-Fintech-Suite).
+         The installer and CLAUDE.md document this convention. -->
+    <ProjectReference Include="..\..\manuelvene90\Da-Vinci-Fintech-Suite\00_Shared\LoggingLib\LoggingLib.csproj" />
+  </ItemGroup>
 
 </Project>

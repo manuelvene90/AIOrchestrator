@@ -1,3 +1,5 @@
 <Solution>
   <Project Path="AIOrchestrator/AIOrchestrator.csproj" />
+  <Project Path="AIOrchestratorCoreLib/AIOrchestratorCoreLib.csproj" />
+  <Project Path="AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj" />
 </Solution>

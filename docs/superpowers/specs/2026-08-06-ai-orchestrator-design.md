@@ -73,5 +73,112 @@ Hub-and-spoke per orchestration: one supervisor, N implementers, one duplex chan
 ## Testing
 Unit tests (xunit) for every pure part: parser, chunker, mirror formatter, spawn command builder, state resolver, tailer (temp files), session store (temp dir), inbound routing filter. Telegram HTTP and process spawning sit behind thin adapters and are exercised by a documented manual end-to-end script per machine.
 
+## AMENDMENT (2026-08-06, same day, owner directives during implementation)
+
+### General supervisor (always-on, Telegram-first)
+A permanent GENERAL SUPERVISOR session — the owner's orchestration concierge — living at
+`~/.claude/supervision/general/channel.md`, mirrored to the supergroup's **General topic** (always
+exists, undeletable, owner pins it; messages there carry no `message_thread_id`, which is exactly
+how the bridge routes them). The owner tells it "I need to work on skeleton client" from their
+phone; it resolves the repo against `config.json` (`RepoQuery_Resolver`: exact match, else UNIQUE
+substring, ambiguity → ask, never guess) and asks the app to act. Spawned from the app's
+"Start General Supervisor" button (amber tab, `/general-supervisor`, works from the supervision root).
+
+### The request-file protocol (`.requests/*.json`) — agents ask, the app executes
+Agents cannot click the WPF app, so they drop JSON request files that the app's bridge engine
+executes within one mirror tick (~2 s), always confirming (or failing) with a `FROM app` entry on
+the requester's channel — which wakes the requester via its watcher. `FROM app` is a first-class
+channel author (`ChannelAuthors.App`, tag `⚙ [app → …]`). Malformed request files are logged and
+deleted, never allowed to wedge the loop; processed files are deleted after execution.
+
+| Action | Requester | Effect | Confirmation lands on |
+|---|---|---|---|
+| `start-orchestration` (orchId, repo) | general supervisor | create orchestration + spawn supervisor terminal (+ topic on first mirror) | `general/channel.md` |
+| `add-implementer` (orchId) | orchestration supervisor | allocate `imp-<n>`, seed channel, spawn terminal | that orchestration's `owner-channel.md` |
+| `close-implementer` (orchId, memberId) | orchestration supervisor | mark member closed; channel kept on disk, no longer tailed | that orchestration's `owner-channel.md` |
+| `close-orchestration` (orchId) | general supervisor | mark session closed + close the Telegram topic; folder kept as audit trail | `general/channel.md` |
+
+Closed members/orchestrations: `ClosedUtc` on the member/session in `session.json`; the bridge
+stops tailing them; the UI dims the card / greys the chip. Nothing is ever deleted.
+
+### Consequences folded into the components
+- `ISupervisionPaths` gains `GeneralFolder`/`GeneralChannelFile`/`RequestsFolder`; discovery treats
+  `general` as a reserved orchestration id with owner-channel semantics and a null Telegram thread id.
+- `IOrchestrationLauncher` is the shared execution seam for UI buttons AND request files.
+- The `/general-supervisor` role command ships in the kit alongside `/supervisor` and `/implementer`.
+
+## AMENDMENT 2 (2026-08-06, owner directives during the same build session)
+
+### Session lifecycle — always-on while the app runs, everything dies with the app
+- **PID files are the liveness truth**: every spawned shell writes its own `$PID` to a `.pid` file
+  beside its channel (wt.exe delegates and exits, so its pid is useless). A `SessionWatchdog`
+  (engine tick) respawns any dead required session with 45 s backoff and pid-recycling protection
+  (the pid must still be a PowerShell process): the general supervisor (always), and the
+  supervisor + non-closed implementers of every open orchestration.
+- **App start** ⇒ watchdog brings everything up (general supervisor auto-starts). **App exit** ⇒
+  `SessionTerminator` tree-kills every pid file under the supervision root. **Orchestration
+  close** ⇒ its supervisor + implementers are killed too. State lives on disk; the next app start
+  resumes everything.
+- **Resume semantics:** general supervisor restarts with `claude --continue` (its cwd — the
+  supervision root — is unique to it) falling back to the role command; supervisors/implementers
+  restart through their role commands, whose boot re-reads the channels (`--continue` in a repo
+  shared by several sessions could resume the wrong conversation).
+
+### Orchestration ids & repo naming
+- Ids are ALLOCATED (`OrchId_Allocator`): `repo-slug-n`, incremental per repo, derived from
+  existing folders. Nobody types ids; the start request carries only the repo.
+- Colloquial repo naming is the GENERAL SUPERVISOR's job (it is an LLM); `RepoQuery_Resolver`
+  (exact, else unique substring, ambiguity → null → ask) is only the app-side safety net.
+- The general supervisor runs a cheap model by default (`generalSupervisorModel`, default
+  "sonnet") and stays mostly silent. Every new orchestration's supervisor GREETS the owner naming
+  the full repo directory (mapping verification) and invites instructions.
+
+### Do-Not-Disturb with catch-up burst (the away-from-PC model)
+- Mute (UI checkbox, or any supervisor dropping `{"action":"set-telegram-muted","muted":true}` on
+  the owner's texted request) pauses ALL outbound Telegram. Implementation: the engine skips
+  tailing entirely, freezing offsets — so unmute (UI, request, or the owner texting ANYTHING,
+  which auto-unmutes) delivers every pending entry in one catch-up burst, including supervisors'
+  waiting questions in their topics. Inbound always works.
+- The check-in ritual is a first-class flow in the general supervisor's role command: text →
+  auto-unmute → "make a summary" → compact digest (per orchestration: state, progress from
+  boundary reports, last activity, pending owner questions + which topic) → answer → "DND on".
+
+### Telemetry & alerts (the status line is the probe)
+- `statusline.ps1` renders role identity AND dumps the raw statusline JSON to the session's
+  `.usage.json`. The UI reads `cost.total_cost_usd` per member; the engine scans all usage files
+  every 60 s, extracts limit percentages tolerantly (`LimitData_Parser` — schema varies by Claude
+  Code version; no data ⇒ idle), and texts the General topic on crossing 90/95/97/98/99/100%
+  (`LimitAlert_Tracker`, per-window dedup, reset below 50%). ⚠ NEEDS LIVE VERIFICATION: whether
+  this Claude Code version's statusline payload carries limit data.
+
+### Session-manager UI
+- Cards show implementer count + orchestration age; per-member second line: current task (last
+  supervisor brief subject), worktree (the brief's `WORKTREE: <path>` marker line — protocol),
+  time on task, session cost. "🖥 Show" per row foregrounds that session's terminal
+  (`TerminalWindow_Focuser`, Win32 EnumWindows by title; sessions spawn one WT window each via
+  `wt -w new` precisely to make titles matchable). Settings window manages bot token / chat id /
+  owner id / models. Mute checkbox in the status bar (synced both ways with agent requests).
+
+### Images from the owner (screenshots of bugs)
+- Owner photo messages are downloaded by the bridge (getFile + file endpoint) into `media/` beside
+  the target channel; the appended owner entry carries the caption plus an `IMAGE: <path>` line.
+  Supervisors Read the file to inspect it (Claude Code reads images natively) and pass the path
+  into implementer briefs. Download failure degrades to a text entry noting the failure.
+
+### Repo knowledge source
+- The general supervisor resolves colloquial repo names using the owner's user-level
+  `~/.claude/CLAUDE.md` project registry (names, paths, purposes — loads automatically into every
+  session) PLUS `config.json`; the emitted request carries the exact configured repo name.
+
+### Worktree stewardship (protocol)
+- The orchestration SUPERVISOR owns worktree lifecycle (creation, merging, removal) and the
+  implementer→worktree mapping; one worktree per implementer by default; merges only after review;
+  removals only when merged/discarded; owner instructions override. Implementers never manage
+  worktrees on their own initiative.
+
+### Periodic owner updates (protocol)
+- On request, a supervisor switches its watcher to the timeout variant (e.g. 1800 s) and appends a
+  concise status entry to its owner-channel on each quiet timeout — mirrored to Telegram.
+
 ## v1 scope cuts (explicit)
 Mac launcher (design permits, not built) · owner→implementer direct messaging (everything routes through the supervisor) · multiple supergroups · session auto-restart/watchdog · mirroring owner terminal input back to Telegram.

@@ -1,12 +1,126 @@
-﻿<Window x:Class="AIOrchestrator.MainWindow"
+<Window x:Class="AIOrchestrator.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:AIOrchestrator"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
+        xmlns:log="clr-namespace:LoggingLib.Loggers;assembly=LoggingLib"
+        xmlns:views="clr-namespace:AIOrchestrator.Views"
+        Title="AI Orchestrator" Height="780" Width="1280"
+        Background="{StaticResource BgWindow}"
+        WindowStartupLocation="CenterScreen">
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="250"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="400"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT: repositories + session starters -->
+            <Border Grid.Column="0" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="REPOSITORIES" Style="{StaticResource SectionHeader}"/>
+
+                    <StackPanel DockPanel.Dock="Bottom" Margin="12,8,12,12">
+                        <Button x:Name="StartSupervisorButton" Content="▶  Start Orchestration on selected repo" Click="StartSupervisorButton_Click" Margin="0,0,0,8"/>
+                        <Button x:Name="SettingsButton" Content="⚙  Settings" Click="SettingsButton_Click"/>
+                    </StackPanel>
+
+                    <ListBox x:Name="ReposListBox" Margin="6,0">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="6,4">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Path}" Foreground="{StaticResource TextSecondary}" FontSize="10" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <!-- CENTER: orchestration cards -->
+            <DockPanel Grid.Column="1">
+                <TextBlock DockPanel.Dock="Top" Text="ORCHESTRATION SESSIONS" Style="{StaticResource SectionHeader}"/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8,0">
+                    <ItemsControl x:Name="OrchestrationsItemsControl">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type views:OrchestrationCardView}">
+                                <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1"
+                                        CornerRadius="6" Margin="4,4,4,8" Padding="12,10" Opacity="{Binding CardOpacity}">
+                                    <StackPanel>
+                                        <DockPanel Margin="0,0,0,6">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding OrchId}" FontSize="15" FontWeight="Bold"/>
+                                                <TextBlock Text="{Binding RepoName}" Foreground="{StaticResource TextSecondary}" Margin="10,3,0,0" FontSize="11"/>
+                                                <TextBlock Text="{Binding SummaryText}" Foreground="{StaticResource TextSecondary}" Margin="10,3,0,0" FontSize="11"/>
+                                                <TextBlock Text="{Binding ClosedLabel}" Foreground="{StaticResource StateClosed}" Margin="10,3,0,0" FontSize="11" FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                                <Button Content="＋ Implementer" Tag="{Binding}" Click="AddImplementerButton_Click" Margin="0,0,6,0" IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"/>
+                                                <Button Content="📂" Tag="{Binding}" Click="OpenFolderButton_Click" ToolTip="Open orchestration folder"/>
+                                            </StackPanel>
+                                        </DockPanel>
+
+                                        <ItemsControl ItemsSource="{Binding Members}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type views:MemberRowView}">
+                                                    <StackPanel Margin="0,3">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="120"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                                                <Ellipse Width="8" Height="8" Fill="{Binding RoleBrush}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                                <TextBlock Text="{Binding MemberLabel}" FontWeight="SemiBold" FontSize="12"/>
+                                                            </StackPanel>
+                                                            <Border Grid.Column="1" Background="Transparent" HorizontalAlignment="Left">
+                                                                <Border Background="{Binding StateBrush}" CornerRadius="8" Padding="7,1" VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding StateText}" FontSize="10" FontWeight="SemiBold" Foreground="#101318"/>
+                                                                </Border>
+                                                            </Border>
+                                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                                <TextBlock Text="{Binding LastActivityText}" Foreground="{StaticResource TextSecondary}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                                <Button Content="🖥 Show" FontSize="10" Padding="6,2" Tag="{Binding}" Click="ShowSessionButton_Click" ToolTip="Bring this session's terminal to the foreground"/>
+                                                            </StackPanel>
+                                                        </Grid>
+                                                        <TextBlock Text="{Binding DetailText}" Foreground="{StaticResource TextSecondary}" FontSize="10"
+                                                                   Margin="14,1,0,0" TextTrimming="CharacterEllipsis"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </DockPanel>
+
+            <!-- RIGHT: live activity log -->
+            <Border Grid.Column="2" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1,0,0,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="ACTIVITY LOG" Style="{StaticResource SectionHeader}"/>
+                    <log:ListBoxLoggerSimple x:Name="ActivityLogger" Resettable="True"/>
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <!-- Status bar -->
+        <Border Grid.Row="1" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="0,1,0,0" Padding="12,5">
+            <DockPanel>
+                <TextBlock x:Name="TelegramStatusText" Text="Telegram: …" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                <CheckBox x:Name="MuteTelegramCheckBox" Content="🔕 Mute Telegram (I'm at the PC)" FontSize="11"
+                          Foreground="{StaticResource TextSecondary}" Margin="18,0,0,0" VerticalAlignment="Center"
+                          Checked="MuteTelegramCheckBox_Changed" Unchecked="MuteTelegramCheckBox_Changed"/>
+                <TextBlock x:Name="RootPathText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+            </DockPanel>
+        </Border>
     </Grid>
 </Window>
