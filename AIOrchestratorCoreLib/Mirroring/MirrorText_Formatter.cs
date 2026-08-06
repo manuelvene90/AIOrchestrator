@@ -5,55 +5,52 @@ using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 namespace AIOrchestratorCoreLib.Mirroring;
 
 /// <summary>
-/// Formats a channel entry for the Telegram mirror. The unified group view lives ONLY here:
-/// every spoke's traffic lands in one topic, direction-tagged.
+/// Formats channel entries for the Telegram mirror — MINIMAL VERBOSITY by owner mandate.
+/// Only owner ⇄ supervisor channels reach Telegram at all (implementer spokes stay in the app);
+/// prefixes are bare ("Sup:", "App:") — the owner knows who they are; no entry numbers, no
+/// direction arrows, no subject-plus-body duplication.
 /// </summary>
 public static class MirrorText_Formatter
 {
-    public static string Format(IDiscoveredChannel channel, IChannelEntry entry)
-    {
-        var tag = Build_DirectionTag(channel, entry.Author);
-        var header = $"{tag} #{entry.Index} — {entry.Subject}";
-
-        if (string.IsNullOrWhiteSpace(entry.Body))
-            return header;
-
-        return $"{header}\n\n{entry.Body}";
-    }
+    /// <summary>Supervisors title periodic status entries with this; DND catch-up keeps only the newest.</summary>
+    public const string STATUS_SUBJECT_PREFIX = "STATUS";
 
     public static bool Should_Mirror(IDiscoveredChannel channel, IChannelEntry entry)
     {
-        // Owner entries came FROM Telegram (or from the owner's own terminal typing) — echoing
-        // them back would duplicate what the owner already sees/wrote.
-        if (channel.IsOwnerChannel && entry.Author == ChannelAuthors.Owner)
+        // Implementer spokes never reach Telegram — that traffic made the topics unreadable.
+        // The owner reads it in the app when they want it.
+        if (!channel.IsOwnerChannel)
             return false;
 
-        return true;
+        // Owner entries came FROM Telegram (or the owner's own terminal) — never echoed back.
+        return entry.Author != ChannelAuthors.Owner;
     }
 
-    static string Build_DirectionTag(IDiscoveredChannel channel, ChannelAuthors author)
+    public static string Format(IDiscoveredChannel channel, IChannelEntry entry)
     {
-        if (channel.IsOwnerChannel)
+        return entry.Author switch
         {
-            return author switch
-            {
-                ChannelAuthors.Supervisor => "🔴 [sup → owner]",
-                ChannelAuthors.Owner => "[owner → sup]",
-                ChannelAuthors.App => "⚙ [app → owner]",
-                ChannelAuthors.Implementer => $"⚠ [implementer?! → owner] (unexpected author on the owner channel)",
-                ChannelAuthors.Unknown => "[? → owner]",
-                _ => throw new Exception($"Unhandled ChannelAuthors: {author}"),
-            };
-        }
+            // App entries: the subject IS the message ("orchestration 'crm-2' closed"); the body
+            // is agent-facing detail the owner explicitly does not want texted.
+            ChannelAuthors.App => $"⚙ App: {entry.Subject}",
 
-        return author switch
-        {
-            ChannelAuthors.Supervisor => $"🔴 [sup → {channel.SpokeName}]",
-            ChannelAuthors.Implementer => $"🔵 [{channel.SpokeName} → sup]",
-            ChannelAuthors.App => $"⚙ [app on {channel.SpokeName}]",
-            ChannelAuthors.Owner => $"⚠ [owner?! → {channel.SpokeName}] (unexpected author on an implementer channel)",
-            ChannelAuthors.Unknown => $"[? on {channel.SpokeName}]",
-            _ => throw new Exception($"Unhandled ChannelAuthors: {author}"),
+            // Supervisor entries: the body is the message; the subject is channel metadata.
+            ChannelAuthors.Supervisor => $"🔴 Sup: {Pick_Content(entry)}",
+
+            ChannelAuthors.Implementer => $"⚠ Imp?: {Pick_Content(entry)}",
+            ChannelAuthors.Owner => throw new Exception($"Owner entries must be filtered by Should_Mirror (channel '{channel.FilePath}')"),
+            ChannelAuthors.Unknown => $"?: {Pick_Content(entry)}",
+            _ => throw new Exception($"Unhandled ChannelAuthors: {entry.Author}"),
         };
+    }
+
+    public static bool Is_StatusEntry(IChannelEntry entry)
+    {
+        return entry.Subject.StartsWith(STATUS_SUBJECT_PREFIX, StringComparison.OrdinalIgnoreCase);
+    }
+
+    static string Pick_Content(IChannelEntry entry)
+    {
+        return entry.Body.Length > 0 ? entry.Body : entry.Subject;
     }
 }

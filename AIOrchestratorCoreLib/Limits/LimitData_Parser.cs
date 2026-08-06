@@ -13,6 +13,45 @@ public static class LimitData_Parser
     static readonly string[] PERCENT_FIELD_HINTS = ["percent", "pct", "utilization", "used"];
     static readonly string[] PATH_CONTEXT_HINTS = ["limit", "usage", "rate", "session", "week", "hour"];
 
+    /// <summary>
+    /// Shortens a limit key path for phone alerts: "rate_limits.five_hour.used_percentage" → "5h".
+    /// Generic segments are dropped; known windows get compact names; unknown remainders pass
+    /// through with underscores as spaces.
+    /// </summary>
+    public static string Build_ShortLabel(string limitKey)
+    {
+        string[] genericSegments = ["rate_limits", "rate", "limits", "limit", "usage", "used_percentage", "used_pct", "used", "percentage", "percent", "pct", "utilization"];
+
+        List<string> keptSegments = [];
+
+        foreach (var rawSegment in limitKey.Split('.'))
+        {
+            var segment = rawSegment.ToLowerInvariant();
+
+            if (genericSegments.Contains(segment))
+                continue;
+
+            var compact = segment switch
+            {
+                "five_hour" => "5h",
+                "fivehour" => "5h",
+                "session" => "5h",
+                "seven_day" => "weekly",
+                "sevenday" => "weekly",
+                "week" => "weekly",
+                "weekly" => "weekly",
+                _ => segment.Replace('_', ' '),
+            };
+
+            keptSegments.Add(compact);
+        }
+
+        if (keptSegments.Count == 0)
+            return limitKey;
+
+        return string.Join(' ', keptSegments);
+    }
+
     public static IReadOnlyDictionary<string, double> Extract_LimitPercents(string rawStatuslineJson)
     {
         Dictionary<string, double> results = [];

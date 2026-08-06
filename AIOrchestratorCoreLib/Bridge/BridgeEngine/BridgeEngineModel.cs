@@ -199,8 +199,8 @@ internal sealed class BridgeEngineModel(
 
                 state[pair.Key] = newlyCrossed.Value;
 
-                var alertText = $"⚠️ USAGE LIMIT ALERT — '{pair.Key}' is at {pair.Value:F0}% (crossed the {newlyCrossed.Value:F0}% threshold)";
-                _log.Log_Warning(GLOBAL_ORCH_ID, alertText);
+                var alertText = $"⚠️ LIMIT: {Limits.LimitData_Parser.Build_ShortLabel(pair.Key)} {pair.Value:F0}%";
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"{alertText} (key '{pair.Key}')");
                 await _telegramClient.Send_Message_Async(null, alertText, cancellationToken);
             }
 
@@ -296,13 +296,15 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient == null)
             return;
 
+        var mirrorableEntries = Select_MirrorableEntries(append);
+
+        if (mirrorableEntries.Count == 0)
+            return;
+
         var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
 
-        foreach (var entry in append.Entries)
+        foreach (var entry in mirrorableEntries)
         {
-            if (!MirrorText_Formatter.Should_Mirror(append.Channel, entry))
-                continue;
-
             var text = MirrorText_Formatter.Format(append.Channel, entry);
 
             foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
@@ -322,6 +324,48 @@ internal sealed class BridgeEngineModel(
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Owner-channel entries only, and of any QUEUED periodic STATUS entries (a DND catch-up
+    /// batch) only the NEWEST survives — hours of muted half-hour reports must not flood the
+    /// owner on unmute.
+    /// </summary>
+    static IReadOnlyList<Channels.ChannelEntry.IChannelEntry> Select_MirrorableEntries(ICompletedChannelAppend append)
+    {
+        List<Channels.ChannelEntry.IChannelEntry> mirrorable = [];
+
+        foreach (var entry in append.Entries)
+        {
+            if (MirrorText_Formatter.Should_Mirror(append.Channel, entry))
+                mirrorable.Add(entry);
+        }
+
+        var lastStatusIndex = -1;
+
+        for (var i = mirrorable.Count - 1; i >= 0; i--)
+        {
+            if (MirrorText_Formatter.Is_StatusEntry(mirrorable[i]))
+            {
+                lastStatusIndex = i;
+                break;
+            }
+        }
+
+        if (lastStatusIndex < 0)
+            return mirrorable;
+
+        List<Channels.ChannelEntry.IChannelEntry> deduplicated = [];
+
+        for (var i = 0; i < mirrorable.Count; i++)
+        {
+            var isSupersededStatus = i != lastStatusIndex && MirrorText_Formatter.Is_StatusEntry(mirrorable[i]);
+
+            if (!isSupersededStatus)
+                deduplicated.Add(mirrorable[i]);
+        }
+
+        return deduplicated;
     }
 
     /// <summary>General channel → the General topic (null thread id). Orchestrations get a topic on first mirror.</summary>
@@ -373,6 +417,51 @@ internal sealed class BridgeEngineModel(
         Process_CloseImplementerRequests(pending);
         Process_CloseOrchestrationRequests(pending);
         Process_SetTelegramMutedRequests(pending);
+        Process_SetOrchestrationNameRequests(pending);
+    }
+
+    void Process_SetOrchestrationNameRequests(IPendingRequests pending)
+    {
+        foreach (var request in pending.SetOrchestrationNameRequests)
+        {
+            try
+            {
+                var session = _store.Get_Session(request.OrchId);
+                _store.Set_DisplayName(request.OrchId, request.Name);
+
+                if (_telegramClient != null && session.TelegramTopicId != null)
+                    Rename_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value, request.Name);
+
+                _log.Log_Info(request.OrchId, $"Named '{request.Name}'");
+                Raise_OrchestrationActivity(request.OrchId);
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Error(request.OrchId, $"set-orchestration-name '{request.Name}' failed", ex);
+            }
+            finally
+            {
+                Delete_RequestFile(request.SourceFilePath);
+            }
+        }
+    }
+
+    void Rename_TelegramTopic_FireAndForget(string orchId, long topicId, string newName)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var client = _telegramClient
+                    ?? throw new Exception($"Telegram client vanished while renaming topic {topicId} of '{orchId}'");
+
+                await client.Edit_ForumTopic_Async(topicId, newName, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Error(orchId, $"Telegram editForumTopic({topicId} → '{newName}') failed", ex);
+            }
+        });
     }
 
     void Process_SetTelegramMutedRequests(IPendingRequests pending)
@@ -487,11 +576,11 @@ internal sealed class BridgeEngineModel(
                 SessionTerminator.Kill_OrchestrationSessions(_paths, request.OrchId);
 
                 if (_telegramClient != null && session.TelegramTopicId != null)
-                    Close_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value);
+                    Delete_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value);
 
                 Append_GeneralAppEntry(
                     $"orchestration '{request.OrchId}' closed",
-                    $"Orchestration '{request.OrchId}' is closed: its supervisor and implementer terminals were closed, its folder stays on disk as audit trail, and its Telegram topic was closed.");
+                    "Sessions ended; folder kept as audit trail; Telegram topic deleted.");
             }
             catch (Exception ex)
             {
@@ -518,20 +607,20 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    void Close_TelegramTopic_FireAndForget(string orchId, long topicId)
+    void Delete_TelegramTopic_FireAndForget(string orchId, long topicId)
     {
         _ = Task.Run(async () =>
         {
             try
             {
                 var client = _telegramClient
-                    ?? throw new Exception($"Telegram client vanished while closing topic {topicId} of '{orchId}'");
+                    ?? throw new Exception($"Telegram client vanished while deleting topic {topicId} of '{orchId}'");
 
-                await client.Close_ForumTopic_Async(topicId, CancellationToken.None);
+                await client.Delete_ForumTopic_Async(topicId, CancellationToken.None);
             }
             catch (Exception ex)
             {
-                _log.Log_Error(orchId, $"Telegram closeForumTopic({topicId}) failed", ex);
+                _log.Log_Error(orchId, $"Telegram deleteForumTopic({topicId}) failed", ex);
             }
         });
     }

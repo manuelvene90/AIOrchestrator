@@ -4,8 +4,10 @@ namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
 public static class OrchestratorConfig_Factory
 {
-    /// <summary>The general supervisor's default model — routing "work on X" needs no expensive model.</summary>
+    /// <summary>Owner's model ladder: routing = cheap, supervision = strongest, implementation = strong.</summary>
     public const string DEFAULT_GENERAL_SUPERVISOR_MODEL = "sonnet";
+    public const string DEFAULT_SUPERVISOR_MODEL = "fable";
+    public const string DEFAULT_IMPLEMENTER_MODEL = "opus";
 
     public static IOrchestratorConfig Create(
         IReadOnlyList<IRepoEntry> repos,
@@ -18,8 +20,8 @@ public static class OrchestratorConfig_Factory
     {
         return new OrchestratorConfigModel(
             repos,
-            supervisorModel,
-            implementerModel,
+            supervisorModel ?? DEFAULT_SUPERVISOR_MODEL,
+            implementerModel ?? DEFAULT_IMPLEMENTER_MODEL,
             generalSupervisorModel ?? DEFAULT_GENERAL_SUPERVISOR_MODEL,
             telegramSupergroupChatId,
             telegramOwnerUserId,

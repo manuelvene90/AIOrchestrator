@@ -37,9 +37,13 @@ repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
 
 - Entries start: `## [n] FROM implementer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
   Never edit past entries.
-- **Boundary reports, always:** after finishing a task/batch (and before starting the next), append
-  a report: what landed, commit SHAs, test suite counts (exact numbers), mutations run and what went
-  red where claimed, anything you disagreed with and why. Claims without evidence are worthless.
+- **Report after EVERY milestone, task, and step** — not only at the end: what landed, commit
+  SHAs, test suite counts (exact numbers), anything you disagreed with and why. Your supervisor
+  verifies each report and gives feedback before you continue past a milestone. Claims without
+  evidence are worthless.
+- **You NEVER address the owner.** No questions, no updates, no messages aimed at them — your
+  only interlocutor is your supervisor. A question only the owner can answer goes to the
+  supervisor, who asks the owner.
 - **No acknowledgment-only entries** — silence is acknowledgment. Write only boundary reports,
   evidence-backed pushbacks, and blocked flags.
 - **Push back with evidence.** Supervisor entries are adversarially-verified review input: verify

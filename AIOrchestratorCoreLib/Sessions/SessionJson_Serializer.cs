@@ -31,6 +31,8 @@ public static class SessionJson_Serializer
             ["createdUtc"] = session.CreatedUtc.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicId"] = session.TelegramTopicId,
             ["supervisorPid"] = session.SupervisorPid,
+            ["supervisorSpawnedUtc"] = session.SupervisorSpawnedUtc?.ToString("O", CultureInfo.InvariantCulture),
+            ["displayName"] = session.DisplayName,
             ["members"] = membersArray,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
         };
@@ -75,8 +77,19 @@ public static class SessionJson_Serializer
             createdUtc,
             Get_Long_OrNull(root, "telegramTopicId"),
             Get_Int_OrNull(root, "supervisorPid"),
+            Get_DateTime_OrNull(root, "supervisorSpawnedUtc"),
+            Get_String_OrNull(root, "displayName"),
             members,
             Get_DateTime_OrNull(root, "closedUtc"));
+    }
+
+    static string? Get_String_OrNull(JsonObject root, string key)
+    {
+        var node = root[key];
+        if (node == null)
+            return null;
+
+        return node.GetValue<string>();
     }
 
     static string Get_RequiredString(JsonObject root, string key, string sourceDescription)

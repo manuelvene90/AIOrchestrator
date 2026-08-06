@@ -188,7 +188,8 @@ public partial class MainWindow : Window
             if (generalCard != null)
                 cards.Add(generalCard);
 
-            foreach (var session in _store.Load_All().OrderByDescending(s => s.CreatedUtc))
+            // Closed orchestrations disappear (folders stay on disk as audit trail).
+            foreach (var session in _store.Load_All().Where(s => s.ClosedUtc == null).OrderByDescending(s => s.CreatedUtc))
                 cards.Add(Build_Card(session));
 
             OrchestrationsItemsControl.ItemsSource = cards;
@@ -237,12 +238,13 @@ public partial class MainWindow : Window
 
         var openImplementers = session.Members.Count(m => m.ClosedUtc == null);
         var age = DateTime.UtcNow - session.CreatedUtc;
+        var orchIdSuffix = session.DisplayName == null ? "" : $"· {session.OrchId} ";
 
         return new OrchestrationCardView
         {
-            OrchId = session.OrchId,
+            OrchId = session.DisplayName ?? session.OrchId,
             RepoName = session.RepoName,
-            SummaryText = $"· {openImplementers} implementer{(openImplementers == 1 ? "" : "s")} · running {Describe_Duration(age)}",
+            SummaryText = $"{orchIdSuffix}· {openImplementers} implementer{(openImplementers == 1 ? "" : "s")} · running {Describe_Duration(age)}",
             IsClosed = session.ClosedUtc != null,
             ClosedLabel = session.ClosedUtc == null ? "" : "CLOSED",
             CardOpacity = session.ClosedUtc == null ? 1.0 : 0.5,

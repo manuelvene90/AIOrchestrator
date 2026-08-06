@@ -88,6 +88,29 @@ public class OrchestrationSessionStoreTests : IDisposable
     }
 
     [Fact]
+    public void Set_DisplayName_RoundTrips()
+    {
+        _store.Create_Orchestration("crm-2", "CRM", @"C:\repos\crm");
+
+        _store.Set_DisplayName("crm-2", "CRM invoice crash");
+
+        Assert.Equal("CRM invoice crash", _store.Get_Session("crm-2").DisplayName);
+    }
+
+    [Fact]
+    public void Set_SupervisorPid_StampsSpawnTime_TheWatchdogGraceSource()
+    {
+        _store.Create_Orchestration("crm-2", "CRM", @"C:\repos\crm");
+        Assert.Null(_store.Get_Session("crm-2").SupervisorSpawnedUtc);
+
+        _store.Set_SupervisorPid("crm-2", 1234);
+
+        var stamped = _store.Get_Session("crm-2").SupervisorSpawnedUtc
+            ?? throw new Exception("SupervisorSpawnedUtc should be stamped by Set_SupervisorPid");
+        Assert.True((DateTime.UtcNow - stamped).TotalSeconds < 30);
+    }
+
+    [Fact]
     public void Close_Orchestration_SetsClosedUtc()
     {
         _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");

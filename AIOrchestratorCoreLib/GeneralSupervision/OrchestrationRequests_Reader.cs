@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.CloseImplementerRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.CloseOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.MalformedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
+using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.StartOrchestrationRequest;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -22,6 +23,7 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 ///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor)
 ///   {"action":"close-orchestration","orchId":"..."}                   (general supervisor)
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
+///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
 /// </summary>
 public static class OrchestrationRequests_Reader
 {
@@ -30,6 +32,7 @@ public static class OrchestrationRequests_Reader
     public const string CLOSE_IMPLEMENTER_ACTION = "close-implementer";
     public const string CLOSE_ORCHESTRATION_ACTION = "close-orchestration";
     public const string SET_TELEGRAM_MUTED_ACTION = "set-telegram-muted";
+    public const string SET_ORCHESTRATION_NAME_ACTION = "set-orchestration-name";
 
     public static IPendingRequests Read_Pending(ISupervisionPaths paths)
     {
@@ -38,6 +41,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseImplementerRequest> closeImplementerRequests = [];
         List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
         List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
+        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
         List<IMalformedRequest> malformedRequests = [];
 
         if (Directory.Exists(paths.RequestsFolder))
@@ -45,7 +49,7 @@ public static class OrchestrationRequests_Reader
             foreach (var file in Directory.EnumerateFiles(paths.RequestsFolder, "*.json"))
             {
                 var rejectionReason = Try_ParseInto_OrReason(
-                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests);
+                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests);
 
                 if (rejectionReason != null)
                     malformedRequests.Add(MalformedRequest_Factory.Create(file, rejectionReason));
@@ -53,7 +57,7 @@ public static class OrchestrationRequests_Reader
         }
 
         return PendingRequests_Factory.Create(
-            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, malformedRequests);
+            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, malformedRequests);
     }
 
     /// <summary>Returns null on success, otherwise the rejection reason.</summary>
@@ -63,7 +67,8 @@ public static class OrchestrationRequests_Reader
         List<IAddImplementerRequest> addImplementerRequests,
         List<ICloseImplementerRequest> closeImplementerRequests,
         List<ICloseOrchestrationRequest> closeOrchestrationRequests,
-        List<ISetTelegramMutedRequest> setTelegramMutedRequests)
+        List<ISetTelegramMutedRequest> setTelegramMutedRequests,
+        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests)
     {
         JsonObject root;
         try
@@ -130,12 +135,21 @@ public static class OrchestrationRequests_Reader
                     setTelegramMutedRequests.Add(SetTelegramMutedRequest_Factory.Create(mutedNode.GetValue<bool>(), filePath));
                     return null;
                 }
+                case SET_ORCHESTRATION_NAME_ACTION:
+                {
+                    var nameValue = root["name"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(orchId) || string.IsNullOrWhiteSpace(nameValue))
+                        return "missing 'orchId' or 'name'";
+
+                    setOrchestrationNameRequests.Add(SetOrchestrationNameRequest_Factory.Create(orchId, nameValue, filePath));
+                    return null;
+                }
                 default:
                 {
                     var known = string.Join(", ", new[]
                     {
                         START_ORCHESTRATION_ACTION, ADD_IMPLEMENTER_ACTION, CLOSE_IMPLEMENTER_ACTION,
-                        CLOSE_ORCHESTRATION_ACTION, SET_TELEGRAM_MUTED_ACTION,
+                        CLOSE_ORCHESTRATION_ACTION, SET_TELEGRAM_MUTED_ACTION, SET_ORCHESTRATION_NAME_ACTION,
                     });
 
                     return $"unknown action '{action}' (known: {known}; retries must reuse the SAME action)";

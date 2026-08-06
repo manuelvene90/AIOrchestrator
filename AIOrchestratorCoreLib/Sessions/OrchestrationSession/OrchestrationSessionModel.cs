@@ -9,6 +9,8 @@ internal sealed class OrchestrationSessionModel(
     DateTime createdUtc,
     long? telegramTopicId,
     int? supervisorPid,
+    DateTime? supervisorSpawnedUtc,
+    string? displayName,
     IReadOnlyList<IOrchestrationMember> members,
     DateTime? closedUtc) : IOrchestrationSession
 {
@@ -18,6 +20,8 @@ internal sealed class OrchestrationSessionModel(
     public DateTime CreatedUtc { get; } = createdUtc;
     public long? TelegramTopicId { get; } = telegramTopicId;
     public int? SupervisorPid { get; } = supervisorPid;
+    public DateTime? SupervisorSpawnedUtc { get; } = supervisorSpawnedUtc;
+    public string? DisplayName { get; } = displayName;
     public IReadOnlyList<IOrchestrationMember> Members { get; } = members;
     public DateTime? ClosedUtc { get; } = closedUtc;
 }

@@ -14,66 +14,62 @@ public class MirrorTextFormatterTests
     }
 
     [Fact]
-    public void Format_ImplementerEntryOnSpoke_TagsTowardSupervisor()
+    public void Should_Mirror_ImplementerSpokeTraffic_NeverReachesTelegram()
     {
-        var channel = DiscoveredChannel_Factory.Create_ForImplementer("arb-fix", "imp-2", "unused");
-        var entry = Build_Entry(ChannelAuthors.Implementer, "boundary report", "All green.");
+        // The briefs/reports between supervisor and implementers made topics unreadable —
+        // only the owner channel is texted; spokes live in the app.
+        var spoke = DiscoveredChannel_Factory.Create_ForImplementer("crm-2", "imp-1", "unused");
 
-        var text = MirrorText_Formatter.Format(channel, entry);
-
-        Assert.StartsWith("🔵 [imp-2 → sup] #1 — boundary report", text);
-        Assert.Contains("All green.", text);
+        Assert.False(MirrorText_Formatter.Should_Mirror(spoke, Build_Entry(ChannelAuthors.Supervisor, "TASK: fix crash", "long brief")));
+        Assert.False(MirrorText_Formatter.Should_Mirror(spoke, Build_Entry(ChannelAuthors.Implementer, "report", "long report")));
     }
 
     [Fact]
-    public void Format_SupervisorEntryOnSpoke_TagsTowardImplementer()
+    public void Should_Mirror_OwnerChannel_SupervisorAndAppYes_OwnerEchoNo()
     {
-        var channel = DiscoveredChannel_Factory.Create_ForImplementer("arb-fix", "imp-1", "unused");
-        var entry = Build_Entry(ChannelAuthors.Supervisor, "verdict", "Close it.");
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("crm-2", "unused");
 
-        var text = MirrorText_Formatter.Format(channel, entry);
-
-        Assert.StartsWith("🔴 [sup → imp-1]", text);
+        Assert.True(MirrorText_Formatter.Should_Mirror(ownerChannel, Build_Entry(ChannelAuthors.Supervisor, "s", "b")));
+        Assert.True(MirrorText_Formatter.Should_Mirror(ownerChannel, Build_Entry(ChannelAuthors.App, "s", "b")));
+        Assert.False(MirrorText_Formatter.Should_Mirror(ownerChannel, Build_Entry(ChannelAuthors.Owner, "via Telegram", "hello")));
     }
 
     [Fact]
-    public void Format_SupervisorEntryOnOwnerChannel_TagsTowardOwner()
+    public void Format_Supervisor_BarePrefixAndBodyOnly_NoCeremony()
     {
-        var channel = DiscoveredChannel_Factory.Create_ForOwner("arb-fix", "unused");
-        var entry = Build_Entry(ChannelAuthors.Supervisor, "question for you", "Which option?");
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("crm-2", "unused");
+        var entry = Build_Entry(ChannelAuthors.Supervisor, "STATUS", "- imp-1: building\n- no blockers");
 
-        var text = MirrorText_Formatter.Format(channel, entry);
+        var text = MirrorText_Formatter.Format(ownerChannel, entry);
 
-        Assert.StartsWith("🔴 [sup → owner]", text);
+        Assert.Equal("🔴 Sup: - imp-1: building\n- no blockers", text);
+        Assert.DoesNotContain("[sup", text);
+        Assert.DoesNotContain("#1", text);
     }
 
     [Fact]
-    public void Should_Mirror_OwnerEntryOnOwnerChannel_IsFalse()
+    public void Format_SupervisorWithEmptyBody_SubjectIsTheMessage()
     {
-        var channel = DiscoveredChannel_Factory.Create_ForOwner("arb-fix", "unused");
-        var entry = Build_Entry(ChannelAuthors.Owner, "via Telegram", "hello");
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("crm-2", "unused");
+        var entry = Build_Entry(ChannelAuthors.Supervisor, "supervisor online — CRM — Projects\\Prova Amazon", "");
 
-        Assert.False(MirrorText_Formatter.Should_Mirror(channel, entry));
+        Assert.Equal("🔴 Sup: supervisor online — CRM — Projects\\Prova Amazon", MirrorText_Formatter.Format(ownerChannel, entry));
     }
 
     [Fact]
-    public void Should_Mirror_AppEntryOnOwnerChannel_IsTrue()
+    public void Format_App_SubjectOnly_BodyIsAgentFacingDetail()
     {
-        var channel = DiscoveredChannel_Factory.Create_ForOwner("general", "unused");
-        var entry = Build_Entry(ChannelAuthors.App, "orchestration started", "done");
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("general", "unused");
+        var entry = Build_Entry(ChannelAuthors.App, "orchestration 'crm-2' closed", "Sessions ended; folder kept as audit trail; Telegram topic deleted.");
 
-        Assert.True(MirrorText_Formatter.Should_Mirror(channel, entry));
-        Assert.StartsWith("⚙ [app → owner]", MirrorText_Formatter.Format(channel, entry));
+        Assert.Equal("⚙ App: orchestration 'crm-2' closed", MirrorText_Formatter.Format(ownerChannel, entry));
     }
 
     [Fact]
-    public void Format_EmptyBody_HeaderOnly()
+    public void Is_StatusEntry_MatchesStatusSubjectPrefix_CaseInsensitive()
     {
-        var channel = DiscoveredChannel_Factory.Create_ForImplementer("x", "imp-1", "unused");
-        var entry = Build_Entry(ChannelAuthors.Implementer, "ack", "");
-
-        var text = MirrorText_Formatter.Format(channel, entry);
-
-        Assert.DoesNotContain("\n\n", text);
+        Assert.True(MirrorText_Formatter.Is_StatusEntry(Build_Entry(ChannelAuthors.Supervisor, "STATUS", "- no change")));
+        Assert.True(MirrorText_Formatter.Is_StatusEntry(Build_Entry(ChannelAuthors.Supervisor, "status update", "x")));
+        Assert.False(MirrorText_Formatter.Is_StatusEntry(Build_Entry(ChannelAuthors.Supervisor, "question", "x")));
     }
 }

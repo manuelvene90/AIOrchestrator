@@ -148,6 +148,15 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_DisplayName(string orchId, string displayName)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithDisplayName(session, displayName));
+        }
+    }
+
     public void Close_Member(string orchId, string memberId)
     {
         lock (_writeLock)

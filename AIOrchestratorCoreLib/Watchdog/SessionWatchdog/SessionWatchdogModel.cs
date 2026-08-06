@@ -16,6 +16,13 @@ internal sealed class SessionWatchdogModel(
     /// <summary>Grace between respawns of the same slot — covers shell startup + pid-file write.</summary>
     const int RESPAWN_BACKOFF_SECONDS = 45;
 
+    /// <summary>
+    /// Grace after ANY spawn (launcher-initiated included) before a missing pid file counts as
+    /// dead. Without this, the tick right after a launcher spawn saw no pid file yet and spawned
+    /// a DUPLICATE (the launcher never claims the watchdog's own backoff slot).
+    /// </summary>
+    const int SPAWN_GRACE_SECONDS = 90;
+
     static readonly IReadOnlySet<string> SHELL_PROCESS_NAMES = new HashSet<string> { "powershell", "pwsh" };
 
     readonly ISupervisionPaths _paths = paths;
@@ -33,14 +40,19 @@ internal sealed class SessionWatchdogModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            Check_OrchestrationSupervisor(session.OrchId);
+            Check_OrchestrationSupervisor(session);
 
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc == null)
-                    Check_Implementer(session.OrchId, member.MemberId);
+                    Check_Implementer(session.OrchId, member.MemberId, member.SpawnedUtc);
             }
         }
+    }
+
+    static bool Is_WithinSpawnGrace(DateTime? spawnedUtc)
+    {
+        return spawnedUtc != null && (DateTime.UtcNow - spawnedUtc.Value).TotalSeconds < SPAWN_GRACE_SECONDS;
     }
 
     void Check_GeneralSupervisor()
@@ -55,20 +67,26 @@ internal sealed class SessionWatchdogModel(
         _launcher.Spawn_GeneralSupervisor();
     }
 
-    void Check_OrchestrationSupervisor(string orchId)
+    void Check_OrchestrationSupervisor(Sessions.OrchestrationSession.IOrchestrationSession session)
     {
-        if (Is_SessionAlive(_paths.Get_SupervisorPidFile(orchId)))
+        if (Is_WithinSpawnGrace(session.SupervisorSpawnedUtc))
             return;
 
-        if (!Try_ClaimRespawnSlot($"sup:{orchId}"))
+        if (Is_SessionAlive(_paths.Get_SupervisorPidFile(session.OrchId)))
             return;
 
-        _log.Log_Warning(orchId, "Supervisor session not running — respawning (it resumes from the channels)");
-        _launcher.Respawn_Supervisor(orchId);
+        if (!Try_ClaimRespawnSlot($"sup:{session.OrchId}"))
+            return;
+
+        _log.Log_Warning(session.OrchId, "Supervisor session not running — respawning (it resumes from the channels)");
+        _launcher.Respawn_Supervisor(session.OrchId);
     }
 
-    void Check_Implementer(string orchId, string memberId)
+    void Check_Implementer(string orchId, string memberId, DateTime? spawnedUtc)
     {
+        if (Is_WithinSpawnGrace(spawnedUtc))
+            return;
+
         if (Is_SessionAlive(_paths.Get_ImplementerPidFile(orchId, memberId)))
             return;
 

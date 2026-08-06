@@ -13,7 +13,7 @@ public static class OrchestrationSession_Factory
         int? supervisorPid,
         IReadOnlyList<IOrchestrationMember> members)
     {
-        return Create(orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, members, null);
+        return Create(orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, null, null, members, null);
     }
 
     public static IOrchestrationSession Create(
@@ -23,6 +23,8 @@ public static class OrchestrationSession_Factory
         DateTime createdUtc,
         long? telegramTopicId,
         int? supervisorPid,
+        DateTime? supervisorSpawnedUtc,
+        string? displayName,
         IReadOnlyList<IOrchestrationMember> members,
         DateTime? closedUtc)
     {
@@ -30,21 +32,29 @@ public static class OrchestrationSession_Factory
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
 
         return new OrchestrationSessionModel(
-            orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, members, closedUtc);
+            orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc, displayName, members, closedUtc);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithTopicId(IOrchestrationSession existing, long topicId)
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            topicId, existing.SupervisorPid, existing.Members, existing.ClosedUtc);
+            topicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName, existing.Members, existing.ClosedUtc);
     }
 
+    /// <summary>Also stamps SupervisorSpawnedUtc — the pid change IS a spawn (watchdog grace source).</summary>
     public static IOrchestrationSession CreateFrom_Existing_WithSupervisorPid(IOrchestrationSession existing, int? pid)
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            existing.TelegramTopicId, pid, existing.Members, existing.ClosedUtc);
+            existing.TelegramTopicId, pid, DateTime.UtcNow, existing.DisplayName, existing.Members, existing.ClosedUtc);
+    }
+
+    public static IOrchestrationSession CreateFrom_Existing_WithDisplayName(IOrchestrationSession existing, string displayName)
+    {
+        return Create(
+            existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
+            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, displayName, existing.Members, existing.ClosedUtc);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithMembers(
@@ -53,13 +63,13 @@ public static class OrchestrationSession_Factory
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            existing.TelegramTopicId, existing.SupervisorPid, members, existing.ClosedUtc);
+            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName, members, existing.ClosedUtc);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_Closed(IOrchestrationSession existing, DateTime closedUtc)
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            existing.TelegramTopicId, existing.SupervisorPid, existing.Members, closedUtc);
+            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName, existing.Members, closedUtc);
     }
 }

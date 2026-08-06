@@ -39,7 +39,19 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         return threadIdNode.GetValue<long>();
     }
 
-    public async Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
+    public async Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_thread_id"] = messageThreadId,
+            ["name"] = newName,
+        };
+
+        await Post_Async("editForumTopic", payload, cancellationToken);
+    }
+
+    public async Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
         {
@@ -47,7 +59,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["message_thread_id"] = messageThreadId,
         };
 
-        await Post_Async("closeForumTopic", payload, cancellationToken);
+        await Post_Async("deleteForumTopic", payload, cancellationToken);
     }
 
     public async Task Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)

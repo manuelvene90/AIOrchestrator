@@ -19,6 +19,7 @@ public interface IOrchestrationSessionStore
     void Set_TelegramTopicId(string orchId, long topicId);
     void Set_SupervisorPid(string orchId, int? pid);
     void Set_MemberPid(string orchId, string memberId, int? pid);
+    void Set_DisplayName(string orchId, string displayName);
 
     void Close_Member(string orchId, string memberId);
     void Close_Orchestration(string orchId);
