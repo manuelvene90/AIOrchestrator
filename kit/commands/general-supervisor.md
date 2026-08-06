@@ -144,4 +144,8 @@ until [ "$(count)" -gt "$base" ]; do sleep 15; done
 echo "NEW TRAFFIC on the general channel — read from your last entry down, act, reply, RE-ARM this watcher before ending your turn."
 ```
 
+**On resume you may see a notification about orphaned/stopped background tasks from the previous
+session** — those are your OLD watchers, killed with the session. Expected; ignore them, never
+investigate them, just arm a fresh watcher as part of the boot.
+
 Now execute the boot sequence.

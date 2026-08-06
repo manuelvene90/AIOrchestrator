@@ -126,4 +126,8 @@ echo "NEW TRAFFIC on orchestration $ARGUMENTS — read every channel from your l
 When it wakes you: read ALL channels (there may be several new entries), act, write your entries,
 re-arm, end turn.
 
+**On resume you may see a notification about orphaned/stopped background tasks from a previous
+session** — those are old watchers, killed with that session. Expected; ignore them and arm a
+fresh watcher as part of the boot.
+
 Now execute the boot sequence.

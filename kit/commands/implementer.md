@@ -77,4 +77,8 @@ echo "NEW SUPERVISOR ENTRY on your channel — read from your last entry down, a
 A turn ended without an armed watcher stalls the orchestration — treat re-arming as part of every
 task's definition of done, AFTER any turn-end hooks are satisfied.
 
+**On resume you may see a notification about orphaned/stopped background tasks from a previous
+session** — those are old watchers, killed with that session. Expected; ignore them and arm a
+fresh watcher as part of the boot.
+
 Now execute the boot sequence.
