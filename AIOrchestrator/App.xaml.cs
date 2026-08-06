@@ -24,6 +24,7 @@ public partial class App : Application
     Mutex? _singleInstanceMutex;
     CancellationTokenSource? _engineCancellation;
     ISupervisionPaths? _paths;
+    AIOrchestratorCoreLib.Logging.OrchestrationLog.IOrchestrationLog? _log;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -46,7 +47,9 @@ public partial class App : Application
         _paths = paths;
         var configProvider = OrchestratorConfigProvider_Factory.Create(paths);
         var log = OrchestrationLog_Factory.Create(paths);
+        _log = log;
 
+        Install_GlobalExceptionHandlers();
         Ensure_KitAssetsInstalled(paths, log);
         var store = OrchestrationSessionStore_Factory.Create(paths);
         var spawner = SessionSpawner_Factory.Create();
@@ -59,6 +62,37 @@ public partial class App : Application
 
         var mainWindow = new MainWindow(paths, configProvider, store, launcher, engine, log);
         mainWindow.Show();
+    }
+
+    /// <summary>
+    /// An unhandled exception must NEVER take the app down — the app dying kills every agent
+    /// session with it. UI-thread exceptions are logged, shown, and marked handled; background
+    /// task exceptions are logged and observed. (The engine's own loops already catch per-tick.)
+    /// </summary>
+    void Install_GlobalExceptionHandlers()
+    {
+        DispatcherUnhandledException += (_, args) =>
+        {
+            _log?.Log_Error("", "Unhandled UI exception — app kept alive", args.Exception);
+            MessageBox.Show(
+                $"An internal error occurred and was contained (the app and all sessions keep running):\n\n{args.Exception.Message}",
+                "AI Orchestrator",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            args.Handled = true;
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            _log?.Log_Error("", "Unobserved background task exception — app kept alive", args.Exception);
+            args.SetObserved();
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            // Non-recoverable path (runtime is tearing down) — at least leave a trace.
+            _log?.Log_Error("", "FATAL unhandled exception — app is going down", args.ExceptionObject as Exception);
+        };
     }
 
     /// <summary>

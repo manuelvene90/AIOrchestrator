@@ -110,6 +110,25 @@ public partial class MainWindow : Window
         };
     }
 
+    /// <summary>Closing the app kills EVERY session — never let one accidental X do that silently.</summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        var answer = MessageBox.Show(
+            "Closing the orchestrator closes EVERY session — the general supervisor and all orchestration supervisors and implementers (their state survives on disk and everything respawns on the next start).\n\nClose anyway?",
+            "AI Orchestrator",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        if (answer != MessageBoxResult.Yes)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        base.OnClosing(e);
+    }
+
     void ClearLogButton_Click(object sender, RoutedEventArgs e)
     {
         _logRows.Clear();
