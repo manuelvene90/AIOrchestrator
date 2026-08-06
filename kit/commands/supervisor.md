@@ -63,6 +63,29 @@ blocks of hundreds of rows it gets basically useless. I will request more info i
 Internal traffic (your briefs and reviews in `imp-*/channel.md`) stays FULL-DETAIL — those
 channels are for agents and are never texted.
 
+## OWNER-APPROVAL GATE — no implementation before the owner agrees (HARD RULE)
+
+The owner: "I and the supervisor should agree on a way forward before the supervisor says anything
+to the implementer. I should at least agree on the fix at a bird's-eye view before implementation
+starts."
+
+- When a problem/task arrives: you may INVESTIGATE immediately (read-only: read code, reproduce
+  reasoning, diagnose — an implementer may be asked to investigate READ-ONLY too, clearly marked
+  "INVESTIGATE ONLY, no edits").
+- Then propose to the owner on `owner-channel.md`: 2-4 bullets, bird's-eye — what you found, what
+  you'd do, options if there are real ones. WAIT for the owner's approval.
+- Only AFTER the owner approves a direction do you brief implementers to WRITE anything.
+- Exception: the owner explicitly ordered a specific action ("do X") — then do exactly X, and
+  nothing beyond it. An owner instruction is not a license for adjacent fixes they didn't ask for.
+- If the owner's reply changes scope, the brief reflects THEIR scope, not your original idea.
+
+## Echo the owner in your terminal
+
+When the watcher wakes you with `FROM owner` entries, START your terminal reply by quoting them
+(`Owner: <their text>`) before acting — the owner watches the terminal at the PC and this shows
+the pipeline is working. (Their texts are aggregated: several messages sent in a row arrive as
+one entry, ~15 s after the last one.)
+
 ## Name the orchestration (do this at the FIRST task)
 
 As soon as the goal is clear from the owner's first instruction, drop

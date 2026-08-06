@@ -1,7 +1,9 @@
+using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.WindowFocus;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
@@ -35,6 +37,9 @@ internal sealed class BridgeEngineModel(
     const int INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS = 60000;
     const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
 
+    /// <summary>The owner often texts several messages in a row — quiet time before delivery as ONE entry.</summary>
+    const int OWNER_AGGREGATION_SECONDS = 15;
+
     const string GLOBAL_ORCH_ID = "";
 
     readonly ISupervisionPaths _paths = paths;
@@ -46,6 +51,9 @@ internal sealed class BridgeEngineModel(
     readonly ITelegramApiClient? _telegramClient = telegramClient;
     readonly ISessionWatchdog _watchdog = watchdog;
     readonly Lock _stateLock = new();
+    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
+    readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
+    readonly Lock _deliveryLock = new();
 
     long _lastUpdateId = initialLastUpdateId;
     DateTime _lastLimitCheckUtc = DateTime.MinValue;
@@ -124,6 +132,9 @@ internal sealed class BridgeEngineModel(
 
         // After closes are processed, so a freshly-closed session is not immediately revived.
         _watchdog.Check_AndRestart_DeadSessions();
+
+        // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
+        await Flush_OwnerDeliveries_Async(cancellationToken);
 
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
@@ -433,6 +444,8 @@ internal sealed class BridgeEngineModel(
                 if (_telegramClient != null && session.TelegramTopicId != null)
                     Rename_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value, request.Name);
 
+                Rename_SessionWindows_BestEffort(session, request.Name);
+
                 _log.Log_Info(request.OrchId, $"Named '{request.Name}'");
                 Raise_OrchestrationActivity(request.OrchId);
             }
@@ -463,6 +476,32 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Warning(orchId, $"Topic pin removal failed for topic {topicId}: {ex.Message}");
             }
         });
+    }
+
+    /// <summary>
+    /// Renames the session terminal windows to carry the goal name. The original fragment stays
+    /// as a prefix ("SUP · crm-2 · CRM invoice crash") so focusing/closing keep matching.
+    /// </summary>
+    void Rename_SessionWindows_BestEffort(Sessions.OrchestrationSession.IOrchestrationSession session, string name)
+    {
+        try
+        {
+            var supervisorFragment = $"SUP · {session.OrchId}";
+            TerminalWindow_Focuser.Try_Rename_ByTitleFragment(supervisorFragment, $"{supervisorFragment} · {name}");
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc != null)
+                    continue;
+
+                var memberFragment = $"{member.MemberId.ToUpperInvariant()} · {session.OrchId}";
+                TerminalWindow_Focuser.Try_Rename_ByTitleFragment(memberFragment, $"{memberFragment} · {name}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(session.OrchId, $"Terminal window rename failed: {ex.Message}");
+        }
     }
 
     void Rename_TelegramTopic_FireAndForget(string orchId, long topicId, string newName)
@@ -723,6 +762,11 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// Owner texts are BUFFERED, not delivered immediately: several messages sent in a row
+    /// aggregate into one entry after a quiet window (Flush_OwnerDeliveries_Async does the
+    /// delivery and sends the '✓ → Sup' receipt).
+    /// </summary>
     async Task Route_OwnerMessage_Async(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
     {
         string orchId;
@@ -747,13 +791,57 @@ internal sealed class BridgeEngineModel(
             channelFile = _paths.Get_OwnerChannelFile(orchId);
         }
 
-        var entryText = message.PhotoFileId == null
+        var segmentText = message.PhotoFileId == null
             ? message.Text
             : await Build_PhotoEntryText_Async(message, channelFile, orchId, cancellationToken);
 
-        ChannelAppender.Append_OwnerEntry(channelFile, entryText, DateTime.Now);
-        _log.Log_Info(orchId, "Owner message routed to the supervisor's channel");
-        Raise_OrchestrationActivity(orchId);
+        lock (_deliveryLock)
+        {
+            _deliveryTargets[channelFile] = (orchId, message.MessageThreadId);
+        }
+
+        _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
+        _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
+    }
+
+    async Task Flush_OwnerDeliveries_Async(CancellationToken cancellationToken)
+    {
+        if (!_ownerDeliveryBuffer.Has_PendingDeliveries())
+            return;
+
+        foreach (var delivery in _ownerDeliveryBuffer.Take_ReadyDeliveries(DateTime.UtcNow))
+        {
+            (string OrchId, long? ThreadId) target;
+
+            lock (_deliveryLock)
+            {
+                if (!_deliveryTargets.TryGetValue(delivery.Key, out target))
+                {
+                    _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner delivery for '{delivery.Key}' has no recorded target — dropped");
+                    continue;
+                }
+            }
+
+            ChannelAppender.Append_OwnerEntry(delivery.Key, delivery.Value, DateTime.Now);
+            _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
+            Raise_OrchestrationActivity(target.OrchId);
+
+            if (_telegramClient == null || _telegramMuted)
+                continue;
+
+            try
+            {
+                await _telegramClient.Send_Message_Async(target.ThreadId, "✓ → Sup", cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(target.OrchId, $"Delivery receipt send failed: {ex.Message}");
+            }
+        }
     }
 
     /// <summary>

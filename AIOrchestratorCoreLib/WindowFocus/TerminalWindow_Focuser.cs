@@ -35,6 +35,9 @@ public static class TerminalWindow_Focuser
     [DllImport("user32.dll")]
     static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern bool SetWindowText(IntPtr hWnd, string text);
+
     const uint WM_CLOSE = 0x0010;
 
     /// <summary>Returns false when no visible window carries the fragment in its title.</summary>
@@ -65,6 +68,24 @@ public static class TerminalWindow_Focuser
             return false;
 
         return PostMessage(foundHandle, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    /// <summary>
+    /// Renames a session's terminal window (used when the orchestration gets its goal name).
+    /// The new title must KEEP the original fragment as a prefix so title-based focusing and
+    /// closing keep working.
+    /// </summary>
+    public static bool Try_Rename_ByTitleFragment(string titleFragment, string newTitle)
+    {
+        if (!newTitle.Contains(titleFragment, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"New title '{newTitle}' must contain the fragment '{titleFragment}' — focusing/closing match on it");
+
+        var foundHandle = Find_WindowHandle_ByTitleFragment(titleFragment);
+
+        if (foundHandle == IntPtr.Zero)
+            return false;
+
+        return SetWindowText(foundHandle, newTitle);
     }
 
     static IntPtr Find_WindowHandle_ByTitleFragment(string titleFragment)
