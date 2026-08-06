@@ -50,6 +50,7 @@ public partial class MainWindow : Window
         _engine = engine;
 
         InitializeComponent();
+        DarkTitleBar_Enabler.Apply(this);
 
         ActivityLogListBox.ItemsSource = _logRows;
         RootPathText.Text = paths.Root;
@@ -72,6 +73,29 @@ public partial class MainWindow : Window
         _refreshTimer.Start();
 
         Refresh_Orchestrations();
+        Schedule_GeneralSupervisorFocus();
+    }
+
+    /// <summary>
+    /// The watchdog spawns the general supervisor a few seconds after startup — once its window
+    /// exists, bring it to the front so the owner can start talking right away.
+    /// </summary>
+    void Schedule_GeneralSupervisorFocus()
+    {
+        var attempts = 0;
+        var focusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+
+        focusTimer.Tick += (_, _) =>
+        {
+            attempts++;
+
+            var focused = AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment("GENERAL");
+
+            if (focused || attempts >= 5)
+                focusTimer.Stop();
+        };
+
+        focusTimer.Start();
     }
 
     void On_LogEntry(AIOrchestratorCoreLib.Logging.OrchestrationLogEntry.IOrchestrationLogEntry entry)
@@ -247,7 +271,7 @@ public partial class MainWindow : Window
             OrchId = session.OrchId,
             Title = session.DisplayName ?? session.OrchId,
             RepoName = session.RepoName,
-            SummaryText = $"{orchIdSuffix}· {openImplementers} implementer{(openImplementers == 1 ? "" : "s")} · running {Describe_Duration(age)}",
+            SummaryText = $"{orchIdSuffix}· {openImplementers} implementer{(openImplementers == 1 ? "" : "s")} · running {Describe_Duration(age)}{Build_UsageTotalText(session)}",
             IsClosed = session.ClosedUtc != null,
             ClosedLabel = session.ClosedUtc == null ? "" : "CLOSED",
             CardOpacity = session.ClosedUtc == null ? 1.0 : 0.5,
@@ -365,6 +389,90 @@ public partial class MainWindow : Window
             return $"{(int)duration.TotalHours} h {duration.Minutes} min";
 
         return $"{(int)duration.TotalDays} d {duration.Hours} h";
+    }
+
+    /// <summary>
+    /// Orchestration-wide usage: supervisor + ALL members, CLOSED ones included (their last
+    /// .usage.json persists). Caveat: each file holds the member's current/last session, so a
+    /// respawn resets that member's contribution.
+    /// </summary>
+    string Build_UsageTotalText(IOrchestrationSession session)
+    {
+        List<string> usageFiles = [Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), ".usage.json")];
+
+        foreach (var member in session.Members)
+            usageFiles.Add(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), ".usage.json"));
+
+        var costTotal = 0.0;
+        long tokenTotal = 0;
+
+        foreach (var usageFile in usageFiles)
+        {
+            costTotal += Read_SessionCost_OrNull(usageFile) ?? 0.0;
+            tokenTotal += Read_SessionTokens_OrNull(usageFile) ?? 0L;
+        }
+
+        if (costTotal <= 0 && tokenTotal <= 0)
+            return "";
+
+        var tokenPart = tokenTotal > 0 ? $" · Σ {Format_Tokens(tokenTotal)}" : "";
+        var costPart = costTotal > 0 ? $" · Σ ≈${costTotal:F2} equiv" : "";
+
+        return $"{tokenPart}{costPart}";
+    }
+
+    /// <summary>Tolerant token extraction — the statusline schema varies by Claude Code version.</summary>
+    static long? Read_SessionTokens_OrNull(string usageFilePath)
+    {
+        try
+        {
+            if (!File.Exists(usageFilePath))
+                return null;
+
+            var root = System.Text.Json.Nodes.JsonNode.Parse(Read_FileText_Safe(usageFilePath));
+
+            if (root == null)
+                return null;
+
+            long total = 0;
+            Sum_TokenFields(root, ref total);
+
+            return total > 0 ? total : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    static void Sum_TokenFields(System.Text.Json.Nodes.JsonNode node, ref long total)
+    {
+        if (node is System.Text.Json.Nodes.JsonObject jsonObject)
+        {
+            foreach (var pair in jsonObject)
+            {
+                if (pair.Value == null)
+                    continue;
+
+                var isTokenCountField = System.Text.RegularExpressions.Regex.IsMatch(
+                    pair.Key, @"^(total_)?(cache_creation_|cache_read_)?(input|output)_tokens$");
+
+                if (isTokenCountField && pair.Value is System.Text.Json.Nodes.JsonValue value && value.TryGetValue<long>(out var count))
+                    total += count;
+                else
+                    Sum_TokenFields(pair.Value, ref total);
+            }
+        }
+    }
+
+    static string Format_Tokens(long tokens)
+    {
+        if (tokens < 1_000)
+            return $"{tokens} tok";
+        if (tokens < 1_000_000)
+            return $"{tokens / 1_000.0:F1}k tok";
+
+        return $"{tokens / 1_000_000.0:F1}M tok";
     }
 
     static double? Read_SessionCost_OrNull(string usageFilePath)

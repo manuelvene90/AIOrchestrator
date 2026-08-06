@@ -4,9 +4,9 @@ namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
 public static class OrchestratorConfig_Factory
 {
-    /// <summary>Owner's model ladder: routing = cheap, supervision = strongest, implementation = strong.</summary>
+    /// <summary>Owner's model ladder: routing = cheap, supervision and implementation = opus.</summary>
     public const string DEFAULT_GENERAL_SUPERVISOR_MODEL = "sonnet";
-    public const string DEFAULT_SUPERVISOR_MODEL = "fable";
+    public const string DEFAULT_SUPERVISOR_MODEL = "opus";
     public const string DEFAULT_IMPLEMENTER_MODEL = "opus";
 
     public static IOrchestratorConfig Create(

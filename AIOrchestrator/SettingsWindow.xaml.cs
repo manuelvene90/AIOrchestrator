@@ -17,6 +17,7 @@ public partial class SettingsWindow : Window
         _config = config;
 
         InitializeComponent();
+        Views.DarkTitleBar_Enabler.Apply(this);
 
         BotTokenTextBox.Text = config.TelegramBotToken ?? "";
         ChatIdTextBox.Text = config.TelegramSupergroupChatId?.ToString() ?? "";

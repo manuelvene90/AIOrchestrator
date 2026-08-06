@@ -4,7 +4,8 @@
         xmlns:views="clr-namespace:AIOrchestrator.Views"
         Title="AI Orchestrator" Height="780" Width="1280"
         Background="{StaticResource BgWindow}"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        WindowState="Maximized">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
@@ -33,7 +34,9 @@
                             <DataTemplate>
                                 <StackPanel Margin="6,4">
                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-                                    <TextBlock Text="{Binding Path}" Foreground="{StaticResource TextSecondary}" FontSize="10" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding Path, Converter={x:Static views:LastTwoFoldersConverter.INSTANCE}}"
+                                               Foreground="{StaticResource TextSecondary}" FontSize="10" TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding Path}"/>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
