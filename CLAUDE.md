@@ -22,16 +22,22 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
 
 1. **Telegram is a MIRROR + owner console, never the agent↔agent transport.** Hard Bot API constraints force this and it is also the better design: bots cannot create group chats (only forum topics), bots never see other bots' messages, and one bot token allows a single concurrent `getUpdates` poller. Agent↔agent traffic stays on local channel files (append-only, auditable, watcher-wakeable — the proven mechanism). The bridge mirrors outbound and injects inbound.
 2. **One Telegram forum supergroup, one topic per orchestration session.** The owner creates the supergroup once (Topics enabled, bot as admin); the app creates a topic per orchestration id via `createForumTopic`. Owner messages typed into a topic are inherently supervisor-only, because implementers never read Telegram at all.
-3. **Central channel home, outside every git tree:** `~/.claude/supervision/<orch-id>/` containing `session.json` (repo path, model choices, member roster), `inbox.md` (bridge → supervisor: owner messages), and `imp-<n>/channel.md` (one duplex channel per implementer). This kills the accidental-`git add -A` hazard the in-repo channel file had, and makes bridge discovery trivial (watch one folder; new orch-id folder ⇒ create topic).
+3. **Central channel home, outside every git tree:** `~/.claude/supervision/<orch-id>/` containing `session.json` (repo path, member roster + PIDs, telegram topic id), `owner-channel.md` (duplex owner ⇄ supervisor: bridge appends inbound Telegram messages, supervisor appends replies/questions, bridge mirrors the supervisor's entries back to Telegram), `orchestrator.log.jsonl` (structured per-orchestration log), and `imp-<n>/channel.md` (one duplex channel per implementer). This kills the accidental-`git add -A` hazard the in-repo channel file had, and makes bridge discovery trivial (watch one folder; new orch-id folder ⇒ create topic).
 4. **Hub-and-spoke topology, one supervisor : N implementers.** Each implementer gets its OWN channel file with the supervisor — an exact copy of the proven 1:1 duplex protocol. Implementers never see each other's traffic. The unified "group conversation" view exists only in the Telegram mirror, where the bridge merges all spokes chronologically tagged `[sup → imp-2]`, `[imp-1 → sup]`, etc.
 5. **The app spawns sessions in real terminals** (Windows Terminal `wt new-tab`, fallback `Start-Process`), passing the role slash command as the initial prompt so the session knows its role and id from message one. Mac later via `osascript`; same design, different launcher line.
 6. **Portable kit:** everything a new machine needs (app, role commands, config template) installs from this repo. Owner uses this across multiple machines.
 
-## Open Questions (do not implement past these without resolving)
+## Resolved Decisions (2026-08-06, owner)
 
-- **UI framework: the created VS template is WPF (`net10.0-windows`), but the owner's current stack is Avalonia** (their entire suite rebuild). Asked, awaiting answer — affects the csproj immediately.
-- Coding patterns: does this repo follow the Da-Vinci-Fintech-Suite `CODING_PATTERNS.md` rules (no auto-properties, factory-built models, etc.) or is it free-style? Owner to decide.
-- Design spec not yet written — will land at `docs/superpowers/specs/2026-08-06-ai-orchestrator-design.md` once the brainstorm concludes. Until then, this file is the decision log.
+- **UI framework: WPF** ("keep it simple") — `net10.0-windows`. The suite's `LoggingLib` ships a WPF `ListBoxLoggerSimple` control, which the app uses as its live log panel.
+- **Coding patterns: follow the suite's `CODING_PATTERNS.md`** (read `CODING_PATTERNS_QUICKREF.md` in the suite repo before writing C# here). `AIOrchestratorCoreLib` = strict (triples, factories, immutability); the WPF app project = UI-relaxed (mutable observable properties allowed), same as the suite's App-project rule. NOTE: this repo has no pre-write hook — compliance is on the author.
+- **Suite code reuse:** the WPF app takes `ProjectReference`s into the sibling suite repo (`..\..\manuelvene90\Da-Vinci-Fintech-Suite` relative to this repo; main checkout, NOT a worktree). v1 references `00_Shared/LoggingLib` (+ `ExtensionsAndMethodsLib` transitively). CoreLib stays suite-free so its tests run standalone.
+- **Per-orchestration logging + live state view** (owner directive mid-design): every orchestration writes `orchestrator.log.jsonl`; the app shows a live log panel and per-member state chips (implementer working / awaiting review / writing window open / blocked on owner) derived from the channel files.
+- **Dual interaction:** Telegram AND direct terminal typing are both first-class; the file protocol works with the app closed.
+
+## Design Spec
+
+**`docs/superpowers/specs/2026-08-06-ai-orchestrator-design.md` is the approved design** — read it before changing architecture. This file stays the quick context; the spec is the authority.
 
 ## Repository Structure
 
