@@ -51,40 +51,19 @@ public static class SpawnCommand_Builder
 
     /// <summary>
     /// generalHomeFolder is the general supervisor's PERMANENT working directory (its CLAUDE.md home).
-    /// The role command travels WITH --continue: a resumed conversation would otherwise sit idle
-    /// (no greeting, no watcher armed) — the boot sequence is idempotent by design, so re-running
-    /// it on every launch is exactly right.
     ///
-    /// Resume-vs-fresh is decided BEFORE launching, by checking whether a previous conversation
-    /// exists (Claude Code stores each directory's sessions under ~/.claude/projects/&lt;encoded&gt;/).
-    /// An exit-code fallback is WRONG here: it cannot distinguish "could not resume" from "the
-    /// session ran and exited non-zero" (Ctrl+C, crash), and re-launched the role command a second
-    /// time after such an exit.
+    /// The general supervisor is STATELESS ACROSS LAUNCHES by design (owner directive): every
+    /// launch is a FRESH conversation. Its only memory is its CLAUDE.md (role/repo knowledge,
+    /// auto-loaded from the working directory) and the channel file its boot re-reads as a LOG.
+    /// A '--continue' resume proved harmful: the restored conversation re-executed its own
+    /// in-flight plans (a failed start-orchestration was retried on boot → duplicate
+    /// orchestrations).
     /// </summary>
     public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
     {
-        var claudeInvocation = Build_ClaudeInvocation(model);
-        var conversationsPattern = $"$env:USERPROFILE\\.claude\\projects\\{Encode_ClaudeProjectFolderName(generalHomeFolder)}\\*.jsonl";
-
-        var claudeCommand =
-            $"if (Test-Path \"{conversationsPattern}\") " +
-            $"{{ {claudeInvocation} --continue '/general-supervisor' }} " +
-            $"else {{ {claudeInvocation} '/general-supervisor' }}";
-
-        var script = Build_SessionScript("general", "general", "general", claudeCommand, pidFilePath);
+        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(model)} '/general-supervisor'", pidFilePath);
 
         return Build_WindowsTerminalCommand("GENERAL", GENERAL_TAB_COLOR, generalHomeFolder, script);
-    }
-
-    /// <summary>
-    /// Claude Code's per-directory conversation folder name: the absolute path with every
-    /// non-alphanumeric character replaced by '-' (e.g. C:\Users\x\.claude\supervision\general
-    /// → C--Users-x--claude-supervision-general).
-    /// </summary>
-    public static string Encode_ClaudeProjectFolderName(string absolutePath)
-    {
-        var characters = absolutePath.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-');
-        return new string([.. characters]);
     }
 
     /// <summary>Fallback when Windows Terminal (wt.exe) is not installed: a plain PowerShell window.</summary>

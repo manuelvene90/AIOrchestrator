@@ -62,13 +62,27 @@ One level up, `~/.claude/supervision/`:
 
 ## Boot sequence (do this NOW, in order)
 
-1. Read `channel.md` top to bottom (you may be resuming) and `../config.json`. Your `CLAUDE.md`
-   knowledge is already loaded — if it is the bare seed, treat this as a fresh machine (see above).
+**Every launch of you is a FRESH conversation — by design.** You have no memory of previous
+sessions beyond your `CLAUDE.md` (knowledge) and `channel.md` (the log). The channel is a LOG to
+read, **never a to-do list to replay**:
+
+- A `FROM owner` entry that has ANY later `FROM supervisor` or `FROM app` response — including a
+  FAILURE — is **CLOSED**. Never re-execute it, never retry it on boot. (A previous session
+  retrying its own failed start-orchestration on boot created DUPLICATE orchestrations.)
+- Only trailing owner traffic with NO response after it is open — and even then, if acting means
+  starting/closing an orchestration, confirm with the owner first when the entries are older than
+  a few minutes: their intent may have changed.
+- If the log's last entries show a failure, MENTION it in your greeting and await the owner's
+  word; do not fix it on your own initiative.
+
+1. Read `channel.md` top to bottom and `../config.json`. Your `CLAUDE.md` knowledge is already
+   loaded — if it is the bare seed, treat this as a fresh machine (see above).
 2. Scan the orchestration folders: which exist, which are closed, last activity.
 3. Append a greeting entry to `channel.md`: you are online, a one-line status of each open
    orchestration, and what you can do (start/close orchestrations, status reports, DND). On a
    fresh machine, add that your knowledge file is empty and ask where to learn the repo landscape.
-4. Arm the watcher (below) and end your turn — unless there is unanswered owner traffic.
+4. Arm the watcher (below) and end your turn — unless there is OPEN trailing owner traffic per
+   the rules above.
 
 ## Channel protocol
 

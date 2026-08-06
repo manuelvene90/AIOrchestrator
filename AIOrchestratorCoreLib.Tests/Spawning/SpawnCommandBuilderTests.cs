@@ -33,11 +33,7 @@ public class SpawnCommandBuilderTests
 
         Assert.Contains(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS, SpawnCommand_Builder.Decode_SessionScript(supervisor));
         Assert.Contains(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS, SpawnCommand_Builder.Decode_SessionScript(implementer));
-
-        // The general supervisor runs claude twice (resume + fallback) — BOTH must skip prompts.
-        var generalScript = SpawnCommand_Builder.Decode_SessionScript(general);
-        var flagCount = generalScript.Split(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS).Length - 1;
-        Assert.Equal(2, flagCount);
+        Assert.Contains(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS, SpawnCommand_Builder.Decode_SessionScript(general));
     }
 
     [Fact]
@@ -74,7 +70,7 @@ public class SpawnCommandBuilderTests
     }
 
     [Fact]
-    public void Build_ForGeneralSupervisor_ResumesPreviousConversationWithRoleCommandFallback()
+    public void Build_ForGeneralSupervisor_AlwaysStartsFresh_StatelessAcrossLaunches()
     {
         var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", PID_FILE);
 
@@ -83,20 +79,12 @@ public class SpawnCommandBuilderTests
 
         var script = SpawnCommand_Builder.Decode_SessionScript(command);
 
-        // Resume-vs-fresh is decided by CONVERSATION EXISTENCE, never by exit code: an exit-code
-        // fallback re-ran the role command after any non-zero session end (the double-run bug).
-        Assert.Contains(@"if (Test-Path ""$env:USERPROFILE\.claude\projects\C--Users-x--claude-supervision-general\*.jsonl"")", script);
-        Assert.Contains("{ claude --model sonnet --dangerously-skip-permissions --continue '/general-supervisor' }", script);
-        Assert.Contains("else { claude --model sonnet --dangerously-skip-permissions '/general-supervisor' }", script);
+        // Fresh conversation every launch — a --continue resume re-executed its own in-flight
+        // plans (a failed start was retried on boot → duplicate orchestrations). Memory lives in
+        // its CLAUDE.md and the channel file, never in the conversation.
+        Assert.Contains("claude --model sonnet --dangerously-skip-permissions '/general-supervisor'", script);
+        Assert.DoesNotContain("--continue", script);
         Assert.DoesNotContain("$LASTEXITCODE", script);
-    }
-
-    [Fact]
-    public void Encode_ClaudeProjectFolderName_MatchesClaudeCodeEncoding()
-    {
-        var encoded = SpawnCommand_Builder.Encode_ClaudeProjectFolderName(@"C:\Users\Gianpiero\.claude\supervision\general");
-
-        Assert.Equal("C--Users-Gianpiero--claude-supervision-general", encoded);
     }
 
     [Fact]

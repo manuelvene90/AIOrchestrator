@@ -119,10 +119,13 @@ stops tailing them; the UI dims the card / greys the chip. Nothing is ever delet
   `SessionTerminator` tree-kills every pid file under the supervision root. **Orchestration
   close** ⇒ its supervisor + implementers are killed too. State lives on disk; the next app start
   resumes everything.
-- **Resume semantics:** general supervisor restarts with `claude --continue` (its cwd — the
-  supervision root — is unique to it) falling back to the role command; supervisors/implementers
-  restart through their role commands, whose boot re-reads the channels (`--continue` in a repo
-  shared by several sessions could resume the wrong conversation).
+- **Resume semantics (REVISED after live rounds):** ALL roles restart FRESH through their role
+  commands; nothing uses `--continue`. The general supervisor is STATELESS across launches by
+  owner directive — its only memory is its own `CLAUDE.md` (role/repo knowledge) and the channel
+  file, which its boot reads as a LOG, never as a to-do list (a `--continue` resume re-executed
+  its own in-flight failed start on boot → duplicate orchestrations; answered/failed requests are
+  CLOSED and never auto-retried). Supervisors/implementers resume state the same way: channel
+  re-read.
 
 ### Orchestration ids & repo naming
 - Ids are ALLOCATED (`OrchId_Allocator`): `repo-slug-n`, incremental per repo, derived from
