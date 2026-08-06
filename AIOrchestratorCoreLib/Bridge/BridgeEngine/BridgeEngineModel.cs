@@ -38,7 +38,7 @@ internal sealed class BridgeEngineModel(
     const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
 
     /// <summary>The owner often texts several messages in a row — quiet time before delivery as ONE entry.</summary>
-    const int OWNER_AGGREGATION_SECONDS = 15;
+    const int OWNER_AGGREGATION_SECONDS = 8;
 
     const string GLOBAL_ORCH_ID = "";
 
@@ -775,12 +775,15 @@ internal sealed class BridgeEngineModel(
                 var json = await client.Get_UpdatesJson_Async(_lastUpdateId + 1, INBOUND_LONG_POLL_SECONDS, cancellationToken);
                 var batch = TelegramUpdates_Parser.Parse_OwnerMessages(json, supergroupChatId, ownerUserId);
 
-                foreach (var message in batch.OwnerMessages)
-                    await Route_OwnerMessage_Async(message, cancellationToken);
-
-                // The owner texting ANYTHING lifts DND — the catch-up burst follows on the next tick.
+                // The owner texting ANYTHING lifts DND — before routing, so the ✓ acks go out.
                 if (batch.OwnerMessages.Count > 0 && _telegramMuted)
                     Set_TelegramMuted(false);
+
+                foreach (var message in batch.OwnerMessages)
+                {
+                    await Route_OwnerMessage_Async(message, cancellationToken);
+                    await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+                }
 
                 if (batch.MaxUpdateId != null)
                 {
@@ -881,7 +884,8 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                await _telegramClient.Send_Message_Async(target.ThreadId, "✓ → Sup", cancellationToken);
+                // Double tick = aggregation done, message actually handed to the Sup.
+                await _telegramClient.Send_Message_Async(target.ThreadId, "✓✓", cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -891,6 +895,23 @@ internal sealed class BridgeEngineModel(
             {
                 _log.Log_Warning(target.OrchId, $"Delivery receipt send failed: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>Single tick = "received", sent immediately per message (delivery follows as ✓✓).</summary>
+    async Task Send_ReceivedAck_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.Send_Message_Async(messageThreadId, "✓", cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Received-ack send failed: {ex.Message}");
         }
     }
 

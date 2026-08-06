@@ -80,7 +80,7 @@ Run with the Bash tool, `run_in_background: true`, substituting your ids:
 ```bash
 ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
 base=$(grep -c "FROM supervisor" "$ch")
-until [ "$(grep -c "FROM supervisor" "$ch")" -gt "$base" ]; do sleep 15; done
+until [ "$(grep -c "FROM supervisor" "$ch")" -gt "$base" ]; do sleep 5; done
 echo "NEW SUPERVISOR ENTRY on your channel — read from your last entry down, act on it, append your boundary report, then RE-ARM this watcher before ending your turn."
 ```
 

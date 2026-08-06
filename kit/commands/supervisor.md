@@ -129,6 +129,14 @@ and the app executes within ~2 s, confirming with a `FROM app` entry on your `ow
   new member (e.g. `imp-2`), brief it in `imp-2/channel.md`.
 - **Retire an implementer:** first tell it to wrap up in its channel and wait for its final report;
   then drop `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>"}`.
+- **Liveness is the APP's job — NEVER yours (hard rule).** The `pid` in `session.json` is NOT a
+  liveness signal: it is informational, and it is legitimately `null` for a while after every
+  spawn. NEVER run Get-Process to decide whether an implementer is alive, and NEVER
+  close-implementer because you suspect it died: if a session actually dies, the app's watchdog
+  respawns it automatically within seconds, and it resumes from its channel. An implementer that
+  has not written yet is THINKING or working — write in its channel and wait. Retiring is ONLY for
+  work that is finished or that the owner explicitly abandoned. (A supervisor once retired a live,
+  working implementer off a stale pid and then committed into another's worktree — never again.)
 - **Close the WHOLE orchestration — yours to do when the work is done.** When the owner says
   "close the session", "we're done", "our work is completed" or anything equivalent, they mean the
   ENTIRE orchestration — you included, card removed, topic deleted — never just the implementers.
@@ -204,7 +212,7 @@ without one stalls the whole orchestration:
 sup="$HOME/.claude/supervision/$ARGUMENTS"
 count() { cat "$sup"/imp-*/channel.md "$sup/owner-channel.md" 2>/dev/null | grep -c "FROM implementer\|FROM owner\|FROM app"; }
 base=$(count); start=$(date +%s)
-until [ "$(count)" -gt "$base" ] || [ $(( $(date +%s) - start )) -ge 1800 ]; do sleep 15; done
+until [ "$(count)" -gt "$base" ] || [ $(( $(date +%s) - start )) -ge 1800 ]; do sleep 5; done
 if [ "$(count)" -gt "$base" ]; then echo "NEW TRAFFIC on orchestration $ARGUMENTS — read every channel from your last entry down, act on it, append your entries, then RE-ARM this watcher before ending your turn."; else echo "STATUS due for $ARGUMENTS — append a STATUS entry (1-3 bullets) to owner-channel.md if work is in flight, then RE-ARM this watcher."; fi
 ```
 

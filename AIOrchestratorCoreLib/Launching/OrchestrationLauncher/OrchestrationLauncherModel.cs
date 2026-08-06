@@ -18,6 +18,10 @@ internal sealed class OrchestrationLauncherModel(
     ISessionSpawner spawner,
     IOrchestrationLog log) : IOrchestrationLauncher
 {
+    /// <summary>The shell writes its pid file within ~1 s of starting; 40 × 500 ms is generous.</summary>
+    const int PID_FILE_WAIT_ATTEMPTS = 40;
+    const int PID_FILE_POLL_MILLISECONDS = 500;
+
     readonly ISupervisionPaths _paths = paths;
     readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
@@ -47,39 +51,53 @@ internal sealed class OrchestrationLauncherModel(
         var newMember = session.Members[session.Members.Count - 1];
 
         Respawn_Implementer(orchId, newMember.MemberId);
-        return session;
+
+        // Respawn stamped the new member's spawn state — return the fresh session, not the
+        // pre-spawn snapshot.
+        return _store.Get_Session(orchId);
     }
 
     public void Respawn_Supervisor(string orchId)
     {
         var session = _store.Get_Session(orchId);
+        var pidFile = _paths.Get_SupervisorPidFile(orchId);
 
         var command = SpawnCommand_Builder.Build_ForSupervisor(
             orchId,
             session.RepoPath,
             session.SupervisorModelOverride ?? _configProvider.Get_Current().SupervisorModel,
-            _paths.Get_SupervisorPidFile(orchId));
+            pidFile);
 
-        var pid = _spawner.Spawn(command);
+        // Stamp the spawn (watchdog grace) BEFORE deleting the stale pid file, so no tick can see
+        // "no pid file + no grace" and double-spawn. The stale file must go: the sync below must
+        // never read the PREVIOUS session's pid as the new one.
+        _store.Set_SupervisorPid(orchId, null);
+        Delete_StalePidFile_BestEffort(pidFile);
 
-        _store.Set_SupervisorPid(orchId, pid);
+        _spawner.Spawn(command);
+        Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
+
         _log.Log_Info(orchId, "Supervisor session spawned");
     }
 
     public void Respawn_Implementer(string orchId, string memberId)
     {
         var session = _store.Get_Session(orchId);
+        var pidFile = _paths.Get_ImplementerPidFile(orchId, memberId);
 
         var command = SpawnCommand_Builder.Build_ForImplementer(
             orchId,
             memberId,
             session.RepoPath,
             session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel,
-            _paths.Get_ImplementerPidFile(orchId, memberId));
+            pidFile);
 
-        var pid = _spawner.Spawn(command);
+        _store.Set_MemberPid(orchId, memberId, null);
+        Delete_StalePidFile_BestEffort(pidFile);
 
-        _store.Set_MemberPid(orchId, memberId, pid);
+        _spawner.Spawn(command);
+        Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
+
         _log.Log_Info(orchId, $"Implementer '{memberId}' session spawned");
     }
 
@@ -96,5 +114,80 @@ internal sealed class OrchestrationLauncherModel(
         _spawner.Spawn(command);
 
         _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, "General supervisor session spawned (resume-if-possible)");
+    }
+
+    /// <summary>
+    /// Process.Start's pid is wt.exe's short-lived DELEGATOR (it hands off to the terminal service
+    /// and exits) — recording it in session.json made a supervisor conclude LIVE implementers were
+    /// dead and retire them mid-work. The TRUE session-host pid is the one the spawned shell writes
+    /// into its pid file; sync THAT into session.json once it appears. Until then the stored pid is
+    /// null, meaning "spawning" — never "dead".
+    /// </summary>
+    void Sync_TruePid_FromPidFile(string pidFilePath, string orchId, string sessionLabel, Action<int> storeTruePid)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                for (var attempt = 0; attempt < PID_FILE_WAIT_ATTEMPTS; attempt++)
+                {
+                    await Task.Delay(PID_FILE_POLL_MILLISECONDS);
+
+                    if (!File.Exists(pidFilePath))
+                        continue;
+
+                    if (int.TryParse(File.ReadAllText(pidFilePath).Trim(), out var truePid))
+                    {
+                        storeTruePid(truePid);
+                        return;
+                    }
+                }
+
+                _log.Log_Warning(orchId, $"{sessionLabel}: pid file '{pidFilePath}' never appeared — the session may have failed to start (the watchdog will respawn it)");
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(orchId, $"{sessionLabel}: true-pid sync from '{pidFilePath}' failed: {ex.Message}");
+            }
+        });
+    }
+
+    void Store_SupervisorTruePid_IfStillOpen(string orchId, int truePid)
+    {
+        var current = _store.Get_Session_OrNull(orchId);
+
+        if (current == null || current.ClosedUtc != null)
+            return;
+
+        _store.Set_SupervisorPid(orchId, truePid);
+    }
+
+    void Store_MemberTruePid_IfStillOpen(string orchId, string memberId, int truePid)
+    {
+        var current = _store.Get_Session_OrNull(orchId);
+
+        if (current == null || current.ClosedUtc != null)
+            return;
+
+        // A member closed during the sync window must stay closed — writing its pid would reopen it.
+        foreach (var member in current.Members)
+        {
+            if (member.MemberId == memberId && member.ClosedUtc == null)
+                _store.Set_MemberPid(orchId, memberId, truePid);
+        }
+    }
+
+    static void Delete_StalePidFile_BestEffort(string pidFilePath)
+    {
+        try
+        {
+            if (File.Exists(pidFilePath))
+                File.Delete(pidFilePath);
+        }
+        catch
+        {
+            // A locked pid file is tolerable — the sync may then read a stale pid for one poll,
+            // but the shell overwrites it within a second of starting.
+        }
     }
 }

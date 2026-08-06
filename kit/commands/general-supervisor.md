@@ -170,7 +170,7 @@ Run with the Bash tool, `run_in_background: true`:
 gc="$HOME/.claude/supervision/general/channel.md"   # = ./channel.md in your working directory
 count() { grep -c "FROM owner\|FROM app" "$gc"; }
 base=$(count)
-until [ "$(count)" -gt "$base" ]; do sleep 15; done
+until [ "$(count)" -gt "$base" ]; do sleep 5; done
 echo "NEW TRAFFIC on the general channel — read from your last entry down, act, reply, RE-ARM this watcher before ending your turn."
 ```
 
