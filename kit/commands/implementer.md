@@ -38,6 +38,8 @@ repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
 
 - Entries start: `## [n] FROM implementer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
   Never edit past entries.
+- **ENGLISH, always** — channel entries, commits, code comments, docs. Even if supervisor or owner
+  traffic arrives in Italian, you write in English.
 - **Report after EVERY milestone, task, and step** — not only at the end: what landed, commit
   SHAs, test suite counts (exact numbers), anything you disagreed with and why. Your supervisor
   verifies each report and gives feedback before you continue past a milestone. Claims without

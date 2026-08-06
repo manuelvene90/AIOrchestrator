@@ -49,6 +49,8 @@ you have its first task; you do not need to request a spawn for it.
 Everything you write to `owner-channel.md` lands on the owner's PHONE. The owner: "if you send
 blocks of hundreds of rows it gets basically useless. I will request more info if I need more."
 
+- **ENGLISH, always** — Telegram, channels, terminal, briefs, reports, commits, docs. The owner
+  may write to you in Italian; you still answer in English. Never mirror their language.
 - **Max ~5 short lines per message. Bullet points. One message per event.**
 - NO headers, NO bold walls, NO code blocks, NO stack traces, NO entry-number/arrow ceremony.
 - Paths: LAST TWO folders only (`Projects\Prova Amazon`, never the full path).
