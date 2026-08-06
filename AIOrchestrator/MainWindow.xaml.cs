@@ -222,8 +222,9 @@ public partial class MainWindow : Window
 
         return new OrchestrationCardView
         {
-            OrchId = "general supervisor",
-            RepoName = "always-on · pinned General topic",
+            OrchId = ChannelDiscovery.GENERAL_ORCH_ID,
+            Title = "general supervisor",
+            RepoName = "always-on · General topic",
             Members = [row],
             OrchestrationButtonsVisibility = Visibility.Collapsed,
         };
@@ -233,8 +234,9 @@ public partial class MainWindow : Window
     {
         List<MemberRowView> rows = [Build_SupervisorRow(session)];
 
-        foreach (var member in session.Members)
-            rows.Add(Build_MemberRow(session, member.MemberId, member.ClosedUtc != null));
+        // Closed implementers disappear from the card (their channel stays on disk).
+        foreach (var member in session.Members.Where(m => m.ClosedUtc == null))
+            rows.Add(Build_MemberRow(session, member.MemberId));
 
         var openImplementers = session.Members.Count(m => m.ClosedUtc == null);
         var age = DateTime.UtcNow - session.CreatedUtc;
@@ -242,7 +244,8 @@ public partial class MainWindow : Window
 
         return new OrchestrationCardView
         {
-            OrchId = session.DisplayName ?? session.OrchId,
+            OrchId = session.OrchId,
+            Title = session.DisplayName ?? session.OrchId,
             RepoName = session.RepoName,
             SummaryText = $"{orchIdSuffix}· {openImplementers} implementer{(openImplementers == 1 ? "" : "s")} · running {Describe_Duration(age)}",
             IsClosed = session.ClosedUtc != null,
@@ -274,24 +277,13 @@ public partial class MainWindow : Window
         var usageFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), ".usage.json");
         var cost = Read_SessionCost_OrNull(usageFile);
 
-        return cost == null ? "" : $"session cost ${cost.Value:F2}";
+        // API-EQUIVALENT usage, not a charge — subscription plans (Max) are not billed per token.
+        return cost == null ? "" : $"usage ≈${cost.Value:F2} equiv (not billed)";
     }
 
-    MemberRowView Build_MemberRow(IOrchestrationSession session, string memberId, bool isClosed)
+    MemberRowView Build_MemberRow(IOrchestrationSession session, string memberId)
     {
         var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, memberId);
-
-        if (isClosed)
-        {
-            return new MemberRowView
-            {
-                MemberLabel = memberId,
-                RoleBrush = Find_Brush("AccentImplementer"),
-                StateText = "closed",
-                StateBrush = Find_Brush("StateClosed"),
-                LastActivityText = "",
-            };
-        }
 
         var entries = ChannelEntry_Parser.Parse_All(Read_FileText_Safe(channelFile));
         var state = MemberState_Resolver.Resolve(entries);
@@ -333,7 +325,7 @@ public partial class MainWindow : Window
 
         var cost = Read_SessionCost_OrNull(usageFilePath);
         if (cost != null)
-            parts.Add($"${cost.Value:F2}");
+            parts.Add($"≈${cost.Value:F2} equiv");
 
         return string.Join("  ·  ", parts);
     }
@@ -533,7 +525,7 @@ public partial class MainWindow : Window
             return;
 
         var answer = MessageBox.Show(
-            $"Close orchestration '{card.OrchId}'?\n\nIts supervisor and implementer sessions end, its Telegram topic closes, and its folder stays on disk as audit trail.",
+            $"Close orchestration '{card.Title}'?\n\nIts supervisor and implementer sessions end, its Telegram topic is deleted, and its folder stays on disk as audit trail.",
             "AI Orchestrator",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning,
@@ -560,7 +552,7 @@ public partial class MainWindow : Window
         if (sender is not Button button || button.Tag is not OrchestrationCardView card)
             return;
 
-        var folder = card.OrchId == "general supervisor"
+        var folder = card.OrchId == ChannelDiscovery.GENERAL_ORCH_ID
             ? _paths.GeneralFolder
             : _paths.Get_OrchestrationFolder(card.OrchId);
 

@@ -5,7 +5,12 @@ namespace AIOrchestrator.Views;
 /// <summary>Display model for one orchestration card. Rebuilt on every refresh; bindings are one-way.</summary>
 public class OrchestrationCardView
 {
+    /// <summary>The REAL orchestration id — what every action handler must send. Never the display name.</summary>
     public string OrchId { get; init; } = string.Empty;
+
+    /// <summary>What the header shows: the goal name when set, else the orch id.</summary>
+    public string Title { get; init; } = string.Empty;
+
     public string RepoName { get; init; } = string.Empty;
     public string SummaryText { get; init; } = string.Empty;
     public string ClosedLabel { get; init; } = string.Empty;
