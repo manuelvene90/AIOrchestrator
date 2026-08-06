@@ -16,4 +16,11 @@
          MainWindow's ActivityLogListBox). No suite references remain — the repo builds standalone. -->
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The kit ships WITH the app so startup can self-install the role commands and the status
+         line script (~/.claude) — running install.ps1 is no longer a prerequisite for them. -->
+    <Content Include="..\kit\commands\*.md" Link="kit\commands\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

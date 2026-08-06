@@ -1,6 +1,8 @@
+using System.IO;
 using System.Windows;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Configuration;
+using AIOrchestratorCoreLib.Kit;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -44,6 +46,8 @@ public partial class App : Application
         _paths = paths;
         var config = OrchestratorConfig_Loader.Load_OrEmpty(paths);
         var log = OrchestrationLog_Factory.Create(paths);
+
+        Ensure_KitAssetsInstalled(paths, log);
         var store = OrchestrationSessionStore_Factory.Create(paths);
         var spawner = SessionSpawner_Factory.Create();
         var launcher = OrchestrationLauncher_Factory.Create(paths, config, store, spawner, log);
@@ -55,6 +59,36 @@ public partial class App : Application
 
         var mainWindow = new MainWindow(paths, config, store, launcher, engine, log);
         mainWindow.Show();
+    }
+
+    /// <summary>
+    /// Launching the app must be enough: the role commands (/supervisor, /implementer,
+    /// /general-supervisor) and the status line script self-install/refresh from the kit shipped
+    /// in the app's output folder — no install.ps1 prerequisite for them.
+    /// </summary>
+    static void Ensure_KitAssetsInstalled(ISupervisionPaths paths, AIOrchestratorCoreLib.Logging.OrchestrationLog.IOrchestrationLog log)
+    {
+        try
+        {
+            var kitCommandsFolder = Path.Combine(AppContext.BaseDirectory, "kit", "commands");
+            var kitStatuslineFile = Path.Combine(AppContext.BaseDirectory, "kit", "statusline", "statusline.ps1");
+            var claudeCommandsFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "commands");
+            var statuslineTargetFile = Path.Combine(paths.Root, "statusline.ps1");
+
+            var installedFiles = KitAssets_Installer.Ensure_Installed(
+                kitCommandsFolder, kitStatuslineFile, claudeCommandsFolder, statuslineTargetFile);
+
+            foreach (var installedFile in installedFiles)
+                log.Log_Info("", $"Kit asset installed/updated: {installedFile}");
+
+            if (!Directory.Exists(kitCommandsFolder))
+                log.Log_Warning("", $"Kit commands folder not found at {kitCommandsFolder} — role commands NOT installed");
+        }
+        catch (Exception ex)
+        {
+            log.Log_Error("", "Kit asset self-install failed", ex);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
