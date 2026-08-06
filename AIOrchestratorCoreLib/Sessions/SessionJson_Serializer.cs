@@ -33,6 +33,8 @@ public static class SessionJson_Serializer
             ["supervisorPid"] = session.SupervisorPid,
             ["supervisorSpawnedUtc"] = session.SupervisorSpawnedUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["displayName"] = session.DisplayName,
+            ["supervisorModelOverride"] = session.SupervisorModelOverride,
+            ["implementerModelOverride"] = session.ImplementerModelOverride,
             ["members"] = membersArray,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
         };
@@ -79,6 +81,8 @@ public static class SessionJson_Serializer
             Get_Int_OrNull(root, "supervisorPid"),
             Get_DateTime_OrNull(root, "supervisorSpawnedUtc"),
             Get_String_OrNull(root, "displayName"),
+            Get_String_OrNull(root, "supervisorModelOverride"),
+            Get_String_OrNull(root, "implementerModelOverride"),
             members,
             Get_DateTime_OrNull(root, "closedUtc"));
     }

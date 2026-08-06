@@ -13,7 +13,7 @@ public static class OrchestrationSession_Factory
         int? supervisorPid,
         IReadOnlyList<IOrchestrationMember> members)
     {
-        return Create(orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, null, null, members, null);
+        return Create(orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, null, null, null, null, members, null);
     }
 
     public static IOrchestrationSession Create(
@@ -25,6 +25,8 @@ public static class OrchestrationSession_Factory
         int? supervisorPid,
         DateTime? supervisorSpawnedUtc,
         string? displayName,
+        string? supervisorModelOverride,
+        string? implementerModelOverride,
         IReadOnlyList<IOrchestrationMember> members,
         DateTime? closedUtc)
     {
@@ -32,14 +34,16 @@ public static class OrchestrationSession_Factory
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
 
         return new OrchestrationSessionModel(
-            orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc, displayName, members, closedUtc);
+            orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
+            displayName, supervisorModelOverride, implementerModelOverride, members, closedUtc);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithTopicId(IOrchestrationSession existing, long topicId)
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            topicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName, existing.Members, existing.ClosedUtc);
+            topicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName,
+            existing.SupervisorModelOverride, existing.ImplementerModelOverride, existing.Members, existing.ClosedUtc);
     }
 
     /// <summary>Also stamps SupervisorSpawnedUtc — the pid change IS a spawn (watchdog grace source).</summary>
@@ -47,14 +51,32 @@ public static class OrchestrationSession_Factory
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            existing.TelegramTopicId, pid, DateTime.UtcNow, existing.DisplayName, existing.Members, existing.ClosedUtc);
+            existing.TelegramTopicId, pid, DateTime.UtcNow, existing.DisplayName,
+            existing.SupervisorModelOverride, existing.ImplementerModelOverride, existing.Members, existing.ClosedUtc);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithDisplayName(IOrchestrationSession existing, string displayName)
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, displayName, existing.Members, existing.ClosedUtc);
+            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, displayName,
+            existing.SupervisorModelOverride, existing.ImplementerModelOverride, existing.Members, existing.ClosedUtc);
+    }
+
+    public static IOrchestrationSession CreateFrom_Existing_WithSupervisorModelOverride(IOrchestrationSession existing, string? model)
+    {
+        return Create(
+            existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
+            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName,
+            model, existing.ImplementerModelOverride, existing.Members, existing.ClosedUtc);
+    }
+
+    public static IOrchestrationSession CreateFrom_Existing_WithImplementerModelOverride(IOrchestrationSession existing, string? model)
+    {
+        return Create(
+            existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
+            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName,
+            existing.SupervisorModelOverride, model, existing.Members, existing.ClosedUtc);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithMembers(
@@ -63,13 +85,15 @@ public static class OrchestrationSession_Factory
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName, members, existing.ClosedUtc);
+            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName,
+            existing.SupervisorModelOverride, existing.ImplementerModelOverride, members, existing.ClosedUtc);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_Closed(IOrchestrationSession existing, DateTime closedUtc)
     {
         return Create(
             existing.OrchId, existing.RepoName, existing.RepoPath, existing.CreatedUtc,
-            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName, existing.Members, closedUtc);
+            existing.TelegramTopicId, existing.SupervisorPid, existing.SupervisorSpawnedUtc, existing.DisplayName,
+            existing.SupervisorModelOverride, existing.ImplementerModelOverride, existing.Members, closedUtc);
     }
 }

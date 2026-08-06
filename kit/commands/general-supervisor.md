@@ -130,12 +130,13 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
   `{"action":"close-orchestration","orchId":"<id>"}`. The folder stays as audit trail; the topic
   is closed.
 
-- **Model management** — when the owner asks to change a role's model ("use fable for
-  supervisors", "put imp models on sonnet"): edit `../config.json` (`supervisorModel`,
-  `implementerModel`, `generalSupervisorModel`). The app reads it LIVE — sessions spawned from
-  then on use the new model. For an ALREADY-RUNNING session, tell the owner: closing its terminal
-  (or the card) makes the watchdog respawn it with the new model in seconds, resuming from its
-  channels. Confirm in one line what you set.
+- **Model DEFAULTS — only when the owner EXPLICITLY asks for a default/global change** ("change
+  the default supervisor model to X", "all implementers from now on..."): edit `../config.json`
+  (`supervisorModel`, `implementerModel`, `generalSupervisorModel`); read LIVE, applies to
+  sessions spawned from then on. A request about ONE orchestration ("use fable for the CRM one")
+  is NOT yours — that goes through that orchestration's supervisor (`set-model` action), or drop
+  `{"action":"set-model","orchId":"<id>","role":"supervisor|implementer","model":"..."}` yourself
+  if the owner asked you directly. Confirm in one line what you set.
 - **Do-Not-Disturb (texts on/off)** — when the owner says "disable texts", "don't disturb me",
   "texts off": drop `{"action":"set-telegram-muted","muted":true}`. When they ask to re-enable
   (or say "texts on"): `{"action":"set-telegram-muted","muted":false}`. Facts you must know:

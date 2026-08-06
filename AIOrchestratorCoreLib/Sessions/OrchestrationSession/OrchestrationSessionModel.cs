@@ -11,6 +11,8 @@ internal sealed class OrchestrationSessionModel(
     int? supervisorPid,
     DateTime? supervisorSpawnedUtc,
     string? displayName,
+    string? supervisorModelOverride,
+    string? implementerModelOverride,
     IReadOnlyList<IOrchestrationMember> members,
     DateTime? closedUtc) : IOrchestrationSession
 {
@@ -22,6 +24,8 @@ internal sealed class OrchestrationSessionModel(
     public int? SupervisorPid { get; } = supervisorPid;
     public DateTime? SupervisorSpawnedUtc { get; } = supervisorSpawnedUtc;
     public string? DisplayName { get; } = displayName;
+    public string? SupervisorModelOverride { get; } = supervisorModelOverride;
+    public string? ImplementerModelOverride { get; } = implementerModelOverride;
     public IReadOnlyList<IOrchestrationMember> Members { get; } = members;
     public DateTime? ClosedUtc { get; } = closedUtc;
 }

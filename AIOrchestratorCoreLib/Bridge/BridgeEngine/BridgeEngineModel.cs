@@ -430,6 +430,56 @@ internal sealed class BridgeEngineModel(
         Process_CloseOrchestrationRequests(pending);
         Process_SetTelegramMutedRequests(pending);
         Process_SetOrchestrationNameRequests(pending);
+        Process_SetModelRequests(pending);
+    }
+
+    /// <summary>
+    /// Per-orchestration model override (owner: "use fable for this") — stored on session.json,
+    /// then the affected sessions are killed and respawned on the new model; they resume from
+    /// their channels. Never touches the global defaults.
+    /// </summary>
+    void Process_SetModelRequests(IPendingRequests pending)
+    {
+        foreach (var request in pending.SetModelRequests)
+        {
+            try
+            {
+                if (request.Role == GeneralSupervision.SetModelRequest.SetModelRequest_Factory.SUPERVISOR_ROLE)
+                {
+                    _store.Set_SupervisorModelOverride(request.OrchId, request.Model);
+                    SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_SupervisorPidFile(request.OrchId));
+                    _launcher.Respawn_Supervisor(request.OrchId);
+                }
+                else
+                {
+                    _store.Set_ImplementerModelOverride(request.OrchId, request.Model);
+                    var session = _store.Get_Session(request.OrchId);
+
+                    foreach (var member in session.Members)
+                    {
+                        if (member.ClosedUtc != null)
+                            continue;
+
+                        SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(request.OrchId, member.MemberId));
+                        _launcher.Respawn_Implementer(request.OrchId, member.MemberId);
+                    }
+                }
+
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    $"model set: {request.Role} → {request.Model}",
+                    "Affected sessions respawned on the new model; they resume from their channels.");
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Error(request.OrchId, $"set-model {request.Role} → '{request.Model}' failed", ex);
+                Append_OrchestrationAppEntry(request.OrchId, $"set-model FAILED: {request.Role} → {request.Model}", $"Error: {ex.Message}");
+            }
+            finally
+            {
+                Delete_RequestFile(request.SourceFilePath);
+            }
+        }
     }
 
     void Process_SetOrchestrationNameRequests(IPendingRequests pending)

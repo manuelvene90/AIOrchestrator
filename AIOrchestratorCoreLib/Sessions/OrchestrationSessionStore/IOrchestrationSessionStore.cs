@@ -20,6 +20,8 @@ public interface IOrchestrationSessionStore
     void Set_SupervisorPid(string orchId, int? pid);
     void Set_MemberPid(string orchId, string memberId, int? pid);
     void Set_DisplayName(string orchId, string displayName);
+    void Set_SupervisorModelOverride(string orchId, string? model);
+    void Set_ImplementerModelOverride(string orchId, string? model);
 
     void Close_Member(string orchId, string memberId);
     void Close_Orchestration(string orchId);

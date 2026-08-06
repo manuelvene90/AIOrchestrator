@@ -55,7 +55,10 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
 
         var command = SpawnCommand_Builder.Build_ForSupervisor(
-            orchId, session.RepoPath, _configProvider.Get_Current().SupervisorModel, _paths.Get_SupervisorPidFile(orchId));
+            orchId,
+            session.RepoPath,
+            session.SupervisorModelOverride ?? _configProvider.Get_Current().SupervisorModel,
+            _paths.Get_SupervisorPidFile(orchId));
 
         var pid = _spawner.Spawn(command);
 
@@ -68,7 +71,11 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
 
         var command = SpawnCommand_Builder.Build_ForImplementer(
-            orchId, memberId, session.RepoPath, _configProvider.Get_Current().ImplementerModel, _paths.Get_ImplementerPidFile(orchId, memberId));
+            orchId,
+            memberId,
+            session.RepoPath,
+            session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel,
+            _paths.Get_ImplementerPidFile(orchId, memberId));
 
         var pid = _spawner.Spawn(command);
 

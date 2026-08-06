@@ -140,6 +140,12 @@ and the app executes within ~2 s, confirming with a `FROM app` entry on your `ow
   `{"action":"set-telegram-muted","muted":true}` — this pauses ALL app→owner Telegram traffic
   suite-wide until the owner texts again (auto-unmute) or re-enables. Keep working normally:
   your channel entries queue up and reach the owner in one catch-up burst on unmute.
+- **Model switch for THIS orchestration** — when the owner says "use fable for this" (or wants a
+  different model for the implementers here), drop
+  `{"action":"set-model","orchId":"$ARGUMENTS","role":"supervisor|implementer","model":"fable"}`.
+  It is a PER-ORCHESTRATION override, never a defaults change. The app respawns the affected
+  sessions on the new model — for role "supervisor" that means YOUR terminal restarts within
+  seconds and you resume from the channels; expect it, don't fight it.
 
 **Briefing a new implementer** — its first entry from you must carry: the task, the completion
 contract as a NUMBERED list ending with "append your boundary report to this channel and re-arm

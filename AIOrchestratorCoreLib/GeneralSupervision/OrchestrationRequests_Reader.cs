@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.CloseImplementerRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.CloseOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.MalformedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
+using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.StartOrchestrationRequest;
@@ -24,6 +25,7 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 ///   {"action":"close-orchestration","orchId":"..."}                   (general supervisor)
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
 ///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
+///   {"action":"set-model","orchId":"...","role":"supervisor|implementer","model":"..."}  (per-orchestration override)
 /// </summary>
 public static class OrchestrationRequests_Reader
 {
@@ -33,6 +35,7 @@ public static class OrchestrationRequests_Reader
     public const string CLOSE_ORCHESTRATION_ACTION = "close-orchestration";
     public const string SET_TELEGRAM_MUTED_ACTION = "set-telegram-muted";
     public const string SET_ORCHESTRATION_NAME_ACTION = "set-orchestration-name";
+    public const string SET_MODEL_ACTION = "set-model";
 
     public static IPendingRequests Read_Pending(ISupervisionPaths paths)
     {
@@ -42,6 +45,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
         List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<ISetModelRequest> setModelRequests = [];
         List<IMalformedRequest> malformedRequests = [];
 
         if (Directory.Exists(paths.RequestsFolder))
@@ -49,7 +53,7 @@ public static class OrchestrationRequests_Reader
             foreach (var file in Directory.EnumerateFiles(paths.RequestsFolder, "*.json"))
             {
                 var rejectionReason = Try_ParseInto_OrReason(
-                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests);
+                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests);
 
                 if (rejectionReason != null)
                     malformedRequests.Add(MalformedRequest_Factory.Create(file, rejectionReason));
@@ -57,7 +61,7 @@ public static class OrchestrationRequests_Reader
         }
 
         return PendingRequests_Factory.Create(
-            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, malformedRequests);
+            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests, malformedRequests);
     }
 
     /// <summary>Returns null on success, otherwise the rejection reason.</summary>
@@ -68,7 +72,8 @@ public static class OrchestrationRequests_Reader
         List<ICloseImplementerRequest> closeImplementerRequests,
         List<ICloseOrchestrationRequest> closeOrchestrationRequests,
         List<ISetTelegramMutedRequest> setTelegramMutedRequests,
-        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests)
+        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests,
+        List<ISetModelRequest> setModelRequests)
     {
         JsonObject root;
         try
@@ -144,12 +149,28 @@ public static class OrchestrationRequests_Reader
                     setOrchestrationNameRequests.Add(SetOrchestrationNameRequest_Factory.Create(orchId, nameValue, filePath));
                     return null;
                 }
+                case SET_MODEL_ACTION:
+                {
+                    var roleValue = root["role"]?.GetValue<string>();
+                    var modelValue = root["model"]?.GetValue<string>();
+
+                    if (string.IsNullOrWhiteSpace(orchId) || string.IsNullOrWhiteSpace(roleValue) || string.IsNullOrWhiteSpace(modelValue))
+                        return "missing 'orchId', 'role' or 'model'";
+
+                    var normalizedRole = roleValue.Trim().ToLowerInvariant();
+                    if (normalizedRole != SetModelRequest_Factory.SUPERVISOR_ROLE && normalizedRole != SetModelRequest_Factory.IMPLEMENTER_ROLE)
+                        return $"role must be '{SetModelRequest_Factory.SUPERVISOR_ROLE}' or '{SetModelRequest_Factory.IMPLEMENTER_ROLE}', got '{roleValue}'";
+
+                    setModelRequests.Add(SetModelRequest_Factory.Create(orchId, normalizedRole, modelValue, filePath));
+                    return null;
+                }
                 default:
                 {
                     var known = string.Join(", ", new[]
                     {
                         START_ORCHESTRATION_ACTION, ADD_IMPLEMENTER_ACTION, CLOSE_IMPLEMENTER_ACTION,
                         CLOSE_ORCHESTRATION_ACTION, SET_TELEGRAM_MUTED_ACTION, SET_ORCHESTRATION_NAME_ACTION,
+                        SET_MODEL_ACTION,
                     });
 
                     return $"unknown action '{action}' (known: {known}; retries must reuse the SAME action)";

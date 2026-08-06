@@ -157,6 +157,24 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_SupervisorModelOverride(string orchId, string? model)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithSupervisorModelOverride(session, model));
+        }
+    }
+
+    public void Set_ImplementerModelOverride(string orchId, string? model)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithImplementerModelOverride(session, model));
+        }
+    }
+
     public void Close_Member(string orchId, string memberId)
     {
         lock (_writeLock)
