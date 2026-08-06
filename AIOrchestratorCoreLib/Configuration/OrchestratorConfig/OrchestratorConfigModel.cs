@@ -9,7 +9,8 @@ internal sealed class OrchestratorConfigModel(
     string? generalSupervisorModel,
     long? telegramSupergroupChatId,
     long? telegramOwnerUserId,
-    string? telegramBotToken) : IOrchestratorConfig
+    string? telegramBotToken,
+    bool telegramItalianLayer) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -18,6 +19,7 @@ internal sealed class OrchestratorConfigModel(
     public long? TelegramSupergroupChatId { get; } = telegramSupergroupChatId;
     public long? TelegramOwnerUserId { get; } = telegramOwnerUserId;
     public string? TelegramBotToken { get; } = telegramBotToken;
+    public bool TelegramItalianLayer { get; } = telegramItalianLayer;
 
     public bool Is_TelegramConfigured()
     {

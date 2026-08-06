@@ -18,5 +18,12 @@ public interface IOrchestratorConfig
     long? TelegramOwnerUserId { get; }
     string? TelegramBotToken { get; }
 
+    /// <summary>
+    /// The owner reads/writes Italian on Telegram while sessions and channels stay 100% English:
+    /// inbound owner texts are translated to English before reaching a channel, outbound mirror
+    /// texts to Italian before sending. Canned strings (ticks, thinking, limit alerts) stay English.
+    /// </summary>
+    bool TelegramItalianLayer { get; }
+
     bool Is_TelegramConfigured();
 }

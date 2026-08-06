@@ -50,7 +50,10 @@ Everything you write to `owner-channel.md` lands on the owner's PHONE. The owner
 blocks of hundreds of rows it gets basically useless. I will request more info if I need more."
 
 - **ENGLISH, always** — Telegram, channels, terminal, briefs, reports, commits, docs. The owner
-  may write to you in Italian; you still answer in English. Never mirror their language.
+  may write to you in Italian; you still answer in English. Never mirror their language. (The app
+  has an Italian layer that translates Telegram traffic both ways — owner texts usually reach your
+  channel already in English, and your English gets translated for their phone. Not your concern:
+  you read and write English, period.)
 - **Max ~5 short lines per message. Bullet points. One message per event.**
 - NO headers, NO bold walls, NO code blocks, NO stack traces, NO entry-number/arrow ceremony.
 - Paths: LAST TWO folders only (`Projects\Prova Amazon`, never the full path).

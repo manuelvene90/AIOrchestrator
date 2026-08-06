@@ -56,6 +56,17 @@ public class OrchestratorConfigProviderTests : IDisposable
     }
 
     [Fact]
+    public void Get_Current_ItalianLayer_DefaultsTrue_AndAnExplicitFalseSticks()
+    {
+        Assert.True(_provider.Get_Current().TelegramItalianLayer);
+
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"telegramItalianLayer":false}""");
+        File.SetLastWriteTimeUtc(_paths.ConfigFile, DateTime.UtcNow.AddSeconds(2));
+
+        Assert.False(_provider.Get_Current().TelegramItalianLayer);
+    }
+
+    [Fact]
     public void Get_Current_FileChanged_ReturnsNewInstance()
     {
         File.WriteAllText(_paths.ConfigFile, """{"repos":[{"name":"CRM","path":"C:\\somewhere"}]}""");

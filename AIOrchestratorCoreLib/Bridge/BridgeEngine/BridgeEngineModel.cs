@@ -16,6 +16,7 @@ using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Termination;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 
 namespace AIOrchestratorCoreLib.Bridge.BridgeEngine;
@@ -29,6 +30,7 @@ internal sealed class BridgeEngineModel(
     IChannelTailer tailer,
     ITelegramApiClient? telegramClient,
     ISessionWatchdog watchdog,
+    IMessageTranslator translator,
     long initialLastUpdateId) : IBridgeEngine
 {
     const int MIRROR_TICK_MILLISECONDS = 2000;
@@ -50,6 +52,7 @@ internal sealed class BridgeEngineModel(
     readonly IChannelTailer _tailer = tailer;
     readonly ITelegramApiClient? _telegramClient = telegramClient;
     readonly ISessionWatchdog _watchdog = watchdog;
+    readonly IMessageTranslator _translator = translator;
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
@@ -317,6 +320,11 @@ internal sealed class BridgeEngineModel(
         foreach (var entry in mirrorableEntries)
         {
             var text = MirrorText_Formatter.Format(append.Channel, entry);
+
+            // Italian layer (live config): the owner reads Italian on the phone; sessions and
+            // channels stay English. Fallback inside the translator = original text on failure.
+            if (_configProvider.Get_Current().TelegramItalianLayer)
+                text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
 
             foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             {
@@ -875,7 +883,14 @@ internal sealed class BridgeEngineModel(
                 }
             }
 
-            ChannelAppender.Append_OwnerEntry(delivery.Key, delivery.Value, DateTime.Now);
+            var deliveryText = delivery.Value;
+
+            // Italian layer: the SESSION must only ever see English — translate the aggregated
+            // owner text before it touches the channel. Already-English text passes unchanged.
+            if (_configProvider.Get_Current().TelegramItalianLayer)
+                deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
+
+            ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now);
             _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
             Raise_OrchestrationActivity(target.OrchId);
 

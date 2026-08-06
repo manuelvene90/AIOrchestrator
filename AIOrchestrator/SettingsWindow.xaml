@@ -1,7 +1,7 @@
 <Window x:Class="AIOrchestrator.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AI Orchestrator — Settings" Height="430" Width="520"
+        Title="AI Orchestrator — Settings" Height="490" Width="520"
         Background="{StaticResource BgWindow}"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
     <StackPanel Margin="18">
@@ -37,6 +37,13 @@
                 <TextBox x:Name="GeneralModelTextBox"/>
             </StackPanel>
         </Grid>
+
+        <TextBlock Text="LANGUAGE" Style="{StaticResource SectionHeader}" Margin="0,14,0,6"/>
+
+        <CheckBox x:Name="ItalianLayerCheckBox" Content="Italian layer on Telegram" FontSize="12"
+                  Foreground="{StaticResource TextSecondary}"/>
+        <TextBlock Text="You read/write Italian on Telegram; sessions and channels stay 100% English (messages are translated in both directions, technical terms kept in English). Applies live."
+                   Foreground="{StaticResource TextSecondary}" FontSize="10" TextWrapping="Wrap" Margin="22,2,0,0"/>
 
         <TextBlock x:Name="RestartNoteText" Text="Telegram and model changes apply to sessions spawned AFTER saving; Telegram bridge changes need an app restart."
                    Foreground="{StaticResource TextSecondary}" FontSize="10" TextWrapping="Wrap" Margin="0,14,0,0"/>

@@ -25,6 +25,7 @@ public partial class SettingsWindow : Window
         SupervisorModelTextBox.Text = config.SupervisorModel ?? "";
         ImplementerModelTextBox.Text = config.ImplementerModel ?? "";
         GeneralModelTextBox.Text = config.GeneralSupervisorModel ?? "";
+        ItalianLayerCheckBox.IsChecked = config.TelegramItalianLayer;
     }
 
     void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -61,7 +62,8 @@ public partial class SettingsWindow : Window
             Null_IfEmpty(GeneralModelTextBox.Text),
             chatId,
             ownerId,
-            Null_IfEmpty(BotTokenTextBox.Text));
+            Null_IfEmpty(BotTokenTextBox.Text),
+            ItalianLayerCheckBox.IsChecked == true);
 
         OrchestratorConfig_Loader.Save(updated, _paths);
         Close();

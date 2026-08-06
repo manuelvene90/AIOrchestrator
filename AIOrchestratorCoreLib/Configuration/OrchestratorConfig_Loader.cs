@@ -28,7 +28,8 @@ public static class OrchestratorConfig_Loader
             Get_String_OrNull(configRoot, "generalSupervisorModel"),
             Get_Long_OrNull(configRoot, "telegramSupergroupChatId"),
             Get_Long_OrNull(configRoot, "telegramOwnerUserId"),
-            Get_String_OrNull(secretsRoot, "telegramBotToken"));
+            Get_String_OrNull(secretsRoot, "telegramBotToken"),
+            Get_Bool_OrNull(configRoot, "telegramItalianLayer"));
     }
 
     public static void Save(IOrchestratorConfig config, ISupervisionPaths paths)
@@ -53,6 +54,7 @@ public static class OrchestratorConfig_Loader
             ["generalSupervisorModel"] = config.GeneralSupervisorModel,
             ["telegramSupergroupChatId"] = config.TelegramSupergroupChatId,
             ["telegramOwnerUserId"] = config.TelegramOwnerUserId,
+            ["telegramItalianLayer"] = config.TelegramItalianLayer,
         };
 
         File.WriteAllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));
@@ -126,5 +128,17 @@ public static class OrchestratorConfig_Loader
             return null;
 
         return node.GetValue<long>();
+    }
+
+    static bool? Get_Bool_OrNull(JsonObject? root, string key)
+    {
+        if (root == null)
+            return null;
+
+        var node = root[key];
+        if (node == null)
+            return null;
+
+        return node.GetValue<bool>();
     }
 }

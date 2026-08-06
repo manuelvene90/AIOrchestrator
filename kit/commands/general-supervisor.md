@@ -48,9 +48,15 @@ One level up, `~/.claude/supervision/`:
     "implementerModel": null,
     "generalSupervisorModel": "sonnet",
     "telegramSupergroupChatId": null,
-    "telegramOwnerUserId": null
+    "telegramOwnerUserId": null,
+    "telegramItalianLayer": true
   }
   ```
+
+  `telegramItalianLayer` (default true, read LIVE): the APP translates Telegram traffic — the
+  owner reads/writes Italian on the phone while every channel and session stays 100% English.
+  You NEVER translate anything yourself; write English as always and the app handles the rest.
+  If the owner asks to turn the Italian layer on/off, flip this key in `config.json`.
 
   Only add repos whose path EXISTS on this machine (verify each with Test-Path); record what you
   learned in your CLAUDE.md. Never touch `secrets.json` (the bot token) — the owner manages it

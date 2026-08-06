@@ -8,6 +8,7 @@ public static class OrchestratorConfig_Factory
     public const string DEFAULT_GENERAL_SUPERVISOR_MODEL = "sonnet";
     public const string DEFAULT_SUPERVISOR_MODEL = "opus";
     public const string DEFAULT_IMPLEMENTER_MODEL = "opus";
+    public const bool DEFAULT_TELEGRAM_ITALIAN_LAYER = true;
 
     public static IOrchestratorConfig Create(
         IReadOnlyList<IRepoEntry> repos,
@@ -16,7 +17,8 @@ public static class OrchestratorConfig_Factory
         string? generalSupervisorModel,
         long? telegramSupergroupChatId,
         long? telegramOwnerUserId,
-        string? telegramBotToken)
+        string? telegramBotToken,
+        bool? telegramItalianLayer)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -25,11 +27,12 @@ public static class OrchestratorConfig_Factory
             generalSupervisorModel ?? DEFAULT_GENERAL_SUPERVISOR_MODEL,
             telegramSupergroupChatId,
             telegramOwnerUserId,
-            telegramBotToken);
+            telegramBotToken,
+            telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER);
     }
 
     public static IOrchestratorConfig Create_Empty()
     {
-        return Create([], null, null, null, null, null, null);
+        return Create([], null, null, null, null, null, null, null);
     }
 }
