@@ -38,6 +38,11 @@ internal sealed class SupervisionPathsModel(string root) : ISupervisionPaths
         return Path.Combine(Get_OrchestrationFolder(orchId), ".supervisor.pid");
     }
 
+    public string Get_CommunicatorPidFile(string orchId)
+    {
+        return Path.Combine(Get_OrchestrationFolder(orchId), ".communicator.pid");
+    }
+
     public string Get_ImplementerPidFile(string orchId, string memberId)
     {
         return Path.Combine(Get_ImplementerFolder(orchId, memberId), ".pid");

@@ -35,6 +35,7 @@ if ($role -and $raw) {
         $usageFile = $null
         if ($role -eq 'general') { $usageFile = Join-Path $supervisionRoot 'general\.usage.json' }
         elseif ($role -eq 'supervisor') { $usageFile = Join-Path $supervisionRoot "$orchId\.usage.json" }
+        elseif ($role -eq 'communicator') { $usageFile = Join-Path $supervisionRoot "$orchId\.communicator.usage.json" }
         elseif ($role -eq 'implementer') { $usageFile = Join-Path $supervisionRoot "$orchId\$member\.usage.json" }
         if ($usageFile -and (Test-Path (Split-Path $usageFile))) {
             Set-Content -LiteralPath $usageFile -Value $raw -Encoding utf8
@@ -49,6 +50,9 @@ if ($role -eq 'supervisor') {
 elseif ($role -eq 'implementer') {
     $memberUpper = if ($member) { $member.ToUpper() } else { 'IMPLEMENTER' }
     Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m $model"
+}
+elseif ($role -eq 'communicator') {
+    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $orchId $esc[0m $model"
 }
 elseif ($role -eq 'general') {
     Write-Output "$esc[1;93m GENERAL SUPERVISOR $esc[0m $model"

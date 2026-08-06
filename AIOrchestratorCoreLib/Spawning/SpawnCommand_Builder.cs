@@ -24,6 +24,7 @@ public static class SpawnCommand_Builder
     public const string SUPERVISOR_TAB_COLOR = "#E5484D";
     public const string IMPLEMENTER_TAB_COLOR = "#3B82F6";
     public const string GENERAL_TAB_COLOR = "#F5A623";
+    public const string COMMUNICATOR_TAB_COLOR = "#22C55E";
 
     /// <summary>
     /// Orchestrated sessions run unattended (the owner may be on their phone) — a permission
@@ -38,6 +39,16 @@ public static class SpawnCommand_Builder
         var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model)} '/supervisor {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand($"SUP · {orchId}", SUPERVISOR_TAB_COLOR, repoPath, script);
+    }
+
+    /// <summary>The orchestration's green press-secretary voice: narrates, never works (see communicator.md).</summary>
+    public static ISpawnCommand Build_ForCommunicator(string orchId, string repoPath, string? model, string pidFilePath)
+    {
+        Validate_OrchId(orchId);
+
+        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(model)} '/communicator {orchId}'", pidFilePath);
+
+        return Build_WindowsTerminalCommand($"COM · {orchId}", COMMUNICATOR_TAB_COLOR, repoPath, script);
     }
 
     public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string pidFilePath)

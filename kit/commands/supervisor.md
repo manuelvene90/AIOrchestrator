@@ -68,6 +68,12 @@ blocks of hundreds of rows it gets basically useless. I will request more info i
 Internal traffic (your briefs and reviews in `imp-*/channel.md`) stays FULL-DETAIL — those
 channels are for agents and are never texted.
 
+**`FROM communicator` entries on your owner channel: IGNORE them completely.** The communicator
+is the orchestration's press secretary — a separate session that narrates YOUR current activity
+to the owner while you are mid-turn. Its entries are owner-facing status noise, never input for
+you: never respond to them, never treat them as owner traffic, never wait on them. (Your watcher
+already doesn't wake on them.)
+
 ## OWNER-APPROVAL GATE — no implementation before the owner agrees (HARD RULE)
 
 The owner: "I and the supervisor should agree on a way forward before the supervisor says anything

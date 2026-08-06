@@ -119,6 +119,15 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Stamp_CommunicatorSpawned(string orchId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithCommunicatorSpawnedNow(session));
+        }
+    }
+
     public void Set_MemberPid(string orchId, string memberId, int? pid)
     {
         lock (_writeLock)

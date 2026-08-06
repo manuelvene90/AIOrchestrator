@@ -7,6 +7,7 @@ internal sealed class OrchestratorConfigModel(
     string? supervisorModel,
     string? implementerModel,
     string? generalSupervisorModel,
+    string? communicatorModel,
     long? telegramSupergroupChatId,
     long? telegramOwnerUserId,
     string? telegramBotToken,
@@ -16,6 +17,7 @@ internal sealed class OrchestratorConfigModel(
     public string? SupervisorModel { get; } = supervisorModel;
     public string? ImplementerModel { get; } = implementerModel;
     public string? GeneralSupervisorModel { get; } = generalSupervisorModel;
+    public string? CommunicatorModel { get; } = communicatorModel;
     public long? TelegramSupergroupChatId { get; } = telegramSupergroupChatId;
     public long? TelegramOwnerUserId { get; } = telegramOwnerUserId;
     public string? TelegramBotToken { get; } = telegramBotToken;

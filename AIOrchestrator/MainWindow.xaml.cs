@@ -270,7 +270,7 @@ public partial class MainWindow : Window
 
     OrchestrationCardView Build_Card(IOrchestrationSession session)
     {
-        List<MemberRowView> rows = [Build_SupervisorRow(session)];
+        List<MemberRowView> rows = [Build_SupervisorRow(session), Build_CommunicatorRow(session)];
 
         // Closed implementers keep their row (disabled, no Show button) — their channel and usage
         // stay on disk, so the chips and totals remain meaningful.
@@ -310,6 +310,26 @@ public partial class MainWindow : Window
             FocusTitleFragment = $"SUP · {session.OrchId}",
             DetailText = Build_SupervisorCostText(session.OrchId),
             ShowButtonVisibility = session.ClosedUtc == null ? Visibility.Visible : Visibility.Collapsed,
+        };
+    }
+
+    /// <summary>The green press-secretary session: narrates the supervisor's activity, never works.</summary>
+    MemberRowView Build_CommunicatorRow(IOrchestrationSession session)
+    {
+        var isOpen = session.ClosedUtc == null;
+        var communicatorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), ".communicator.usage.json");
+        var cost = Read_SessionCost_OrNull(communicatorUsageFile);
+
+        return new MemberRowView
+        {
+            MemberLabel = "COM",
+            RoleBrush = Find_Brush("AccentCommunicator"),
+            StateText = isOpen ? "on watch" : "closed",
+            StateBrush = isOpen ? Find_Brush("AccentCommunicator") : Find_Brush("StateClosed"),
+            LastActivityText = "",
+            DetailText = cost == null ? "" : $"≈${cost.Value:F2} equiv",
+            FocusTitleFragment = $"COM · {session.OrchId}",
+            ShowButtonVisibility = isOpen ? Visibility.Visible : Visibility.Collapsed,
         };
     }
 
@@ -421,7 +441,11 @@ public partial class MainWindow : Window
     /// </summary>
     string Build_UsageTotalText(IOrchestrationSession session)
     {
-        List<string> usageFiles = [Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), ".usage.json")];
+        List<string> usageFiles =
+        [
+            Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), ".usage.json"),
+            Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), ".communicator.usage.json"),
+        ];
 
         foreach (var member in session.Members)
             usageFiles.Add(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), ".usage.json"));

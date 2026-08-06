@@ -40,6 +40,10 @@ internal sealed class OrchestrationLauncherModel(
 
         Respawn_Supervisor(orchId);
 
+        // The communicator is the always-responsive press-secretary voice: while the supervisor
+        // is mid-turn (unreachable), it narrates what the supervisor is doing to the owner.
+        Respawn_Communicator(orchId);
+
         // Every orchestration starts with one implementer ready (owner directive): the supervisor
         // briefs imp-1 when the first task arrives instead of requesting a spawn first.
         return Add_Implementer(orchId);
@@ -78,6 +82,26 @@ internal sealed class OrchestrationLauncherModel(
         Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
 
         _log.Log_Info(orchId, "Supervisor session spawned");
+    }
+
+    public void Respawn_Communicator(string orchId)
+    {
+        var session = _store.Get_Session(orchId);
+        var pidFile = _paths.Get_CommunicatorPidFile(orchId);
+
+        var command = SpawnCommand_Builder.Build_ForCommunicator(
+            orchId,
+            session.RepoPath,
+            _configProvider.Get_Current().CommunicatorModel,
+            pidFile);
+
+        // No pid lands in session.json for the communicator — the pid file is the liveness
+        // source and nothing else needs it. Only the spawn-grace stamp is stored.
+        _store.Stamp_CommunicatorSpawned(orchId);
+        Delete_StalePidFile_BestEffort(pidFile);
+
+        _spawner.Spawn(command);
+        _log.Log_Info(orchId, "Communicator session spawned");
     }
 
     public void Respawn_Implementer(string orchId, string memberId)

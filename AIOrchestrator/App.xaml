@@ -14,6 +14,7 @@
         <SolidColorBrush x:Key="AccentSupervisor" Color="#E5484D"/>
         <SolidColorBrush x:Key="AccentImplementer" Color="#3B82F6"/>
         <SolidColorBrush x:Key="AccentGeneral" Color="#F5A623"/>
+        <SolidColorBrush x:Key="AccentCommunicator" Color="#22C55E"/>
 
         <!-- Member state chips -->
         <SolidColorBrush x:Key="StateWorking" Color="#3B82F6"/>

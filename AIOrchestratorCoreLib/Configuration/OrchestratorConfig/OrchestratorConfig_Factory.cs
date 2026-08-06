@@ -8,6 +8,7 @@ public static class OrchestratorConfig_Factory
     public const string DEFAULT_GENERAL_SUPERVISOR_MODEL = "sonnet";
     public const string DEFAULT_SUPERVISOR_MODEL = "opus";
     public const string DEFAULT_IMPLEMENTER_MODEL = "opus";
+    public const string DEFAULT_COMMUNICATOR_MODEL = "sonnet";
     public const bool DEFAULT_TELEGRAM_ITALIAN_LAYER = true;
 
     public static IOrchestratorConfig Create(
@@ -15,6 +16,7 @@ public static class OrchestratorConfig_Factory
         string? supervisorModel,
         string? implementerModel,
         string? generalSupervisorModel,
+        string? communicatorModel,
         long? telegramSupergroupChatId,
         long? telegramOwnerUserId,
         string? telegramBotToken,
@@ -25,6 +27,7 @@ public static class OrchestratorConfig_Factory
             supervisorModel ?? DEFAULT_SUPERVISOR_MODEL,
             implementerModel ?? DEFAULT_IMPLEMENTER_MODEL,
             generalSupervisorModel ?? DEFAULT_GENERAL_SUPERVISOR_MODEL,
+            communicatorModel ?? DEFAULT_COMMUNICATOR_MODEL,
             telegramSupergroupChatId,
             telegramOwnerUserId,
             telegramBotToken,
@@ -33,6 +36,6 @@ public static class OrchestratorConfig_Factory
 
     public static IOrchestratorConfig Create_Empty()
     {
-        return Create([], null, null, null, null, null, null, null);
+        return Create([], null, null, null, null, null, null, null, null);
     }
 }

@@ -14,5 +14,8 @@ public enum ChannelAuthors
     /// <summary>The orchestrator app itself (request confirmations/failures on the general channel).</summary>
     App,
 
+    /// <summary>The orchestration's press-secretary session: narrates the supervisor's activity to the owner, never works.</summary>
+    Communicator,
+
     Unknown,
 }

@@ -91,6 +91,7 @@ public static partial class ChannelEntry_Parser
             "implementer" => ChannelAuthors.Implementer,
             "owner" => ChannelAuthors.Owner,
             "app" => ChannelAuthors.App,
+            "communicator" => ChannelAuthors.Communicator,
             _ => ChannelAuthors.Unknown,
         };
     }

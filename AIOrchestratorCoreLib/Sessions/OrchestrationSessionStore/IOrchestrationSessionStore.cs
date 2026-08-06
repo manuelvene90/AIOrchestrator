@@ -18,6 +18,9 @@ public interface IOrchestrationSessionStore
 
     void Set_TelegramTopicId(string orchId, long topicId);
     void Set_SupervisorPid(string orchId, int? pid);
+
+    /// <summary>Stamps the communicator spawn (watchdog grace) — its pid lives only in its pid file.</summary>
+    void Stamp_CommunicatorSpawned(string orchId);
     void Set_MemberPid(string orchId, string memberId, int? pid);
     void Set_DisplayName(string orchId, string displayName);
     void Set_SupervisorModelOverride(string orchId, string? model);

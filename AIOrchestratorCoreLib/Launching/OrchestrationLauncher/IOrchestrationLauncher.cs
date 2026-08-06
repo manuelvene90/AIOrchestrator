@@ -12,6 +12,7 @@ public interface IOrchestrationLauncher
     IOrchestrationSession Start_Orchestration(string repoName, string repoPath);
     IOrchestrationSession Add_Implementer(string orchId);
     void Respawn_Supervisor(string orchId);
+    void Respawn_Communicator(string orchId);
     void Respawn_Implementer(string orchId, string memberId);
 
     /// <summary>Spawns (or re-spawns) the general supervisor; resumes its previous conversation when one exists.</summary>

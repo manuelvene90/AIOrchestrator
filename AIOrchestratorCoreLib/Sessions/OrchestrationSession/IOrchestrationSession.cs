@@ -21,6 +21,9 @@ public interface IOrchestrationSession
     /// <summary>Stamped on every supervisor spawn — the watchdog's grace window against double-spawn races.</summary>
     DateTime? SupervisorSpawnedUtc { get; }
 
+    /// <summary>Same grace stamp for the communicator session (its pid lives only in its pid file).</summary>
+    DateTime? CommunicatorSpawnedUtc { get; }
+
     /// <summary>Short human goal name (2-4 words) set by the supervisor once the goal is known; also the Telegram topic name.</summary>
     string? DisplayName { get; }
 

@@ -10,6 +10,7 @@ internal sealed class OrchestrationSessionModel(
     long? telegramTopicId,
     int? supervisorPid,
     DateTime? supervisorSpawnedUtc,
+    DateTime? communicatorSpawnedUtc,
     string? displayName,
     string? supervisorModelOverride,
     string? implementerModelOverride,
@@ -23,6 +24,7 @@ internal sealed class OrchestrationSessionModel(
     public long? TelegramTopicId { get; } = telegramTopicId;
     public int? SupervisorPid { get; } = supervisorPid;
     public DateTime? SupervisorSpawnedUtc { get; } = supervisorSpawnedUtc;
+    public DateTime? CommunicatorSpawnedUtc { get; } = communicatorSpawnedUtc;
     public string? DisplayName { get; } = displayName;
     public string? SupervisorModelOverride { get; } = supervisorModelOverride;
     public string? ImplementerModelOverride { get; } = implementerModelOverride;

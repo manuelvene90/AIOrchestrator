@@ -52,7 +52,9 @@ public class OrchestrationLauncherTests : IDisposable
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
 
-        Assert.Equal(2, _spawner.SpawnedCommands.Count);
+        // Supervisor + communicator + the pre-spawned imp-1.
+        Assert.Equal(3, _spawner.SpawnedCommands.Count);
+        Assert.NotNull(session.CommunicatorSpawnedUtc);
         Assert.Null(session.SupervisorPid);
         Assert.Null(session.Members[0].Pid);
         Assert.NotNull(session.SupervisorSpawnedUtc);

@@ -14,6 +14,9 @@ public interface IOrchestratorConfig
 
     /// <summary>The general supervisor only routes "work on X" requests — a cheap model suffices (default: sonnet).</summary>
     string? GeneralSupervisorModel { get; }
+
+    /// <summary>The per-orchestration press-secretary: narrates, never works — sonnet holds the boundary (default: sonnet).</summary>
+    string? CommunicatorModel { get; }
     long? TelegramSupergroupChatId { get; }
     long? TelegramOwnerUserId { get; }
     string? TelegramBotToken { get; }

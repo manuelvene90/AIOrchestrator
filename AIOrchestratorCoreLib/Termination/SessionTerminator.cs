@@ -83,6 +83,9 @@ public static class SessionTerminator
         if (fileName == ".supervisor.pid")
             return $"SUP · {containingFolderName}";
 
+        if (fileName == ".communicator.pid")
+            return $"COM · {containingFolderName}";
+
         var orchFolderName = Path.GetFileName(Path.GetDirectoryName(containingFolder) ?? "");
         if (orchFolderName.Length == 0)
             return null;

@@ -47,6 +47,7 @@ One level up, `~/.claude/supervision/`:
     "supervisorModel": null,
     "implementerModel": null,
     "generalSupervisorModel": "sonnet",
+    "communicatorModel": null,
     "telegramSupergroupChatId": null,
     "telegramOwnerUserId": null,
     "telegramItalianLayer": true

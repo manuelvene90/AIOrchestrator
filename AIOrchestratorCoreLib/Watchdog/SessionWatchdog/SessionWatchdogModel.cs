@@ -41,6 +41,7 @@ internal sealed class SessionWatchdogModel(
                 continue;
 
             Check_OrchestrationSupervisor(session);
+            Check_Communicator(session);
 
             foreach (var member in session.Members)
             {
@@ -80,6 +81,21 @@ internal sealed class SessionWatchdogModel(
 
         _log.Log_Warning(session.OrchId, "Supervisor session not running — respawning (it resumes from the channels)");
         _launcher.Respawn_Supervisor(session.OrchId);
+    }
+
+    void Check_Communicator(Sessions.OrchestrationSession.IOrchestrationSession session)
+    {
+        if (Is_WithinSpawnGrace(session.CommunicatorSpawnedUtc))
+            return;
+
+        if (Is_SessionAlive(_paths.Get_CommunicatorPidFile(session.OrchId)))
+            return;
+
+        if (!Try_ClaimRespawnSlot($"com:{session.OrchId}"))
+            return;
+
+        _log.Log_Warning(session.OrchId, "Communicator session not running — respawning (it resumes from the channels)");
+        _launcher.Respawn_Communicator(session.OrchId);
     }
 
     void Check_Implementer(string orchId, string memberId, DateTime? spawnedUtc)

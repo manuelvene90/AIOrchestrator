@@ -40,6 +40,9 @@ public static class MirrorText_Formatter
             // Supervisor entries: the body is the message; the subject is channel metadata.
             ChannelAuthors.Supervisor => $"🔴 Sup: {Pick_Content(entry)}",
 
+            // Communicator entries: live narration of what the supervisor is doing — green voice.
+            ChannelAuthors.Communicator => $"🟢 Com: {Pick_Content(entry)}",
+
             ChannelAuthors.Implementer => $"⚠ Imp?: {Pick_Content(entry)}",
             ChannelAuthors.Owner => throw new Exception($"Owner entries must be filtered by Should_Mirror (channel '{channel.FilePath}')"),
             ChannelAuthors.Unknown => $"?: {Pick_Content(entry)}",

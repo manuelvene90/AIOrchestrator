@@ -19,6 +19,7 @@ public interface ISupervisionPaths
     /// <summary>PID files, written by the spawned shells themselves — the watchdog's liveness source.</summary>
     string GeneralPidFile { get; }
     string Get_SupervisorPidFile(string orchId);
+    string Get_CommunicatorPidFile(string orchId);
     string Get_ImplementerPidFile(string orchId, string memberId);
 
     /// <summary>Requests dropped by the general supervisor for the app to execute (start orchestration, ...).</summary>
