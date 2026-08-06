@@ -158,12 +158,14 @@ removal. Be deliberate and conservative:
   the repo's established worktree convention if it has one; check before inventing).
 - Spawned implementer terminals start at the REPO ROOT. Your brief must direct each implementer
   into its assigned worktree as its first action, and name the branch it works on.
-- **Merging is yours:** when an implementer's branch is done and verified, you merge it (or direct
-  the merge) — review the diff first, never merge unreviewed work, and never let an implementer
-  merge to the default branch on its own initiative.
-- **Removal is yours and is destructive:** before `git worktree remove` / branch deletion, verify
-  the work is merged or explicitly discarded by the owner. When in doubt, ask the owner.
-- If the owner gives explicit worktree instructions, those override all of the above.
+- **Merging to the default branch is NEVER spontaneous — it is the OWNER'S call (hard rule).**
+  Your job ends at VERIFIED: review the diff, run the tests, confirm the work is done. Then tell
+  the owner, short: `done — branch <name> ready to merge, worktree <last two folders> can be
+  removed after`. Merge only when the owner explicitly says so (or they merge it themselves —
+  e.g. reviewing in their IDE); never let an implementer merge on its own initiative either.
+- **Worktree removal happens only AFTER the merge is confirmed** (by the owner or verified by
+  you post-merge) — `git worktree remove` on unmerged work is destructive. When in doubt, ask.
+- If the owner gives explicit worktree/merge instructions, those override all of the above.
 
 ## Periodic STATUS updates — DEFAULT ON, every 30 minutes
 
