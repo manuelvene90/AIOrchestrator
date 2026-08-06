@@ -27,6 +27,10 @@ public static class SessionTerminator
             {
                 var process = Process.GetProcessById(pid);
                 process.Kill(entireProcessTree: true);
+
+                // A pending prompt does not protect a process from Kill, but the window close
+                // below must not race the tree teardown — wait (bounded) for actual death.
+                process.WaitForExit(3000);
             }
         }
         catch

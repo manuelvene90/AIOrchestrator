@@ -21,7 +21,23 @@ public class SpawnCommandBuilderTests
         Assert.Contains("$env:AIORCH_ROLE='supervisor'", script);
         Assert.Contains("$env:AIORCH_ID='arb-fix'", script);
         Assert.Contains($"Set-Content -LiteralPath '{PID_FILE}' -Value $PID", script);
-        Assert.Contains("claude --model opus '/supervisor arb-fix'", script);
+        Assert.Contains("claude --model opus --dangerously-skip-permissions '/supervisor arb-fix'", script);
+    }
+
+    [Fact]
+    public void Build_EverySession_SkipsPermissionPrompts_UnattendedByDesign()
+    {
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE);
+        var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", null, PID_FILE);
+        var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", null, PID_FILE);
+
+        Assert.Contains(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS, SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.Contains(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS, SpawnCommand_Builder.Decode_SessionScript(implementer));
+
+        // The general supervisor runs claude twice (resume + fallback) — BOTH must skip prompts.
+        var generalScript = SpawnCommand_Builder.Decode_SessionScript(general);
+        var flagCount = generalScript.Split(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS).Length - 1;
+        Assert.Equal(2, flagCount);
     }
 
     [Fact]
@@ -53,7 +69,7 @@ public class SpawnCommandBuilderTests
 
         var script = SpawnCommand_Builder.Decode_SessionScript(command);
         Assert.Contains("$env:AIORCH_MEMBER='imp-2'", script);
-        Assert.Contains("claude '/implementer arb-fix/imp-2'", script);
+        Assert.Contains("claude --dangerously-skip-permissions '/implementer arb-fix/imp-2'", script);
         Assert.DoesNotContain("--model", script);
     }
 
@@ -69,8 +85,8 @@ public class SpawnCommandBuilderTests
 
         // The role command rides WITH --continue: a resumed conversation must still boot
         // (greet + re-arm watcher), not sit idle. The bare fallback covers the first-ever run.
-        Assert.Contains("claude --model sonnet --continue '/general-supervisor'", script);
-        Assert.Contains("{ claude --model sonnet '/general-supervisor' }", script);
+        Assert.Contains("claude --model sonnet --dangerously-skip-permissions --continue '/general-supervisor'", script);
+        Assert.Contains("{ claude --model sonnet --dangerously-skip-permissions '/general-supervisor' }", script);
     }
 
     [Fact]

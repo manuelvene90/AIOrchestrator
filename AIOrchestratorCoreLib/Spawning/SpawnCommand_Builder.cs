@@ -25,11 +25,17 @@ public static class SpawnCommand_Builder
     public const string IMPLEMENTER_TAB_COLOR = "#3B82F6";
     public const string GENERAL_TAB_COLOR = "#F5A623";
 
+    /// <summary>
+    /// Orchestrated sessions run unattended (the owner may be on their phone) — a permission
+    /// prompt would hang the whole loop, so every session skips them (owner directive).
+    /// </summary>
+    public const string CLAUDE_LAUNCH_FLAGS = "--dangerously-skip-permissions";
+
     public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string pidFilePath)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("supervisor", orchId, "sup", $"claude{Build_ModelPart(model)} '/supervisor {orchId}'", pidFilePath);
+        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model)} '/supervisor {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand($"SUP · {orchId}", SUPERVISOR_TAB_COLOR, repoPath, script);
     }
@@ -38,7 +44,7 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("implementer", orchId, memberId, $"claude{Build_ModelPart(model)} '/implementer {orchId}/{memberId}'", pidFilePath);
+        var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/implementer {orchId}/{memberId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", IMPLEMENTER_TAB_COLOR, repoPath, script);
     }
@@ -52,10 +58,10 @@ public static class SpawnCommand_Builder
     /// </summary>
     public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
     {
-        var modelPart = Build_ModelPart(model);
+        var claudeInvocation = Build_ClaudeInvocation(model);
         var claudeCommand =
-            $"claude{modelPart} --continue '/general-supervisor'; " +
-            $"if ($LASTEXITCODE -ne 0) {{ claude{modelPart} '/general-supervisor' }}";
+            $"{claudeInvocation} --continue '/general-supervisor'; " +
+            $"if ($LASTEXITCODE -ne 0) {{ {claudeInvocation} '/general-supervisor' }}";
 
         var script = Build_SessionScript("general", "general", "general", claudeCommand, pidFilePath);
 
@@ -129,9 +135,10 @@ public static class SpawnCommand_Builder
             claudeCommand;
     }
 
-    static string Build_ModelPart(string? model)
+    static string Build_ClaudeInvocation(string? model)
     {
-        return string.IsNullOrWhiteSpace(model) ? string.Empty : $" --model {model}";
+        var modelPart = string.IsNullOrWhiteSpace(model) ? string.Empty : $" --model {model}";
+        return $"claude{modelPart} {CLAUDE_LAUNCH_FLAGS}";
     }
 
     static void Validate_OrchId(string orchId)
