@@ -77,8 +77,11 @@ internal sealed class OrchestrationLauncherModel(
     {
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
+        // The general folder is the general supervisor's PERMANENT working directory: its
+        // CLAUDE.md (persistent, machine-portable knowledge) auto-loads there, and --continue
+        // resumes unambiguously because only general sessions ever run in it.
         var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(
-            _paths.Root, _config.GeneralSupervisorModel, _paths.GeneralPidFile);
+            _paths.GeneralFolder, _config.GeneralSupervisorModel, _paths.GeneralPidFile);
 
         _spawner.Spawn(command);
 

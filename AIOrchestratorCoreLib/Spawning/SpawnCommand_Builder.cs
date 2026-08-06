@@ -42,7 +42,8 @@ public static class SpawnCommand_Builder
         return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", IMPLEMENTER_TAB_COLOR, repoPath, script);
     }
 
-    public static ISpawnCommand Build_ForGeneralSupervisor(string supervisionRoot, string? model, string pidFilePath)
+    /// <summary>generalHomeFolder is the general supervisor's PERMANENT working directory (its CLAUDE.md home).</summary>
+    public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
     {
         var modelPart = Build_ModelPart(model);
         var claudeCommand =
@@ -51,7 +52,7 @@ public static class SpawnCommand_Builder
 
         var script = Build_SessionScript("general", "general", "general", claudeCommand, pidFilePath);
 
-        return Build_WindowsTerminalCommand("GENERAL", GENERAL_TAB_COLOR, supervisionRoot, script);
+        return Build_WindowsTerminalCommand("GENERAL", GENERAL_TAB_COLOR, generalHomeFolder, script);
     }
 
     /// <summary>Fallback when Windows Terminal (wt.exe) is not installed: a plain PowerShell window.</summary>

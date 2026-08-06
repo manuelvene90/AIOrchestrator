@@ -165,10 +165,20 @@ stops tailing them; the UI dims the card / greys the chip. Nothing is ever delet
   Supervisors Read the file to inspect it (Claude Code reads images natively) and pass the path
   into implementer briefs. Download failure degrades to a text entry noting the failure.
 
-### Repo knowledge source
-- The general supervisor resolves colloquial repo names using the owner's user-level
-  `~/.claude/CLAUDE.md` project registry (names, paths, purposes — loads automatically into every
-  session) PLUS `config.json`; the emitted request carries the exact configured repo name.
+### Repo knowledge source (CORRECTED 2026-08-06, owner)
+- **The general supervisor's knowledge is machine-portable and lives in ITS OWN home:** every
+  general session runs in `~/.claude/supervision/general/` (same folder, always), whose
+  `CLAUDE.md` auto-loads as its persistent memory — the app seeds a bare knowledge file on first
+  run, and the agent maintains it itself (repo map, colloquial names, owner preferences).
+- Colloquial repo names resolve against `config.json` + that knowledge file; the emitted request
+  carries the exact configured repo name.
+- **Fresh machine:** the seed file is bare → the general supervisor says so in its greeting and
+  asks the owner where to learn the repo landscape. Machine-local sources (e.g. this machine's
+  user-level `~/.claude/CLAUDE.md` project registry) are possible INITIALIZATION inputs the owner
+  may point it at — never a general rule, never assumed to exist. What it learns gets recorded in
+  its own `CLAUDE.md`.
+- (Per-orchestration supervisors are the complement: their knowledge context is the REPO they run
+  in — its `CLAUDE.md` — plus whatever the machine's user-level config loads.)
 
 ### Worktree stewardship (protocol)
 - The orchestration SUPERVISOR owns worktree lifecycle (creation, merging, removal) and the
