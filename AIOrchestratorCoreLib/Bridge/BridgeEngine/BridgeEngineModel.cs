@@ -408,7 +408,7 @@ internal sealed class BridgeEngineModel(
 
                 Append_GeneralAppEntry(
                     $"orchestration '{session.OrchId}' started",
-                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). Supervisor session spawned; its Telegram topic appears on its first channel entry.");
+                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). Supervisor and implementer imp-1 spawned; its Telegram topic appears on its first channel entry.");
             }
             catch (Exception ex)
             {

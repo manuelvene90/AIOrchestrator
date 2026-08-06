@@ -59,8 +59,14 @@
                                                 <TextBlock Text="{Binding ClosedLabel}" Foreground="{StaticResource StateClosed}" Margin="10,3,0,0" FontSize="11" FontWeight="SemiBold"/>
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                                <Button Content="＋ Implementer" Tag="{Binding}" Click="AddImplementerButton_Click" Margin="0,0,6,0" IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"/>
-                                                <Button Content="📂" Tag="{Binding}" Click="OpenFolderButton_Click" ToolTip="Open orchestration folder"/>
+                                                <Button Content="＋ Implementer" Tag="{Binding}" Click="AddImplementerButton_Click" Margin="0,0,6,0"
+                                                        Visibility="{Binding OrchestrationButtonsVisibility}"
+                                                        IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"/>
+                                                <Button Content="📂" Tag="{Binding}" Click="OpenFolderButton_Click" ToolTip="Open orchestration folder" Margin="0,0,6,0"/>
+                                                <Button Content="✕ Close" Tag="{Binding}" Click="CloseOrchestrationButton_Click"
+                                                        Visibility="{Binding OrchestrationButtonsVisibility}"
+                                                        IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"
+                                                        ToolTip="Close this orchestration: its sessions end, its topic closes, its folder stays as audit trail"/>
                                             </StackPanel>
                                         </DockPanel>
 

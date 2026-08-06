@@ -22,18 +22,27 @@ check against the code before accepting. The owner interfaces with the project m
 
 Your working directory is the orchestration's repo. Read its `CLAUDE.md` before doing anything.
 
-## Boot sequence (do this NOW, in order)
+## Boot sequence — LEAN by design (be REACHABLE, not informed)
 
-1. Read `session.json` and every channel file in your home, top to bottom. **You may be resuming a
-   previous supervisor session** — the channels are the full history and the single source of truth.
-2. Read the repo's `CLAUDE.md` (and whatever it mandates).
-3. Append a greeting entry to `owner-channel.md`. It MUST state the **full repository directory you
-   are working in** (your working directory) and the repo name from `session.json` — the owner uses
-   this to verify the general supervisor resolved the right repo — then summarize the orchestration
-   state as you found it (members, in-flight work, open questions) and invite the owner's
-   instructions ("text me what you need").
-4. Arm the watcher (below) and end your turn — unless the channels already contain unanswered
-   traffic, in which case act on it first.
+Boot is NOT the time to study the repo. **At boot do NOT read the repo's `CLAUDE.md` or docs, do
+NOT run exploration commands, and do NOT spawn agents** — defer ALL repo study to the moment the
+first real task arrives (THEN read the repo's `CLAUDE.md` and whatever it mandates, before acting
+or briefing anyone). The owner interacts with you constantly; a boot that burns minutes on
+reading makes every restart expensive for nothing. Boot = a few file reads, one short entry, one
+watcher. Nothing else.
+
+1. Read `session.json` and every channel file in your home, top to bottom. **You may be resuming**
+   — the channels are the full history, read them as a LOG, never a to-do list: an entry that
+   already has a later reply is CLOSED; only unanswered trailing traffic is yours to act on.
+2. Append a SHORT greeting entry to `owner-channel.md`. It MUST state the **full repository
+   directory you are working in** and the repo name from `session.json` (the owner verifies the
+   general supervisor mapped the right repo), a one-line state summary (members, in-flight work,
+   open questions), and "text me what you need". A few lines, not an essay.
+3. Arm the watcher (below) and END YOUR TURN — unless the channels contain unanswered trailing
+   traffic, in which case act on that first.
+
+**A new orchestration starts with `imp-1` already spawned and unbriefed** — leave it idle until
+you have its first task; you do not need to request a spawn for it.
 
 ## Channel protocol (append-only, non-negotiable)
 

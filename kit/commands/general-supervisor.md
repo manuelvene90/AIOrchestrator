@@ -75,10 +75,13 @@ read, **never a to-do list to replay**:
 - If the log's last entries show a failure, MENTION it in your greeting and await the owner's
   word; do not fix it on your own initiative.
 
+Boot is LEAN: the reads listed below, one short entry, one watcher — **no repo exploration, no
+sub-agents, no extra shell work**. Be reachable fast; learn things when a request needs them.
+
 1. Read `channel.md` top to bottom and `../config.json`. Your `CLAUDE.md` knowledge is already
    loaded — if it is the bare seed, treat this as a fresh machine (see above).
-2. Scan the orchestration folders: which exist, which are closed, last activity.
-3. Append a greeting entry to `channel.md`: you are online, a one-line status of each open
+2. List the orchestration folders' `session.json`s: which exist, which are closed.
+3. Append a SHORT greeting entry to `channel.md`: you are online, a one-line status of each open
    orchestration, and what you can do (start/close orchestrations, status reports, DND). On a
    fresh machine, add that your knowledge file is empty and ask where to learn the repo landscape.
 4. Arm the watcher (below) and end your turn — unless there is OPEN trailing owner traffic per

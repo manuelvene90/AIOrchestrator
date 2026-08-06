@@ -31,11 +31,14 @@ internal sealed class OrchestrationLauncherModel(
 
         var orchId = OrchId_Allocator.Allocate_NextOrchId(_paths, repoName);
 
-        var session = _store.Create_Orchestration(orchId, repoName, repoPath);
+        _store.Create_Orchestration(orchId, repoName, repoPath);
         _log.Log_Info(orchId, $"Orchestration created for repo '{repoName}' ({repoPath})");
 
         Respawn_Supervisor(orchId);
-        return session;
+
+        // Every orchestration starts with one implementer ready (owner directive): the supervisor
+        // briefs imp-1 when the first task arrives instead of requesting a spawn first.
+        return Add_Implementer(orchId);
     }
 
     public IOrchestrationSession Add_Implementer(string orchId)

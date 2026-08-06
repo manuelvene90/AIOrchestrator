@@ -12,6 +12,9 @@ public class OrchestrationCardView
     public bool IsClosed { get; init; }
     public double CardOpacity { get; init; } = 1.0;
     public IReadOnlyList<MemberRowView> Members { get; init; } = [];
+
+    /// <summary>Collapsed on the general supervisor's card: it has no implementers and cannot be closed.</summary>
+    public System.Windows.Visibility OrchestrationButtonsVisibility { get; init; } = System.Windows.Visibility.Visible;
 }
 
 /// <summary>One row inside a card: the supervisor or an implementer, with its state chip.</summary>

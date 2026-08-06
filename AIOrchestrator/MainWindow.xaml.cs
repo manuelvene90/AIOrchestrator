@@ -224,6 +224,7 @@ public partial class MainWindow : Window
             OrchId = "general supervisor",
             RepoName = "always-on · pinned General topic",
             Members = [row],
+            OrchestrationButtonsVisibility = Visibility.Collapsed,
         };
     }
 
@@ -517,6 +518,38 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             MessageBox.Show(ex.Message, "Add Implementer failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// Goes through the same request-file path the general supervisor uses — ONE close code path
+    /// (kill sessions, close topic, FROM app confirmation), executed by the engine within ~2 s.
+    /// </summary>
+    void CloseOrchestrationButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not OrchestrationCardView card)
+            return;
+
+        var answer = MessageBox.Show(
+            $"Close orchestration '{card.OrchId}'?\n\nIts supervisor and implementer sessions end, its Telegram topic closes, and its folder stays on disk as audit trail.",
+            "AI Orchestrator",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        if (answer != MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            Directory.CreateDirectory(_paths.RequestsFolder);
+            var requestFile = Path.Combine(_paths.RequestsFolder, $"ui-close-{card.OrchId}-{DateTime.UtcNow.Ticks}.json");
+            File.WriteAllText(requestFile, $$"""{"action":"close-orchestration","orchId":"{{card.OrchId}}"}""");
+            Add_LogRow(LogLevels.Info, $"[{card.OrchId}] close requested from the UI");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Close failed", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

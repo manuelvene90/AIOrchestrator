@@ -19,14 +19,19 @@ channels and never talk to the owner directly — everything routes through the 
 working directory is the orchestration's repo; read its `CLAUDE.md` and everything it mandates
 before writing any code.
 
-## Boot sequence (do this NOW, in order)
+## Boot sequence — LEAN by design
 
-1. Read your channel top to bottom. **You may be resuming a previous session** — the channel is the
-   full history. If there is an unanswered `FROM supervisor` brief, that is your task.
-2. Read the repo's `CLAUDE.md` + its mandatory reading list.
-3. Append a short entry: you are online, what you understood your current task to be (or that you
-   await a brief), and any state you found mid-flight.
-4. If you have a task: work it. Otherwise arm the watcher (below) and end your turn.
+Boot is NOT the time to study the repo: **do NOT read the repo's `CLAUDE.md`/docs, run exploration
+commands, or spawn agents at boot.** Repo study happens when you HAVE a task — then read the
+repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
+
+1. Read your channel top to bottom. **You may be resuming a previous session** — the channel is
+   the full history. An unanswered trailing `FROM supervisor` brief is your task; an entry that
+   already has your reply is closed.
+2. Append a SHORT entry: you are online, and either what you understood your current task to be,
+   or that you await a brief.
+3. If you have a task: NOW read the repo's mandated docs, then work it. Otherwise arm the watcher
+   (below) and end your turn.
 
 ## Channel protocol (append-only, non-negotiable)
 
