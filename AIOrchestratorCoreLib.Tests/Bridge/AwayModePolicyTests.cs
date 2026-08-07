@@ -87,10 +87,19 @@ public class AwayModePolicyTests
 public class AwayTopicGlyphTests
 {
     [Fact]
-    public void AwayGlyph_IsNotTheDeferredMoon()
+    public void EveryStateGlyph_IsDistinct()
     {
-        Assert.NotEqual(TelegramDeliveryMode_Glyphs.DEFERRED, TelegramDeliveryMode_Glyphs.AWAY);
+        string[] glyphs =
+        [
+            TelegramDeliveryMode_Glyphs.DEFERRED,
+            TelegramDeliveryMode_Glyphs.SILENCED,
+            TelegramDeliveryMode_Glyphs.AWAY,
+            TelegramDeliveryMode_Glyphs.QUIET,
+        ];
+
+        Assert.Equal(glyphs.Length, glyphs.Distinct().Count());
         Assert.Equal(TelegramDeliveryMode_Glyphs.AWAY, AwayMode_Policy.AWAY_GLYPH);
+        Assert.Equal(TelegramDeliveryMode_Glyphs.QUIET, AwayMode_Policy.QUIET_GLYPH);
     }
 
     [Fact]
@@ -99,6 +108,28 @@ public class AwayTopicGlyphTests
         Assert.Equal("✈ crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Normal, isAway: true));
         Assert.Equal("✈ 🔕 crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Silenced, isAway: true));
         Assert.Equal("🌙 crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Deferred, isAway: false));
+    }
+
+    [Fact]
+    public void Quiet_ShowsOnItsOwnTopic()
+    {
+        Assert.Equal("🤐 crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Normal, isAway: false, isQuiet: true));
+        Assert.Equal("🤐 🌙 crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Deferred, isAway: false, isQuiet: true));
+    }
+
+    /// <summary>Away already means every orchestration stopped asking — showing both is noise.</summary>
+    [Fact]
+    public void Away_SupersedesQuiet()
+    {
+        Assert.Equal("✈ crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Normal, isAway: true, isQuiet: true));
+    }
+
+    [Fact]
+    public void TheQuietNotice_MarksWhereInTheConversationItStopped()
+    {
+        Assert.Contains("going quiet", AwayMode_Policy.QUIET_ON_NOTICE);
+        Assert.Contains("stops asking", AwayMode_Policy.QUIET_ON_NOTICE);
+        Assert.Contains("Reply", AwayMode_Policy.QUIET_ON_NOTICE);
     }
 
     /// <summary>
@@ -111,6 +142,9 @@ public class AwayTopicGlyphTests
     [InlineData("✈ 🔕 crm bug")]
     [InlineData("🌙 crm bug")]
     [InlineData("✈ 🌙 crm bug")]
+    [InlineData("🤐 crm bug")]
+    [InlineData("🤐 🌙 crm bug")]
+    [InlineData("✈ 🔕 crm bug")]
     public void Strip_RemovesEveryLeadingGlyph(string decorated)
     {
         Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph(decorated));

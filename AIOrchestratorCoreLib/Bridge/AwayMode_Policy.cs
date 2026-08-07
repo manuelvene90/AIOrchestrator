@@ -54,6 +54,18 @@ public static class AwayMode_Policy
     /// <summary>Marks an away topic in the owner's topic LIST, so the state is visible without opening it.</summary>
     public const string AWAY_GLYPH = "✈";
 
+    /// <summary>Per-topic quiet marker, for the same reason.</summary>
+    public const string QUIET_GLYPH = "🤐";
+
+    /// <summary>
+    /// Posted in the topic the moment it goes quiet. The glyph alone says WHAT is happening but not
+    /// WHERE in the conversation it started — and that boundary is the useful part when scrolling
+    /// back: everything above it was asked, nothing below it will be until you reply.
+    /// </summary>
+    public const string QUIET_ON_NOTICE =
+        "🤐 going quiet here — 3 messages unanswered, so this orchestration stops asking. It keeps working and parks "
+        + "anything it needs from you. Reply whenever; that resumes it immediately.";
+
     /// <summary>
     /// What the owner sees when it flips on. It must answer the question they will actually have on
     /// landing: "do I need to scroll up and answer all that?" — no.

@@ -1172,7 +1172,7 @@ internal sealed class BridgeEngineModel(
                 if (append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor && chunks.Count > 0)
                 {
                     if (Note_SupervisorSpokeToOwner_AndJustWentQuiet(append.Channel.OrchId))
-                        Enter_QuietMode(append.Channel.OrchId);
+                        await Enter_QuietMode_Async(append.Channel.OrchId, cancellationToken);
                 }
 
                 // The buttons NEVER ride on the body. Agents write long, thorough messages, and
@@ -2389,7 +2389,8 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
-            var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode());
+            var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId));
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -3336,11 +3337,23 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// Per-orchestration: has THIS one stopped asking? Quiet stays local on purpose — the owner may
+    /// be silent here simply because they are working in another topic, which is not absence.
+    /// </summary>
+    public bool Is_Quiet(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            return _awayTrackers.TryGetValue(orchId, out var tracker) && tracker.IsQuiet;
+        }
+    }
+
+    /// <summary>
     /// Told to ONE orchestration the moment it hits three unanswered messages. Nothing is announced
     /// to the owner and nothing is parked yet — they may be seconds from replying. This only stops
     /// the flood while we find out.
     /// </summary>
-    void Enter_QuietMode(string orchId)
+    async Task Enter_QuietMode_Async(string orchId, CancellationToken cancellationToken)
     {
         _log.Log_Info(orchId, $"QUIET — {AwayMode_Policy.QUIET_THRESHOLD} unanswered messages; supervisor told to hold further questions");
 
@@ -3355,6 +3368,13 @@ internal sealed class BridgeEngineModel(
             DateTime.Now);
 
         Raise_OrchestrationActivity(orchId);
+
+        // The owner gets ONE line marking the boundary in the conversation: everything above it was
+        // asked, nothing below will be until they reply. The topic glyph says WHAT, this says WHERE.
+        var session = _store.Get_Session_OrNull(orchId);
+
+        if (session != null)
+            await Send_AwayNotice_Async(session, AwayMode_Policy.QUIET_ON_NOTICE, cancellationToken);
     }
 
     /// <summary>

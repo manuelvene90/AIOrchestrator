@@ -24,22 +24,34 @@ public static class TelegramDeliveryMode_Glyphs
     public const string SILENCED = "🔕";
 
     /// <summary>
-    /// Away mode's own glyph. Deliberately NOT the moon — that already means Deferred, and two
-    /// different states sharing a symbol in the topic list would be worse than no symbol.
+    /// Away mode's own glyph — app-wide. Deliberately NOT the moon: that already means Deferred,
+    /// and two different states sharing a symbol in the topic list is worse than no symbol.
     /// </summary>
     public const string AWAY = "✈";
+
+    /// <summary>
+    /// QUIET — this ONE orchestration has stopped asking after 3 unanswered messages. Per topic on
+    /// purpose: the owner may be quiet here simply because they are working in another topic.
+    /// </summary>
+    public const string QUIET = "🤐";
 
     /// <summary>Prefixes the topic name with the mode's glyph (Normal = the bare name).</summary>
     public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode)
     {
-        return Decorate_TopicName(baseName, mode, isAway: false);
+        return Decorate_TopicName(baseName, mode, isAway: false, isQuiet: false);
+    }
+
+    public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode, bool isAway)
+    {
+        return Decorate_TopicName(baseName, mode, isAway, isQuiet: false);
     }
 
     /// <summary>
-    /// Away is app-wide and orthogonal to the per-topic delivery mode, so both can show at once:
-    /// "✈ 🔕 crm bug" reads as "the owner is away AND this topic is silenced".
+    /// Delivery mode is per topic; away is app-wide; quiet is per topic. Mode and presence are
+    /// orthogonal and show together ("✈ 🔕 crm bug"), but AWAY SUPERSEDES QUIET — away already
+    /// means every orchestration has stopped asking, so showing both would be noise.
     /// </summary>
-    public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode, bool isAway)
+    public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode, bool isAway, bool isQuiet)
     {
         var withMode = mode switch
         {
@@ -49,7 +61,10 @@ public static class TelegramDeliveryMode_Glyphs
             _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
         };
 
-        return isAway ? $"{AWAY} {withMode}" : withMode;
+        if (isAway)
+            return $"{AWAY} {withMode}";
+
+        return isQuiet ? $"{QUIET} {withMode}" : withMode;
     }
 
     /// <summary>
@@ -70,13 +85,21 @@ public static class TelegramDeliveryMode_Glyphs
     {
         return topicName.StartsWith(DEFERRED, StringComparison.Ordinal)
             || topicName.StartsWith(SILENCED, StringComparison.Ordinal)
-            || topicName.StartsWith(AWAY, StringComparison.Ordinal);
+            || topicName.StartsWith(AWAY, StringComparison.Ordinal)
+            || topicName.StartsWith(QUIET, StringComparison.Ordinal);
     }
 
+    /// <summary>Glyphs differ in UTF-16 length (✈ is one unit, the emoji are two) — measure, don't assume.</summary>
     static int Leading_GlyphLength(string topicName)
     {
         if (topicName.StartsWith(AWAY, StringComparison.Ordinal))
             return AWAY.Length;
+
+        if (topicName.StartsWith(QUIET, StringComparison.Ordinal))
+            return QUIET.Length;
+
+        if (topicName.StartsWith(SILENCED, StringComparison.Ordinal))
+            return SILENCED.Length;
 
         return DEFERRED.Length;
     }
