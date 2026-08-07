@@ -68,10 +68,15 @@ public static class TelegramUpdates_Parser
         if (fromIdNode == null || fromIdNode.GetValue<long>() != ownerUserId)
             return null;
 
-        var threadIdNode = (callbackQuery["message"] as JsonObject)?["message_thread_id"];
+        var messageObject = callbackQuery["message"] as JsonObject;
+
+        var threadIdNode = messageObject?["message_thread_id"];
         long? threadId = threadIdNode == null ? null : threadIdNode.GetValue<long>();
 
-        return TelegramCallbackTap_Factory.Create(updateId, queryId, data, threadId);
+        var messageIdNode = messageObject?["message_id"];
+        long? messageId = messageIdNode == null ? null : messageIdNode.GetValue<long>();
+
+        return TelegramCallbackTap_Factory.Create(updateId, queryId, data, threadId, messageId);
     }
 
     static ITelegramOwnerMessage? Parse_OwnerMessage_OrNull(

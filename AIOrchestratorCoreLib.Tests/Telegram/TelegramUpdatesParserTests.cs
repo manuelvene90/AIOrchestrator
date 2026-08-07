@@ -127,6 +127,7 @@ public class TelegramUpdatesParserTests
         Assert.Equal("cbq-1", batch.CallbackTaps[0].CallbackQueryId);
         Assert.Equal("opt-7", batch.CallbackTaps[0].Data);
         Assert.Equal(7, batch.CallbackTaps[0].MessageThreadId);
+        Assert.Equal(9, batch.CallbackTaps[0].MessageId);
         Assert.Equal(201, batch.MaxUpdateId);
     }
 

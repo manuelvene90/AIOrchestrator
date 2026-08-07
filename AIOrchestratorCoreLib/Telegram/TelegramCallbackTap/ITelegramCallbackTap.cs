@@ -13,4 +13,7 @@ public interface ITelegramCallbackTap
 
     /// <summary>Topic the button message lives in; null outside topics.</summary>
     long? MessageThreadId { get; }
+
+    /// <summary>The button message's id — used to strip the keyboard after the first tap (single-use buttons).</summary>
+    long? MessageId { get; }
 }

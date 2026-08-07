@@ -61,10 +61,11 @@ internal sealed class BridgeEngineModel(
     readonly ISessionWatchdog _watchdog = watchdog;
     readonly IMessageTranslator _translator = translator;
     readonly IVoiceTranscriber _transcriber = transcriber;
-    readonly Dictionary<string, (long? ThreadId, string OptionText)> _buttonOptions = [];
+    readonly Dictionary<string, (long? ThreadId, string OptionText, long GroupId)> _buttonOptions = [];
     readonly Queue<string> _buttonOrder = new();
     readonly Lock _buttonLock = new();
     long _buttonSequence;
+    long _buttonGroupSequence;
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
@@ -448,12 +449,15 @@ internal sealed class BridgeEngineModel(
 
         lock (_buttonLock)
         {
+            // One GROUP per button message: the first tap invalidates all its siblings.
+            _buttonGroupSequence++;
+
             foreach (var label in optionLabels)
             {
                 _buttonSequence++;
                 var data = $"opt-{_buttonSequence}";
 
-                _buttonOptions[data] = (threadId, label);
+                _buttonOptions[data] = (threadId, label, _buttonGroupSequence);
                 _buttonOrder.Enqueue(data);
                 buttons.Add((data, label));
             }
@@ -1058,12 +1062,22 @@ internal sealed class BridgeEngineModel(
 
     async Task Handle_CallbackTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
     {
-        (long? ThreadId, string OptionText) registered;
+        (long? ThreadId, string OptionText, long GroupId) registered;
         bool found;
 
         lock (_buttonLock)
         {
             found = _buttonOptions.TryGetValue(tap.Data, out registered);
+
+            // SINGLE-USE: the first tap consumes the WHOLE option group — a second tap (or a
+            // sibling button) resolves to "expired" instead of double-firing a decision.
+            if (found)
+            {
+                List<string> groupKeys = [.. _buttonOptions.Where(pair => pair.Value.GroupId == registered.GroupId).Select(pair => pair.Key)];
+
+                foreach (var key in groupKeys)
+                    _buttonOptions.Remove(key);
+            }
         }
 
         try
@@ -1082,6 +1096,23 @@ internal sealed class BridgeEngineModel(
 
         if (!found)
             return;
+
+        // Strip the keyboard from the message so the buttons visibly disappear after the choice.
+        if (tap.MessageId != null)
+        {
+            try
+            {
+                await client.Remove_MessageButtons_Async(tap.MessageId.Value, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"Button keyboard removal failed: {ex.Message}");
+            }
+        }
 
         // A tap IS an owner message: the chosen option text goes through the normal pipeline
         // (aggregation, translation, delivery receipts) into the topic the buttons live in.

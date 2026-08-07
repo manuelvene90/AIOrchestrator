@@ -12,7 +12,12 @@ namespace AIOrchestratorCoreLib.Translation.MessageTranslator;
 /// </summary>
 internal sealed class MessageTranslatorModel(IOrchestrationLog log) : IMessageTranslator
 {
-    const string TRANSLATION_MODEL = "haiku";
+    /// <summary>Inbound IT→EN: haiku suffices (already-English text just passes through).</summary>
+    const string TO_ENGLISH_MODEL = "haiku";
+
+    /// <summary>Outbound EN→IT is owner-facing and quality-critical — haiku repeatedly returned English or mixed prose.</summary>
+    const string TO_ITALIAN_MODEL = "sonnet";
+
     const int TRANSLATION_TIMEOUT_MILLISECONDS = 45_000;
 
     const string TO_ENGLISH_INSTRUCTION =
@@ -36,22 +41,29 @@ internal sealed class MessageTranslatorModel(IOrchestrationLog log) : IMessageTr
 
     public async Task<string> Translate_ToEnglish_Async(string text, CancellationToken cancellationToken)
     {
-        return await Translate_Async(TO_ENGLISH_INSTRUCTION, text, cancellationToken);
+        return await Translate_Async(TO_ENGLISH_INSTRUCTION, text, TO_ENGLISH_MODEL, cancellationToken);
     }
 
     public async Task<string> Translate_ToItalian_Async(string text, CancellationToken cancellationToken)
     {
-        return await Translate_Async(TO_ITALIAN_INSTRUCTION, text, cancellationToken);
+        var translated = await Translate_Async(TO_ITALIAN_INSTRUCTION, text, TO_ITALIAN_MODEL, cancellationToken);
+
+        // Unchanged output on this direction means the model refused/failed silently — make it
+        // VISIBLE in the log so untranslated owner texts can be diagnosed instead of shrugged at.
+        if (translated == text && text.Trim().Length > 0)
+            _log.Log_Warning("", $"EN→IT translation returned the text unchanged ({text.Length} chars)");
+
+        return translated;
     }
 
-    async Task<string> Translate_Async(string instruction, string text, CancellationToken cancellationToken)
+    async Task<string> Translate_Async(string instruction, string text, string model, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(text))
             return text;
 
         try
         {
-            using var process = Process.Start(Build_StartInfo())
+            using var process = Process.Start(Build_StartInfo(model))
                 ?? throw new Exception("Process.Start returned null for the claude CLI");
 
             using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -93,12 +105,12 @@ internal sealed class MessageTranslatorModel(IOrchestrationLog log) : IMessageTr
     }
 
     /// <summary>cmd /c resolves claude through PATH (including .cmd shims) — the WPF app has no shell of its own.</summary>
-    static ProcessStartInfo Build_StartInfo()
+    static ProcessStartInfo Build_StartInfo(string model)
     {
         return new ProcessStartInfo
         {
             FileName = "cmd.exe",
-            Arguments = $"/c claude -p --model {TRANSLATION_MODEL}",
+            Arguments = $"/c claude -p --model {model}",
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardInput = true,

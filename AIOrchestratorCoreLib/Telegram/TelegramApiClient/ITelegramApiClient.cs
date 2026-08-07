@@ -28,6 +28,9 @@ public interface ITelegramApiClient
     /// <summary>Answers a button tap (stops the phone-side spinner); text shows as a small toast.</summary>
     Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken);
 
+    /// <summary>Strips the inline keyboard from a sent message — decision buttons are SINGLE-USE.</summary>
+    Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken);
+
     /// <summary>Uploads a local image file as a photo message (multipart sendPhoto).</summary>
     Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken);
 
