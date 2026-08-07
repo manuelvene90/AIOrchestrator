@@ -84,7 +84,7 @@ internal sealed class BridgeEngineModel(
     readonly ISessionWatchdog _watchdog = watchdog;
     readonly IMessageTranslator _translator = translator;
     readonly IVoiceTranscriber _transcriber = transcriber;
-    readonly Dictionary<string, (long? ThreadId, string OptionText, long GroupId)> _buttonOptions = [];
+    readonly Dictionary<string, (long? ThreadId, string OptionText, long GroupId, string QuestionText)> _buttonOptions = [];
     readonly Queue<string> _buttonOrder = new();
     readonly Lock _buttonLock = new();
     long _buttonSequence;
@@ -903,6 +903,11 @@ internal sealed class BridgeEngineModel(
             // decision buttons the owner can tap instead of typing.
             var photoPaths = Extract_MarkerLines(ref text, "IMAGE");
             var optionLabels = Extract_MarkerLines(ref text, "OPTION");
+            var questionLines = Extract_MarkerLines(ref text, "QUESTION");
+
+            // Built from the ENGLISH text, before the Italian layer rewrites it: an explicit
+            // QUESTION: line and a derived one then get translated the same way, together.
+            var questionPrompt = optionLabels.Count > 0 ? QuestionPrompt_Builder.Build(questionLines, text) : null;
 
             // Italian layer (live config): the owner reads Italian on the phone; sessions and
             // channels stay English. The speaker prefix ("🟢 Com: ") is split off DETERMINISTICALLY
@@ -921,20 +926,16 @@ internal sealed class BridgeEngineModel(
 
             var chunks = TelegramMessage_Chunker.Chunk(text);
 
-            if (chunks.Count == 0 && optionLabels.Count > 0)
-                chunks = ["…"];
-
             try
             {
-                for (var i = 0; i < chunks.Count; i++)
-                {
-                    var isLastChunk = i == chunks.Count - 1;
+                foreach (var chunk in chunks)
+                    Remember_TopicMessage(threadId, await Send_MirrorChunk_Async(threadId, chunk, cancellationToken));
 
-                    if (isLastChunk && optionLabels.Count > 0)
-                        await _telegramClient.Send_MessageWithButtons_Async(threadId, chunks[i], Register_Buttons(threadId, optionLabels), cancellationToken);
-                    else
-                        Remember_TopicMessage(threadId, await Send_MirrorChunk_Async(threadId, chunks[i], cancellationToken));
-                }
+                // The buttons NEVER ride on the body. Agents write long, thorough messages, and
+                // options hanging off the bottom of one arrive on a phone as a wall of text with
+                // taps underneath and no visible question. They get their own short message.
+                if (questionPrompt != null)
+                    await Send_QuestionWithButtons_Async(threadId, questionPrompt, optionLabels, append.Channel, cancellationToken);
 
                 foreach (var photoPath in photoPaths)
                     await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel.OrchId, cancellationToken);
@@ -1050,7 +1051,33 @@ internal sealed class BridgeEngineModel(
         return values;
     }
 
-    IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionLabels)
+    /// <summary>
+    /// The decision message: a SHORT question with the options under it, sent on its own rather
+    /// than bolted to the end of the body. The owner sees what is being asked without re-reading
+    /// the message above it, and after tapping this same message records their answer.
+    /// </summary>
+    async Task Send_QuestionWithButtons_Async(
+        long? threadId,
+        string questionPrompt,
+        IReadOnlyList<string> optionLabels,
+        Channels.DiscoveredChannel.IDiscoveredChannel channel,
+        CancellationToken cancellationToken)
+    {
+        var client = _telegramClient
+            ?? throw new Exception("Send_QuestionWithButtons_Async called without a Telegram client");
+
+        var prompt = questionPrompt;
+
+        if (_configProvider.Get_Current().TelegramItalianLayer && channel.IsOwnerChannel)
+            prompt = await _translator.Translate_ToItalian_Async(prompt, cancellationToken);
+
+        var messageId = await client.Send_MessageWithButtons_Async(
+            threadId, prompt, Register_Buttons(threadId, optionLabels, prompt), cancellationToken);
+
+        Remember_TopicMessage(threadId, messageId);
+    }
+
+    IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionLabels, string questionText)
     {
         List<(string Data, string Label)> buttons = [];
 
@@ -1064,7 +1091,7 @@ internal sealed class BridgeEngineModel(
                 _buttonSequence++;
                 var data = $"opt-{_buttonSequence}";
 
-                _buttonOptions[data] = (threadId, label, _buttonGroupSequence);
+                _buttonOptions[data] = (threadId, label, _buttonGroupSequence, questionText);
                 _buttonOrder.Enqueue(data);
                 buttons.Add((data, label));
             }
@@ -2338,9 +2365,25 @@ internal sealed class BridgeEngineModel(
         return string.Join('\n', lines);
     }
 
+    async Task Remove_Buttons_BestEffort_Async(ITelegramApiClient client, long messageId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.Remove_MessageButtons_Async(messageId, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Button keyboard removal failed for message {messageId}: {ex.Message}");
+        }
+    }
+
     async Task Handle_CallbackTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
     {
-        (long? ThreadId, string OptionText, long GroupId) registered;
+        (long? ThreadId, string OptionText, long GroupId, string QuestionText) registered;
         bool found;
 
         lock (_buttonLock)
@@ -2375,12 +2418,18 @@ internal sealed class BridgeEngineModel(
         if (!found)
             return;
 
-        // Strip the keyboard from the message so the buttons visibly disappear after the choice.
+        // Rewrite the question message to RECORD the choice ("❓ … / ✅ deep"). Telegram's tap
+        // acknowledgement is a transient toast and the keyboard vanishes, so without this the chat
+        // keeps no trace of what was picked — the owner scrolls back and cannot tell what they
+        // answered. Editing the text also drops the keyboard, so it replaces the strip step.
         if (tap.MessageId != null)
         {
             try
             {
-                await client.Remove_MessageButtons_Async(tap.MessageId.Value, cancellationToken);
+                await client.Edit_MessageText_Async(
+                    tap.MessageId.Value,
+                    QuestionPrompt_Builder.Build_AnsweredText(registered.QuestionText, registered.OptionText),
+                    cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -2388,7 +2437,11 @@ internal sealed class BridgeEngineModel(
             }
             catch (Exception ex)
             {
-                _log.Log_Warning(GLOBAL_ORCH_ID, $"Button keyboard removal failed: {ex.Message}");
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"Answered-question edit failed: {ex.Message}");
+
+                // The record is nice; a live keyboard on an already-answered question is a BUG,
+                // so fall back to at least removing it.
+                await Remove_Buttons_BestEffort_Async(client, tap.MessageId.Value, cancellationToken);
             }
         }
 

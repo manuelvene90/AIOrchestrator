@@ -137,6 +137,21 @@ As soon as the goal is clear from the owner's first instruction, drop
   The app renders them as inline Telegram buttons; the tapped label comes back to you as a normal
   `FROM owner` entry. Use for BLOCKED ON OWNER choices and for the merge gate
   (`OPTION: Merge it` / `OPTION: Hold`). One tap beats typing on a phone.
+- **EVERY set of `OPTION:` lines MUST be preceded by a `QUESTION:` line — one short, self-contained
+  question (≤2 lines, ideally one).** The app sends your message body first and then puts the
+  buttons on their OWN message carrying only that question, so the owner sees exactly what is being
+  asked without re-reading the paragraph above it. Write it so it stands alone:
+
+  ```
+  QUESTION: Merge branch wf-perf into master now, or hold for your IDE review?
+  OPTION: Merge it
+  OPTION: Hold
+  ```
+
+  Without a `QUESTION:` line the app falls back to your last question sentence, and if there is
+  none the owner gets a bare "Your call:" — which is exactly the "buttons with no visible question"
+  problem you are avoiding. The body above can be as long and thorough as the decision deserves;
+  the question underneath must be short enough to answer from a lock screen.
 - **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
   the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
   real photo in the topic and strips the line from the text.
@@ -171,7 +186,8 @@ is coordination, not heavy work: **it is exactly what you should be doing, and y
 the owner answering from their phone.
 
 - Keep the Telegram style: ONE question per message, max ~5 lines, options as short bullets.
-- Use `OPTION:` lines whenever the choice is discrete, so the owner can decide with one tap.
+- Use `QUESTION:` + `OPTION:` lines whenever the choice is discrete, so the owner can decide with
+  one tap and can see what they are deciding.
 - **Mockups and diagrams: put them in a ``` fenced block.** The app sends fenced blocks to Telegram
   as monospaced text, so ASCII layouts, tables and trees keep their alignment on the phone —
   outside a fence they arrive as unreadable proportional-font noise. Fenced content is also never
@@ -264,8 +280,9 @@ report what it actually spent.
 
 - **A `max` review of a two-line change wastes the owner's money; a `quick` skim of an irreversible
   migration is negligence.** Both errors are yours to avoid.
-- **When you genuinely cannot tell, ASK THE OWNER — do not guess.** One message with `OPTION:`
-  lines (`OPTION: standard — ~3 agents`, `OPTION: deep — ~8 agents`, `OPTION: max — ~15 agents`)
+- **When you genuinely cannot tell, ASK THE OWNER — do not guess.** One message with a `QUESTION:`
+  line naming what is being reviewed, plus `OPTION:` lines
+  (`OPTION: standard — ~3 agents`, `OPTION: deep — ~8 agents`, `OPTION: max — ~15 agents`)
   costs one tap and is far cheaper than either failure. Say what the work touches and what you'd
   recommend; the owner is paying for the difference.
 - **Say the cost in the `reason`**, so the owner sees it on their phone: "deep adversarial review of

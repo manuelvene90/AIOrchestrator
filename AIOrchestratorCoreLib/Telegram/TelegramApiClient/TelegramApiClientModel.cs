@@ -154,7 +154,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         }
     }
 
-    public async Task Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public async Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
         var keyboardRows = new JsonArray();
 
@@ -177,7 +177,8 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
-        await Post_Async("sendMessage", payload, cancellationToken);
+        // The id is needed later: on a tap this message is rewritten to show the chosen option.
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken));
     }
 
     public async Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)

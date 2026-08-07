@@ -35,8 +35,11 @@ public interface ITelegramApiClient
     /// </summary>
     Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken);
 
-    /// <summary>sendMessage with an inline keyboard — one tappable button per (data, label) pair.</summary>
-    Task Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
+    /// <summary>
+    /// sendMessage with an inline keyboard — one tappable button per (data, label) pair. Returns
+    /// the message id so a tap can rewrite it to show WHICH option was chosen.
+    /// </summary>
+    Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
 
     /// <summary>Answers a button tap (stops the phone-side spinner); text shows as a small toast.</summary>
     Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken);
