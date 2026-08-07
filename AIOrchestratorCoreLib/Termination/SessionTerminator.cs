@@ -14,6 +14,9 @@ namespace AIOrchestratorCoreLib.Termination;
 /// </summary>
 public static class SessionTerminator
 {
+    /// <summary>The spawned session host is always a PowerShell shell — the pid-recycling guard.</summary>
+    static readonly IReadOnlySet<string> SHELL_PROCESS_NAMES = new HashSet<string> { "powershell", "pwsh" };
+
     public static void Kill_SessionTree_ByPidFile(string pidFilePath)
     {
         try
@@ -26,6 +29,13 @@ public static class SessionTerminator
             if (int.TryParse(pidText, out var pid))
             {
                 var process = Process.GetProcessById(pid);
+
+                // Windows RECYCLES pids: a stale pid file can point at somebody else's process by
+                // now, and killing a whole tree by mistake is not a risk worth taking. Session
+                // hosts are always the spawned shell.
+                if (!SHELL_PROCESS_NAMES.Contains(process.ProcessName.ToLowerInvariant()))
+                    return;
+
                 process.Kill(entireProcessTree: true);
 
                 // A pending prompt does not protect a process from Kill, but the window close

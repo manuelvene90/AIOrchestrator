@@ -56,6 +56,13 @@ internal sealed class BridgeEngineModel(
     /// <summary>How long the owner may wait for their supervisor's acknowledgement before the app steps in.</summary>
     const int OWNER_REPLY_GRACE_SECONDS = 150;
 
+    /// <summary>
+    /// How long a nudged, idle session may stay frozen before it is declared ORPHANED. The nudge
+    /// changed its channel, so a live watcher fires within seconds — this window is generous
+    /// enough that only a genuinely absent listener runs it out.
+    /// </summary>
+    const int ORPHAN_CONFIRM_MINUTES = 6;
+
     const int MIRROR_TICK_MILLISECONDS = 2000;
     const int INBOUND_LONG_POLL_SECONDS = 20;
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
@@ -86,7 +93,8 @@ internal sealed class BridgeEngineModel(
     /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
     readonly HashSet<string> _stallAlertedOrchIds = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
-    readonly HashSet<string> _nudgedMemberKeys = [];
+    /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
+    readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
@@ -426,59 +434,132 @@ internal sealed class BridgeEngineModel(
                     continue;
 
                 var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+                var memberKey = $"{session.OrchId}/{member.MemberId}";
 
                 // Nothing to answer, or the implementer already spoke last: not a missed hand-off.
                 if (entries.Count == 0 || entries[^1].Author == ChannelAuthors.Implementer)
-                    continue;
-
-                // An App nudge is itself the last entry — never nudge on top of a nudge.
-                if (entries[^1].Author == ChannelAuthors.App)
-                    continue;
-
-                var quietFor = DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile);
-
-                if (quietFor.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
                 {
-                    _nudgedMemberKeys.Remove($"{session.OrchId}/{member.MemberId}");
+                    _nudgedMemberUtc.Remove(memberKey);
                     continue;
                 }
 
+                var quietFor = DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile);
+                var alreadyNudged = _nudgedMemberUtc.TryGetValue(memberKey, out var nudgedUtc);
+
+                if (!alreadyNudged && quietFor.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+                    continue;
+
+                // Transcript growing = genuinely working (a long build, a big read). NOT orphaned:
+                // this is the false positive the whole detector has to avoid.
                 if (Is_SessionMidTurn(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE)))
                     continue;
 
-                if (!_nudgedMemberKeys.Add($"{session.OrchId}/{member.MemberId}"))
+                if (!alreadyNudged)
+                {
+                    await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, cancellationToken);
+                    _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
+                    continue;
+                }
+
+                // ESCALATION. The nudge CHANGED the channel; a live watcher fires on that within
+                // seconds. Still frozen after the grace window ⇒ there is no listener at all (the
+                // turn ended abnormally, or never reached the point where a watcher is armed).
+                // Nothing the session can do about that — only a respawn brings it back, and it
+                // resumes from its channel, which is the designed durable state.
+                if ((DateTime.UtcNow - nudgedUtc).TotalMinutes < ORPHAN_CONFIRM_MINUTES)
                     continue;
 
-                ChannelAppender.Append_AppEntry(
-                    channelFile,
-                    "unread traffic — you have not answered",
-                    $"Entry [{entries[^1].Index}] FROM {entries[^1].Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If your watcher never fired, re-arm it with the baseline captured BEFORE you read.",
-                    DateTime.Now);
-
-                _log.Log_Warning(session.OrchId, $"{member.MemberId} had unread traffic for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
-                Raise_OrchestrationActivity(session.OrchId);
-
-                // The channel nudge above ALWAYS happens (it is what unsticks the implementer);
-                // only the owner-facing text respects the topic's mode.
-                if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
-                    continue;
-
-                try
-                {
-                    await _telegramClient.Send_Message_Async(
-                        session.TelegramTopicId,
-                        $"⚠️ {member.MemberId} left a brief unanswered for {SessionDuration_Formatter.Describe(quietFor)} — nudged it (its watcher probably missed the entry).",
-                        cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _log.Log_Warning(session.OrchId, $"Idle-implementer alert send failed: {ex.Message}");
-                }
+                _nudgedMemberUtc.Remove(memberKey);
+                await Recover_OrphanedImplementer_Async(session, member.MemberId, cancellationToken);
             }
+        }
+    }
+
+    async Task Nudge_Implementer_Async(
+        IOrchestrationSession session,
+        string memberId,
+        string channelFile,
+        Channels.ChannelEntry.IChannelEntry lastEntry,
+        TimeSpan quietFor,
+        CancellationToken cancellationToken)
+    {
+        ChannelAppender.Append_AppEntry(
+            channelFile,
+            "unread traffic — you have not answered",
+            $"Entry [{lastEntry.Index}] FROM {lastEntry.Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If your watcher never fired, re-arm it with the baseline captured BEFORE you read.",
+            DateTime.Now);
+
+        _log.Log_Warning(session.OrchId, $"{memberId} had unread traffic for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
+        Raise_OrchestrationActivity(session.OrchId);
+
+        // The channel nudge above ALWAYS happens (it is what unsticks the implementer);
+        // only the owner-facing text respects the topic's mode.
+        if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+            return;
+
+        try
+        {
+            await _telegramClient.Send_Message_Async(
+                session.TelegramTopicId,
+                $"⚠️ {memberId} left a brief unanswered for {SessionDuration_Formatter.Describe(quietFor)} — nudged it.",
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(session.OrchId, $"Idle-implementer alert send failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Last resort for a session that is ALIVE but has no way back: it ignored a channel change
+    /// while idle, so nothing is listening for it. Respawning is the only recovery — its files and
+    /// its channel survive, and the role command's boot re-reads the channel. In-conversation
+    /// context is lost, which is why this only runs after the nudge probe has failed.
+    /// </summary>
+    async Task Recover_OrphanedImplementer_Async(IOrchestrationSession session, string memberId, CancellationToken cancellationToken)
+    {
+        _log.Log_Error(session.OrchId, $"{memberId} is ORPHANED (idle, ignored a channel change) — respawning it", null);
+
+        try
+        {
+            SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(session.OrchId, memberId));
+            _launcher.Respawn_Implementer(session.OrchId, memberId);
+
+            ChannelAppender.Append_AppEntry(
+                _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
+                "session was orphaned and has been respawned",
+                "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
+                DateTime.Now);
+
+            Raise_OrchestrationActivity(session.OrchId);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, $"Orphan recovery for '{memberId}' failed", ex);
+            return;
+        }
+
+        if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+            return;
+
+        try
+        {
+            await _telegramClient.Send_Message_Async(
+                session.TelegramTopicId,
+                $"⚠️ {memberId} was ORPHANED (alive but nothing listening — it ignored the nudge). Respawned it; its work on disk is untouched, but its in-session context is gone.",
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(session.OrchId, $"Orphan-recovery alert send failed: {ex.Message}");
         }
     }
 
