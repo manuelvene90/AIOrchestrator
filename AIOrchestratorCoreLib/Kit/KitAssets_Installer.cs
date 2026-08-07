@@ -15,9 +15,24 @@ public static class KitAssets_Installer
         string kitCommandsFolder,
         string kitStatuslineFile,
         string claudeCommandsFolder,
-        string statuslineTargetFile)
+        string statuslineTargetFile,
+        string kitHooksFolder,
+        string claudeHooksFolder)
     {
         List<string> installedFiles = [];
+
+        if (Directory.Exists(kitHooksFolder))
+        {
+            Directory.CreateDirectory(claudeHooksFolder);
+
+            foreach (var sourceFile in Directory.EnumerateFiles(kitHooksFolder, "*.sh"))
+            {
+                var targetFile = Path.Combine(claudeHooksFolder, Path.GetFileName(sourceFile));
+
+                if (Copy_IfChanged(sourceFile, targetFile))
+                    installedFiles.Add(targetFile);
+            }
+        }
 
         if (Directory.Exists(kitCommandsFolder))
         {

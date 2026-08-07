@@ -11,6 +11,7 @@ using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Mirroring;
+using AIOrchestratorCoreLib.Planning;
 using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -93,6 +94,11 @@ internal sealed class BridgeEngineModel(
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
+
+    /// <summary>When the supervisor last posted a verdict into a spoke — the ledger's due-by signal.</summary>
+    readonly Dictionary<string, DateTime> _lastSupervisorVerdictUtc = [];
+    readonly HashSet<string> _ledgerBehindReportedOrchIds = [];
+    readonly Dictionary<string, string> _reportedLedgerShapeByOrchId = [];
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
@@ -266,6 +272,13 @@ internal sealed class BridgeEngineModel(
         }
 
         await Check_UsageLimits_Async(cancellationToken);
+
+        // Every tick, so a mode toggled from the APP's card or checkboxes reaches the Telegram
+        // topic name too — not just the ones toggled by a Telegram command. It only calls the API
+        // when a name actually changed.
+        await Sync_TopicNames_BestEffort_Async(cancellationToken);
+
+        await Check_LedgerHealth_Async(cancellationToken);
 
         Compact_LongChannels();
         Persist_BridgeState();
@@ -575,6 +588,94 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// The ledger's missing feedback loop. A supervisor verdict with no PLAN.md update is now
+    /// FLAGGED — visible to the owner, on the card, and to the turn-end hook that blocks the
+    /// supervisor. The ledger was the only artifact in the protocol whose omission produced no
+    /// signal whatsoever, which is precisely why it was the one that kept being skipped.
+    /// Shape is checked at the same time: a line covering "tasks 3-9" can never show progress,
+    /// however faithfully it is maintained.
+    /// </summary>
+    async Task Check_LedgerHealth_Async(CancellationToken cancellationToken)
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            _lastSupervisorVerdictUtc.TryGetValue(session.OrchId, out var lastVerdictUtc);
+
+            var isBehind = LedgerHealth_Tracker.Is_LedgerBehind(_paths, session.OrchId, lastVerdictUtc == default ? null : lastVerdictUtc);
+            LedgerHealth_Tracker.Sync_Flag(_paths, session.OrchId, isBehind);
+
+            if (!isBehind)
+            {
+                _ledgerBehindReportedOrchIds.Remove(session.OrchId);
+            }
+            else if (_ledgerBehindReportedOrchIds.Add(session.OrchId))
+            {
+                ChannelAppender.Append_AppEntry(
+                    _paths.Get_OwnerChannelFile(session.OrchId),
+                    "PLAN.md is behind your verdicts",
+                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
+                    DateTime.Now);
+
+                _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
+                Raise_OrchestrationActivity(session.OrchId);
+            }
+
+            await Report_LedgerShape_Async(session, cancellationToken);
+        }
+    }
+
+    async Task Report_LedgerShape_Async(IOrchestrationSession session, CancellationToken cancellationToken)
+    {
+        var planFile = _paths.Get_PlanFile(session.OrchId);
+
+        if (!File.Exists(planFile))
+            return;
+
+        var complaints = PlanShape_Validator.Find_UnrepresentableLines(UsageTotals_Reader.Read_Text_Safe(planFile));
+        var fingerprint = string.Join("\n", complaints);
+
+        // Re-report only when the offending set CHANGES, so a warning cannot become background noise.
+        if (_reportedLedgerShapeByOrchId.TryGetValue(session.OrchId, out var reported) && reported == fingerprint)
+            return;
+
+        _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
+
+        if (complaints.Count == 0)
+            return;
+
+        ChannelAppender.Append_AppEntry(
+            _paths.Get_OwnerChannelFile(session.OrchId),
+            "PLAN.md has lines that cannot show progress",
+            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
+            DateTime.Now);
+
+        _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
+        Raise_OrchestrationActivity(session.OrchId);
+
+        if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+            return;
+
+        try
+        {
+            await _telegramClient.Send_Message_Async(
+                session.TelegramTopicId,
+                $"⚠️ {session.DisplayName ?? session.OrchId}: the task ledger has {complaints.Count} line(s) that lump several tasks together — progress on them cannot be shown until they are split.",
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(session.OrchId, $"Ledger-shape alert send failed: {ex.Message}");
+        }
+    }
+
     /// <summary>Runaway guard: a per-orchestration token ceiling the owner sets in config.json.</summary>
     async Task Send_BudgetAlerts_Async(CancellationToken cancellationToken)
     {
@@ -767,7 +868,14 @@ internal sealed class BridgeEngineModel(
     async Task Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
         foreach (var entry in append.Entries)
+        {
             _log.Log_Info(append.Channel.OrchId, $"[{append.Channel.SpokeName}] entry #{entry.Index} FROM {entry.Author}: {entry.Subject}");
+
+            // A supervisor entry in a SPOKE is a brief or a verdict — either way the ledger owes
+            // an update from this moment, and the flag below is what makes skipping it visible.
+            if (!append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor)
+                _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
+        }
 
         if (_telegramClient == null)
             return;

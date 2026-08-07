@@ -21,6 +21,7 @@
          line script (~/.claude) — running install.ps1 is no longer a prerequisite for them. -->
     <Content Include="..\kit\commands\*.md" Link="kit\commands\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

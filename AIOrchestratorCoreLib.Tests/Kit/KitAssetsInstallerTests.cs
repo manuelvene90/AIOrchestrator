@@ -33,7 +33,8 @@ public class KitAssetsInstallerTests : IDisposable
     IReadOnlyList<string> Run_Installer()
     {
         return KitAssets_Installer.Ensure_Installed(
-            _kitCommandsFolder, _kitStatuslineFile, _commandsTargetFolder, _statuslineTargetFile);
+            _kitCommandsFolder, _kitStatuslineFile, _commandsTargetFolder, _statuslineTargetFile,
+            Path.Combine(_tempRoot, "kit", "hooks"), Path.Combine(_tempRoot, "claude", "hooks"));
     }
 
     [Fact]
@@ -76,8 +77,27 @@ public class KitAssetsInstallerTests : IDisposable
             Path.Combine(_tempRoot, "does-not-exist"),
             Path.Combine(_tempRoot, "also-missing.ps1"),
             _commandsTargetFolder,
-            _statuslineTargetFile);
+            _statuslineTargetFile,
+            Path.Combine(_tempRoot, "no-hooks"),
+            Path.Combine(_tempRoot, "claude", "hooks"));
 
         Assert.Empty(installer);
+    }
+
+    [Fact]
+    public void Ensure_Installed_CopiesTheEnforcementHooks()
+    {
+        var kitHooksFolder = Path.Combine(_tempRoot, "kit", "hooks");
+        var hooksTargetFolder = Path.Combine(_tempRoot, "claude", "hooks");
+
+        Directory.CreateDirectory(kitHooksFolder);
+        File.WriteAllText(Path.Combine(kitHooksFolder, "supervisor-ledger-check.sh"), "#!/usr/bin/env bash\nexit 0\n");
+
+        var installed = KitAssets_Installer.Ensure_Installed(
+            _kitCommandsFolder, _kitStatuslineFile, _commandsTargetFolder, _statuslineTargetFile,
+            kitHooksFolder, hooksTargetFolder);
+
+        Assert.Contains(installed, file => file.EndsWith("supervisor-ledger-check.sh", StringComparison.Ordinal));
+        Assert.True(File.Exists(Path.Combine(hooksTargetFolder, "supervisor-ledger-check.sh")));
     }
 }

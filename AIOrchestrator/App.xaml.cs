@@ -110,8 +110,13 @@ public partial class App : Application
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "commands");
             var statuslineTargetFile = Path.Combine(paths.Root, "statusline.ps1");
 
+            var kitHooksFolder = Path.Combine(AppContext.BaseDirectory, "kit", "hooks");
+            var claudeHooksFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "hooks");
+
             var installedFiles = KitAssets_Installer.Ensure_Installed(
-                kitCommandsFolder, kitStatuslineFile, claudeCommandsFolder, statuslineTargetFile);
+                kitCommandsFolder, kitStatuslineFile, claudeCommandsFolder, statuslineTargetFile,
+                kitHooksFolder, claudeHooksFolder);
 
             foreach (var installedFile in installedFiles)
                 log.Log_Info("", $"Kit asset installed/updated: {installedFile}");
@@ -124,6 +129,13 @@ public partial class App : Application
 
             if (StatusLineSettings_Wirer.Ensure_Wired(settingsFile, statuslineTargetFile))
                 log.Log_Info("", $"Status line wired into {settingsFile} (previous file backed up); active for newly spawned sessions");
+
+            // Turn-end enforcement for the task ledger: prose in a role command gets skipped, a
+            // Stop hook does not.
+            var ledgerHookFile = Path.Combine(claudeHooksFolder, "supervisor-ledger-check.sh");
+
+            if (StopHookSettings_Wirer.Ensure_Wired(settingsFile, ledgerHookFile))
+                log.Log_Info("", $"Ledger Stop hook wired into {settingsFile}; supervisors spawned from now on cannot end a turn owing a PLAN.md update");
         }
         catch (Exception ex)
         {
