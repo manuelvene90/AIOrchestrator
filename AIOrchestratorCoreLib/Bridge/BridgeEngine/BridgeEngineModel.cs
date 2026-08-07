@@ -166,6 +166,14 @@ internal sealed class BridgeEngineModel(
     /// <summary>Target channel → the WAIT acknowledgement being kept up to date while held.</summary>
     readonly Dictionary<string, HoldReceipt> _holdReceipts = [];
 
+    /// <summary>
+    /// Guards _holdReceipts and _pendingOwnerReplies. GO flushes from the INBOUND loop (waiting for
+    /// the 2 s mirror tick would be exactly the lag GO exists to remove), so both dictionaries are
+    /// now touched from two threads. Short, non-async critical sections only — never hold this
+    /// across an await.
+    /// </summary>
+    readonly Lock _ownerStateLock = new();
+
     sealed class PendingOwnerReply
     {
         public long? ThreadId;
@@ -2750,7 +2758,11 @@ internal sealed class BridgeEngineModel(
             try
             {
                 var receiptId = await client.Send_Message_Async(message.MessageThreadId, Build_HoldReceiptText(0), cancellationToken);
-                _holdReceipts[targetKey] = new HoldReceipt { MessageId = receiptId, HeldCount = 0 };
+
+                lock (_ownerStateLock)
+                {
+                    _holdReceipts[targetKey] = new HoldReceipt { MessageId = receiptId, HeldCount = 0 };
+                }
             }
             catch (OperationCanceledException)
             {
@@ -2767,11 +2779,20 @@ internal sealed class BridgeEngineModel(
         if (OwnerControlWords.Is_Go(message.Text))
         {
             _ownerDeliveryBuffer.Release(targetKey);
-            _holdReceipts.Remove(targetKey);
+
+            lock (_ownerStateLock)
+            {
+                _holdReceipts.Remove(targetKey);
+            }
+
             _log.Log_Info(Describe_MessageOrch(message), "Owner sent GO — releasing held messages");
 
             // The tick the owner did not get per message, now that the thought is complete.
             await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+
+            // Deliver HERE rather than waiting for the next mirror tick. GO means "I am done
+            // typing", so every millisecond after it is dead time — and the tick is up to 2 s away.
+            await Flush_OwnerDeliveries_Async(cancellationToken);
 
             return true;
         }
@@ -2803,10 +2824,21 @@ internal sealed class BridgeEngineModel(
     {
         var targetKey = Resolve_TargetChannelFile_OrNull(message);
 
-        if (targetKey == null || !_holdReceipts.TryGetValue(targetKey, out var receipt) || receipt.MessageId == null)
+        if (targetKey == null)
             return;
 
-        receipt.HeldCount++;
+        HoldReceipt? receipt;
+
+        lock (_ownerStateLock)
+        {
+            if (!_holdReceipts.TryGetValue(targetKey, out receipt))
+                return;
+
+            receipt.HeldCount++;
+        }
+
+        if (receipt.MessageId == null)
+            return;
 
         try
         {
@@ -2903,7 +2935,10 @@ internal sealed class BridgeEngineModel(
         foreach (var delivery in _ownerDeliveryBuffer.Take_ReadyDeliveries(DateTime.UtcNow))
         {
             // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
-            _holdReceipts.Remove(delivery.Key);
+            lock (_ownerStateLock)
+            {
+                _holdReceipts.Remove(delivery.Key);
+            }
 
             (string OrchId, long? ThreadId) target;
 
@@ -2949,14 +2984,17 @@ internal sealed class BridgeEngineModel(
 
                 // Tracked until the supervisor actually answers â€” the owner must never be left
                 // staring at a receipt frozen on "thinkingâ€¦".
-                _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
+                lock (_ownerStateLock)
                 {
-                    ThreadId = target.ThreadId,
-                    ReceiptMessageId = receiptMessageId,
-                    SupervisorEntryCountAtDelivery = supervisorEntryCountBefore,
-                    DeliveredUtc = DateTime.UtcNow,
-                    Nudged = false,
-                };
+                    _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
+                    {
+                        ThreadId = target.ThreadId,
+                        ReceiptMessageId = receiptMessageId,
+                        SupervisorEntryCountAtDelivery = supervisorEntryCountBefore,
+                        DeliveredUtc = DateTime.UtcNow,
+                        Nudged = false,
+                    };
+                }
             }
             catch (OperationCanceledException)
             {
@@ -3267,9 +3305,24 @@ internal sealed class BridgeEngineModel(
 
     async Task Resolve_PendingOwnerReplies_Async(CancellationToken cancellationToken)
     {
-        foreach (var orchId in _pendingOwnerReplies.Keys.ToList())
+        List<string> trackedOrchIds;
+
+        lock (_ownerStateLock)
         {
-            var pending = _pendingOwnerReplies[orchId];
+            trackedOrchIds = [.. _pendingOwnerReplies.Keys];
+        }
+
+        foreach (var orchId in trackedOrchIds)
+        {
+            PendingOwnerReply? pending;
+
+            lock (_ownerStateLock)
+            {
+                // GO can flush (and replace an entry) from the inbound loop between iterations.
+                if (!_pendingOwnerReplies.TryGetValue(orchId, out pending))
+                    continue;
+            }
+
             var ownerChannel = orchId == ChannelDiscovery.GENERAL_ORCH_ID
                 ? _paths.GeneralChannelFile
                 : _paths.Get_OwnerChannelFile(orchId);
@@ -3279,7 +3332,11 @@ internal sealed class BridgeEngineModel(
             // Answered: the supervisor wrote to the owner. The mirrored entry IS the feedback.
             if (supervisorEntryCount > pending.SupervisorEntryCountAtDelivery)
             {
-                _pendingOwnerReplies.Remove(orchId);
+                lock (_ownerStateLock)
+                {
+                    _pendingOwnerReplies.Remove(orchId);
+                }
+
                 continue;
             }
 
