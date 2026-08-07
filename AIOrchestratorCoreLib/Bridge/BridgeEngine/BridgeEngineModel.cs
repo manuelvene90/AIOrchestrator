@@ -6,8 +6,10 @@ using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.WindowFocus;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
+using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Mirroring;
+using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
@@ -968,6 +970,14 @@ internal sealed class BridgeEngineModel(
                         // while the supervisor is mid-turn (which is exactly when it gets asked).
                         await Send_ProgressReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "tokens")
+                    {
+                        await Send_TokensReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "limits")
+                    {
+                        await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else
                     {
                         routableMessages.Add(message);
@@ -1032,6 +1042,8 @@ internal sealed class BridgeEngineModel(
             await client.Set_MyCommands_Async(
                 [
                     ("progress", "Task ledger of this orchestration (all of them in General)"),
+                    ("tokens", "Token and usage totals"),
+                    ("limits", "5-hour and weekly usage limits"),
                     ("summary", "What is going on across all orchestrations"),
                     ("pending", "Open questions awaiting me"),
                     ("dnd", "Mute texts (text anything to unmute)"),
@@ -1171,6 +1183,137 @@ internal sealed class BridgeEngineModel(
         {
             return string.Empty;
         }
+    }
+
+    /// <summary>
+    /// /tokens — LIFETIME token and usage figures (respawns folded in). In a topic: that
+    /// orchestration, broken down per session; in General: every orchestration plus a grand total.
+    /// The figures are API-EQUIVALENT: subscription plans are not billed per token.
+    /// </summary>
+    async Task Send_TokensReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_TokensReportText(messageThreadId);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_TokensReportText(long? messageThreadId)
+    {
+        if (messageThreadId != null)
+        {
+            var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+            if (session == null)
+                return "no orchestration is bound to this topic";
+
+            var (cost, tokens) = UsageTotals_Reader.Build_OrchestrationTotals(_paths, session);
+
+            if (tokens <= 0 && cost <= 0)
+                return $"{session.DisplayName ?? session.OrchId}: no usage recorded yet";
+
+            List<string> lines = [$"{session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} · ≈${cost:F2} equiv (not billed)"];
+
+            foreach (var line in Build_PerSessionUsageLines(session))
+                lines.Add(line);
+
+            return string.Join('\n', lines);
+        }
+
+        List<string> blocks = [];
+        var grandCost = 0.0;
+        long grandTokens = 0;
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            var (cost, tokens) = UsageTotals_Reader.Build_OrchestrationTotals(_paths, session);
+            grandCost += cost;
+            grandTokens += tokens;
+
+            blocks.Add($"{session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} · ≈${cost:F2}");
+        }
+
+        if (blocks.Count == 0)
+            return "no open orchestrations";
+
+        blocks.Add($"TOTAL: {UsageTotals_Reader.Format_Tokens(grandTokens)} · ≈${grandCost:F2} equiv (not billed)");
+        return string.Join('\n', blocks);
+    }
+
+    IReadOnlyList<string> Build_PerSessionUsageLines(IOrchestrationSession session)
+    {
+        var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
+
+        List<(string Label, string File)> sources =
+        [
+            ("supervisor", Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE)),
+            ("communicator", Path.Combine(orchFolder, UsageTotals_Reader.COMMUNICATOR_USAGE_FILE)),
+        ];
+
+        foreach (var member in session.Members)
+            sources.Add((member.MemberId, Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE)));
+
+        List<string> lines = [];
+
+        foreach (var source in sources)
+        {
+            var tokens = UsageTotals_Reader.Read_Tokens_OrNull(source.File);
+
+            if (tokens == null)
+                continue;
+
+            lines.Add($"- {source.Label}: {UsageTotals_Reader.Format_Tokens(tokens.Value)} (current session)");
+        }
+
+        return lines;
+    }
+
+    /// <summary>
+    /// /limits — the 5-hour and weekly usage windows, per model where the status line reports
+    /// them. Data comes from the status-line probe files; every session writes what its Claude
+    /// Code version exposes, and the WORST (highest) percent per window is what matters.
+    /// </summary>
+    async Task Send_LimitsReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_LimitsReportText();
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_LimitsReportText()
+    {
+        Dictionary<string, double> worstPerWindow = [];
+
+        foreach (var usageFile in UsageTotals_Reader.Find_AllUsageFiles(_paths))
+        {
+            foreach (var pair in LimitData_Parser.Extract_LimitPercents(UsageTotals_Reader.Read_Text_Safe(usageFile)))
+            {
+                var label = LimitData_Parser.Build_ShortLabel(pair.Key);
+
+                if (!worstPerWindow.TryGetValue(label, out var known) || pair.Value > known)
+                    worstPerWindow[label] = pair.Value;
+            }
+        }
+
+        if (worstPerWindow.Count == 0)
+            return "no limit data in the status line of this Claude Code version — nothing to report (the automatic limit alerts idle for the same reason)";
+
+        List<string> lines = ["LIMITS (highest reading across all sessions)"];
+
+        foreach (var pair in worstPerWindow.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            lines.Add($"- {pair.Key}: {pair.Value:F0}%");
+
+        return string.Join('\n', lines);
     }
 
     async Task Handle_CallbackTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)

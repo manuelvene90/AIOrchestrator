@@ -161,52 +161,15 @@ public static class SessionRows_Builder
         return null;
     }
 
-    /// <summary>
-    /// Orchestration-wide usage: supervisor + communicator + ALL members, CLOSED ones included.
-    /// Each figure is LIFETIME (the accumulator folds in sessions that respawned and reset).
-    /// </summary>
+    /// <summary>Orchestration-wide LIFETIME usage — shared with the bridge's /tokens command.</summary>
     public static (double Cost, long Tokens) Build_UsageTotals(ISupervisionPaths paths, IOrchestrationSession session)
     {
-        var orchFolder = paths.Get_OrchestrationFolder(session.OrchId);
-
-        List<string> usageFiles =
-        [
-            Path.Combine(orchFolder, SUPERVISOR_USAGE_FILE),
-            Path.Combine(orchFolder, COMMUNICATOR_USAGE_FILE),
-        ];
-
-        foreach (var member in session.Members)
-            usageFiles.Add(Path.Combine(paths.Get_ImplementerFolder(session.OrchId, member.MemberId), SUPERVISOR_USAGE_FILE));
-
-        var costTotal = 0.0;
-        long tokenTotal = 0;
-
-        foreach (var usageFile in usageFiles)
-        {
-            if (!File.Exists(usageFile))
-                continue;
-
-            var (lifetimeCost, lifetimeTokens) = UsageLifetime_Accumulator.Accumulate(
-                orchFolder,
-                Path.GetRelativePath(orchFolder, usageFile),
-                Read_SessionCost_OrNull(usageFile) ?? 0.0,
-                Read_SessionTokens_OrNull(usageFile) ?? 0L);
-
-            costTotal += lifetimeCost;
-            tokenTotal += lifetimeTokens;
-        }
-
-        return (costTotal, tokenTotal);
+        return UsageTotals_Reader.Build_OrchestrationTotals(paths, session);
     }
 
     public static string Format_Tokens(long tokens)
     {
-        if (tokens < 1_000)
-            return $"{tokens} tok";
-        if (tokens < 1_000_000)
-            return $"{tokens / 1_000.0:F1}k tok";
-
-        return $"{tokens / 1_000_000.0:F1}M tok";
+        return UsageTotals_Reader.Format_Tokens(tokens);
     }
 
     public static string? Describe_TimeSince_OrNull(string entryDateText)
@@ -270,67 +233,8 @@ public static class SessionRows_Builder
         };
     }
 
-    /// <summary>Tolerant token extraction — the statusline schema varies by Claude Code version.</summary>
-    public static long? Read_SessionTokens_OrNull(string usageFilePath)
-    {
-        try
-        {
-            if (!File.Exists(usageFilePath))
-                return null;
-
-            var root = JsonNode.Parse(SafeFile_Reader.Read_Text_Safe(usageFilePath));
-
-            if (root == null)
-                return null;
-
-            long total = 0;
-            Sum_TokenFields(root, ref total);
-
-            return total > 0 ? total : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    static void Sum_TokenFields(JsonNode node, ref long total)
-    {
-        if (node is JsonObject jsonObject)
-        {
-            foreach (var pair in jsonObject)
-            {
-                if (pair.Value == null)
-                    continue;
-
-                var isTokenCountField = Regex.IsMatch(pair.Key, @"^(total_)?(cache_creation_|cache_read_)?(input|output)_tokens$");
-
-                if (isTokenCountField && pair.Value is JsonValue value && value.TryGetValue<long>(out var count))
-                    total += count;
-                else
-                    Sum_TokenFields(pair.Value, ref total);
-            }
-        }
-    }
-
     public static double? Read_SessionCost_OrNull(string usageFilePath)
     {
-        try
-        {
-            if (!File.Exists(usageFilePath))
-                return null;
-
-            var root = JsonNode.Parse(SafeFile_Reader.Read_Text_Safe(usageFilePath));
-            var costNode = root?["cost"]?["total_cost_usd"];
-
-            if (costNode == null)
-                return null;
-
-            return costNode.GetValue<double>();
-        }
-        catch
-        {
-            return null;
-        }
+        return UsageTotals_Reader.Read_Cost_OrNull(usageFilePath);
     }
 }
