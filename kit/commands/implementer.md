@@ -38,6 +38,9 @@ repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
 
 - Entries start: `## [n] FROM implementer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
   Never edit past entries.
+- **APPEND ONLY — never `Write` a channel file.** Writing overwrites it and DESTROYS entries
+  (this really happened: a supervisor's `Write` wiped an implementer's just-posted entry and cost
+  35 minutes). Append with `>>` (or an Edit that adds text at the end), never a whole-file write.
 - **ENGLISH, always** — channel entries, commits, code comments, docs. Even if supervisor or owner
   traffic arrives in Italian, you write in English.
 - **Report after EVERY milestone, task, and step** — not only at the end: what landed, commit
@@ -81,10 +84,27 @@ Run with the Bash tool, `run_in_background: true`, substituting your ids:
 
 ```bash
 ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
-base=$(grep -c "FROM supervisor" "$ch")
-until [ "$(grep -c "FROM supervisor" "$ch")" -gt "$base" ]; do sleep 5; done
-echo "NEW SUPERVISOR ENTRY on your channel — read from your last entry down, act on it, append your boundary report, then RE-ARM this watcher before ending your turn."
+fingerprint() { wc -c < "$ch"; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; }
+base=$(cat "$ch.watch-base" 2>/dev/null)
+until [ "$(fingerprint)" != "$base" ]; do sleep 5; done
+echo "YOUR CHANNEL CHANGED — read from your last entry down, act on it, append your boundary report, then RE-ARM this watcher before ending your turn."
 ```
+
+**The baseline is captured at the START of your turn, NOT here.** The very first thing you do on
+every wake — before reading anything — is:
+
+```bash
+ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
+{ wc -c < "$ch"; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; } > "$ch.watch-base"
+```
+
+This ordering is not a detail, it is THE reliability rule of this system. Baselining at ARM time
+makes every entry that arrived while you were working invisible forever: one implementer sat 35
+minutes on "awaiting the supervisor's first entry" while its complete task assignment was already
+in the file. Baselining first can only ever cause one harmless extra wake.
+
+It fingerprints CONTENT (size + hash), never a count of matching lines: a rewritten file can keep
+the same count while its content changes completely, and a count-based watcher sleeps through that.
 
 A turn ended without an armed watcher stalls the orchestration — treat re-arming as part of every
 task's definition of done, AFTER any turn-end hooks are satisfied.

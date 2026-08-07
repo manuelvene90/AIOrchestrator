@@ -50,6 +50,9 @@ internal sealed class BridgeEngineModel(
     /// <summary>Transcript/probe freshness that means "this session is working right now".</summary>
     const int SESSION_MIDTURN_SECONDS = 120;
 
+    /// <summary>How long an implementer may leave a brief unanswered before the app nudges it.</summary>
+    const int IMPLEMENTER_NUDGE_MINUTES = 8;
+
     const int MIRROR_TICK_MILLISECONDS = 2000;
     const int INBOUND_LONG_POLL_SECONDS = 20;
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
@@ -80,6 +83,8 @@ internal sealed class BridgeEngineModel(
     /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
     readonly HashSet<string> _stallAlertedOrchIds = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
+    readonly HashSet<string> _nudgedMemberKeys = [];
+    readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
@@ -175,6 +180,7 @@ internal sealed class BridgeEngineModel(
         await Send_CrashLoopAlerts_Async(cancellationToken);
         await Send_StallAlerts_Async(cancellationToken);
         await Send_BudgetAlerts_Async(cancellationToken);
+        await Nudge_IdleImplementers_Async(cancellationToken);
 
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
@@ -354,6 +360,85 @@ internal sealed class BridgeEngineModel(
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// The backstop for a missed hand-off: an implementer whose channel ends with SOMEONE ELSE'S
+    /// entry (a brief it never answered), quiet for minutes, and not mid-turn. That is exactly the
+    /// state a watcher armed AFTER the brief landed produces — it can never fire on its own.
+    /// The app appends a FROM app entry, which changes the channel and therefore trips the
+    /// (content-fingerprint) watcher: the orchestration heals itself instead of stalling.
+    /// </summary>
+    async Task Nudge_IdleImplementers_Async(CancellationToken cancellationToken)
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc != null)
+                    continue;
+
+                var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+
+                if (!File.Exists(channelFile))
+                    continue;
+
+                var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+
+                // Nothing to answer, or the implementer already spoke last: not a missed hand-off.
+                if (entries.Count == 0 || entries[^1].Author == ChannelAuthors.Implementer)
+                    continue;
+
+                // An App nudge is itself the last entry — never nudge on top of a nudge.
+                if (entries[^1].Author == ChannelAuthors.App)
+                    continue;
+
+                var quietFor = DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile);
+
+                if (quietFor.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+                {
+                    _nudgedMemberKeys.Remove($"{session.OrchId}/{member.MemberId}");
+                    continue;
+                }
+
+                if (Is_SessionMidTurn(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE)))
+                    continue;
+
+                if (!_nudgedMemberKeys.Add($"{session.OrchId}/{member.MemberId}"))
+                    continue;
+
+                ChannelAppender.Append_AppEntry(
+                    channelFile,
+                    "unread traffic — you have not answered",
+                    $"Entry [{entries[^1].Index}] FROM {entries[^1].Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If your watcher never fired, re-arm it with the baseline captured BEFORE you read.",
+                    DateTime.Now);
+
+                _log.Log_Warning(session.OrchId, $"{member.MemberId} had unread traffic for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
+                Raise_OrchestrationActivity(session.OrchId);
+
+                if (_telegramClient == null)
+                    continue;
+
+                try
+                {
+                    await _telegramClient.Send_Message_Async(
+                        session.TelegramTopicId,
+                        $"⚠️ {member.MemberId} left a brief unanswered for {SessionDuration_Formatter.Describe(quietFor)} — nudged it (its watcher probably missed the entry).",
+                        cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _log.Log_Warning(session.OrchId, $"Idle-implementer alert send failed: {ex.Message}");
+                }
+            }
         }
     }
 
@@ -1802,7 +1887,11 @@ internal sealed class BridgeEngineModel(
                 // immediately by a TRUTHFUL handoff line: whether the recipient can answer now,
                 // or is mid-turn and the communicator will cover the wait.
                 await _telegramClient.Send_Message_Async(target.ThreadId, "✓✓", cancellationToken);
-                await _telegramClient.Send_Message_Async(target.ThreadId, Build_HandoffLine(target.OrchId), cancellationToken);
+
+                var handoffLine = Build_HandoffLine(target.OrchId);
+
+                if (Should_SendHandoffLine(target.OrchId, handoffLine))
+                    await _telegramClient.Send_Message_Async(target.ThreadId, handoffLine, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -1813,6 +1902,27 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Warning(target.OrchId, $"Delivery receipt send failed: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// Several messages sent minutes apart close separate aggregation windows, and repeating the
+    /// SAME handoff line after each ✓✓ is pure noise (the owner saw three identical "thinking…"
+    /// lines in a row). Repeat it only when the state actually changed, or after a long gap when
+    /// it has become informative again.
+    /// </summary>
+    bool Should_SendHandoffLine(string orchId, string handoffLine)
+    {
+        const int REPEAT_AFTER_MINUTES = 5;
+
+        if (_lastHandoffLineByOrchId.TryGetValue(orchId, out var last)
+            && last.Line == handoffLine
+            && (DateTime.UtcNow - last.SentUtc).TotalMinutes < REPEAT_AFTER_MINUTES)
+        {
+            return false;
+        }
+
+        _lastHandoffLineByOrchId[orchId] = (handoffLine, DateTime.UtcNow);
+        return true;
     }
 
     /// <summary>

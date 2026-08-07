@@ -189,6 +189,10 @@ hook is NOT the deliverable and it must CONTINUE to the remaining numbered items
 
 ## Git discipline (shared machine, multiple sessions)
 
+- **NEVER `Write` a channel file — APPEND ONLY.** A whole-file write overwrites entries that other
+  sessions just appended. This really happened: a supervisor's `Write` on `imp-3/channel.md` wiped
+  imp-3's own `online` entry, and imp-3 then waited 35 minutes for a brief that was already sitting
+  in its file. Brief an implementer by APPENDING (`>>` or an Edit that adds at the end).
 - **NEVER `git add -A`, `git add .`, or `git commit -a`.** Stage by explicit path, always — other
   sessions' uncommitted work may share the tree.
 - You normally do not commit code; implementers commit their own work per their briefs.
@@ -247,11 +251,24 @@ without one stalls the whole orchestration:
 
 ```bash
 sup="$HOME/.claude/supervision/$ARGUMENTS"
-count() { cat "$sup"/imp-*/channel.md "$sup/owner-channel.md" 2>/dev/null | grep -c "FROM implementer\|FROM owner\|FROM app"; }
-base=$(count); start=$(date +%s)
-until [ "$(count)" -gt "$base" ] || [ $(( $(date +%s) - start )) -ge 1800 ]; do sleep 5; done
-if [ "$(count)" -gt "$base" ]; then echo "NEW TRAFFIC on orchestration $ARGUMENTS — read every channel from your last entry down, act on it, append your entries, then RE-ARM this watcher before ending your turn."; else echo "STATUS due for $ARGUMENTS — append a STATUS entry (1-3 bullets) to owner-channel.md if work is in flight, then RE-ARM this watcher."; fi
+fingerprint() { cat "$sup"/imp-*/channel.md "$sup/owner-channel.md" 2>/dev/null | md5sum | cut -d' ' -f1; }
+base=$(cat "$sup/.watch-base" 2>/dev/null); start=$(date +%s)
+until [ "$(fingerprint)" != "$base" ] || [ $(( $(date +%s) - start )) -ge 1800 ]; do sleep 5; done
+if [ "$(fingerprint)" != "$base" ]; then echo "CHANNELS CHANGED on orchestration $ARGUMENTS — read every channel from your last entry down, act on it, append your entries, then RE-ARM this watcher before ending your turn."; else echo "STATUS due for $ARGUMENTS — append a STATUS entry (1-3 bullets) to owner-channel.md if work is in flight, then RE-ARM this watcher."; fi
 ```
+
+**Capture the baseline at the START of every turn — before you read anything:**
+
+```bash
+sup="$HOME/.claude/supervision/$ARGUMENTS"
+cat "$sup"/imp-*/channel.md "$sup/owner-channel.md" 2>/dev/null | md5sum | cut -d' ' -f1 > "$sup/.watch-base"
+```
+
+This ordering is THE reliability rule of this system. Baselining when you ARM makes every entry
+that arrived while you were working invisible forever — an implementer's finished-work report can
+sit unnoticed indefinitely. Baselining first costs at most one harmless extra wake. And it
+fingerprints CONTENT, not a line count: a rewritten file can keep its count while changing
+completely.
 
 When it wakes you: read ALL channels (there may be several new entries), act, write your entries,
 re-arm, end turn.

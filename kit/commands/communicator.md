@@ -78,11 +78,15 @@ supervisor is busy AND the owner is still waiting on it since their last message
 
 ```bash
 ch="$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md"
-count() { grep -c "FROM owner\|FROM supervisor" "$ch"; }
-base=$(count); start=$(date +%s)
-until [ "$(count)" -gt "$base" ] || [ $(( $(date +%s) - start )) -ge 180 ]; do sleep 5; done
-if [ "$(count)" -gt "$base" ]; then echo "NEW TRAFFIC — read owner-channel.md from your last read down, apply your behavior rules, RE-ARM this watcher."; else echo "TIMEOUT — if Sup is busy and the owner awaits a reply, post a short STATUS update, then RE-ARM this watcher."; fi
+fingerprint() { md5sum "$ch" | cut -d' ' -f1; }
+base=$(cat "$ch.com-base" 2>/dev/null); start=$(date +%s)
+until [ "$(fingerprint)" != "$base" ] || [ $(( $(date +%s) - start )) -ge 180 ]; do sleep 5; done
+if [ "$(fingerprint)" != "$base" ]; then echo "OWNER CHANNEL CHANGED — read it from your last read down, apply your behavior rules, RE-ARM this watcher."; else echo "TIMEOUT — if Sup is busy and the owner awaits a reply, post a short STATUS update, then RE-ARM this watcher."; fi
 ```
+
+**Capture the baseline at the START of every turn, before reading**
+(`md5sum "$ch" | cut -d' ' -f1 > "$ch.com-base"`) — baselining at arm time makes traffic that
+arrived while you were working invisible forever. Channels are APPEND-ONLY; never `Write` one.
 
 **On resume you may see notifications about orphaned background tasks from a previous session** —
 old watchers, killed with that session. Ignore them and arm a fresh one.

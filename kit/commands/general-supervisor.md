@@ -187,11 +187,15 @@ Run with the Bash tool, `run_in_background: true`:
 
 ```bash
 gc="$HOME/.claude/supervision/general/channel.md"   # = ./channel.md in your working directory
-count() { grep -c "FROM owner\|FROM app" "$gc"; }
-base=$(count)
-until [ "$(count)" -gt "$base" ]; do sleep 5; done
-echo "NEW TRAFFIC on the general channel — read from your last entry down, act, reply, RE-ARM this watcher before ending your turn."
+fingerprint() { md5sum "$gc" | cut -d' ' -f1; }
+base=$(cat "$gc.watch-base" 2>/dev/null)
+until [ "$(fingerprint)" != "$base" ]; do sleep 5; done
+echo "GENERAL CHANNEL CHANGED — read from your last entry down, act, reply, RE-ARM this watcher before ending your turn."
 ```
+
+**Capture the baseline at the START of every turn, before reading** (`md5sum "$gc" | cut -d' ' -f1 > "$gc.watch-base"`).
+Baselining at arm time makes anything that arrived while you were working invisible forever; doing
+it first costs at most one harmless extra wake. Channels are APPEND-ONLY — never `Write` one.
 
 **On resume you may see a notification about orphaned/stopped background tasks from the previous
 session** — those are your OLD watchers, killed with the session. Expected; ignore them, never
