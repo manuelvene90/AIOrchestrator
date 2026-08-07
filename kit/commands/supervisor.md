@@ -38,7 +38,7 @@ watcher. Nothing else.
    directory you are working in** and the repo name from `session.json` (the owner verifies the
    general supervisor mapped the right repo), a one-line state summary (members, in-flight work,
    open questions), and "text me what you need". A few lines, not an essay.
-3. Arm the watcher (below) and END YOUR TURN — unless the channels contain unanswered trailing
+3. Arm the persistent monitor (below) and END YOUR TURN — unless the channels contain unanswered trailing
    traffic, in which case act on that first.
 
 **A new orchestration starts with `imp-1` already spawned and unbriefed** — leave it idle until
@@ -363,37 +363,65 @@ If nothing changed since the last STATUS: one line, `- no change`. The app colla
 entries queued under Do-Not-Disturb, so only the newest reaches the owner on unmute — write each
 STATUS as self-contained. Stop the cadence when no work is in flight or the owner says stop.
 
-## The watcher — arm it before ending EVERY turn (definition of done)
+## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
-Run with the Bash tool, `run_in_background: true`. One armed watcher per turn end; a turn ended
-without one stalls the whole orchestration:
+Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`:
+
+```
+Monitor(
+  description: "channel traffic on orchestration $ARGUMENTS",
+  persistent: true,
+  command: <the script below>
+)
+```
 
 ```bash
 sup="$HOME/.claude/supervision/$ARGUMENTS"
-fingerprint() { cat "$sup"/imp-*/channel.md "$sup/owner-channel.md" 2>/dev/null | md5sum | cut -d' ' -f1; }
-base=$(cat "$sup/.watch-base" 2>/dev/null); start=$(date +%s)
-until [ "$(fingerprint)" != "$base" ] || [ $(( $(date +%s) - start )) -ge 1800 ]; do sleep 5; done
-if [ "$(fingerprint)" != "$base" ]; then echo "CHANNELS CHANGED on orchestration $ARGUMENTS — read every channel from your last entry down, act on it, append your entries, then RE-ARM this watcher before ending your turn."; else echo "STATUS due for $ARGUMENTS — append a STATUS entry (1-3 bullets) to owner-channel.md if work is in flight, then RE-ARM this watcher."; fi
+fingerprint() { cat "$sup"/imp-*/channel.md "$sup"/rev-*/channel.md "$sup/owner-channel.md" 2>/dev/null | md5sum | cut -d' ' -f1; }
+prev="$(fingerprint)"; last_status=$(date +%s)
+while true; do
+  sleep 5
+  cur="$(fingerprint)"
+  if [ "$cur" != "$prev" ]; then
+    echo "CHANNELS CHANGED on $ARGUMENTS — read every channel from your last entry down, act on it, append your entries."
+    prev="$cur"; last_status=$(date +%s)
+  elif [ $(( $(date +%s) - last_status )) -ge 1800 ]; then
+    echo "STATUS due for $ARGUMENTS — append a STATUS entry (1-3 bullets) to owner-channel.md if work is in flight."
+    last_status=$(date +%s)
+  fi
+done
 ```
 
-**Capture the baseline at the START of every turn — before you read anything:**
+**Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
+2026-08-07 twenty-nine background watchers were killed across four sessions of one orchestration,
+several of them in the SAME SECOND in different sessions (12:02:35: supervisor ×2, communicator;
+12:08:31–33: supervisor, imp-1, communicator). Every one of them was a Bash `run_in_background`
+task. **In the same orchestration, on the same machine, across those same instants, a persistent
+Monitor survived 41+ minutes and delivered five times without a single kill.** Something outside
+the app and outside the sessions reaps background Bash tasks; it does not touch Monitors.
 
-```bash
-sup="$HOME/.claude/supervision/$ARGUMENTS"
-cat "$sup"/imp-*/channel.md "$sup/owner-channel.md" 2>/dev/null | md5sum | cut -d' ' -f1 > "$sup/.watch-base"
-```
+**Two failure modes disappear with this shape, so do not "improve" it back:**
 
-This ordering is THE reliability rule of this system. Baselining when you ARM makes every entry
-that arrived while you were working invisible forever — an implementer's finished-work report can
-sit unnoticed indefinitely. Baselining first costs at most one harmless extra wake. And it
-fingerprints CONTENT, not a line count: a rewritten file can keep its count while changing
-completely.
+- **No re-arming.** The old watcher had to be re-armed at every turn end, which is a step that runs
+  on memory alone — miss it once and the orchestration stalls silently.
+- **No baseline race.** The old watcher captured a baseline that had to be taken at turn START, and
+  taking it at arm time made everything that arrived mid-turn invisible forever (an implementer
+  once sat 35 minutes on a brief that was already in its file). A persistent monitor holds its own
+  `prev` continuously, so there is no window in which a change can be missed.
 
 When it wakes you: read ALL channels (there may be several new entries), act, write your entries,
-re-arm, end turn.
+end your turn. The monitor keeps running — you do not touch it again.
 
-**On resume you may see a notification about orphaned/stopped background tasks from a previous
-session** — those are old watchers, killed with that session. Expected; ignore them and arm a
-fresh watcher as part of the boot.
+**If you ever see it stop** (a `killed`/stopped notification for it), arm a fresh one immediately;
+that is the one case where re-arming is your job.
+
+**Nothing wakes you except this monitor and the owner.** A monitor fires only when SOMEONE ELSE
+writes. If you end a turn with your OWN work unfinished and nobody is going to write to you, you
+will sleep until spoken to — so never end a turn mid-task expecting to continue by yourself.
+Finish the step, or hand it to an implementer, or say in your entry that you are waiting.
+
+**On resume you may see notifications about orphaned/stopped background tasks from a previous
+session** — those died with that session. Expected; ignore them and arm your monitor as part of
+the boot.
 
 Now execute the boot sequence.

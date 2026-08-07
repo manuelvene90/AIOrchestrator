@@ -188,24 +188,44 @@ Lead with the orchestrations that need the owner (blocked/questions), end with t
 one line each. Never append to other orchestrations' channels — the owner answers in each
 orchestration's own Telegram topic; the bridge routes per-topic.
 
-## The watcher — arm it before ending EVERY turn (definition of done)
+## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
-Run with the Bash tool, `run_in_background: true`:
+Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`:
+
+```
+Monitor(
+  description: "general channel traffic",
+  persistent: true,
+  command: <the script below>
+)
+```
 
 ```bash
 gc="$HOME/.claude/supervision/general/channel.md"   # = ./channel.md in your working directory
-fingerprint() { md5sum "$gc" | cut -d' ' -f1; }
-base=$(cat "$gc.watch-base" 2>/dev/null)
-until [ "$(fingerprint)" != "$base" ]; do sleep 5; done
-echo "GENERAL CHANNEL CHANGED — read from your last entry down, act, reply, RE-ARM this watcher before ending your turn."
+fingerprint() { md5sum "$gc" 2>/dev/null | cut -d' ' -f1; }
+prev="$(fingerprint)"
+while true; do
+  sleep 5
+  cur="$(fingerprint)"
+  if [ "$cur" != "$prev" ]; then
+    echo "GENERAL CHANNEL CHANGED — read from your last entry down, act, reply."
+    prev="$cur"
+  fi
+done
 ```
 
-**Capture the baseline at the START of every turn, before reading** (`md5sum "$gc" | cut -d' ' -f1 > "$gc.watch-base"`).
-Baselining at arm time makes anything that arrived while you were working invisible forever; doing
-it first costs at most one harmless extra wake. Channels are APPEND-ONLY — never `Write` one.
+**Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
+2026-08-07 twenty-nine background watchers were killed across four sessions of one orchestration,
+several in the SAME SECOND in different sessions; every one was a Bash `run_in_background` task,
+while a persistent Monitor survived those same instants for 41+ minutes. This shape also removes
+the re-arm obligation and the baseline race — the monitor holds `prev` continuously, so anything
+arriving while you work cannot fall into a gap. Channels are APPEND-ONLY — never `Write` one.
 
-**On resume you may see a notification about orphaned/stopped background tasks from the previous
-session** — those are your OLD watchers, killed with the session. Expected; ignore them, never
-investigate them, just arm a fresh watcher as part of the boot.
+**If the monitor ever stops** (a `killed`/stopped notification for it), arm a fresh one immediately.
+
+**On resume you may see notifications about orphaned/stopped background tasks from the previous
+session** — those died with that session. Expected; ignore them, never investigate them, just arm
+your monitor as part of the boot.
+
 
 Now execute the boot sequence.

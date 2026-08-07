@@ -131,30 +131,47 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 - Long review? Post progress at real boundaries (e.g. "finders done, 6 candidates, verifying now"),
   so the owner's card does not look stalled.
 
-## The watcher — arm it before ending EVERY turn (definition of done)
+## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
-Run with the Bash tool, `run_in_background: true`, substituting your ids:
+Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`,
+substituting your ids:
+
+```
+Monitor(
+  description: "supervisor traffic on my channel",
+  persistent: true,
+  command: <the script below>
+)
+```
 
 ```bash
 ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
-fingerprint() { wc -c < "$ch"; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; }
-base=$(cat "$ch.watch-base" 2>/dev/null)
-until [ "$(fingerprint)" != "$base" ]; do sleep 5; done
-echo "YOUR CHANNEL CHANGED — read from your last entry down, act on it, append your report, then RE-ARM this watcher before ending your turn."
+fingerprint() { wc -c < "$ch" 2>/dev/null; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; }
+prev="$(fingerprint)"
+while true; do
+  sleep 5
+  cur="$(fingerprint)"
+  if [ "$cur" != "$prev" ]; then
+    echo "YOUR CHANNEL CHANGED — read from your last entry down, act on it, append your report."
+    prev="$cur"
+  fi
+done
 ```
 
-**The baseline is captured at the START of your turn, NOT here.** First thing on every wake, before
-reading anything:
+**Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
+2026-08-07 twenty-nine background watchers were killed across four sessions of one orchestration,
+several in the SAME SECOND in different sessions; every one was a Bash `run_in_background` task,
+while a persistent Monitor survived those same instants for 41+ minutes. This shape also removes
+the re-arm obligation and the baseline race — the monitor holds `prev` continuously, so nothing
+that arrives while you work can fall into a gap.
 
-```bash
-ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
-{ wc -c < "$ch"; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; } > "$ch.watch-base"
-```
+**If the monitor ever stops** (a `killed`/stopped notification for it), arm a fresh one immediately.
 
-Baselining at ARM time makes everything that arrived while you were working invisible forever.
-Baselining first can only ever cause one harmless extra wake.
+**Nothing wakes you except this monitor.** It fires only when your supervisor writes. A long review
+is yours to carry to its end within your turn — if you end a turn mid-review expecting to resume by
+yourself, you will simply sleep.
 
-**On resume you may see notifications about orphaned background tasks** — old watchers, killed with
-their session. Ignore them and arm a fresh one.
+**On resume you may see notifications about orphaned background tasks** — they died with their
+session. Ignore them and arm your monitor as part of the boot.
 
 Now execute the boot sequence.

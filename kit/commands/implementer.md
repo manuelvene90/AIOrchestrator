@@ -78,39 +78,64 @@ repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
   hook, then CONTINUE with your remaining numbered contract items — the hook is never the
   deliverable, and stopping after it is the known failure mode.
 
-## The watcher — arm it before ending EVERY turn (definition of done)
+## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
-Run with the Bash tool, `run_in_background: true`, substituting your ids:
+Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`,
+substituting your ids:
+
+```
+Monitor(
+  description: "supervisor traffic on my channel",
+  persistent: true,
+  command: <the script below>
+)
+```
 
 ```bash
 ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
-fingerprint() { wc -c < "$ch"; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; }
-base=$(cat "$ch.watch-base" 2>/dev/null)
-until [ "$(fingerprint)" != "$base" ]; do sleep 5; done
-echo "YOUR CHANNEL CHANGED — read from your last entry down, act on it, append your boundary report, then RE-ARM this watcher before ending your turn."
+fingerprint() { wc -c < "$ch" 2>/dev/null; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; }
+prev="$(fingerprint)"
+while true; do
+  sleep 5
+  cur="$(fingerprint)"
+  if [ "$cur" != "$prev" ]; then
+    echo "YOUR CHANNEL CHANGED — read from your last entry down, act on it, append your boundary report."
+    prev="$cur"
+  fi
+done
 ```
 
-**The baseline is captured at the START of your turn, NOT here.** The very first thing you do on
-every wake — before reading anything — is:
+**Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
+2026-08-07, twenty-nine background watchers were killed across four sessions of one orchestration,
+several of them in the SAME SECOND in different sessions. Every single one was a Bash
+`run_in_background` task; a persistent Monitor in the same orchestration survived those same
+instants and ran 41+ minutes without a kill. Something outside the app reaps background Bash tasks
+and does not touch Monitors.
 
-```bash
-ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
-{ wc -c < "$ch"; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; } > "$ch.watch-base"
-```
+**Two old failure modes disappear with this shape, so do not "improve" it back:**
 
-This ordering is not a detail, it is THE reliability rule of this system. Baselining at ARM time
-makes every entry that arrived while you were working invisible forever: one implementer sat 35
-minutes on "awaiting the supervisor's first entry" while its complete task assignment was already
-in the file. Baselining first can only ever cause one harmless extra wake.
+- **No re-arming.** The old watcher had to be re-armed at every turn end — a step that ran on
+  memory alone, and missing it once stalled the orchestration silently.
+- **No baseline race.** The old one needed its baseline captured at turn START; capturing it at arm
+  time made everything that arrived mid-turn invisible forever (one implementer sat 35 minutes on a
+  task assignment that was already in its file). A persistent monitor holds `prev` continuously, so
+  no change can fall into a gap.
 
 It fingerprints CONTENT (size + hash), never a count of matching lines: a rewritten file can keep
 the same count while its content changes completely, and a count-based watcher sleeps through that.
 
-A turn ended without an armed watcher stalls the orchestration — treat re-arming as part of every
-task's definition of done, AFTER any turn-end hooks are satisfied.
+**If you ever see the monitor stop** (a `killed`/stopped notification for it), arm a fresh one
+immediately — that is the one case where re-arming is your job.
 
-**On resume you may see a notification about orphaned/stopped background tasks from a previous
-session** — those are old watchers, killed with that session. Expected; ignore them and arm a
-fresh watcher as part of the boot.
+**Nothing wakes you except this monitor.** It fires only when your SUPERVISOR writes. If you end a
+turn with your own work unfinished and nobody is going to write to you, you sleep until spoken to —
+this is the single most common way work stops silently. Never end a turn in the middle of a task
+you intend to continue: carry on to a real boundary, or append a report saying exactly what you are
+waiting for.
+
+**On resume you may see notifications about orphaned/stopped background tasks from a previous
+session** — those died with that session. Expected; ignore them and arm your monitor as part of the
+boot.
+
 
 Now execute the boot sequence.

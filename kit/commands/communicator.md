@@ -69,26 +69,52 @@ mentioning to the owner when it climbs past ~80% (the supervisor is nearing a co
   Technical questions are never yours: `That one's for Sup — delivered, he's currently <activity>.`
 - **Minimal verbosity always** (owner mandate): 1–2 lines, no ceremony, no headers, never pin.
 
-## The watcher — arm it before ending EVERY turn (definition of done)
+## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
-Run with the Bash tool, `run_in_background: true`. Wakes you on owner traffic (narrate if Sup is
-busy) AND on supervisor entries (your cue to go silent); the 180 s timeout drives the periodic
-"still busy" updates — on a timeout wake with no new traffic, post an update ONLY if the
-supervisor is busy AND the owner is still waiting on it since their last message.
+Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`.
+It wakes you on owner traffic (narrate if Sup is busy) AND on supervisor entries (your cue to go
+silent); the 180 s idle tick drives the periodic "still busy" updates — on an idle tick with no new
+traffic, post an update ONLY if the supervisor is busy AND the owner is still waiting on it since
+their last message.
+
+```
+Monitor(
+  description: "owner-channel traffic on $ARGUMENTS",
+  persistent: true,
+  command: <the script below>
+)
+```
 
 ```bash
 ch="$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md"
-fingerprint() { md5sum "$ch" | cut -d' ' -f1; }
-base=$(cat "$ch.com-base" 2>/dev/null); start=$(date +%s)
-until [ "$(fingerprint)" != "$base" ] || [ $(( $(date +%s) - start )) -ge 180 ]; do sleep 5; done
-if [ "$(fingerprint)" != "$base" ]; then echo "OWNER CHANNEL CHANGED — read it from your last read down, apply your behavior rules, RE-ARM this watcher."; else echo "TIMEOUT — if Sup is busy and the owner awaits a reply, post a short STATUS update, then RE-ARM this watcher."; fi
+fingerprint() { md5sum "$ch" 2>/dev/null | cut -d' ' -f1; }
+prev="$(fingerprint)"; last_tick=$(date +%s)
+while true; do
+  sleep 5
+  cur="$(fingerprint)"
+  if [ "$cur" != "$prev" ]; then
+    echo "OWNER CHANNEL CHANGED — read it from your last read down and apply your behaviour rules."
+    prev="$cur"; last_tick=$(date +%s)
+  elif [ $(( $(date +%s) - last_tick )) -ge 180 ]; then
+    echo "IDLE TICK — if Sup is busy and the owner is still awaiting a reply, post a short STATUS update."
+    last_tick=$(date +%s)
+  fi
+done
 ```
 
-**Capture the baseline at the START of every turn, before reading**
-(`md5sum "$ch" | cut -d' ' -f1 > "$ch.com-base"`) — baselining at arm time makes traffic that
-arrived while you were working invisible forever. Channels are APPEND-ONLY; never `Write` one.
+**Why a Monitor and not a `run_in_background` Bash task — this is measured.** You were the worst
+hit: on 2026-08-07 your background watchers were killed twenty times in one day, several of them in
+the same second as other sessions' watchers. Every kill in that orchestration was a Bash
+`run_in_background` task; a persistent Monitor ran 41+ minutes across those same instants without
+one. This shape also removes the re-arm step and the baseline race entirely — the monitor holds
+`prev` continuously, so traffic arriving while you work cannot fall into a gap.
+
+Channels are APPEND-ONLY; never `Write` one.
+
+**If the monitor ever stops** (a `killed`/stopped notification for it), arm a fresh one immediately.
 
 **On resume you may see notifications about orphaned background tasks from a previous session** —
-old watchers, killed with that session. Ignore them and arm a fresh one.
+they died with that session. Ignore them and arm your monitor as part of the boot.
+
 
 Now execute the boot sequence.

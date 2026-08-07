@@ -449,6 +449,8 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null)
                 continue;
 
+            Nudge_IdleSupervisor(session);
+
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc != null)
@@ -462,8 +464,31 @@ internal sealed class BridgeEngineModel(
                 var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
                 var memberKey = $"{session.OrchId}/{member.MemberId}";
 
-                // Nothing to answer, or the implementer already spoke last: not a missed hand-off.
-                if (entries.Count == 0 || entries[^1].Author == ChannelAuthors.Implementer)
+                if (entries.Count == 0)
+                {
+                    _nudgedMemberUtc.Remove(memberKey);
+                    continue;
+                }
+
+                var spokeLast = entries[^1].Author == ChannelAuthors.Implementer;
+
+                // A session CANNOT give itself the next turn — its monitor fires only when someone
+                // ELSE writes. So a member that spoke last and then went quiet is waiting for a
+                // message that is never coming, and the nudge IS that message.
+                //
+                // The two states that are LEGITIMATE dormancy are excluded: a filed report is
+                // waiting for the supervisor's verdict, and BLOCKED ON OWNER is waiting for the
+                // owner. Both have someone who owes them a reply; nudging them would be noise.
+                // Everything else the member said last — an open writing window, a "proceeding
+                // with X" — means it stopped mid-task with nobody about to speak to it.
+                var memberState = MemberState_Resolver.Resolve(entries);
+
+                var waitingOnSomeoneElse =
+                    memberState == MemberStates.AwaitingSupervisorReview || memberState == MemberStates.BlockedOnOwner;
+
+                var dormantMidWork = spokeLast && !waitingOnSomeoneElse;
+
+                if (spokeLast && !dormantMidWork)
                 {
                     _nudgedMemberUtc.Remove(memberKey);
                     continue;
@@ -482,7 +507,7 @@ internal sealed class BridgeEngineModel(
 
                 if (!alreadyNudged)
                 {
-                    await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, cancellationToken);
+                    await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, dormantMidWork, cancellationToken);
                     _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
                     continue;
                 }
@@ -501,21 +526,89 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// The same backstop for the SUPERVISOR, which nothing else covered — and it is the session
+    /// whose dormancy costs most, because every member's report waits behind it. It is nudged when
+    /// a member's channel ends with that member's entry (a report nobody has answered), the wait is
+    /// past the threshold, and the supervisor is not mid-turn.
+    ///
+    /// The nudge goes on owner-channel.md — the supervisor's own channel — so it reaches the
+    /// supervisor without landing in a member's channel, where it would read as traffic addressed
+    /// to that member.
+    /// </summary>
+    void Nudge_IdleSupervisor(IOrchestrationSession session)
+    {
+        var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
+        if (Is_SessionMidTurn(supervisorUsageFile))
+            return;
+
+        List<string> waitingMembers = [];
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+                continue;
+
+            var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+
+            if (!File.Exists(channelFile))
+                continue;
+
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+
+            if (entries.Count == 0 || entries[^1].Author != ChannelAuthors.Implementer)
+                continue;
+
+            if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile)).TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+                continue;
+
+            waitingMembers.Add(member.MemberId);
+        }
+
+        if (waitingMembers.Count == 0)
+        {
+            _nudgedMemberUtc.Remove(session.OrchId);
+            return;
+        }
+
+        // Once per quiet spell, not once per tick.
+        if (_nudgedMemberUtc.ContainsKey(session.OrchId))
+            return;
+
+        _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
+
+        ChannelAppender.Append_AppEntry(
+            _paths.Get_OwnerChannelFile(session.OrchId),
+            $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
+            $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
+            DateTime.Now);
+
+        _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
+        Raise_OrchestrationActivity(session.OrchId);
+    }
+
     async Task Nudge_Implementer_Async(
         IOrchestrationSession session,
         string memberId,
         string channelFile,
         Channels.ChannelEntry.IChannelEntry lastEntry,
         TimeSpan quietFor,
+        bool dormantMidWork,
         CancellationToken cancellationToken)
     {
-        ChannelAppender.Append_AppEntry(
-            channelFile,
-            "unread traffic — you have not answered",
-            $"Entry [{lastEntry.Index}] FROM {lastEntry.Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If your watcher never fired, re-arm it with the baseline captured BEFORE you read.",
-            DateTime.Now);
+        var subject = dormantMidWork
+            ? "you stopped mid-task — nothing was going to wake you"
+            : "unread traffic — you have not answered";
 
-        _log.Log_Warning(session.OrchId, $"{memberId} had unread traffic for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
+        var body = dormantMidWork
+            ? $"Your own entry [{lastEntry.Index}] is the last thing on this channel and nothing has moved for {SessionDuration_Formatter.Describe(quietFor)}. Your monitor only fires when someone ELSE writes, so a turn ended mid-task can never continue on its own — this entry is the app waking you. Resume the work you announced. If you are in fact waiting on somebody, say so explicitly (file your report, or write BLOCKED ON OWNER with the question) instead of going quiet — silence is indistinguishable from a dead session."
+            : $"Entry [{lastEntry.Index}] FROM {lastEntry.Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If your monitor is no longer running, arm a fresh one.";
+
+        ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
+
+        var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
+        _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
 
         // The channel nudge above ALWAYS happens (it is what unsticks the implementer);
