@@ -7,8 +7,9 @@ namespace AIOrchestratorCoreLib.Mirroring;
 /// <summary>
 /// Formats channel entries for the Telegram mirror — MINIMAL VERBOSITY by owner mandate.
 /// Only owner ⇄ supervisor channels reach Telegram at all (implementer spokes stay in the app);
-/// prefixes are bare ("Sup:", "App:") — the owner knows who they are; no entry numbers, no
-/// direction arrows, no subject-plus-body duplication.
+/// prefixes are bare ("Sup:", "Gen-Sup:", "Com:", "App:") — the owner knows who they are; no entry
+/// numbers, no direction arrows, no subject-plus-body duplication. Each voice has its own color:
+/// 🔴 orchestration supervisor · 🟡 general supervisor · 🟢 communicator · 🔵 implementer · ⚙ app.
 /// </summary>
 public static class MirrorText_Formatter
 {
@@ -38,7 +39,11 @@ public static class MirrorText_Formatter
             ChannelAuthors.App => $"⚙ App: {entry.Subject}",
 
             // Supervisor entries: the body is the message; the subject is channel metadata.
-            ChannelAuthors.Supervisor => $"🔴 Sup: {Pick_Content(entry)}",
+            // The GENERAL supervisor speaks with its own color so the owner never confuses
+            // the concierge with an orchestration's supervisor.
+            ChannelAuthors.Supervisor => channel.OrchId == ChannelDiscovery.GENERAL_ORCH_ID
+                ? $"🟡 Gen-Sup: {Pick_Content(entry)}"
+                : $"🔴 Sup: {Pick_Content(entry)}",
 
             // Communicator entries: live narration of what the supervisor is doing — green voice.
             ChannelAuthors.Communicator => $"🟢 Com: {Pick_Content(entry)}",

@@ -409,11 +409,16 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>"🔴 Sup: body" → ("🔴 Sup: ", "body") — the prefix must NEVER pass through the translator.</summary>
+    /// <summary>
+    /// "🔴 Sup: body" → ("🔴 Sup: ", "body") — the prefix must NEVER pass through the translator.
+    /// The bound covers the longest prefix ("🟡 Gen-Sup: " is already 12 UTF-16 units, its emoji
+    /// being a surrogate pair) with room to spare; the LAZY quantifier still stops at the first
+    /// ": ", which is always the formatter's own prefix.
+    /// </summary>
     static (string Prefix, string Content) Split_SpeakerPrefix(string text)
     {
         var match = System.Text.RegularExpressions.Regex.Match(
-            text, @"^(.{1,12}?: )(.*)$", System.Text.RegularExpressions.RegexOptions.Singleline);
+            text, @"^(.{1,18}?: )(.*)$", System.Text.RegularExpressions.RegexOptions.Singleline);
 
         if (!match.Success)
             return (string.Empty, text);
@@ -957,6 +962,12 @@ internal sealed class BridgeEngineModel(
                     {
                         routableMessages.Add(Build_GeneralCommandMessage(message, "List every pending question that awaits me, and which topic to answer each in."));
                     }
+                    else if (command == "progress")
+                    {
+                        // Answered by the APP straight from PLAN.md — instant, and it works even
+                        // while the supervisor is mid-turn (which is exactly when it gets asked).
+                        await Send_ProgressReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else
                     {
                         routableMessages.Add(message);
@@ -1020,6 +1031,7 @@ internal sealed class BridgeEngineModel(
         {
             await client.Set_MyCommands_Async(
                 [
+                    ("progress", "Task ledger of this orchestration (all of them in General)"),
                     ("summary", "What is going on across all orchestrations"),
                     ("pending", "Open questions awaiting me"),
                     ("dnd", "Mute texts (text anything to unmute)"),
@@ -1058,6 +1070,107 @@ internal sealed class BridgeEngineModel(
     {
         return TelegramOwnerMessage_Factory.Create(
             original.UpdateId, original.ChatId, original.FromUserId, null, cannedText, null, null);
+    }
+
+    /// <summary>
+    /// /progress — the PLAN.md task ledger, straight from disk. In a topic: that orchestration's
+    /// full ledger; in General: one line per open orchestration. Deliberately NOT routed to the
+    /// supervisor: this is asked precisely when the supervisor is mid-turn and cannot answer.
+    /// </summary>
+    async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_ProgressReportText(messageThreadId);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_ProgressReportText(long? messageThreadId)
+    {
+        if (messageThreadId != null)
+        {
+            var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+            if (session == null)
+                return "no orchestration is bound to this topic";
+
+            return Build_OrchestrationLedgerText(session.OrchId, session.DisplayName ?? session.OrchId);
+        }
+
+        List<string> blocks = [];
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            blocks.Add(Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId));
+        }
+
+        if (blocks.Count == 0)
+            return "no open orchestrations";
+
+        return string.Join('\n', blocks);
+    }
+
+    /// <summary>Full ledger for one orchestration — the raw '- [x]' lines are the point of the command.</summary>
+    string Build_OrchestrationLedgerText(string orchId, string displayName)
+    {
+        const int MAX_LEDGER_LINES = 40;
+
+        var planText = Read_FileText_Safe(_paths.Get_PlanFile(orchId));
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(planText);
+
+        if (progress == null)
+            return $"{displayName}: no task ledger yet — the supervisor writes PLAN.md once you approve a direction";
+
+        List<string> taskLines = [];
+
+        foreach (var rawLine in planText.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r').Trim();
+
+            if (line.StartsWith("- [", StringComparison.Ordinal))
+                taskLines.Add(line);
+        }
+
+        var shown = taskLines.Count <= MAX_LEDGER_LINES ? taskLines : [.. taskLines.Take(MAX_LEDGER_LINES)];
+        var truncationNote = taskLines.Count > MAX_LEDGER_LINES ? $"\n… and {taskLines.Count - MAX_LEDGER_LINES} more" : "";
+
+        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n\n{string.Join('\n', shown)}{truncationNote}";
+    }
+
+    string Build_OrchestrationCountsLine(string orchId, string displayName)
+    {
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
+
+        if (progress == null)
+            return $"{displayName}: no task ledger yet";
+
+        var blockedPart = progress.Blocked > 0 ? $" · {progress.Blocked} BLOCKED" : "";
+        var runningPart = progress.InProgress > 0 ? $" · {progress.InProgress} running" : "";
+
+        return $"{displayName}: {progress.Done}/{progress.Total} done{runningPart}{blockedPart}";
+    }
+
+    static string Read_FileText_Safe(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+                return string.Empty;
+
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     async Task Handle_CallbackTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)

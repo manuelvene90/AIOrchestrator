@@ -217,7 +217,8 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked`
   Short imperative task texts; headers/notes are ignored by the parser.
 - **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
-  the owner → `[!]`. A stale ledger is worse than none.
+  the owner → `[!]`. A stale ledger is worse than none — the owner can pull it up at any moment
+  from their phone with `/progress`, which the APP answers straight from this file.
 - **Derive your STATUS texts from it** (counts + the current task), and re-read it as your
   fast resume point after a respawn — it beats replaying the whole channel narrative.
 

@@ -61,6 +61,15 @@ public class MirrorTextFormatterTests
     }
 
     [Fact]
+    public void Format_GeneralSupervisor_HasItsOwnVoice_NotTheOrchestrationSupervisorOne()
+    {
+        var generalChannel = DiscoveredChannel_Factory.Create_ForOwner("general", "unused");
+        var entry = Build_Entry(ChannelAuthors.Supervisor, "online", "starting orchestration: CRM");
+
+        Assert.Equal("🟡 Gen-Sup: starting orchestration: CRM", MirrorText_Formatter.Format(generalChannel, entry));
+    }
+
+    [Fact]
     public void Format_App_SubjectOnly_BodyIsAgentFacingDetail()
     {
         var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("general", "unused");

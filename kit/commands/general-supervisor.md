@@ -61,7 +61,7 @@ One level up, `~/.claude/supervision/`:
 
   The owner also has bot menu commands the APP handles directly: `/summary` and `/pending` reach
   YOU as canned English requests ("make a summary…", "list every pending question…"); `/dnd`
-  mutes texts without involving you.
+  mutes texts and `/progress` answers from the PLAN.md ledgers — both without involving you.
 
   `telegramItalianLayer` (default true, read LIVE): the APP translates Telegram traffic — the
   owner reads/writes Italian on the phone while every channel and session stays 100% English.
