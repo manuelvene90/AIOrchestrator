@@ -6,7 +6,6 @@ namespace AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 
 internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : IOrchestrationSessionStore
 {
-    const string IMPLEMENTER_ID_PREFIX = "imp-";
 
     readonly ISupervisionPaths _paths = paths;
     readonly Lock _writeLock = new();
@@ -80,11 +79,17 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
 
     public IOrchestrationSession Add_Implementer(string orchId)
     {
+        return Add_Member(orchId, MemberKinds.Implementer);
+    }
+
+    public IOrchestrationSession Add_Member(string orchId, MemberKinds kind)
+    {
         lock (_writeLock)
         {
             var session = Get_Session(orchId);
 
-            var memberId = $"{IMPLEMENTER_ID_PREFIX}{Get_NextImplementerNumber(session)}";
+            var prefix = MemberKind_Ids.Build_Prefix(kind);
+            var memberId = $"{prefix}{Get_NextMemberNumber(session, prefix)}";
 
             Directory.CreateDirectory(_paths.Get_ImplementerFolder(orchId, memberId));
 
@@ -231,13 +236,17 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
-    static int Get_NextImplementerNumber(IOrchestrationSession session)
+    /// <summary>Each kind numbers independently, so an orchestration reads as "imp-1, imp-2, rev-1".</summary>
+    static int Get_NextMemberNumber(IOrchestrationSession session, string prefix)
     {
         var maxNumber = 0;
 
         foreach (var member in session.Members)
         {
-            var numberPart = member.MemberId.Replace(IMPLEMENTER_ID_PREFIX, string.Empty);
+            if (!member.MemberId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var numberPart = member.MemberId[prefix.Length..];
 
             if (int.TryParse(numberPart, out var number) && number > maxNumber)
                 maxNumber = number;

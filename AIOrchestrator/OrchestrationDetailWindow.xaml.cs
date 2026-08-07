@@ -295,6 +295,13 @@ public partial class OrchestrationDetailWindow : Window
             "add-implementer requested");
     }
 
+    void AddReviewerButton_Click(object sender, RoutedEventArgs e)
+    {
+        Drop_Request(
+            $$"""{"action":"add-reviewer","orchId":"{{_orchId}}","reason":"spawned by the owner from the detail window"}""",
+            "add-reviewer requested");
+    }
+
     void CloseOrchestrationButton_Click(object sender, RoutedEventArgs e)
     {
         var answer = MessageBox.Show(

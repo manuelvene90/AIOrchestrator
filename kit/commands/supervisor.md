@@ -152,8 +152,9 @@ coordination: read, decide, brief, verify at the boundary, report.
 
 - **Anything that will take more than a couple of minutes goes to an IMPLEMENTER**, including work
   you would enjoy doing yourself: writing code, running long builds or test suites, large
-  refactors, exhaustive searches, and REVIEWS of an implementer's work. Spawn one with a `reason`
-  and brief it, exactly as with any other task.
+  refactors and exhaustive searches. Spawn one with a `reason` and brief it, exactly as with any
+  other task. **Serious REVIEWS go to a REVIEWER** (next section) — same principle, different kind
+  of member.
 - **NEVER use a sub-agent (the Task tool) for long work.** A sub-agent runs INSIDE your turn: it
   blocks you for its whole duration, which is precisely the failure this rule exists to prevent.
   An implementer is a separate session — it works while you stay free. Sub-agents are acceptable
@@ -190,8 +191,13 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
 - **Add an implementer:** write `~/.claude/supervision/.requests/add-imp-$ARGUMENTS-<timestamp>.json`
   containing `{"action":"add-implementer","orchId":"$ARGUMENTS","reason":"<why, one line>"}`. When
   the confirmation names the new member (e.g. `imp-2`), brief it in `imp-2/channel.md`.
-- **Retire an implementer:** first tell it to wrap up in its channel and wait for its final report;
-  then drop `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`.
+- **Add a REVIEWER:** same shape, `{"action":"add-reviewer","orchId":"$ARGUMENTS","reason":"<why, one line>"}`.
+  You get back `rev-1`, `rev-2`, … — reviewers number separately from implementers. Brief it in
+  `rev-<n>/channel.md`. See "Reviewers" below for what to put in that brief.
+- **Retire an implementer or a reviewer:** first tell it to wrap up in its channel and wait for its
+  final report; then drop
+  `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`
+  (the same action closes a `rev-<n>` — pass its member id).
 - **Liveness is the APP's job — NEVER yours (hard rule).** The `pid` in `session.json` is NOT a
   liveness signal: it is informational, and it is legitimately `null` for a while after every
   spawn. NEVER run Get-Process to decide whether an implementer is alive, and NEVER
@@ -231,6 +237,57 @@ assign a worktree — a line of exactly `WORKTREE: <full path>` (the orchestrato
 this marker to show which worktree each implementer is on). If the repo
 has hooks that fire at turn end (style checks), tell the implementer explicitly that satisfying the
 hook is NOT the deliverable and it must CONTINUE to the remaining numbered items afterwards.
+
+## REVIEWERS — a second kind of member, read-only and adversarial
+
+A reviewer (`rev-1`, `rev-2`, …) is a session that reviews work and produces findings, never code.
+It is launched WITHOUT the editing tools and a hook blocks mutating shell commands, so "review
+only, do not fix" is guaranteed by construction rather than trusted. It gets no worktree — it reads
+the repo and the implementers' branches — which makes it cheaper to run than an implementer.
+
+**Use one whenever a review is worth more than your own quick read of a diff.** Your boundary
+verification (read the diff, run the suite, write the verdict) stays yours and stays fast. A
+reviewer is for the case where being wrong is expensive.
+
+### Choosing the DEPTH — this is your call, and it is a spending decision
+
+Depth is chosen from **blast radius** — what breaks if this is wrong, and how reversible it is —
+never from how big the diff looks. Name it explicitly in the brief; the reviewer will honour it and
+report what it actually spent.
+
+| Depth | ~Agents | Use when |
+|---|---|---|
+| `quick` | 0–1 | Small, local, easily reverted. A docs/config edit, a re-check of one earlier finding. |
+| `standard` | 2–4 | Ordinary feature work or a bug fix on a branch. **The default.** |
+| `deep` | 6–9 | Engine/algorithm changes, money or order paths, shared libraries, many call sites. |
+| `max` | 12–16 | Irreversible or safety-critical: migrations, deletion sweeps, auth/licensing, anything shipping straight to paying customers. |
+
+- **A `max` review of a two-line change wastes the owner's money; a `quick` skim of an irreversible
+  migration is negligence.** Both errors are yours to avoid.
+- **When you genuinely cannot tell, ASK THE OWNER — do not guess.** One message with `OPTION:`
+  lines (`OPTION: standard — ~3 agents`, `OPTION: deep — ~8 agents`, `OPTION: max — ~15 agents`)
+  costs one tap and is far cheaper than either failure. Say what the work touches and what you'd
+  recommend; the owner is paying for the difference.
+- **Say the cost in the `reason`**, so the owner sees it on their phone: "deep adversarial review of
+  the order-sizing rewrite, ~8 agents".
+- Expect the reviewer to push back on the depth before it starts. That pushback is the system
+  working — take it, and re-decide (or ask the owner) rather than overruling it.
+
+### Briefing a reviewer
+
+Its first entry from you must carry: **exactly what to review** (branch, commit range, files, or
+"the diff between X and Y"), **the depth**, **what the work was supposed to do** (it cannot judge
+correctness against an unstated intent), and any known-risky areas to attack first. Ask for the
+report in its channel; it never talks to the owner.
+
+### Governance — do not spend the reviewer's independence
+
+- **A reviewer must never later own work that depends on what it approved.** If a finding needs
+  fixing, it goes to an IMPLEMENTER — never back to the reviewer that raised or cleared it. A
+  reviewer that fixes its own findings has reviewed nothing.
+- Findings are input to YOUR verdict, not a verdict themselves. You still decide what gets fixed,
+  what is accepted, and what goes to the owner.
+- `UNPROVEN` in a report is real information — relay it as uncertainty, never round it to "clean".
 
 ## Git discipline (shared machine, multiple sessions)
 

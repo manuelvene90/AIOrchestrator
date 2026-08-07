@@ -6,6 +6,7 @@ using System.Windows.Media;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Formatting;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -108,10 +109,14 @@ public static class SessionRows_Builder
         // writing window and never closed it, which is stale the moment it starts working again.
         var isWorkingNow = !isClosed && SessionActivity_Probe.Is_MidTurn(usageFile);
 
+        // A reviewer reads the same channel shape but is a different KIND of session — read-only,
+        // and its findings must never be mistaken for work in progress. It gets its own accent.
+        var kind = MemberKind_Ids.Resolve_Kind(memberId);
+
         return new MemberRowView
         {
             MemberLabel = memberId,
-            RoleBrush = findBrush("AccentImplementer"),
+            RoleBrush = findBrush(kind == MemberKinds.Reviewer ? "AccentReviewer" : "AccentImplementer"),
             StateText = isClosed ? "closed" : Describe_MemberState(state, isWorkingNow),
             StateBrush = isClosed ? findBrush("StateClosed") : findBrush(isWorkingNow ? "StateWorking" : Brush_KeyFor(state)),
             LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",

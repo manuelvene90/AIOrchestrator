@@ -13,6 +13,7 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Mirroring;
 using AIOrchestratorCoreLib.Planning;
 using AIOrchestratorCoreLib.Usage;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Status;
@@ -1396,20 +1397,25 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                var session = _launcher.Add_Implementer(request.OrchId);
+                var session = _launcher.Add_Member(request.OrchId, request.Kind);
                 var newMember = session.Members[session.Members.Count - 1];
+                var kindWord = request.Kind.ToString().ToLowerInvariant();
+
+                var briefingHint = request.Kind == MemberKinds.Reviewer
+                    ? $"New reviewer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}' — READ-ONLY (it cannot edit or commit). Its channel is {newMember.MemberId}/channel.md — brief it there, and the brief MUST name a review DEPTH (quick | standard | deep | max) and exactly what to review."
+                    : $"New implementer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}'. Its channel is {newMember.MemberId}/channel.md — brief it there.";
 
                 // The REASON rides in the subject because App entries mirror subject-only — the
                 // owner must never see a session appear (and burn tokens) without knowing why.
                 Append_OrchestrationAppEntry(
                     request.OrchId,
-                    $"implementer '{newMember.MemberId}' added — {request.Reason}",
-                    $"New implementer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}'. Its channel is {newMember.MemberId}/channel.md — brief it there.");
+                    $"{kindWord} '{newMember.MemberId}' added — {request.Reason}",
+                    briefingHint);
             }
             catch (Exception ex)
             {
-                _log.Log_Error(request.OrchId, "add-implementer failed", ex);
-                Append_OrchestrationAppEntry(request.OrchId, "add-implementer FAILED", $"Error: {ex.Message}");
+                _log.Log_Error(request.OrchId, $"add-{request.Kind.ToString().ToLowerInvariant()} failed", ex);
+                Append_OrchestrationAppEntry(request.OrchId, $"add-{request.Kind.ToString().ToLowerInvariant()} FAILED", $"Error: {ex.Message}");
             }
             finally
             {

@@ -25,6 +25,16 @@ public static class SpawnCommand_Builder
     public const string IMPLEMENTER_TAB_COLOR = "#3B82F6";
     public const string GENERAL_TAB_COLOR = "#F5A623";
     public const string COMMUNICATOR_TAB_COLOR = "#22C55E";
+    public const string REVIEWER_TAB_COLOR = "#A855F7";
+
+    /// <summary>
+    /// A reviewer is READ-ONLY BY CONSTRUCTION: the CLI itself refuses it the editing tools, so
+    /// "investigate only, no edits" stops being a sentence in a brief that it must remember to
+    /// honour. Its Bash access is additionally guarded by a PreToolUse hook (mutating commands and
+    /// writes outside its own channel are blocked) — it still needs Bash for git log/diff, grep and
+    /// for appending its report.
+    /// </summary>
+    public const string REVIEWER_LAUNCH_FLAGS = "--disallowedTools \"Write\" \"Edit\" \"NotebookEdit\"";
 
     /// <summary>
     /// Orchestrated sessions run unattended (the owner may be on their phone) — a permission
@@ -39,6 +49,20 @@ public static class SpawnCommand_Builder
         var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model)} '/supervisor {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand($"SUP · {orchId}", SUPERVISOR_TAB_COLOR, repoPath, script);
+    }
+
+    /// <summary>
+    /// A reviewer session: adversarial review by default, no worktree (it reads the repo and the
+    /// implementers' branches), and no ability to edit or commit.
+    /// </summary>
+    public static ISpawnCommand Build_ForReviewer(string orchId, string memberId, string repoPath, string? model, string pidFilePath)
+    {
+        Validate_OrchId(orchId);
+
+        var claudeCommand = $"{Build_ClaudeInvocation(model)} {REVIEWER_LAUNCH_FLAGS} '/reviewer {orchId}/{memberId}'";
+        var script = Build_SessionScript("reviewer", orchId, memberId, claudeCommand, pidFilePath);
+
+        return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", REVIEWER_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>The orchestration's green press-secretary voice: narrates, never works (see communicator.md).</summary>

@@ -170,6 +170,8 @@
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="AddImplementerButton" Content="＋ Implementer" Click="AddImplementerButton_Click" Margin="0,0,8,0"
                         ToolTip="Spawn another implementer in this orchestration"/>
+                <Button x:Name="AddReviewerButton" Content="＋ Reviewer" Click="AddReviewerButton_Click" Margin="0,0,8,0"
+                        ToolTip="Spawn a READ-ONLY reviewer — it cannot edit or commit; brief it with what to review and how deep"/>
                 <Button x:Name="CloseOrchestrationButton" Content="✕ Close orchestration" Click="CloseOrchestrationButton_Click" Margin="0,0,8,0"
                         ToolTip="End every session, delete the Telegram topic, keep the folder as audit trail"/>
                 <Button Content="📂 Open folder" Click="OpenFolderButton_Click" Margin="0,0,8,0"/>

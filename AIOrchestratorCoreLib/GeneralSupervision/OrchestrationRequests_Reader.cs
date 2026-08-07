@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.StartOrchestrationRequest;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.GeneralSupervision;
@@ -21,7 +22,8 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 /// Supported actions (retries REUSE the same action string — never invent variants):
 ///   {"action":"start-orchestration","repo":"..."}                     (general supervisor; id auto-allocated)
 ///   {"action":"add-implementer","orchId":"..."}                       (orchestration supervisor)
-///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor)
+///   {"action":"add-reviewer","orchId":"..."}                          (orchestration supervisor; read-only member)
+///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor; also closes rev-n)
 ///   {"action":"close-orchestration","orchId":"..."}                   (general supervisor)
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
 ///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
@@ -31,6 +33,7 @@ public static class OrchestrationRequests_Reader
 {
     public const string START_ORCHESTRATION_ACTION = "start-orchestration";
     public const string ADD_IMPLEMENTER_ACTION = "add-implementer";
+    public const string ADD_REVIEWER_ACTION = "add-reviewer";
     public const string CLOSE_IMPLEMENTER_ACTION = "close-implementer";
     public const string CLOSE_ORCHESTRATION_ACTION = "close-orchestration";
     public const string SET_TELEGRAM_MUTED_ACTION = "set-telegram-muted";
@@ -126,6 +129,7 @@ public static class OrchestrationRequests_Reader
                     return null;
                 }
                 case ADD_IMPLEMENTER_ACTION:
+                case ADD_REVIEWER_ACTION:
                 {
                     if (string.IsNullOrWhiteSpace(orchId))
                         return "missing 'orchId'";
@@ -134,7 +138,9 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(reason))
                         return MISSING_REASON_MESSAGE;
 
-                    addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, reason.Trim(), filePath));
+                    var kind = action == ADD_REVIEWER_ACTION ? MemberKinds.Reviewer : MemberKinds.Implementer;
+
+                    addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, kind, reason.Trim(), filePath));
                     return null;
                 }
                 case CLOSE_IMPLEMENTER_ACTION:
@@ -205,9 +211,9 @@ public static class OrchestrationRequests_Reader
                 {
                     var known = string.Join(", ", new[]
                     {
-                        START_ORCHESTRATION_ACTION, ADD_IMPLEMENTER_ACTION, CLOSE_IMPLEMENTER_ACTION,
-                        CLOSE_ORCHESTRATION_ACTION, SET_TELEGRAM_MUTED_ACTION, SET_ORCHESTRATION_NAME_ACTION,
-                        SET_MODEL_ACTION,
+                        START_ORCHESTRATION_ACTION, ADD_IMPLEMENTER_ACTION, ADD_REVIEWER_ACTION,
+                        CLOSE_IMPLEMENTER_ACTION, CLOSE_ORCHESTRATION_ACTION, SET_TELEGRAM_MUTED_ACTION,
+                        SET_ORCHESTRATION_NAME_ACTION, SET_MODEL_ACTION,
                     });
 
                     return $"unknown action '{action}' (known: {known}; retries must reuse the SAME action)";

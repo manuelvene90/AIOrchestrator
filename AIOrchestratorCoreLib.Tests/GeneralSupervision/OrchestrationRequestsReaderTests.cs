@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using Xunit;
 
@@ -53,6 +54,35 @@ public class OrchestrationRequestsReaderTests : IDisposable
         Assert.Equal("work concluded", closeOrch.Reason);
 
         Assert.Empty(pending.MalformedRequests);
+    }
+
+    /// <summary>
+    /// add-reviewer shares the add-implementer pipeline but MUST carry its kind through — a
+    /// reviewer spawned as an implementer would come up able to edit and commit.
+    /// </summary>
+    [Fact]
+    public void Read_Pending_AddReviewer_CarriesTheReviewerKind()
+    {
+        Write_Request("imp.json", """{"action":"add-implementer","orchId":"skel-work","reason":"second pair of hands"}""");
+        Write_Request("rev.json", """{"action":"add-reviewer","orchId":"skel-work","reason":"deep adversarial review of the order path"}""");
+
+        var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
+
+        Assert.Equal(2, pending.AddImplementerRequests.Count);
+        Assert.Equal(MemberKinds.Implementer, pending.AddImplementerRequests.Single(r => r.Reason.Contains("hands")).Kind);
+        Assert.Equal(MemberKinds.Reviewer, pending.AddImplementerRequests.Single(r => r.Reason.Contains("review")).Kind);
+        Assert.Empty(pending.MalformedRequests);
+    }
+
+    [Fact]
+    public void Read_Pending_AddReviewerWithoutAReason_IsRejectedToo()
+    {
+        Write_Request("no-reason-rev.json", """{"action":"add-reviewer","orchId":"skel-work"}""");
+
+        var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
+
+        Assert.Empty(pending.AddImplementerRequests);
+        Assert.Contains("missing 'reason'", Assert.Single(pending.MalformedRequests).Reason);
     }
 
     [Fact]

@@ -134,8 +134,15 @@ public partial class App : Application
             // Stop hook does not.
             var ledgerHookFile = Path.Combine(claudeHooksFolder, "supervisor-ledger-check.sh");
 
-            if (StopHookSettings_Wirer.Ensure_Wired(settingsFile, ledgerHookFile))
+            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, ledgerHookFile, AgentHookSettings_Wirer.STOP_EVENT, null))
                 log.Log_Info("", $"Ledger Stop hook wired into {settingsFile}; supervisors spawned from now on cannot end a turn owing a PLAN.md update");
+
+            // Read-only enforcement for reviewers: the CLI already withholds Write/Edit, but Bash
+            // could mutate the repo just as effectively — this closes that route.
+            var reviewerHookFile = Path.Combine(claudeHooksFolder, "reviewer-readonly-check.sh");
+
+            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, reviewerHookFile, AgentHookSettings_Wirer.PRE_TOOL_USE_EVENT, "Bash"))
+                log.Log_Info("", $"Reviewer read-only PreToolUse hook wired into {settingsFile}; reviewers spawned from now on cannot mutate the repo through Bash");
         }
         catch (Exception ex)
         {

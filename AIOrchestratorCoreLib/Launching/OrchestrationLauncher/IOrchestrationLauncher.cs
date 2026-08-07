@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 
 namespace AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -11,6 +12,9 @@ public interface IOrchestrationLauncher
 {
     IOrchestrationSession Start_Orchestration(string repoName, string repoPath);
     IOrchestrationSession Add_Implementer(string orchId);
+
+    /// <summary>Adds a member of the given kind — a reviewer spawns read-only, with no worktree.</summary>
+    IOrchestrationSession Add_Member(string orchId, MemberKinds kind);
     void Respawn_Supervisor(string orchId);
     void Respawn_Communicator(string orchId);
     void Respawn_Implementer(string orchId, string memberId);

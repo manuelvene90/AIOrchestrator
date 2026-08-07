@@ -4,18 +4,27 @@ using AIOrchestratorCoreLib.Configuration;
 namespace AIOrchestratorCoreLib.Kit;
 
 /// <summary>
-/// Registers the ledger Stop hook in ~/.claude/settings.json, the same way the status line is
-/// wired. This is what turns the ledger from prose into a rule: a supervisor that owes a PLAN.md
-/// update cannot end its turn.
+/// Registers the orchestrator's enforcement hooks in ~/.claude/settings.json, the same way the
+/// status line is wired. This is what turns a rule from prose into a rule: a supervisor that owes a
+/// PLAN.md update cannot end its turn (Stop), and a reviewer cannot mutate the repo through Bash
+/// (PreToolUse).
 ///
-/// Merges rather than overwrites — the user's own hooks are preserved, ours is added once, and a
-/// backup is taken the first time. A settings file that is not a JSON object is left ALONE.
+/// Merges rather than overwrites — the user's own hooks are preserved, ours is added once per
+/// script, and a backup is taken the first time. A settings file that is not a JSON object is left
+/// ALONE.
 /// </summary>
-public static class StopHookSettings_Wirer
+public static class AgentHookSettings_Wirer
 {
+    public const string STOP_EVENT = "Stop";
+    public const string PRE_TOOL_USE_EVENT = "PreToolUse";
+
     const string BACKUP_SUFFIX = ".aiorch-backup";
 
-    public static bool Ensure_Wired(string settingsFilePath, string hookScriptPath)
+    /// <summary>
+    /// matcher is the tool-name pattern for PreToolUse (e.g. "Bash"); null for events that take
+    /// no matcher, such as Stop.
+    /// </summary>
+    public static bool Ensure_Wired(string settingsFilePath, string hookScriptPath, string hookEvent, string? matcher)
     {
         try
         {
@@ -32,23 +41,28 @@ public static class StopHookSettings_Wirer
                 root["hooks"] = hooks;
             }
 
-            if (hooks["Stop"] is not JsonArray stopEntries)
+            if (hooks[hookEvent] is not JsonArray eventEntries)
             {
-                stopEntries = [];
-                hooks["Stop"] = stopEntries;
+                eventEntries = [];
+                hooks[hookEvent] = eventEntries;
             }
 
-            if (Contains_OurHook(stopEntries, hookScriptPath))
+            if (Contains_OurHook(eventEntries, hookScriptPath))
                 return false;
 
-            stopEntries.Add(new JsonObject
+            var entry = new JsonObject
             {
                 ["hooks"] = new JsonArray(new JsonObject
                 {
                     ["type"] = "command",
                     ["command"] = command,
                 }),
-            });
+            };
+
+            if (matcher != null)
+                entry["matcher"] = matcher;
+
+            eventEntries.Add(entry);
 
             Backup_Once(settingsFilePath);
             File.WriteAllText(settingsFilePath, root.ToJsonString(JsonWriting.INDENTED));
@@ -61,11 +75,11 @@ public static class StopHookSettings_Wirer
         }
     }
 
-    static bool Contains_OurHook(JsonArray stopEntries, string hookScriptPath)
+    static bool Contains_OurHook(JsonArray eventEntries, string hookScriptPath)
     {
         var scriptName = Path.GetFileName(hookScriptPath);
 
-        foreach (var entry in stopEntries)
+        foreach (var entry in eventEntries)
         {
             if (entry is not JsonObject entryObject || entryObject["hooks"] is not JsonArray innerHooks)
                 continue;

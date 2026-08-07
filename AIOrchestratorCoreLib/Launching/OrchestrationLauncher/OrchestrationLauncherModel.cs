@@ -56,7 +56,12 @@ internal sealed class OrchestrationLauncherModel(
 
     public IOrchestrationSession Add_Implementer(string orchId)
     {
-        var session = _store.Add_Implementer(orchId);
+        return Add_Member(orchId, MemberKinds.Implementer);
+    }
+
+    public IOrchestrationSession Add_Member(string orchId, MemberKinds kind)
+    {
+        var session = _store.Add_Member(orchId, kind);
         var newMember = session.Members[session.Members.Count - 1];
 
         Respawn_Implementer(orchId, newMember.MemberId);
@@ -109,17 +114,20 @@ internal sealed class OrchestrationLauncherModel(
         _log.Log_Info(orchId, "Communicator session spawned");
     }
 
+    /// <summary>
+    /// Respawns a member AS ITS KIND — the id carries it, so a respawned reviewer comes back
+    /// read-only instead of being quietly resurrected as a writable implementer.
+    /// </summary>
     public void Respawn_Implementer(string orchId, string memberId)
     {
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_ImplementerPidFile(orchId, memberId);
+        var kind = MemberKind_Ids.Resolve_Kind(memberId);
+        var model = session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel;
 
-        var command = SpawnCommand_Builder.Build_ForImplementer(
-            orchId,
-            memberId,
-            session.RepoPath,
-            session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel,
-            pidFile);
+        var command = kind == MemberKinds.Reviewer
+            ? SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, pidFile)
+            : SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, pidFile);
 
         _store.Set_MemberPid(orchId, memberId, null);
         Delete_StalePidFile_BestEffort(pidFile);
@@ -127,7 +135,7 @@ internal sealed class OrchestrationLauncherModel(
         _spawner.Spawn(command);
         Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
 
-        _log.Log_Info(orchId, $"Implementer '{memberId}' session spawned");
+        _log.Log_Info(orchId, $"{kind} '{memberId}' session spawned");
     }
 
     public void Spawn_GeneralSupervisor()

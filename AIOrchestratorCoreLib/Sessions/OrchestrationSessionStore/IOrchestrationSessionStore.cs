@@ -16,6 +16,9 @@ public interface IOrchestrationSessionStore
     IOrchestrationSession Create_Orchestration(string orchId, string repoName, string repoPath);
     IOrchestrationSession Add_Implementer(string orchId);
 
+    /// <summary>Adds a member of the given KIND (imp-N or rev-N); the id carries the kind everywhere.</summary>
+    IOrchestrationSession Add_Member(string orchId, MemberKinds kind);
+
     void Set_TelegramTopicId(string orchId, long topicId);
     void Set_SupervisorPid(string orchId, int? pid);
 

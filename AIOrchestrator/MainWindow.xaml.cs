@@ -14,6 +14,7 @@ using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Logging;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using System.Collections.ObjectModel;
@@ -277,6 +278,35 @@ public partial class MainWindow : Window
         };
     }
 
+    /// <summary>
+    /// "2 implementers · 1 reviewer" — reviewers are counted SEPARATELY because they cost the owner
+    /// tokens without producing code, so a card that hides them behind an implementer count lies
+    /// about where the spend is going.
+    /// </summary>
+    static string Describe_OpenMembers(IOrchestrationSession session)
+    {
+        var implementers = 0;
+        var reviewers = 0;
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+                continue;
+
+            if (MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Reviewer)
+                reviewers++;
+            else
+                implementers++;
+        }
+
+        var text = $"{implementers} implementer{(implementers == 1 ? "" : "s")}";
+
+        if (reviewers > 0)
+            text += $" · {reviewers} reviewer{(reviewers == 1 ? "" : "s")}";
+
+        return text;
+    }
+
     OrchestrationCardView Build_Card(IOrchestrationSession session)
     {
         // Closed implementers keep their row (disabled, no Show button) — their channel and usage
@@ -284,7 +314,6 @@ public partial class MainWindow : Window
         // detail window (SessionRows_Builder) so the two views can never drift apart.
         var rows = SessionRows_Builder.Build_AllRows(_paths, Find_Brush, session);
 
-        var openImplementers = session.Members.Count(m => m.ClosedUtc == null);
         var age = (session.ClosedUtc ?? DateTime.UtcNow) - session.CreatedUtc;
         var ranWord = session.ClosedUtc == null ? "running" : "ran";
         var orchIdSuffix = session.DisplayName == null ? "" : $"· {session.OrchId} ";
@@ -297,7 +326,7 @@ public partial class MainWindow : Window
             OrchId = session.OrchId,
             Title = session.DisplayName ?? session.OrchId,
             RepoName = session.RepoName,
-            SummaryText = $"{orchIdSuffix}· {openImplementers} implementer{(openImplementers == 1 ? "" : "s")} · {ranWord} {Describe_Duration(age)}{Build_UsageTotalText(session)}",
+            SummaryText = $"{orchIdSuffix}· {Describe_OpenMembers(session)} · {ranWord} {Describe_Duration(age)}{Build_UsageTotalText(session)}",
             IsClosed = session.ClosedUtc != null,
             ClosedLabel = session.ClosedUtc == null ? "" : $"CLOSED {session.ClosedUtc.Value.ToLocalTime():dd/MM HH:mm}",
             CardOpacity = session.ClosedUtc == null ? 1.0 : 0.5,
