@@ -2,6 +2,7 @@ namespace AIOrchestratorCoreLib.Telegram.TelegramOwnerMessage;
 
 internal sealed class TelegramOwnerMessageModel(
     long updateId,
+    long? messageId,
     long chatId,
     long fromUserId,
     long? messageThreadId,
@@ -10,6 +11,7 @@ internal sealed class TelegramOwnerMessageModel(
     string? voiceFileId) : ITelegramOwnerMessage
 {
     public long UpdateId { get; } = updateId;
+    public long? MessageId { get; } = messageId;
     public long ChatId { get; } = chatId;
     public long FromUserId { get; } = fromUserId;
     public long? MessageThreadId { get; } = messageThreadId;

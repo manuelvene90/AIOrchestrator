@@ -112,6 +112,14 @@ internal sealed class BridgeEngineModel(
     readonly Lock _receiptLock = new();
 
     /// <summary>
+    /// Message ids KNOWN to belong to each topic (ours + the owner's), for /clear. Telegram message
+    /// ids are chat-wide, not per topic, so deleting a computed RANGE would wipe other topics —
+    /// only ids observed in this topic may ever be deleted. Key 0 = the General topic.
+    /// </summary>
+    readonly Dictionary<long, List<long>> _knownMessageIdsByThread = [];
+    readonly Lock _knownMessageIdsLock = new();
+
+    /// <summary>
     /// Owner messages handed over and NOT yet answered by their supervisor. Tracked so a receipt
     /// can never stay frozen on "thinking…" — the owner always learns what became of what they
     /// sent, even if the supervisor goes idle without replying.
@@ -829,7 +837,7 @@ internal sealed class BridgeEngineModel(
                     if (isLastChunk && optionLabels.Count > 0)
                         await _telegramClient.Send_MessageWithButtons_Async(threadId, chunks[i], Register_Buttons(threadId, optionLabels), cancellationToken);
                     else
-                        await _telegramClient.Send_Message_Async(threadId, chunks[i], cancellationToken);
+                        Remember_TopicMessage(threadId, await _telegramClient.Send_Message_Async(threadId, chunks[i], cancellationToken));
                 }
 
                 foreach (var photoPath in photoPaths)
@@ -1422,6 +1430,9 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var message in batch.OwnerMessages)
                 {
+                    // Tracked so /clear can remove the owner's own messages too.
+                    Remember_TopicMessage(message.MessageThreadId, message.MessageId);
+
                     var command = Get_BotCommand_OrNull(message.Text);
 
                     // Telegram's own command menu only allows [a-z0-9_], so the menu entries are
@@ -1458,6 +1469,10 @@ internal sealed class BridgeEngineModel(
                     else if (command == "diff")
                     {
                         await Send_GitReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "clear")
+                    {
+                        await Clear_Topic_Async(client, message.MessageThreadId, cancellationToken);
                     }
                     else if (command != null && command.StartsWith("imp", StringComparison.Ordinal))
                     {
@@ -1535,6 +1550,7 @@ internal sealed class BridgeEngineModel(
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
                     ("summary", "What is going on across all orchestrations"),
                     ("pending", "Open questions awaiting me"),
+                    ("clear", "Wipe THIS topic's messages (the sessions keep running)"),
                     ("mute", "Toggle 🔕 THIS topic — drop its messages (I'm in its terminal)"),
                     ("dnd", "Toggle 🌙 THIS topic — hold its messages for later"),
                     ("mute_all", "Toggle 🔕 everywhere"),
@@ -1573,7 +1589,7 @@ internal sealed class BridgeEngineModel(
     static ITelegramOwnerMessage Build_GeneralCommandMessage(ITelegramOwnerMessage original, string cannedText)
     {
         return TelegramOwnerMessage_Factory.Create(
-            original.UpdateId, original.ChatId, original.FromUserId, null, cannedText, null, null);
+            original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, null, cannedText, null, null);
     }
 
     /// <summary>
@@ -1966,6 +1982,94 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// /clear — empties the TELEGRAM view, never the sessions: no terminal is touched, no channel
+    /// file is altered, the work continues untouched. An orchestration topic is deleted and
+    /// recreated with the same name, which wipes it completely; the General topic cannot be
+    /// deleted, so there the app removes the messages it KNOWS belong to it.
+    ///
+    /// Telegram message ids are chat-wide, not per topic, so a computed range would delete other
+    /// topics' messages — only observed ids are ever touched.
+    /// </summary>
+    async Task Clear_Topic_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+        {
+            var deleted = await Delete_KnownMessages_Async(client, messageThreadId, cancellationToken);
+
+            await Send_DirectReply_BestEffort_Async(
+                client,
+                messageThreadId,
+                $"🧹 removed {deleted} message(s) I could account for. Telegram does not let a bot wipe the General topic wholesale — older messages need Telegram's own \"clear history\".",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
+            var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(baseName, Resolve_EffectiveMode(session.OrchId));
+
+            // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
+            // empty, and it cannot touch a neighbouring topic by accident.
+            await client.Delete_ForumTopic_Async(messageThreadId ?? throw new Exception($"orchestration '{session.OrchId}' has no topic id to clear"), cancellationToken);
+
+            var newTopicId = await client.Create_ForumTopic_Async(topicName, cancellationToken);
+            _store.Set_TelegramTopicId(session.OrchId, newTopicId);
+
+            _appliedTopicNames[session.OrchId] = topicName;
+            Take_KnownTopicMessageIds(messageThreadId);
+            Take_ReceiptMessageId_OrNull(messageThreadId);
+
+            await client.Remove_TopicCreationPin_Async(newTopicId, cancellationToken);
+
+            _log.Log_Info(session.OrchId, $"Telegram topic cleared (recreated as {newTopicId}) — sessions untouched");
+            Raise_OrchestrationActivity(session.OrchId);
+
+            await Send_DirectReply_BestEffort_Async(
+                client,
+                newTopicId,
+                "🧹 topic cleared. The sessions kept running — nothing was interrupted and the channel files still hold the full history.",
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "clear-topic failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"could not clear the topic: {ex.Message}", cancellationToken);
+        }
+    }
+
+    async Task<int> Delete_KnownMessages_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var deleted = 0;
+
+        foreach (var messageId in Take_KnownTopicMessageIds(messageThreadId))
+        {
+            try
+            {
+                await client.Delete_Message_Async(messageId, cancellationToken);
+                deleted++;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                // Already gone, or older than Telegram's deletion window — expected, keep going.
+            }
+        }
+
+        return deleted;
+    }
+
     /// <summary>/imp 2 — the latest entries of one implementer's spoke, which never reaches Telegram otherwise.</summary>
     async Task Send_ImplementerPeek_Async(ITelegramApiClient client, long? messageThreadId, string command, string rawText, CancellationToken cancellationToken)
     {
@@ -2076,7 +2180,7 @@ internal sealed class BridgeEngineModel(
         // A tap IS an owner message: the chosen option text goes through the normal pipeline
         // (aggregation, translation, delivery receipts) into the topic the buttons live in.
         var syntheticMessage = TelegramOwnerMessage_Factory.Create(
-            tap.UpdateId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
+            tap.UpdateId, tap.MessageId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
 
         await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
     }
@@ -2102,7 +2206,7 @@ internal sealed class BridgeEngineModel(
     {
         try
         {
-            await client.Send_Message_Async(messageThreadId, text, cancellationToken);
+            Remember_TopicMessage(messageThreadId, await client.Send_Message_Async(messageThreadId, text, cancellationToken));
         }
         catch (OperationCanceledException)
         {
@@ -2303,7 +2407,10 @@ internal sealed class BridgeEngineModel(
             var messageId = await client.Send_Message_Async(messageThreadId, "✓", cancellationToken);
 
             if (messageId != null)
+            {
                 Remember_ReceiptMessage(messageThreadId, messageId.Value);
+                Remember_TopicMessage(messageThreadId, messageId);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2320,6 +2427,46 @@ internal sealed class BridgeEngineModel(
         lock (_receiptLock)
         {
             _receiptMessageIdByThread[messageThreadId ?? 0] = messageId;
+        }
+    }
+
+    /// <summary>Records a message id as belonging to a topic — the ONLY source /clear may delete from.</summary>
+    void Remember_TopicMessage(long? messageThreadId, long? messageId)
+    {
+        const int KNOWN_IDS_PER_TOPIC_CAP = 4000;
+
+        if (messageId == null)
+            return;
+
+        lock (_knownMessageIdsLock)
+        {
+            var key = messageThreadId ?? 0;
+
+            if (!_knownMessageIdsByThread.TryGetValue(key, out var ids))
+            {
+                ids = [];
+                _knownMessageIdsByThread[key] = ids;
+            }
+
+            ids.Add(messageId.Value);
+
+            if (ids.Count > KNOWN_IDS_PER_TOPIC_CAP)
+                ids.RemoveRange(0, ids.Count - KNOWN_IDS_PER_TOPIC_CAP);
+        }
+    }
+
+    IReadOnlyList<long> Take_KnownTopicMessageIds(long? messageThreadId)
+    {
+        lock (_knownMessageIdsLock)
+        {
+            var key = messageThreadId ?? 0;
+
+            if (!_knownMessageIdsByThread.TryGetValue(key, out var ids))
+                return [];
+
+            List<long> taken = [.. ids];
+            ids.Clear();
+            return taken;
         }
     }
 

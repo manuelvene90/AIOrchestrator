@@ -4,6 +4,7 @@ public static class TelegramOwnerMessage_Factory
 {
     public static ITelegramOwnerMessage Create(
         long updateId,
+        long? messageId,
         long chatId,
         long fromUserId,
         long? messageThreadId,
@@ -11,6 +12,6 @@ public static class TelegramOwnerMessage_Factory
         string? photoFileId,
         string? voiceFileId)
     {
-        return new TelegramOwnerMessageModel(updateId, chatId, fromUserId, messageThreadId, text, photoFileId, voiceFileId);
+        return new TelegramOwnerMessageModel(updateId, messageId, chatId, fromUserId, messageThreadId, text, photoFileId, voiceFileId);
     }
 }

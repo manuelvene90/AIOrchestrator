@@ -4,6 +4,9 @@ namespace AIOrchestratorCoreLib.Telegram.TelegramOwnerMessage;
 public interface ITelegramOwnerMessage
 {
     long UpdateId { get; }
+
+    /// <summary>The message's own id — needed to delete it when the owner clears a topic.</summary>
+    long? MessageId { get; }
     long ChatId { get; }
     long FromUserId { get; }
 

@@ -138,8 +138,11 @@ public static class TelegramUpdates_Parser
         var threadIdNode = message["message_thread_id"];
         long? threadId = threadIdNode == null ? null : threadIdNode.GetValue<long>();
 
+        var messageIdNode = message["message_id"];
+
         return TelegramOwnerMessage_Factory.Create(
             updateId,
+            messageIdNode?.GetValue<long>(),
             supergroupChatId,
             ownerUserId,
             threadId,
