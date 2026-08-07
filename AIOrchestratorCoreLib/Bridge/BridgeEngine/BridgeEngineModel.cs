@@ -328,17 +328,33 @@ internal sealed class BridgeEngineModel(
 
         foreach (var usageFile in usageFiles)
         {
-            if (!File.Exists(usageFile))
-                continue;
-
-            var transcriptPath = RateLimits_Reader.Read_TranscriptPath_OrNull(UsageTotals_Reader.Read_Text_Safe(usageFile));
-            var probedFile = transcriptPath != null && File.Exists(transcriptPath) ? transcriptPath : usageFile;
-
-            if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(probedFile)).TotalSeconds < SESSION_MIDTURN_SECONDS)
+            if (Is_SessionMidTurn(usageFile))
                 return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Is THIS session working right now? Its status-line probe hands us the exact transcript
+    /// path, and a transcript growing in the last couple of minutes means a turn is in flight.
+    /// </summary>
+    static bool Is_SessionMidTurn(string usageFilePath)
+    {
+        try
+        {
+            if (!File.Exists(usageFilePath))
+                return false;
+
+            var transcriptPath = RateLimits_Reader.Read_TranscriptPath_OrNull(UsageTotals_Reader.Read_Text_Safe(usageFilePath));
+            var probedFile = transcriptPath != null && File.Exists(transcriptPath) ? transcriptPath : usageFilePath;
+
+            return (DateTime.UtcNow - File.GetLastWriteTimeUtc(probedFile)).TotalSeconds < SESSION_MIDTURN_SECONDS;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>Runaway guard: a per-orchestration token ceiling the owner sets in config.json.</summary>
@@ -1782,10 +1798,11 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                // Double tick = aggregation done, message actually handed to the Sup — followed
-                // immediately by the "thinking" line so the owner knows the Sup has it now.
+                // Double tick = aggregation done, message actually handed over — followed
+                // immediately by a TRUTHFUL handoff line: whether the recipient can answer now,
+                // or is mid-turn and the communicator will cover the wait.
                 await _telegramClient.Send_Message_Async(target.ThreadId, "✓✓", cancellationToken);
-                await _telegramClient.Send_Message_Async(target.ThreadId, "🔴 Sup: thinking…", cancellationToken);
+                await _telegramClient.Send_Message_Async(target.ThreadId, Build_HandoffLine(target.OrchId), cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -1796,6 +1813,33 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Warning(target.OrchId, $"Delivery receipt send failed: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// What happens to the message the owner just sent. "thinking…" is only honest when the
+    /// recipient is free to pick it up; a session already mid-turn cannot, and saying so (with
+    /// who will cover the wait) is the whole point of having a communicator.
+    /// </summary>
+    string Build_HandoffLine(string orchId)
+    {
+        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
+        {
+            return Is_SessionMidTurn(Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE))
+                ? "🟡 Gen-Sup: busy — will read this the moment the current turn ends"
+                : "🟡 Gen-Sup: thinking…";
+        }
+
+        var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
+        if (!Is_SessionMidTurn(supervisorUsageFile))
+            return "🔴 Sup: thinking…";
+
+        // No communicator running (or its probe never appeared) — promise nothing it won't do.
+        var communicatorAlive = File.Exists(_paths.Get_CommunicatorPidFile(orchId));
+
+        return communicatorAlive
+            ? "🔴 Sup: busy mid-task — 🟢 Com will keep you posted until he picks this up"
+            : "🔴 Sup: busy mid-task — he'll pick this up when the current turn ends";
     }
 
     /// <summary>Single tick = "received", sent immediately per message (delivery follows as ✓✓).</summary>
