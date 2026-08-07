@@ -367,9 +367,14 @@ internal sealed class BridgeEngineModel(
             var optionLabels = Extract_MarkerLines(ref text, "OPTION");
 
             // Italian layer (live config): the owner reads Italian on the phone; sessions and
-            // channels stay English. Fallback inside the translator = original text on failure.
-            if (_configProvider.Get_Current().TelegramItalianLayer)
-                text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+            // channels stay English. The speaker prefix ("🟢 Com: ") is split off DETERMINISTICALLY
+            // and reattached — a live translation once mangled it into garbage. Presence lines
+            // (implementer spokes' "online") are canned app strings and stay English entirely.
+            if (_configProvider.Get_Current().TelegramItalianLayer && append.Channel.IsOwnerChannel)
+            {
+                var (speakerPrefix, content) = Split_SpeakerPrefix(text);
+                text = speakerPrefix + await _translator.Translate_ToItalian_Async(content, cancellationToken);
+            }
 
             var chunks = TelegramMessage_Chunker.Chunk(text);
 
@@ -401,6 +406,18 @@ internal sealed class BridgeEngineModel(
                 return;
             }
         }
+    }
+
+    /// <summary>"🔴 Sup: body" → ("🔴 Sup: ", "body") — the prefix must NEVER pass through the translator.</summary>
+    static (string Prefix, string Content) Split_SpeakerPrefix(string text)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            text, @"^(.{1,12}?: )(.*)$", System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        if (!match.Success)
+            return (string.Empty, text);
+
+        return (match.Groups[1].Value, match.Groups[2].Value);
     }
 
     /// <summary>Pulls '<marker>: value' lines out of the text (which shrinks accordingly) and returns the values.</summary>

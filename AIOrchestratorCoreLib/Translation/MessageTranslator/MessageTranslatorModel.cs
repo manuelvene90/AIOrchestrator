@@ -24,11 +24,11 @@ internal sealed class MessageTranslatorModel(IOrchestrationLog log) : IMessageTr
 
     const string TO_ITALIAN_INSTRUCTION =
         "You are a translation filter. Translate the message below to Italian. "
-        + "Keep ALL technical terms in English exactly as written, the way Italian professionals use them: "
+        + "Translate ALL the prose - never leave whole sentences in English. "
+        + "But keep the technical TERMS in English exactly as written, the way Italian professionals use them: "
         + "financial/trading terms (Long, Short, spread, hedge ratio, backtest, drawdown), "
-        + "programming terms (commit, merge, branch, worktree, build, test, bug, refactor, deploy, review), "
+        + "programming terms (commit, merge, branch, worktree, build, test, bug, refactor, deploy, review, grep), "
         + "hardware terms, product names, code identifiers, file paths and error messages. "
-        + "Keep any leading speaker prefix (like 'Sup:' or 'App:', with their emoji) exactly as written. "
         + "Preserve formatting, line breaks, bullets and emoji exactly. "
         + "Reply with ONLY the translated text - no preamble, no quotes, no commentary.";
 
