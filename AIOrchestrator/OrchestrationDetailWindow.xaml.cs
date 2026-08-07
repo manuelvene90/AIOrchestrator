@@ -234,6 +234,7 @@ public partial class OrchestrationDetailWindow : Window
         {
             ChannelAuthors.Supervisor => "supervisor",
             ChannelAuthors.Implementer => "implementer",
+            ChannelAuthors.Reviewer => "reviewer",
             ChannelAuthors.Owner => "you",
             ChannelAuthors.App => "app",
             ChannelAuthors.Communicator => "communicator",
@@ -248,6 +249,7 @@ public partial class OrchestrationDetailWindow : Window
         {
             ChannelAuthors.Supervisor => "AccentSupervisor",
             ChannelAuthors.Implementer => "AccentImplementer",
+            ChannelAuthors.Reviewer => "AccentReviewer",
             ChannelAuthors.Owner => "TextPrimary",
             ChannelAuthors.App => "AccentGeneral",
             ChannelAuthors.Communicator => "AccentCommunicator",

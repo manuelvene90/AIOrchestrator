@@ -28,7 +28,7 @@ public static class MemberState_Resolver
 
         var lastEntry = entries[entries.Count - 1];
 
-        if (lastEntry.Author == ChannelAuthors.Implementer)
+        if (ChannelAuthor_Kinds.Is_Member(lastEntry.Author))
         {
             if (Contains_Marker(lastEntry, BLOCKED_ON_OWNER_MARKER))
                 return MemberStates.BlockedOnOwner;

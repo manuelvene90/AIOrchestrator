@@ -474,7 +474,7 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                var spokeLast = entries[^1].Author == ChannelAuthors.Implementer;
+                var spokeLast = ChannelAuthor_Kinds.Is_Member(entries[^1].Author);
 
                 // A session CANNOT give itself the next turn — its monitor fires only when someone
                 // ELSE writes. So a member that spoke last and then went quiet is waiting for a
@@ -626,7 +626,7 @@ internal sealed class BridgeEngineModel(
 
             var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
 
-            if (entries.Count == 0 || entries[^1].Author != ChannelAuthors.Implementer)
+            if (entries.Count == 0 || !ChannelAuthor_Kinds.Is_Member(entries[^1].Author))
                 continue;
 
             if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile)).TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
