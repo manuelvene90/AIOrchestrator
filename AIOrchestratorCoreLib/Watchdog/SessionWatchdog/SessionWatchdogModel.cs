@@ -46,7 +46,9 @@ internal sealed class SessionWatchdogModel(
                 continue;
 
             Check_OrchestrationSupervisor(session);
-            Check_Communicator(session);
+
+            // No Check_Communicator: the role is retired (the app narrates a busy supervisor
+            // itself). Resurrecting one would put the $74/day session straight back.
 
             foreach (var member in session.Members)
             {

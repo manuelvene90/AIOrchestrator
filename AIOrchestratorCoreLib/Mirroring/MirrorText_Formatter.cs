@@ -10,7 +10,8 @@ namespace AIOrchestratorCoreLib.Mirroring;
 /// prefixes are bare ("Sup:", "Gen-Sup:", "Com:", "App:") — the owner knows who they are; no entry
 /// numbers, no direction arrows, no subject-plus-body duplication. Each voice has its own color:
 /// 🔴 orchestration supervisor · 🟡 general supervisor · 🟢 communicator · 🔵 implementer ·
-/// 🟣 reviewer · ⚙ app. The reviewer's purple matches its terminal tab and its row in the app.
+/// 🟢 reviewer · ⚙ app. The reviewer's green matches its terminal tab and its row in the app
+/// (inherited from the retired communicator).
 /// </summary>
 public static class MirrorText_Formatter
 {
@@ -65,7 +66,7 @@ public static class MirrorText_Formatter
     {
         return Sessions.MemberKind_Ids.Resolve_Kind(spokeName) switch
         {
-            Sessions.MemberKinds.Reviewer => "🟣",
+            Sessions.MemberKinds.Reviewer => "🟢",
             Sessions.MemberKinds.Implementer => "🔵",
             _ => throw new Exception($"Unhandled MemberKinds for spoke '{spokeName}'"),
         };

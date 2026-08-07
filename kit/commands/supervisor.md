@@ -70,11 +70,10 @@ blocks of hundreds of rows it gets basically useless. I will request more info i
 Internal traffic (your briefs and reviews in `imp-*/channel.md`) stays FULL-DETAIL — those
 channels are for agents and are never texted.
 
-**`FROM communicator` entries on your owner channel: IGNORE them completely.** The communicator
-is the orchestration's press secretary — a separate session that narrates YOUR current activity
-to the owner while you are mid-turn. Its entries are owner-facing status noise, never input for
-you: never respond to them, never treat them as owner traffic, never wait on them. (Your watcher
-already doesn't wake on them.)
+**The COMMUNICATOR role is retired.** You may still see old `FROM communicator` entries in the
+history of a long-running channel — ignore them, nothing writes them any more. While you are
+mid-turn the APP now tells the owner what you are doing (read off your own transcript), so you are
+never silently unreachable and you do not need to account for a narrator.
 
 ## OWNER-APPROVAL GATE — no implementation before the owner agrees (HARD RULE)
 
@@ -385,21 +384,18 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
 - **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
   the owner → `[!]`. A stale ledger is worse than none — the owner can pull it up at any moment
   from their phone with `/progress`, which the APP answers straight from this file.
-- **Derive your STATUS texts from it** (counts + the current task), and re-read it as your
-  fast resume point after a respawn — it beats replaying the whole channel narrative.
+- Re-read it as your fast resume point after a respawn — it beats replaying the whole channel
+  narrative.
 
-While work is in flight, the owner gets a status text every ~30 min. Use the TIMEOUT variant of
-the watcher below (already included). On a timeout wake, append an entry with subject exactly
-`STATUS` and a body of 1-3 bullets, e.g.:
+**You do NOT write periodic STATUS entries any more — the APP does.** While work is in flight it
+sends the owner a status every ~30 min, built from this ledger plus live member states, and it
+answers `/progress` and `/status` on demand from the same data. That used to cost you ~26 turns a
+day to restate what the app can already see. **Keeping PLAN.md accurate is therefore MORE important
+than before, not less** — it is now the direct source of what the owner is told, with nothing in
+between to paper over a stale ledger.
 
-```
-- imp-1: retry+backoff in ClientManager, building
-- no blockers
-```
-
-If nothing changed since the last STATUS: one line, `- no change`. The app collapses STATUS
-entries queued under Do-Not-Disturb, so only the newest reaches the owner on unmute — write each
-STATUS as self-contained. Stop the cadence when no work is in flight or the owner says stop.
+Your messages to the owner are for things the app cannot know: verdicts, decisions, questions,
+milestones, and anything you judge worth their attention.
 
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
@@ -416,16 +412,13 @@ Monitor(
 ```bash
 sup="$HOME/.claude/supervision/$ARGUMENTS"
 fingerprint() { cat "$sup"/imp-*/channel.md "$sup"/rev-*/channel.md "$sup/owner-channel.md" 2>/dev/null | md5sum | cut -d' ' -f1; }
-prev="$(fingerprint)"; last_status=$(date +%s)
+prev="$(fingerprint)"
 while true; do
   sleep 5
   cur="$(fingerprint)"
   if [ "$cur" != "$prev" ]; then
     echo "CHANNELS CHANGED on $ARGUMENTS — read every channel from your last entry down, act on it, append your entries."
-    prev="$cur"; last_status=$(date +%s)
-  elif [ $(( $(date +%s) - last_status )) -ge 1800 ]; then
-    echo "STATUS due for $ARGUMENTS — append a STATUS entry (1-3 bullets) to owner-channel.md if work is in flight."
-    last_status=$(date +%s)
+    prev="$cur"
   fi
 done
 ```

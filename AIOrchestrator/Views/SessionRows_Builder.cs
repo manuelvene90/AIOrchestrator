@@ -30,11 +30,8 @@ public static class SessionRows_Builder
         Func<string, Brush> findBrush,
         IOrchestrationSession session)
     {
-        List<MemberRowView> rows =
-        [
-            Build_SupervisorRow(paths, findBrush, session),
-            Build_CommunicatorRow(paths, findBrush, session),
-        ];
+        // No communicator row — the role is retired; the app narrates a busy supervisor itself.
+        List<MemberRowView> rows = [Build_SupervisorRow(paths, findBrush, session)];
 
         foreach (var member in session.Members)
             rows.Add(Build_MemberRow(paths, findBrush, session, member));

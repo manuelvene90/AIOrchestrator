@@ -45,9 +45,10 @@ internal sealed class OrchestrationLauncherModel(
 
         Respawn_Supervisor(orchId);
 
-        // The communicator is the always-responsive press-secretary voice: while the supervisor
-        // is mid-turn (unreachable), it narrates what the supervisor is doing to the owner.
-        Respawn_Communicator(orchId);
+        // NO COMMUNICATOR. It cost $74/day per orchestration and 196 turns to produce 37 identical
+        // STATUS entries; the app now narrates a busy supervisor itself, from the same transcript,
+        // for free (Narrate_BusySupervisor_Async). Respawn_Communicator is kept for the moment so
+        // an already-running one can be restarted, but nothing spawns one any more.
 
         // Every orchestration starts with one implementer ready (owner directive): the supervisor
         // briefs imp-1 when the first task arrives instead of requesting a spawn first.

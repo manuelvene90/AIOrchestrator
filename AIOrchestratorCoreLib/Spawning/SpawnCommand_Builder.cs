@@ -25,7 +25,8 @@ public static class SpawnCommand_Builder
     public const string IMPLEMENTER_TAB_COLOR = "#3B82F6";
     public const string GENERAL_TAB_COLOR = "#F5A623";
     public const string COMMUNICATOR_TAB_COLOR = "#22C55E";
-    public const string REVIEWER_TAB_COLOR = "#A855F7";
+    /// <summary>Green, inherited from the retired communicator (owner's call) — reviewers own it now.</summary>
+    public const string REVIEWER_TAB_COLOR = "#22C55E";
 
     /// <summary>
     /// A reviewer is READ-ONLY BY CONSTRUCTION: the CLI itself refuses it the editing tools, so

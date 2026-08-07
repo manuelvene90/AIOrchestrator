@@ -36,13 +36,13 @@ public class ReviewerAuthorTests
     }
 
     [Fact]
-    public void ReviewerPresenceLine_Mirrors_InPurple_NotImplementerBlue()
+    public void ReviewerPresenceLine_Mirrors_InGreen_NotImplementerBlue()
     {
         var channel = DiscoveredChannel_Factory.Create_ForImplementer("orch-1", "rev-1", "path/rev-1/channel.md");
         var entry = Assert.Single(ChannelEntry_Parser.Parse_All("## [1] FROM reviewer — 2026-08-07 14:00 — rev-1 online"));
 
         Assert.True(MirrorText_Formatter.Should_Mirror(channel, entry));
-        Assert.Equal("🟣 rev-1: online", MirrorText_Formatter.Format(channel, entry));
+        Assert.Equal("🟢 rev-1: online", MirrorText_Formatter.Format(channel, entry));
     }
 
     [Fact]
