@@ -156,6 +156,17 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("editMessageReplyMarkup", payload, cancellationToken);
     }
 
+    public async Task Delete_Message_Async(long messageId, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_id"] = messageId,
+        };
+
+        await Post_Async("deleteMessage", payload, cancellationToken);
+    }
+
     public async Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
     {
         using var form = new MultipartFormDataContent();

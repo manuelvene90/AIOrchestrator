@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Sessions.OrchestrationMember;
+using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 
@@ -13,7 +14,7 @@ public static class OrchestrationSession_Factory
         int? supervisorPid,
         IReadOnlyList<IOrchestrationMember> members)
     {
-        return Create(orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, null, null, null, null, null, members, false, null);
+        return Create(orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, null, null, null, null, null, members, TelegramDeliveryModes.Normal, null);
     }
 
     public static IOrchestrationSession Create(
@@ -29,7 +30,7 @@ public static class OrchestrationSession_Factory
         string? supervisorModelOverride,
         string? implementerModelOverride,
         IReadOnlyList<IOrchestrationMember> members,
-        bool telegramSilenced,
+        TelegramDeliveryModes telegramMode,
         DateTime? closedUtc)
     {
         if (string.IsNullOrWhiteSpace(orchId))
@@ -38,7 +39,7 @@ public static class OrchestrationSession_Factory
         return new OrchestrationSessionModel(
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
-            telegramSilenced, closedUtc);
+            telegramMode, closedUtc);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithTopicId(IOrchestrationSession existing, long topicId)
@@ -80,10 +81,10 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, members: members);
     }
 
-    /// <summary>Per-topic silence: this orchestration's outbound Telegram traffic is DROPPED, not queued.</summary>
-    public static IOrchestrationSession CreateFrom_Existing_WithTelegramSilenced(IOrchestrationSession existing, bool silenced)
+    /// <summary>Per-topic delivery mode — overrides the app-wide setting unless it is Normal.</summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithTelegramMode(IOrchestrationSession existing, TelegramDeliveryModes mode)
     {
-        return CreateFrom_Existing(existing, telegramSilenced: silenced);
+        return CreateFrom_Existing(existing, telegramMode: mode);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_Closed(IOrchestrationSession existing, DateTime closedUtc)
@@ -110,7 +111,7 @@ public static class OrchestrationSession_Factory
         string? implementerModelOverride = null,
         bool implementerModelWasSet = false,
         IReadOnlyList<IOrchestrationMember>? members = null,
-        bool? telegramSilenced = null,
+        TelegramDeliveryModes? telegramMode = null,
         DateTime? closedUtc = null)
     {
         return Create(
@@ -126,7 +127,7 @@ public static class OrchestrationSession_Factory
             supervisorModelWasSet ? supervisorModelOverride : existing.SupervisorModelOverride,
             implementerModelWasSet ? implementerModelOverride : existing.ImplementerModelOverride,
             members ?? existing.Members,
-            telegramSilenced ?? existing.TelegramSilenced,
+            telegramMode ?? existing.TelegramMode,
             closedUtc ?? existing.ClosedUtc);
     }
 }

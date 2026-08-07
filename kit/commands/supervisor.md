@@ -172,12 +172,12 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   `{"action":"set-telegram-muted","muted":true}` — this pauses ALL app→owner Telegram traffic
   suite-wide until the owner texts again (auto-unmute) or re-enables. Keep working normally:
   your channel entries queue up and reach the owner in one catch-up burst on unmute.
-- **Topic silence is DIFFERENT and is NOT yours to set.** When the owner says (in your TERMINAL)
-  something like "I'm here at the PC, stop texting me about this", they use `/mute` in the topic
-  or the app's 🔕 button: this orchestration's outbound messages are then DROPPED, not queued —
-  they are talking to you directly in the terminal instead. Nothing changes for you: keep writing
-  your channel entries exactly as always (they are the record, and they resume reaching the phone
-  on `/unmute`). Never assume silence means the owner is gone: they are right there.
+- **Topic delivery modes are NOT yours to set.** The owner toggles them with `/mute` (🔕 — this
+  topic's messages are DROPPED because they are reading you in the terminal) and `/dnd` (🌙 — held
+  and replayed later because they are away), or the app's button. Nothing changes for you in
+  either case: keep writing your channel entries exactly as always — they are the record. And
+  never read 🔕 as "the owner is gone": that mode means the opposite, they are right there in
+  your terminal.
 - **Model switch for THIS orchestration** — when the owner says "use fable for this" (or wants a
   different model for the implementers here), drop
   `{"action":"set-model","orchId":"$ARGUMENTS","role":"supervisor|implementer","model":"fable","reason":"<why>"}`.

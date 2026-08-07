@@ -15,7 +15,7 @@ internal sealed class OrchestrationSessionModel(
     string? supervisorModelOverride,
     string? implementerModelOverride,
     IReadOnlyList<IOrchestrationMember> members,
-    bool telegramSilenced,
+    Telegram.TelegramDeliveryModes telegramMode,
     DateTime? closedUtc) : IOrchestrationSession
 {
     public string OrchId { get; } = orchId;
@@ -30,6 +30,6 @@ internal sealed class OrchestrationSessionModel(
     public string? SupervisorModelOverride { get; } = supervisorModelOverride;
     public string? ImplementerModelOverride { get; } = implementerModelOverride;
     public IReadOnlyList<IOrchestrationMember> Members { get; } = members;
-    public bool TelegramSilenced { get; } = telegramSilenced;
+    public Telegram.TelegramDeliveryModes TelegramMode { get; } = telegramMode;
     public DateTime? ClosedUtc { get; } = closedUtc;
 }

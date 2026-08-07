@@ -34,12 +34,11 @@ public interface IOrchestrationSession
     IReadOnlyList<IOrchestrationMember> Members { get; }
 
     /// <summary>
-    /// TOPIC SILENCE — the "I'm at the PC talking to this supervisor in its terminal" mode.
-    /// Different from Do-Not-Disturb: DND QUEUES outbound traffic and delivers it in a burst on
-    /// unmute, while silence DROPS this orchestration's outbound traffic entirely (the owner is
-    /// reading it in the terminal). Inbound still works, and other topics are unaffected.
+    /// This topic's own delivery mode, which OVERRIDES the app-wide setting when it is not Normal.
+    /// Silenced = drop (the owner is reading this orchestration in its terminal); Deferred = keep
+    /// and replay later (the owner is away). Inbound always works, whatever the mode.
     /// </summary>
-    bool TelegramSilenced { get; }
+    Telegram.TelegramDeliveryModes TelegramMode { get; }
 
     /// <summary>Set when the general supervisor closed this orchestration. Folder stays as audit trail.</summary>
     DateTime? ClosedUtc { get; }

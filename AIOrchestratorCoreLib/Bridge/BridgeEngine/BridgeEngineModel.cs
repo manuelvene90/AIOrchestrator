@@ -90,9 +90,17 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
     readonly Lock _deliveryLock = new();
 
+    /// <summary>Topic name last pushed to Telegram, so the glyph sync only calls the API on a real change.</summary>
+    readonly Dictionary<string, string> _appliedTopicNames = [];
+
     long _lastUpdateId = initialLastUpdateId;
     DateTime _lastLimitCheckUtc = DateTime.MinValue;
+
+    /// <summary>App-wide Do-Not-Disturb: everything is kept and replayed when it goes off.</summary>
     volatile bool _telegramMuted;
+
+    /// <summary>App-wide silence: everything is DROPPED while it lasts (the owner works at the PC).</summary>
+    volatile bool _silenceAllTopics;
 
     public event Action<string>? OrchestrationActivity;
     public event Action<bool>? MutedChanged;
@@ -274,7 +282,7 @@ internal sealed class BridgeEngineModel(
             if (!_stallAlertedOrchIds.Add(session.OrchId))
                 continue;
 
-            if (session.TelegramSilenced)
+            if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
                 continue;
 
             var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: quiet for {SessionDuration_Formatter.Describe(quietFor)} and no session is working — the supervisor may have ended its turn without re-arming its watcher. Text it to wake it up.";
@@ -424,8 +432,8 @@ internal sealed class BridgeEngineModel(
                 Raise_OrchestrationActivity(session.OrchId);
 
                 // The channel nudge above ALWAYS happens (it is what unsticks the implementer);
-                // only the owner-facing text respects the topic's silence.
-                if (_telegramClient == null || session.TelegramSilenced)
+                // only the owner-facing text respects the topic's mode.
+                if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
                     continue;
 
                 try
@@ -468,7 +476,7 @@ internal sealed class BridgeEngineModel(
             if (!_budgetAlertedOrchIds.Add(session.OrchId))
                 continue;
 
-            if (session.TelegramSilenced)
+            if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
                 continue;
 
             var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} used — past the {UsageTotals_Reader.Format_Tokens(budgetTokens.Value)} budget you set.";
@@ -613,6 +621,12 @@ internal sealed class BridgeEngineModel(
             if (!channel.IsOwnerChannel && Is_MemberClosed(session, channel.SpokeName))
                 continue;
 
+            // DEFERRED topics are not polled at all, so their offsets FREEZE and everything they
+            // produced replays the moment the mode goes back to Normal. (Silenced topics ARE
+            // polled — their traffic is dropped, deliberately never replayed.)
+            if (Resolve_EffectiveMode(channel.OrchId) == TelegramDeliveryModes.Deferred)
+                continue;
+
             activeChannels.Add(channel);
         }
 
@@ -721,16 +735,33 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Is this orchestration's topic silenced? Silence is TOTAL for that topic — mirrored entries
-    /// and its alerts alike — because the owner asked for no messages while they work in the
-    /// terminal. Other topics and the General topic are unaffected.
+    /// A topic's OWN mode wins over the app-wide setting — "silence just this one while I work in
+    /// its terminal" must survive someone flipping the global DND, and vice versa. Only when the
+    /// topic is Normal does the app-wide setting apply.
     /// </summary>
+    TelegramDeliveryModes Resolve_EffectiveMode(string orchId)
+    {
+        if (orchId != ChannelDiscovery.GENERAL_ORCH_ID)
+        {
+            var topicMode = _store.Get_Session_OrNull(orchId)?.TelegramMode ?? TelegramDeliveryModes.Normal;
+
+            if (topicMode != TelegramDeliveryModes.Normal)
+                return topicMode;
+        }
+
+        if (_telegramMuted)
+            return TelegramDeliveryModes.Deferred;
+
+        if (_silenceAllTopics)
+            return TelegramDeliveryModes.Silenced;
+
+        return TelegramDeliveryModes.Normal;
+    }
+
+    /// <summary>Silence is TOTAL for a topic: its mirrored entries AND its alerts.</summary>
     bool Is_TopicSilenced(string orchId)
     {
-        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
-            return false;
-
-        return _store.Get_Session_OrNull(orchId)?.TelegramSilenced == true;
+        return Resolve_EffectiveMode(orchId) == TelegramDeliveryModes.Silenced;
     }
 
     /// <summary>Pulls '<marker>: value' lines out of the text (which shrinks accordingly) and returns the values.</summary>
@@ -1257,17 +1288,20 @@ internal sealed class BridgeEngineModel(
                 // Bot commands: /dnd acts directly (and must NOT auto-unmute); /summary and
                 // /pending become canned English requests routed to the general supervisor.
                 List<ITelegramOwnerMessage> routableMessages = [];
-                var dndRequested = false;
-                long? dndThreadId = null;
+                List<(string Command, long? ThreadId)> modeCommands = [];
 
                 foreach (var message in batch.OwnerMessages)
                 {
                     var command = Get_BotCommand_OrNull(message.Text);
 
-                    if (command == "dnd")
+                    // Telegram's own command menu only allows [a-z0-9_], so the menu entries are
+                    // mute_all/dnd_all while a hand-typed mute-all works just as well.
+                    if (command == "dnd" || command == "mute" || command == "unmute"
+                        || command == "dnd-all" || command == "mute-all" || command == "dnd_all" || command == "mute_all")
                     {
-                        dndRequested = true;
-                        dndThreadId = message.MessageThreadId;
+                        // Deferred until after the loop: toggling must not race the ✓ acks, and a
+                        // /dnd must not be auto-unmuted by the very message that requested it.
+                        modeCommands.Add((command, message.MessageThreadId));
                     }
                     else if (command == "summary")
                     {
@@ -1299,18 +1333,14 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_ImplementerPeek_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
                     }
-                    else if (command == "mute" || command == "unmute")
-                    {
-                        await Set_TopicSilence_Async(client, message.MessageThreadId, command == "mute", cancellationToken);
-                    }
                     else
                     {
                         routableMessages.Add(message);
                     }
                 }
 
-                // The owner texting or tapping ANYTHING (except /dnd) lifts DND — before routing,
-                // so the ✓ acks go out.
+                // The owner texting or tapping ANYTHING (except a mode command) lifts app-wide DND
+                // — before routing, so the ✓ acks go out.
                 if ((routableMessages.Count > 0 || batch.CallbackTaps.Count > 0) && _telegramMuted)
                     Set_TelegramMuted(false);
 
@@ -1323,11 +1353,13 @@ internal sealed class BridgeEngineModel(
                 foreach (var tap in batch.CallbackTaps)
                     await Handle_CallbackTap_Async(client, tap, cancellationToken);
 
-                if (dndRequested)
-                {
-                    Set_TelegramMuted(true);
-                    await Send_DirectReply_BestEffort_Async(client, dndThreadId, "🔕 texts muted — text anything to unmute", cancellationToken);
-                }
+                foreach (var modeCommand in modeCommands)
+                    await Apply_ModeCommand_Async(client, modeCommand.Command, modeCommand.ThreadId, cancellationToken);
+
+                // Our own topic renames make Telegram post "changed the topic name" notices —
+                // delete them so a mode toggle leaves the conversation clean.
+                foreach (var serviceMessageId in batch.TopicServiceMessageIds)
+                    await Delete_ServiceMessage_BestEffort_Async(client, serviceMessageId, cancellationToken);
 
                 if (batch.MaxUpdateId != null)
                 {
@@ -1371,11 +1403,12 @@ internal sealed class BridgeEngineModel(
                     ("limits", "5-hour and weekly usage limits"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
-                    ("mute", "Silence THIS topic — I'm working in its terminal"),
-                    ("unmute", "Resume messages in this topic"),
                     ("summary", "What is going on across all orchestrations"),
                     ("pending", "Open questions awaiting me"),
-                    ("dnd", "Mute texts (text anything to unmute)"),
+                    ("mute", "Toggle 🔕 THIS topic — drop its messages (I'm in its terminal)"),
+                    ("dnd", "Toggle 🌙 THIS topic — hold its messages for later"),
+                    ("mute_all", "Toggle 🔕 everywhere"),
+                    ("dnd_all", "Toggle 🌙 everywhere"),
                 ],
                 cancellationToken);
         }
@@ -1693,45 +1726,118 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// /mute and /unmute — TOPIC silence, the "I'm at the PC in this supervisor's terminal" mode.
-    /// Deliberately not the same as Do-Not-Disturb: DND queues everything and dumps it on unmute,
-    /// this DROPS the topic's outbound traffic while it lasts. Survives app restarts (session.json).
+    /// The four delivery toggles. All of them TOGGLE (one command to remember per scope), and the
+    /// -all pair is the app-wide setting while the bare pair is this topic's own override:
+    ///   /mute      this topic → Silenced (dropped)      /mute-all  app-wide Silenced
+    ///   /dnd       this topic → Deferred (kept, replayed) /dnd-all app-wide Deferred
+    /// In the General topic (no orchestration behind it) the bare commands act app-wide too.
     /// </summary>
-    async Task Set_TopicSilence_Async(ITelegramApiClient client, long? messageThreadId, bool silenced, CancellationToken cancellationToken)
+    async Task Apply_ModeCommand_Async(ITelegramApiClient client, string command, long? messageThreadId, CancellationToken cancellationToken)
     {
-        if (messageThreadId == null)
-        {
-            await Send_DirectReply_BestEffort_Async(client, null, "/mute works inside an orchestration's topic — for ALL topics use /dnd", cancellationToken);
-            return;
-        }
+        var wantedMode = command.StartsWith("mute", StringComparison.Ordinal)
+            ? TelegramDeliveryModes.Silenced
+            : TelegramDeliveryModes.Deferred;
 
-        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+        // "/unmute" stays as an explicit way back to Normal for anyone who does not trust a toggle.
+        var forceNormal = command == "unmute";
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+        var isAppWide = command.EndsWith("-all", StringComparison.Ordinal) || command.EndsWith("_all", StringComparison.Ordinal);
 
-        if (session == null)
+        if (isAppWide || session == null)
         {
-            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "no orchestration is bound to this topic", cancellationToken);
+            await Apply_AppWideMode_Async(client, messageThreadId, wantedMode, forceNormal, cancellationToken);
             return;
         }
 
         try
         {
-            _store.Set_TelegramSilenced(session.OrchId, silenced);
-            _log.Log_Info(session.OrchId, silenced ? "Topic silenced — outbound traffic dropped until /unmute" : "Topic unsilenced");
+            var newMode = forceNormal || session.TelegramMode == wantedMode
+                ? TelegramDeliveryModes.Normal
+                : wantedMode;
+
+            _store.Set_TelegramMode(session.OrchId, newMode);
+            _log.Log_Info(session.OrchId, $"Topic delivery mode → {newMode}");
             Raise_OrchestrationActivity(session.OrchId);
 
-            // Sent BEFORE the silence takes hold on the next tick, so the confirmation itself gets through.
-            await Send_DirectReply_BestEffort_Async(
-                client,
-                messageThreadId,
-                silenced
-                    ? "🔕 topic silenced — nothing from this orchestration will be texted (not queued: you're reading it in the terminal). /unmute to resume."
-                    : "🔔 topic unsilenced — messages resume from here on (what happened while silent stays in the terminal and the app).",
-                cancellationToken);
+            // Sent BEFORE the new mode takes hold on the next tick, so the confirmation gets through.
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Mode(newMode, appWide: false), cancellationToken);
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
         {
-            _log.Log_Error(session.OrchId, "set topic silence failed", ex);
-            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"could not change silence: {ex.Message}", cancellationToken);
+            _log.Log_Error(session.OrchId, $"'{command}' failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"could not change the mode: {ex.Message}", cancellationToken);
+        }
+    }
+
+    async Task Apply_AppWideMode_Async(ITelegramApiClient client, long? messageThreadId, TelegramDeliveryModes wantedMode, bool forceNormal, CancellationToken cancellationToken)
+    {
+        var alreadyOn = wantedMode == TelegramDeliveryModes.Deferred ? _telegramMuted : _silenceAllTopics;
+        var turningOn = !forceNormal && !alreadyOn;
+
+        if (wantedMode == TelegramDeliveryModes.Deferred)
+        {
+            Set_TelegramMuted(turningOn);
+        }
+        else
+        {
+            _silenceAllTopics = turningOn;
+            _log.Log_Info(GLOBAL_ORCH_ID, turningOn ? "App-wide silence ON — all topics dropped" : "App-wide silence OFF");
+        }
+
+        var effective = turningOn ? wantedMode : TelegramDeliveryModes.Normal;
+
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Mode(effective, appWide: true), cancellationToken);
+        await Sync_TopicNames_BestEffort_Async(cancellationToken);
+    }
+
+    static string Describe_Mode(TelegramDeliveryModes mode, bool appWide)
+    {
+        var scope = appWide ? "everywhere" : "this topic";
+
+        return mode switch
+        {
+            TelegramDeliveryModes.Normal => $"🔔 {scope}: messages ON",
+            TelegramDeliveryModes.Deferred => $"{TelegramDeliveryMode_Glyphs.DEFERRED} {scope}: Do-Not-Disturb — nothing is lost, it all arrives when you switch back",
+            TelegramDeliveryModes.Silenced => $"{TelegramDeliveryMode_Glyphs.SILENCED} {scope}: silenced — messages are DROPPED while this lasts (you're reading them in the terminal)",
+            _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
+        };
+    }
+
+    /// <summary>
+    /// Keeps each Telegram topic's NAME carrying its mode glyph (🔕 / 🌙), so the owner sees the
+    /// state in the topic list without opening anything. Only calls the API when the name actually
+    /// changes — the desired name is compared against the last one pushed.
+    /// </summary>
+    async Task Sync_TopicNames_BestEffort_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null || session.TelegramTopicId == null)
+                continue;
+
+            var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
+            var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(baseName, Resolve_EffectiveMode(session.OrchId));
+
+            if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
+                continue;
+
+            try
+            {
+                await _telegramClient.Edit_ForumTopic_Async(session.TelegramTopicId.Value, wantedName, cancellationToken);
+                _appliedTopicNames[session.OrchId] = wantedName;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(session.OrchId, $"Topic name sync failed: {ex.Message}");
+            }
         }
     }
 
@@ -1848,6 +1954,23 @@ internal sealed class BridgeEngineModel(
             tap.UpdateId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
 
         await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
+    }
+
+    async Task Delete_ServiceMessage_BestEffort_Async(ITelegramApiClient client, long messageId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.Delete_Message_Async(messageId, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Needs can_delete_messages; without it the notice simply stays.
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not delete a topic service message: {ex.Message}");
+        }
     }
 
     async Task Send_DirectReply_BestEffort_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)

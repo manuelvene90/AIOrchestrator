@@ -14,4 +14,10 @@ public interface ITelegramUpdatesBatch
 
     /// <summary>Inline decision-button taps by the owner.</summary>
     IReadOnlyList<ITelegramCallbackTap> CallbackTaps { get; }
+
+    /// <summary>
+    /// Ids of Telegram's own SERVICE messages ("changed the topic name/icon"), which a rename
+    /// emits into the topic. The bridge deletes them so toggling a mode leaves no litter.
+    /// </summary>
+    IReadOnlyList<long> TopicServiceMessageIds { get; }
 }

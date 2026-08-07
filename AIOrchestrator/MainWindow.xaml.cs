@@ -19,6 +19,7 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using System.Collections.ObjectModel;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestrator;
 
@@ -293,10 +294,8 @@ public partial class MainWindow : Window
             ClosedLabel = session.ClosedUtc == null ? "" : $"CLOSED {session.ClosedUtc.Value.ToLocalTime():dd/MM HH:mm}",
             CardOpacity = session.ClosedUtc == null ? 1.0 : 0.5,
             Members = rows,
-            SilenceGlyph = session.TelegramSilenced ? "🔕" : "🔔",
-            SilenceTooltip = session.TelegramSilenced
-                ? "This topic is SILENCED — its messages are dropped, not queued. Click to resume texting."
-                : "Silence this topic — nothing from it gets texted while you work in its terminal (not queued).",
+            SilenceGlyph = Describe_ModeGlyph(session.TelegramMode),
+            SilenceTooltip = Describe_ModeTooltip(session.TelegramMode),
             ProgressVisibility = progress == null ? Visibility.Collapsed : Visibility.Visible,
             ProgressText = progress == null ? "" : Build_ProgressText(progress),
             ProgressDoneStar = new GridLength(progress?.Done ?? 0, GridUnitType.Star),
@@ -459,9 +458,32 @@ public partial class MainWindow : Window
         Open_DetailWindow(card);
     }
 
+    static string Describe_ModeGlyph(TelegramDeliveryModes mode)
+    {
+        return mode switch
+        {
+            TelegramDeliveryModes.Normal => "🔔",
+            TelegramDeliveryModes.Deferred => TelegramDeliveryMode_Glyphs.DEFERRED,
+            TelegramDeliveryModes.Silenced => TelegramDeliveryMode_Glyphs.SILENCED,
+            _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
+        };
+    }
+
+    static string Describe_ModeTooltip(TelegramDeliveryModes mode)
+    {
+        return mode switch
+        {
+            TelegramDeliveryModes.Normal => "Messages ON for this topic. Click to SILENCE it (messages dropped — you're in its terminal).",
+            TelegramDeliveryModes.Silenced => "SILENCED: this topic's messages are dropped. Click for Do-Not-Disturb (kept and replayed later).",
+            TelegramDeliveryModes.Deferred => "DO-NOT-DISTURB: this topic's messages are held and replayed. Click to turn messages back ON.",
+            _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
+        };
+    }
+
     /// <summary>
-    /// Per-topic silence: for when the owner is working directly in that supervisor's terminal and
-    /// wants nothing texted. Distinct from the global DND checkbox, which QUEUES instead of dropping.
+    /// Cycles this topic: ON → 🔕 silenced (dropped, "I'm in its terminal") → 🌙 deferred (held and
+    /// replayed, "I'm away") → ON. The app-wide equivalents are the status-bar checkbox and the
+    /// /mute_all and /dnd_all commands.
     /// </summary>
     void SilenceButton_Click(object sender, RoutedEventArgs e)
     {
@@ -475,13 +497,21 @@ public partial class MainWindow : Window
             if (session == null)
                 return;
 
-            _store.Set_TelegramSilenced(card.OrchId, !session.TelegramSilenced);
-            Add_LogRow(LogLevels.Info, $"[{card.OrchId}] topic {(session.TelegramSilenced ? "unsilenced" : "silenced")}");
+            var nextMode = session.TelegramMode switch
+            {
+                TelegramDeliveryModes.Normal => TelegramDeliveryModes.Silenced,
+                TelegramDeliveryModes.Silenced => TelegramDeliveryModes.Deferred,
+                TelegramDeliveryModes.Deferred => TelegramDeliveryModes.Normal,
+                _ => throw new Exception($"Unhandled TelegramDeliveryModes: {session.TelegramMode}"),
+            };
+
+            _store.Set_TelegramMode(card.OrchId, nextMode);
+            Add_LogRow(LogLevels.Info, $"[{card.OrchId}] topic delivery mode → {nextMode}");
             Refresh_Orchestrations();
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "Silence toggle failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(ex.Message, "Delivery mode toggle failed", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

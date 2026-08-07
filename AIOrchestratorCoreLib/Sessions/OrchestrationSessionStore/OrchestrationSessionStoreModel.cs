@@ -128,12 +128,12 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
-    public void Set_TelegramSilenced(string orchId, bool silenced)
+    public void Set_TelegramMode(string orchId, Telegram.TelegramDeliveryModes mode)
     {
         lock (_writeLock)
         {
             var session = Get_Session(orchId);
-            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithTelegramSilenced(session, silenced));
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithTelegramMode(session, mode));
         }
     }
 

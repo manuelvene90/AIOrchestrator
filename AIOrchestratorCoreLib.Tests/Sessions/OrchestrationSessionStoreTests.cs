@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Telegram;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Sessions;
@@ -37,27 +38,42 @@ public class OrchestrationSessionStoreTests : IDisposable
     }
 
     [Fact]
-    public void Set_TelegramSilenced_RoundTrips_AndLeavesEverythingElseIntact()
+    public void Set_TelegramMode_RoundTripsEveryMode_AndLeavesEverythingElseIntact()
     {
         _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
         _store.Add_Implementer("arb-fix");
         _store.Set_DisplayName("arb-fix", "drift guard");
         _store.Set_SupervisorModelOverride("arb-fix", "fable");
 
-        Assert.False(_store.Get_Session("arb-fix").TelegramSilenced);
+        Assert.Equal(TelegramDeliveryModes.Normal, _store.Get_Session("arb-fix").TelegramMode);
 
-        _store.Set_TelegramSilenced("arb-fix", true);
+        _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Silenced);
 
         var silenced = _store.Get_Session("arb-fix");
-        Assert.True(silenced.TelegramSilenced);
+        Assert.Equal(TelegramDeliveryModes.Silenced, silenced.TelegramMode);
 
         // The copy-with-overrides path must not drop neighbouring fields.
         Assert.Equal("drift guard", silenced.DisplayName);
         Assert.Equal("fable", silenced.SupervisorModelOverride);
         Assert.Single(silenced.Members);
 
-        _store.Set_TelegramSilenced("arb-fix", false);
-        Assert.False(_store.Get_Session("arb-fix").TelegramSilenced);
+        _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Deferred);
+        Assert.Equal(TelegramDeliveryModes.Deferred, _store.Get_Session("arb-fix").TelegramMode);
+
+        _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Normal);
+        Assert.Equal(TelegramDeliveryModes.Normal, _store.Get_Session("arb-fix").TelegramMode);
+    }
+
+    [Fact]
+    public void Get_Session_LegacySilencedBoolean_IsReadAsSilenced()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+
+        // A session.json written before the three-state mode existed.
+        var sessionFile = _paths.Get_SessionFile("arb-fix");
+        File.WriteAllText(sessionFile, File.ReadAllText(sessionFile).Replace("\"telegramMode\": \"Normal\"", "\"telegramSilenced\": true"));
+
+        Assert.Equal(TelegramDeliveryModes.Silenced, _store.Get_Session("arb-fix").TelegramMode);
     }
 
     [Fact]

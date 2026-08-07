@@ -19,13 +19,14 @@ public static class TelegramUpdates_Parser
     {
         List<ITelegramOwnerMessage> ownerMessages = [];
         List<ITelegramCallbackTap> callbackTaps = [];
+        List<long> topicServiceMessageIds = [];
         long? maxUpdateId = null;
 
         if (JsonNode.Parse(updatesJson) is not JsonObject root)
-            return TelegramUpdatesBatch_Factory.Create(null, ownerMessages, callbackTaps);
+            return TelegramUpdatesBatch_Factory.Create(null, ownerMessages, callbackTaps, topicServiceMessageIds);
 
         if (root["result"] is not JsonArray updates)
-            return TelegramUpdatesBatch_Factory.Create(null, ownerMessages, callbackTaps);
+            return TelegramUpdatesBatch_Factory.Create(null, ownerMessages, callbackTaps, topicServiceMessageIds);
 
         foreach (var updateNode in updates)
         {
@@ -48,9 +49,34 @@ public static class TelegramUpdates_Parser
             var callbackTap = Parse_CallbackTap_OrNull(update, updateId, ownerUserId);
             if (callbackTap != null)
                 callbackTaps.Add(callbackTap);
+
+            var serviceMessageId = Parse_TopicServiceMessageId_OrNull(update);
+            if (serviceMessageId != null)
+                topicServiceMessageIds.Add(serviceMessageId.Value);
         }
 
-        return TelegramUpdatesBatch_Factory.Create(maxUpdateId, ownerMessages, callbackTaps);
+        return TelegramUpdatesBatch_Factory.Create(maxUpdateId, ownerMessages, callbackTaps, topicServiceMessageIds);
+    }
+
+    /// <summary>
+    /// Telegram posts a service message into a topic whenever its name or icon changes. The
+    /// bridge renames topics to show their delivery mode, so those notices are OUR noise to clean
+    /// up — this returns their ids for deletion.
+    /// </summary>
+    static long? Parse_TopicServiceMessageId_OrNull(JsonObject update)
+    {
+        if (update["message"] is not JsonObject message)
+            return null;
+
+        if (message["forum_topic_edited"] == null)
+            return null;
+
+        var messageIdNode = message["message_id"];
+
+        if (messageIdNode == null)
+            return null;
+
+        return messageIdNode.GetValue<long>();
     }
 
     static ITelegramCallbackTap? Parse_CallbackTap_OrNull(JsonObject update, long updateId, long ownerUserId)

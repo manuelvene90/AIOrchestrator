@@ -31,6 +31,12 @@ public interface ITelegramApiClient
     /// <summary>Strips the inline keyboard from a sent message — decision buttons are SINGLE-USE.</summary>
     Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Deletes a message. Used on Telegram's own SERVICE messages ("X changed the topic name"),
+    /// which a topic rename emits and which would otherwise litter the conversation.
+    /// </summary>
+    Task Delete_Message_Async(long messageId, CancellationToken cancellationToken);
+
     /// <summary>Uploads a local image file as a photo message (multipart sendPhoto).</summary>
     Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken);
 

@@ -37,7 +37,7 @@ public static class SessionJson_Serializer
             ["supervisorModelOverride"] = session.SupervisorModelOverride,
             ["implementerModelOverride"] = session.ImplementerModelOverride,
             ["members"] = membersArray,
-            ["telegramSilenced"] = session.TelegramSilenced,
+            ["telegramMode"] = session.TelegramMode.ToString(),
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
         };
 
@@ -87,17 +87,24 @@ public static class SessionJson_Serializer
             Get_String_OrNull(root, "supervisorModelOverride"),
             Get_String_OrNull(root, "implementerModelOverride"),
             members,
-            Get_Bool_OrNull(root, "telegramSilenced") ?? false,
+            Read_TelegramMode(root),
             Get_DateTime_OrNull(root, "closedUtc"));
     }
 
-    static bool? Get_Bool_OrNull(JsonObject root, string key)
+    /// <summary>Reads the mode, still honouring the older boolean "telegramSilenced" key.</summary>
+    static Telegram.TelegramDeliveryModes Read_TelegramMode(JsonObject root)
     {
-        var node = root[key];
-        if (node == null)
-            return null;
+        var modeNode = root["telegramMode"];
 
-        return node.GetValue<bool>();
+        if (modeNode != null && Enum.TryParse<Telegram.TelegramDeliveryModes>(modeNode.GetValue<string>(), out var parsed))
+            return parsed;
+
+        var legacySilenced = root["telegramSilenced"];
+
+        if (legacySilenced != null && legacySilenced.GetValue<bool>())
+            return Telegram.TelegramDeliveryModes.Silenced;
+
+        return Telegram.TelegramDeliveryModes.Normal;
     }
 
     static string? Get_String_OrNull(JsonObject root, string key)

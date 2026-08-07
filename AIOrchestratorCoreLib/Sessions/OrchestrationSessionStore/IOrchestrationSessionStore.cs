@@ -22,8 +22,8 @@ public interface IOrchestrationSessionStore
     /// <summary>Stamps the communicator spawn (watchdog grace) — its pid lives only in its pid file.</summary>
     void Stamp_CommunicatorSpawned(string orchId);
 
-    /// <summary>Per-topic silence: this orchestration's outbound Telegram traffic is DROPPED, not queued.</summary>
-    void Set_TelegramSilenced(string orchId, bool silenced);
+    /// <summary>Per-topic delivery mode (Normal / Deferred = queued / Silenced = dropped).</summary>
+    void Set_TelegramMode(string orchId, Telegram.TelegramDeliveryModes mode);
     void Set_MemberPid(string orchId, string memberId, int? pid);
     void Set_DisplayName(string orchId, string displayName);
     void Set_SupervisorModelOverride(string orchId, string? model);

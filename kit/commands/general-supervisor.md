@@ -64,10 +64,12 @@ One level up, `~/.claude/supervision/`:
   (mute), `/progress` (PLAN.md ledgers), `/tokens` (usage totals) and `/limits` (5-hour and
   weekly windows) are answered by the app itself and never involve you.
 
-  Two different silences, do not confuse them: `/dnd` (or `set-telegram-muted`) is SUITE-WIDE and
-  QUEUES everything for a catch-up burst; `/mute` inside one orchestration's topic SILENCES just
-  that topic and DROPS its messages — the owner is working in that supervisor's terminal and does
-  not want the same content twice. Both survive restarts.
+  Two different silences, do not confuse them, and all four are TOGGLES:
+  `/dnd` 🌙 holds a topic's messages and replays them later (the owner is away); `/mute` 🔕 DROPS
+  them (the owner is reading that orchestration in its terminal and does not want it twice).
+  `/dnd_all` and `/mute_all` are the same two, app-wide. A topic's own setting overrides the
+  app-wide one, and the topic's name carries its glyph so the owner sees the state in the topic
+  list. `set-telegram-muted` remains the request-file equivalent of app-wide 🌙.
 
   `telegramItalianLayer` (default true, read LIVE): the APP translates Telegram traffic — the
   owner reads/writes Italian on the phone while every channel and session stays 100% English.
