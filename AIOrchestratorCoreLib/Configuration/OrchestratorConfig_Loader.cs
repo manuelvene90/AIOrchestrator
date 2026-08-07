@@ -30,7 +30,8 @@ public static class OrchestratorConfig_Loader
             Get_Long_OrNull(configRoot, "telegramSupergroupChatId"),
             Get_Long_OrNull(configRoot, "telegramOwnerUserId"),
             Get_String_OrNull(secretsRoot, "telegramBotToken"),
-            Get_Bool_OrNull(configRoot, "telegramItalianLayer"));
+            Get_Bool_OrNull(configRoot, "telegramItalianLayer"),
+            Get_String_OrNull(configRoot, "voiceTranscribeCommand"));
     }
 
     public static void Save(IOrchestratorConfig config, ISupervisionPaths paths)
@@ -57,6 +58,7 @@ public static class OrchestratorConfig_Loader
             ["telegramSupergroupChatId"] = config.TelegramSupergroupChatId,
             ["telegramOwnerUserId"] = config.TelegramOwnerUserId,
             ["telegramItalianLayer"] = config.TelegramItalianLayer,
+            ["voiceTranscribeCommand"] = config.VoiceTranscribeCommand,
         };
 
         File.WriteAllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));

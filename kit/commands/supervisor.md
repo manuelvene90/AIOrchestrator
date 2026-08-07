@@ -126,6 +126,14 @@ As soon as the goal is clear from the owner's first instruction, drop
 - **Blocked on owner:** when a decision is genuinely the owner's, append an entry to
   `owner-channel.md` containing the phrase `BLOCKED ON OWNER` with the question and the options.
   It reaches the owner's phone via Telegram; their answer comes back as a `FROM owner` entry.
+- **Give the owner TAPPABLE buttons for decisions (always, when there are discrete options):**
+  end the entry body with `OPTION: <short label>` lines (2–4 options, ≤30 chars each, English).
+  The app renders them as inline Telegram buttons; the tapped label comes back to you as a normal
+  `FROM owner` entry. Use for BLOCKED ON OWNER choices and for the merge gate
+  (`OPTION: Merge it` / `OPTION: Hold`). One tap beats typing on a phone.
+- **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
+  the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
+  real photo in the topic and strips the line from the text.
 - **Images:** owner messages may carry an `IMAGE: <path>` line (screenshots of bugs, etc. — the
   bridge downloads them next to your channel). Read the file to inspect it; pass the path on to an
   implementer's brief when the image is part of its task.

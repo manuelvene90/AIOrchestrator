@@ -15,4 +15,7 @@ public interface ITelegramOwnerMessage
 
     /// <summary>Telegram file id of the LARGEST photo size, when the owner sent an image.</summary>
     string? PhotoFileId { get; }
+
+    /// <summary>Telegram file id of a voice note (.oga) the owner sent, transcribed if configured.</summary>
+    string? VoiceFileId { get; }
 }

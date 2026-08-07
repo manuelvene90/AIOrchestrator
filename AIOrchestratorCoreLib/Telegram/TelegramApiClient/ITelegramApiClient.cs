@@ -21,6 +21,19 @@ public interface ITelegramApiClient
     Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken);
 
     Task Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken);
+
+    /// <summary>sendMessage with an inline keyboard — one tappable button per (data, label) pair.</summary>
+    Task Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
+
+    /// <summary>Answers a button tap (stops the phone-side spinner); text shows as a small toast.</summary>
+    Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken);
+
+    /// <summary>Uploads a local image file as a photo message (multipart sendPhoto).</summary>
+    Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken);
+
+    /// <summary>Registers the bot's command menu (the chat's ☰ menu button).</summary>
+    Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken);
+
     Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken);
 
     /// <summary>Downloads a file the owner sent (getFile + file endpoint) — screenshots of bugs, etc.</summary>

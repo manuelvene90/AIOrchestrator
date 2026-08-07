@@ -28,5 +28,12 @@ public interface IOrchestratorConfig
     /// </summary>
     bool TelegramItalianLayer { get; }
 
+    /// <summary>
+    /// External command that transcribes an owner voice note; {input} is replaced by the audio
+    /// file path. Null = voice messages get a "not configured" reply. Example:
+    /// "whisper {input} --model small --language it --output_format txt --output_dir -" style CLIs.
+    /// </summary>
+    string? VoiceTranscribeCommand { get; }
+
     bool Is_TelegramConfigured();
 }

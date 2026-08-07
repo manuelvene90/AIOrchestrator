@@ -42,7 +42,8 @@ public static class BridgeEngine_Factory
 
         var watchdog = SessionWatchdog_Factory.Create(paths, store, launcher, log);
         var translator = Translation.MessageTranslator.MessageTranslator_Factory.Create(log);
+        var transcriber = Transcription.VoiceTranscriber.VoiceTranscriber_Factory.Create(log);
 
-        return new BridgeEngineModel(paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, translator, lastUpdateId);
+        return new BridgeEngineModel(paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, translator, transcriber, lastUpdateId);
     }
 }

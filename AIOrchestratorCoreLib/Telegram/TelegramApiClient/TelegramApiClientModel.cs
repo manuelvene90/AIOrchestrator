@@ -108,9 +108,87 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("sendMessage", payload, cancellationToken);
     }
 
+    public async Task Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        var keyboardRows = new JsonArray();
+
+        foreach (var button in buttons)
+        {
+            keyboardRows.Add(new JsonArray(new JsonObject
+            {
+                ["text"] = button.Label,
+                ["callback_data"] = button.Data,
+            }));
+        }
+
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["text"] = text,
+            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = keyboardRows },
+        };
+
+        if (messageThreadId != null)
+            payload["message_thread_id"] = messageThreadId.Value;
+
+        await Post_Async("sendMessage", payload, cancellationToken);
+    }
+
+    public async Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["callback_query_id"] = callbackQueryId,
+            ["text"] = text,
+        };
+
+        await Post_Async("answerCallbackQuery", payload, cancellationToken);
+    }
+
+    public async Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
+    {
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(_supergroupChatId.ToString()), "chat_id");
+
+        if (messageThreadId != null)
+            form.Add(new StringContent(messageThreadId.Value.ToString()), "message_thread_id");
+
+        var photoBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
+        form.Add(new ByteArrayContent(photoBytes), "photo", Path.GetFileName(filePath));
+
+        var response = await _httpClient.PostAsync(Build_MethodUrl("sendPhoto"), form, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+            throw new Exception($"Telegram 'sendPhoto' failed with HTTP {(int)response.StatusCode} for '{filePath}': {body}");
+    }
+
+    public async Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken)
+    {
+        var commandsArray = new JsonArray();
+
+        foreach (var command in commands)
+        {
+            commandsArray.Add(new JsonObject
+            {
+                ["command"] = command.Command,
+                ["description"] = command.Description,
+            });
+        }
+
+        var payload = new JsonObject
+        {
+            ["commands"] = commandsArray,
+        };
+
+        await Post_Async("setMyCommands", payload, cancellationToken);
+    }
+
     public async Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken)
     {
-        var url = $"{Build_MethodUrl("getUpdates")}?offset={offset}&timeout={timeoutSeconds}&allowed_updates=%5B%22message%22%5D";
+        // allowed_updates = ["message","callback_query"] — without callback_query, inline-button
+        // taps would never reach the bridge.
+        var url = $"{Build_MethodUrl("getUpdates")}?offset={offset}&timeout={timeoutSeconds}&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D";
 
         var response = await _httpClient.GetAsync(url, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);

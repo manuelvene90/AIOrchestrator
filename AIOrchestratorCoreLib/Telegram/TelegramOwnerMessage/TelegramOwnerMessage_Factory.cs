@@ -8,8 +8,9 @@ public static class TelegramOwnerMessage_Factory
         long fromUserId,
         long? messageThreadId,
         string text,
-        string? photoFileId)
+        string? photoFileId,
+        string? voiceFileId)
     {
-        return new TelegramOwnerMessageModel(updateId, chatId, fromUserId, messageThreadId, text, photoFileId);
+        return new TelegramOwnerMessageModel(updateId, chatId, fromUserId, messageThreadId, text, photoFileId, voiceFileId);
     }
 }

@@ -1,12 +1,14 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Telegram.TelegramCallbackTap;
 using AIOrchestratorCoreLib.Telegram.TelegramOwnerMessage;
 using AIOrchestratorCoreLib.Telegram.TelegramUpdatesBatch;
 
 namespace AIOrchestratorCoreLib.Telegram;
 
 /// <summary>
-/// Parses a getUpdates JSON response and filters it down to the OWNER's text messages in the
-/// supervision supergroup. Everything else still advances MaxUpdateId so the offset moves on.
+/// Parses a getUpdates JSON response and filters it down to the OWNER's traffic in the
+/// supervision supergroup: text/photo/voice messages plus inline-button taps (callback_query).
+/// Everything else still advances MaxUpdateId so the offset moves on.
 /// </summary>
 public static class TelegramUpdates_Parser
 {
@@ -16,13 +18,14 @@ public static class TelegramUpdates_Parser
         long ownerUserId)
     {
         List<ITelegramOwnerMessage> ownerMessages = [];
+        List<ITelegramCallbackTap> callbackTaps = [];
         long? maxUpdateId = null;
 
         if (JsonNode.Parse(updatesJson) is not JsonObject root)
-            return TelegramUpdatesBatch_Factory.Create(null, ownerMessages);
+            return TelegramUpdatesBatch_Factory.Create(null, ownerMessages, callbackTaps);
 
         if (root["result"] is not JsonArray updates)
-            return TelegramUpdatesBatch_Factory.Create(null, ownerMessages);
+            return TelegramUpdatesBatch_Factory.Create(null, ownerMessages, callbackTaps);
 
         foreach (var updateNode in updates)
         {
@@ -41,9 +44,34 @@ public static class TelegramUpdates_Parser
             var ownerMessage = Parse_OwnerMessage_OrNull(update, updateId, supergroupChatId, ownerUserId);
             if (ownerMessage != null)
                 ownerMessages.Add(ownerMessage);
+
+            var callbackTap = Parse_CallbackTap_OrNull(update, updateId, ownerUserId);
+            if (callbackTap != null)
+                callbackTaps.Add(callbackTap);
         }
 
-        return TelegramUpdatesBatch_Factory.Create(maxUpdateId, ownerMessages);
+        return TelegramUpdatesBatch_Factory.Create(maxUpdateId, ownerMessages, callbackTaps);
+    }
+
+    static ITelegramCallbackTap? Parse_CallbackTap_OrNull(JsonObject update, long updateId, long ownerUserId)
+    {
+        if (update["callback_query"] is not JsonObject callbackQuery)
+            return null;
+
+        var queryId = callbackQuery["id"]?.GetValue<string>();
+        var data = callbackQuery["data"]?.GetValue<string>();
+
+        if (queryId == null || data == null)
+            return null;
+
+        var fromIdNode = (callbackQuery["from"] as JsonObject)?["id"];
+        if (fromIdNode == null || fromIdNode.GetValue<long>() != ownerUserId)
+            return null;
+
+        var threadIdNode = (callbackQuery["message"] as JsonObject)?["message_thread_id"];
+        long? threadId = threadIdNode == null ? null : threadIdNode.GetValue<long>();
+
+        return TelegramCallbackTap_Factory.Create(updateId, queryId, data, threadId);
     }
 
     static ITelegramOwnerMessage? Parse_OwnerMessage_OrNull(
@@ -56,9 +84,10 @@ public static class TelegramUpdates_Parser
             return null;
 
         var photoFileId = Get_LargestPhotoFileId_OrNull(message);
+        var voiceFileId = (message["voice"] as JsonObject)?["file_id"]?.GetValue<string>();
         var text = Get_TextOrCaption_OrNull(message);
 
-        if (text == null && photoFileId == null)
+        if (text == null && photoFileId == null && voiceFileId == null)
             return null;
 
         if (message["chat"] is not JsonObject chat)
@@ -84,7 +113,8 @@ public static class TelegramUpdates_Parser
             ownerUserId,
             threadId,
             text ?? string.Empty,
-            photoFileId);
+            photoFileId,
+            voiceFileId);
     }
 
     static string? Get_TextOrCaption_OrNull(JsonObject message)

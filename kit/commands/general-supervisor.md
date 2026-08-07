@@ -50,9 +50,18 @@ One level up, `~/.claude/supervision/`:
     "communicatorModel": null,
     "telegramSupergroupChatId": null,
     "telegramOwnerUserId": null,
-    "telegramItalianLayer": true
+    "telegramItalianLayer": true,
+    "voiceTranscribeCommand": null
   }
   ```
+
+  `voiceTranscribeCommand` (default null): external CLI that transcribes owner voice notes —
+  `{input}` is replaced with the audio file path, stdout is the transcript. Until set, voice
+  notes get a "not configured" reply from the app.
+
+  The owner also has bot menu commands the APP handles directly: `/summary` and `/pending` reach
+  YOU as canned English requests ("make a summary…", "list every pending question…"); `/dnd`
+  mutes texts without involving you.
 
   `telegramItalianLayer` (default true, read LIVE): the APP translates Telegram traffic — the
   owner reads/writes Italian on the phone while every channel and session stays 100% English.

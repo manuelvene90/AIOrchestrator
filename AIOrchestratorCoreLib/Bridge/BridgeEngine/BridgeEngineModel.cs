@@ -16,6 +16,9 @@ using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Termination;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Telegram.TelegramCallbackTap;
+using AIOrchestratorCoreLib.Telegram.TelegramOwnerMessage;
+using AIOrchestratorCoreLib.Transcription.VoiceTranscriber;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 
@@ -31,8 +34,12 @@ internal sealed class BridgeEngineModel(
     ITelegramApiClient? telegramClient,
     ISessionWatchdog watchdog,
     IMessageTranslator translator,
+    IVoiceTranscriber transcriber,
     long initialLastUpdateId) : IBridgeEngine
 {
+    /// <summary>In-memory inline-button registry cap — taps on evicted buttons get an "expired" toast.</summary>
+    const int BUTTON_REGISTRY_CAP = 300;
+
     const int MIRROR_TICK_MILLISECONDS = 2000;
     const int INBOUND_LONG_POLL_SECONDS = 20;
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
@@ -53,6 +60,11 @@ internal sealed class BridgeEngineModel(
     readonly ITelegramApiClient? _telegramClient = telegramClient;
     readonly ISessionWatchdog _watchdog = watchdog;
     readonly IMessageTranslator _translator = translator;
+    readonly IVoiceTranscriber _transcriber = transcriber;
+    readonly Dictionary<string, (long? ThreadId, string OptionText)> _buttonOptions = [];
+    readonly Queue<string> _buttonOrder = new();
+    readonly Lock _buttonLock = new();
+    long _buttonSequence;
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
@@ -348,27 +360,116 @@ internal sealed class BridgeEngineModel(
         {
             var text = MirrorText_Formatter.Format(append.Channel, entry);
 
+            // Special lines in the entry become REAL Telegram artifacts, never raw text:
+            // IMAGE: <path> lines upload as photos; OPTION: <label> lines render as inline
+            // decision buttons the owner can tap instead of typing.
+            var photoPaths = Extract_MarkerLines(ref text, "IMAGE");
+            var optionLabels = Extract_MarkerLines(ref text, "OPTION");
+
             // Italian layer (live config): the owner reads Italian on the phone; sessions and
             // channels stay English. Fallback inside the translator = original text on failure.
             if (_configProvider.Get_Current().TelegramItalianLayer)
                 text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
 
-            foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            var chunks = TelegramMessage_Chunker.Chunk(text);
+
+            if (chunks.Count == 0 && optionLabels.Count > 0)
+                chunks = ["…"];
+
+            try
             {
-                try
+                for (var i = 0; i < chunks.Count; i++)
                 {
-                    await _telegramClient.Send_Message_Async(threadId, chunk, cancellationToken);
+                    var isLastChunk = i == chunks.Count - 1;
+
+                    if (isLastChunk && optionLabels.Count > 0)
+                        await _telegramClient.Send_MessageWithButtons_Async(threadId, chunks[i], Register_Buttons(threadId, optionLabels), cancellationToken);
+                    else
+                        await _telegramClient.Send_Message_Async(threadId, chunks[i], cancellationToken);
                 }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _log.Log_Error(append.Channel.OrchId, $"Telegram mirror send failed for entry #{entry.Index}", ex);
-                    return;
-                }
+
+                foreach (var photoPath in photoPaths)
+                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel.OrchId, cancellationToken);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Error(append.Channel.OrchId, $"Telegram mirror send failed for entry #{entry.Index}", ex);
+                return;
+            }
+        }
+    }
+
+    /// <summary>Pulls '<marker>: value' lines out of the text (which shrinks accordingly) and returns the values.</summary>
+    static IReadOnlyList<string> Extract_MarkerLines(ref string text, string marker)
+    {
+        List<string> values = [];
+        List<string> keptLines = [];
+
+        foreach (var line in text.Split('\n'))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(line.TrimEnd('\r'), $@"^{marker}:\s*(.+)$");
+
+            if (match.Success)
+                values.Add(match.Groups[1].Value.Trim());
+            else
+                keptLines.Add(line);
+        }
+
+        if (values.Count > 0)
+            text = string.Join('\n', keptLines).Trim('\n');
+
+        return values;
+    }
+
+    IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionLabels)
+    {
+        List<(string Data, string Label)> buttons = [];
+
+        lock (_buttonLock)
+        {
+            foreach (var label in optionLabels)
+            {
+                _buttonSequence++;
+                var data = $"opt-{_buttonSequence}";
+
+                _buttonOptions[data] = (threadId, label);
+                _buttonOrder.Enqueue(data);
+                buttons.Add((data, label));
+            }
+
+            while (_buttonOrder.Count > BUTTON_REGISTRY_CAP)
+                _buttonOptions.Remove(_buttonOrder.Dequeue());
+        }
+
+        return buttons;
+    }
+
+    async Task Send_EntryPhoto_BestEffort_Async(long? threadId, string photoPath, string orchId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (_telegramClient == null)
+                return;
+
+            if (!File.Exists(photoPath))
+            {
+                _log.Log_Warning(orchId, $"Entry photo not sent — file missing: {photoPath}");
+                return;
+            }
+
+            await _telegramClient.Send_Photo_Async(threadId, photoPath, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Entry photo send failed for '{photoPath}': {ex.Message}");
         }
     }
 
@@ -803,6 +904,8 @@ internal sealed class BridgeEngineModel(
 
         var backoffMilliseconds = INBOUND_ERROR_BACKOFF_START_MILLISECONDS;
 
+        await Register_BotCommands_BestEffort_Async(client, cancellationToken);
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -810,14 +913,53 @@ internal sealed class BridgeEngineModel(
                 var json = await client.Get_UpdatesJson_Async(_lastUpdateId + 1, INBOUND_LONG_POLL_SECONDS, cancellationToken);
                 var batch = TelegramUpdates_Parser.Parse_OwnerMessages(json, supergroupChatId, ownerUserId);
 
-                // The owner texting ANYTHING lifts DND — before routing, so the ✓ acks go out.
-                if (batch.OwnerMessages.Count > 0 && _telegramMuted)
-                    Set_TelegramMuted(false);
+                // Bot commands: /dnd acts directly (and must NOT auto-unmute); /summary and
+                // /pending become canned English requests routed to the general supervisor.
+                List<ITelegramOwnerMessage> routableMessages = [];
+                var dndRequested = false;
+                long? dndThreadId = null;
 
                 foreach (var message in batch.OwnerMessages)
                 {
+                    var command = Get_BotCommand_OrNull(message.Text);
+
+                    if (command == "dnd")
+                    {
+                        dndRequested = true;
+                        dndThreadId = message.MessageThreadId;
+                    }
+                    else if (command == "summary")
+                    {
+                        routableMessages.Add(Build_GeneralCommandMessage(message, "Make a summary of what is going on across all orchestrations."));
+                    }
+                    else if (command == "pending")
+                    {
+                        routableMessages.Add(Build_GeneralCommandMessage(message, "List every pending question that awaits me, and which topic to answer each in."));
+                    }
+                    else
+                    {
+                        routableMessages.Add(message);
+                    }
+                }
+
+                // The owner texting or tapping ANYTHING (except /dnd) lifts DND — before routing,
+                // so the ✓ acks go out.
+                if ((routableMessages.Count > 0 || batch.CallbackTaps.Count > 0) && _telegramMuted)
+                    Set_TelegramMuted(false);
+
+                foreach (var message in routableMessages)
+                {
                     await Route_OwnerMessage_Async(message, cancellationToken);
                     await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+                }
+
+                foreach (var tap in batch.CallbackTaps)
+                    await Handle_CallbackTap_Async(client, tap, cancellationToken);
+
+                if (dndRequested)
+                {
+                    Set_TelegramMuted(true);
+                    await Send_DirectReply_BestEffort_Async(client, dndThreadId, "🔕 texts muted — text anything to unmute", cancellationToken);
                 }
 
                 if (batch.MaxUpdateId != null)
@@ -850,6 +992,104 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>Registers the chat's ☰ command menu — two taps beat typing the check-in ritual.</summary>
+    async Task Register_BotCommands_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.Set_MyCommands_Async(
+                [
+                    ("summary", "What is going on across all orchestrations"),
+                    ("pending", "Open questions awaiting me"),
+                    ("dnd", "Mute texts (text anything to unmute)"),
+                ],
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"setMyCommands failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>"/summary", "/summary@BotName" → "summary"; non-commands → null.</summary>
+    static string? Get_BotCommand_OrNull(string text)
+    {
+        var trimmed = text.Trim();
+
+        if (!trimmed.StartsWith('/'))
+            return null;
+
+        var command = trimmed[1..];
+        var atIndex = command.IndexOf('@');
+
+        if (atIndex >= 0)
+            command = command[..atIndex];
+
+        return command.ToLowerInvariant();
+    }
+
+    /// <summary>A command becomes a canned English request for the GENERAL supervisor (thread null = general channel).</summary>
+    static ITelegramOwnerMessage Build_GeneralCommandMessage(ITelegramOwnerMessage original, string cannedText)
+    {
+        return TelegramOwnerMessage_Factory.Create(
+            original.UpdateId, original.ChatId, original.FromUserId, null, cannedText, null, null);
+    }
+
+    async Task Handle_CallbackTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
+    {
+        (long? ThreadId, string OptionText) registered;
+        bool found;
+
+        lock (_buttonLock)
+        {
+            found = _buttonOptions.TryGetValue(tap.Data, out registered);
+        }
+
+        try
+        {
+            // Must always be answered or the button spinner hangs on the phone.
+            await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, found ? "✓" : "expired — please type your choice", cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"answerCallbackQuery failed: {ex.Message}");
+        }
+
+        if (!found)
+            return;
+
+        // A tap IS an owner message: the chosen option text goes through the normal pipeline
+        // (aggregation, translation, delivery receipts) into the topic the buttons live in.
+        var syntheticMessage = TelegramOwnerMessage_Factory.Create(
+            tap.UpdateId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
+
+        await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
+    }
+
+    async Task Send_DirectReply_BestEffort_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.Send_Message_Async(messageThreadId, text, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Direct reply send failed: {ex.Message}");
+        }
+    }
+
     /// <summary>
     /// Owner texts are BUFFERED, not delivered immediately: several messages sent in a row
     /// aggregate into one entry after a quiet window (Flush_OwnerDeliveries_Async does the
@@ -879,9 +1119,26 @@ internal sealed class BridgeEngineModel(
             channelFile = _paths.Get_OwnerChannelFile(orchId);
         }
 
-        var segmentText = message.PhotoFileId == null
-            ? message.Text
-            : await Build_PhotoEntryText_Async(message, channelFile, orchId, cancellationToken);
+        string segmentText;
+
+        if (message.VoiceFileId != null)
+        {
+            var voiceText = await Build_VoiceEntryText_OrNull_Async(message, channelFile, orchId, cancellationToken);
+
+            // Not configured or failed — the owner already got a direct reply; nothing to route.
+            if (voiceText == null)
+                return;
+
+            segmentText = voiceText;
+        }
+        else if (message.PhotoFileId != null)
+        {
+            segmentText = await Build_PhotoEntryText_Async(message, channelFile, orchId, cancellationToken);
+        }
+        else
+        {
+            segmentText = message.Text;
+        }
 
         lock (_deliveryLock)
         {
@@ -963,6 +1220,69 @@ internal sealed class BridgeEngineModel(
     /// Downloads an owner-sent image beside the channel (media/) and references it with an
     /// 'IMAGE: &lt;path&gt;' line — the supervisor Reads the file to inspect the screenshot.
     /// </summary>
+    /// <summary>
+    /// Downloads the voice note and runs the CONFIGURED transcription command; the transcript
+    /// becomes the message text (then translated by the Italian layer like any owner text).
+    /// Null = unconfigured/failed, with a direct explanatory reply already sent to the owner.
+    /// </summary>
+    async Task<string?> Build_VoiceEntryText_OrNull_Async(
+        Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message,
+        string channelFile,
+        string orchId,
+        CancellationToken cancellationToken)
+    {
+        var client = _telegramClient
+            ?? throw new Exception("Voice message arrived without a Telegram client");
+
+        var commandTemplate = _configProvider.Get_Current().VoiceTranscribeCommand;
+
+        if (string.IsNullOrWhiteSpace(commandTemplate))
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client,
+                message.MessageThreadId,
+                "🎙 voice received, but transcription is not configured — set voiceTranscribeCommand in config.json (a CLI printing the transcript to stdout, {input} = audio path), or type instead",
+                cancellationToken);
+
+            return null;
+        }
+
+        try
+        {
+            var voiceFileId = message.VoiceFileId
+                ?? throw new Exception("Build_VoiceEntryText_OrNull_Async called without a voice file id");
+
+            var mediaFolder = Path.Combine(Path.GetDirectoryName(channelFile)
+                ?? throw new Exception($"Channel file '{channelFile}' has no parent folder"), "media");
+            Directory.CreateDirectory(mediaFolder);
+
+            var audioPath = Path.Combine(mediaFolder, $"tg-voice-{message.UpdateId}.oga");
+            var audioBytes = await client.Download_File_Async(voiceFileId, cancellationToken);
+            await File.WriteAllBytesAsync(audioPath, audioBytes, cancellationToken);
+
+            var transcript = await _transcriber.Transcribe_OrNull_Async(audioPath, commandTemplate, cancellationToken);
+
+            if (transcript == null)
+            {
+                await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🎙 couldn't transcribe the voice message — please type it", cancellationToken);
+                return null;
+            }
+
+            _log.Log_Info(orchId, $"Voice note transcribed ({transcript.Length} chars)");
+            return message.Text.Length == 0 ? transcript : $"{message.Text}\n{transcript}";
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(orchId, "Voice note handling failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🎙 voice message failed — please type it", cancellationToken);
+            return null;
+        }
+    }
+
     async Task<string> Build_PhotoEntryText_Async(
         Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message,
         string channelFile,

@@ -91,4 +91,70 @@ public class TelegramUpdatesParserTests
         Assert.Null(batch.MaxUpdateId);
         Assert.Empty(batch.OwnerMessages);
     }
+
+    [Fact]
+    public void Parse_CallbackTaps_OwnerTapsOnly_WithThreadAndData()
+    {
+        var json = """
+            {
+              "ok": true,
+              "result": [
+                {
+                  "update_id": 200,
+                  "callback_query": {
+                    "id": "cbq-1",
+                    "from": { "id": 42 },
+                    "data": "opt-7",
+                    "message": { "message_id": 9, "message_thread_id": 7 }
+                  }
+                },
+                {
+                  "update_id": 201,
+                  "callback_query": {
+                    "id": "cbq-2",
+                    "from": { "id": 999 },
+                    "data": "opt-8",
+                    "message": { "message_id": 10 }
+                  }
+                }
+              ]
+            }
+            """;
+
+        var batch = TelegramUpdates_Parser.Parse_OwnerMessages(json, SUPERGROUP_ID, OWNER_ID);
+
+        Assert.Single(batch.CallbackTaps);
+        Assert.Equal("cbq-1", batch.CallbackTaps[0].CallbackQueryId);
+        Assert.Equal("opt-7", batch.CallbackTaps[0].Data);
+        Assert.Equal(7, batch.CallbackTaps[0].MessageThreadId);
+        Assert.Equal(201, batch.MaxUpdateId);
+    }
+
+    [Fact]
+    public void Parse_VoiceMessage_CarriesTheVoiceFileId()
+    {
+        var json = """
+            {
+              "ok": true,
+              "result": [
+                {
+                  "update_id": 300,
+                  "message": {
+                    "message_id": 11,
+                    "from": { "id": 42 },
+                    "chat": { "id": -1001234567890 },
+                    "message_thread_id": 7,
+                    "voice": { "file_id": "voice-abc", "duration": 4 }
+                  }
+                }
+              ]
+            }
+            """;
+
+        var batch = TelegramUpdates_Parser.Parse_OwnerMessages(json, SUPERGROUP_ID, OWNER_ID);
+
+        Assert.Single(batch.OwnerMessages);
+        Assert.Equal("voice-abc", batch.OwnerMessages[0].VoiceFileId);
+        Assert.Equal(string.Empty, batch.OwnerMessages[0].Text);
+    }
 }

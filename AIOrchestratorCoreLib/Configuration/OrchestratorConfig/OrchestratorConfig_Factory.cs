@@ -20,7 +20,8 @@ public static class OrchestratorConfig_Factory
         long? telegramSupergroupChatId,
         long? telegramOwnerUserId,
         string? telegramBotToken,
-        bool? telegramItalianLayer)
+        bool? telegramItalianLayer,
+        string? voiceTranscribeCommand)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -31,11 +32,12 @@ public static class OrchestratorConfig_Factory
             telegramSupergroupChatId,
             telegramOwnerUserId,
             telegramBotToken,
-            telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER);
+            telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER,
+            voiceTranscribeCommand);
     }
 
     public static IOrchestratorConfig Create_Empty()
     {
-        return Create([], null, null, null, null, null, null, null, null);
+        return Create([], null, null, null, null, null, null, null, null, null);
     }
 }

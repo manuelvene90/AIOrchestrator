@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Telegram.TelegramCallbackTap;
 using AIOrchestratorCoreLib.Telegram.TelegramOwnerMessage;
 
 namespace AIOrchestratorCoreLib.Telegram.TelegramUpdatesBatch;
@@ -10,4 +11,7 @@ public interface ITelegramUpdatesBatch
 {
     long? MaxUpdateId { get; }
     IReadOnlyList<ITelegramOwnerMessage> OwnerMessages { get; }
+
+    /// <summary>Inline decision-button taps by the owner.</summary>
+    IReadOnlyList<ITelegramCallbackTap> CallbackTaps { get; }
 }
