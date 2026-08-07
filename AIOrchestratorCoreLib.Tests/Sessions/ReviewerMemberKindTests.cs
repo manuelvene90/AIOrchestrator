@@ -50,6 +50,26 @@ public class ReviewerMemberKindTests : IDisposable
         Directory.Delete(_tempRoot, recursive: true);
     }
 
+    /// <summary>
+    /// Owner directive: nobody reviews their own work, not even for a small task. If the reviewer
+    /// had to be requested first, the cheap path would be self-review — so rev-1 exists before the
+    /// first task does, and it comes up read-only like any other reviewer.
+    /// </summary>
+    [Fact]
+    public void Every_Orchestration_StartsWithAReviewer_AlreadyReadOnly()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        Assert.Equal(["imp-1", "rev-1"], session.Members.Select(m => m.MemberId));
+
+        var reviewerScript = _spawner.SpawnedCommands
+            .Select(SpawnCommand_Builder.Decode_SessionScript)
+            .Single(script => script.Contains("/reviewer "));
+
+        Assert.Contains("--disallowedTools \"Write\" \"Edit\" \"NotebookEdit\"", reviewerScript);
+        Assert.Contains($"/reviewer {session.OrchId}/rev-1", reviewerScript);
+    }
+
     [Theory]
     [InlineData("imp-1", MemberKinds.Implementer)]
     [InlineData("imp-12", MemberKinds.Implementer)]
@@ -101,7 +121,8 @@ public class ReviewerMemberKindTests : IDisposable
 
         var session = _launcher.Add_Member(started.OrchId, MemberKinds.Reviewer);
 
-        Assert.Equal("rev-1", session.Members[session.Members.Count - 1].MemberId);
+        // rev-1 is the one every orchestration starts with, so an explicitly added one is rev-2.
+        Assert.Equal("rev-2", session.Members[session.Members.Count - 1].MemberId);
 
         var script = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands.Single());
         Assert.Contains("--disallowedTools", script);
@@ -116,7 +137,6 @@ public class ReviewerMemberKindTests : IDisposable
     public void Respawn_OfAReviewer_ComesBackReadOnly()
     {
         var started = _launcher.Start_Orchestration("Repo", _tempRepo);
-        _launcher.Add_Member(started.OrchId, MemberKinds.Reviewer);
         _spawner.SpawnedCommands.Clear();
 
         _launcher.Respawn_Implementer(started.OrchId, "rev-1");

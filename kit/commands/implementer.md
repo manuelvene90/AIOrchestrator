@@ -52,6 +52,11 @@ repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
   supervisor, who asks the owner.
 - **No acknowledgment-only entries** — silence is acknowledgment. Write only boundary reports,
   evidence-backed pushbacks, and blocked flags.
+- **You do not review your own work, and you never sign it off.** Your report states what you did
+  and the evidence for it; a separate READ-ONLY reviewer session (`rev-n`) and your supervisor
+  decide whether it is good. This holds for one-line changes too — "it's small" is exactly when
+  self-review feels reasonable and is exactly when it fails. Never describe your own work as
+  reviewed, verified-by-review, or approved.
 - **Push back with evidence.** Supervisor entries are adversarially-verified review input: verify
   against the code, and when you disagree, refute with line numbers, test output, or a
   demonstration — never blindly implement a wrong instruction. Being refuted with evidence is

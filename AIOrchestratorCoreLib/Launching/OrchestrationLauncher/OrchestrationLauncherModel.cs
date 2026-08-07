@@ -51,7 +51,14 @@ internal sealed class OrchestrationLauncherModel(
 
         // Every orchestration starts with one implementer ready (owner directive): the supervisor
         // briefs imp-1 when the first task arrives instead of requesting a spawn first.
-        return Add_Implementer(orchId);
+        Add_Implementer(orchId);
+
+        // ...and one REVIEWER, for the same reason and a stronger one (owner directive): nobody
+        // reviews their own work here, not even for small tasks. If the reviewer had to be
+        // requested, the cheap path would be self-review, and a bad review is the one failure that
+        // does not announce itself — bad code gets fixed, an approval lets it survive indefinitely.
+        // So rev-1 exists before the first task does.
+        return Add_Member(orchId, MemberKinds.Reviewer);
     }
 
     public IOrchestrationSession Add_Implementer(string orchId)
