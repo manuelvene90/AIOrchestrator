@@ -110,6 +110,21 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         return Read_MessageId_OrNull(responseJson);
     }
 
+    public async Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["text"] = html,
+            ["parse_mode"] = "HTML",
+        };
+
+        if (messageThreadId != null)
+            payload["message_thread_id"] = messageThreadId.Value;
+
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken));
+    }
+
     public async Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
     {
         var payload = new JsonObject

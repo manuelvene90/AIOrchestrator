@@ -909,8 +909,13 @@ internal sealed class BridgeEngineModel(
             // (implementer spokes' "online") are canned app strings and stay English entirely.
             if (_configProvider.Get_Current().TelegramItalianLayer && append.Channel.IsOwnerChannel)
             {
-                var (speakerPrefix, content) = Split_SpeakerPrefix(text);
-                text = speakerPrefix + await _translator.Translate_ToItalian_Async(content, cancellationToken);
+                // Fenced blocks (ASCII mockups, snippets) are lifted out first: translating a
+                // drawing corrupts the very thing being shown.
+                var (withoutBlocks, blocks) = MonospaceBlocks_Formatter.Extract_Blocks(text);
+                var (speakerPrefix, content) = Split_SpeakerPrefix(withoutBlocks);
+
+                text = MonospaceBlocks_Formatter.Restore_Blocks(
+                    speakerPrefix + await _translator.Translate_ToItalian_Async(content, cancellationToken), blocks);
             }
 
             var chunks = TelegramMessage_Chunker.Chunk(text);
@@ -927,7 +932,7 @@ internal sealed class BridgeEngineModel(
                     if (isLastChunk && optionLabels.Count > 0)
                         await _telegramClient.Send_MessageWithButtons_Async(threadId, chunks[i], Register_Buttons(threadId, optionLabels), cancellationToken);
                     else
-                        Remember_TopicMessage(threadId, await _telegramClient.Send_Message_Async(threadId, chunks[i], cancellationToken));
+                        Remember_TopicMessage(threadId, await Send_MirrorChunk_Async(threadId, chunks[i], cancellationToken));
                 }
 
                 foreach (var photoPath in photoPaths)
@@ -943,6 +948,36 @@ internal sealed class BridgeEngineModel(
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Sends one mirrored chunk, as HTML when it carries a fenced block so an ASCII mockup keeps a
+    /// MONOSPACED font and its alignment. Telegram rejects malformed HTML (a chunk boundary can
+    /// split a fence), so a rejection falls back to plain text — a mangled mockup beats a lost
+    /// message.
+    /// </summary>
+    async Task<long?> Send_MirrorChunk_Async(long? threadId, string chunk, CancellationToken cancellationToken)
+    {
+        var client = _telegramClient
+            ?? throw new Exception("Send_MirrorChunk_Async called without a Telegram client");
+
+        if (MonospaceBlocks_Formatter.Has_Blocks(chunk))
+        {
+            try
+            {
+                return await client.Send_HtmlMessage_Async(threadId, MonospaceBlocks_Formatter.Build_Html(chunk), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"HTML mockup send rejected, falling back to plain text: {ex.Message}");
+            }
+        }
+
+        return await client.Send_Message_Async(threadId, chunk, cancellationToken);
     }
 
     /// <summary>

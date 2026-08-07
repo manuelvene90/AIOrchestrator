@@ -24,6 +24,12 @@ public interface ITelegramApiClient
     Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Sends HTML-formatted text — used for ASCII mockups, which need a &lt;pre&gt; block to keep a
+    /// monospaced font. Telegram rejects malformed HTML, so the caller must escape everything.
+    /// </summary>
+    Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Rewrites an already-sent message. Used for the delivery receipt, which EVOLVES in place
     /// (✓ → ✓✓ → ✓✓ · handoff) instead of stacking three messages in the topic.
     /// </summary>
