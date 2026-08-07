@@ -93,6 +93,13 @@ internal sealed class BridgeEngineModel(
     /// <summary>Topic name last pushed to Telegram, so the glyph sync only calls the API on a real change.</summary>
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
+    /// <summary>
+    /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
+    /// one message instead of three. Key 0 = the General topic (no thread id).
+    /// </summary>
+    readonly Dictionary<long, long> _receiptMessageIdByThread = [];
+    readonly Lock _receiptLock = new();
+
     long _lastUpdateId = initialLastUpdateId;
     DateTime _lastLimitCheckUtc = DateTime.MinValue;
 
@@ -2082,15 +2089,16 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                // Double tick = aggregation done, message actually handed over — followed
-                // immediately by a TRUTHFUL handoff line: whether the recipient can answer now,
-                // or is mid-turn and the communicator will cover the wait.
-                await _telegramClient.Send_Message_Async(target.ThreadId, "✓✓", cancellationToken);
-
+                // The batch's ✓ becomes "✓✓" — plus a TRUTHFUL handoff line (can the recipient
+                // answer now, or is it mid-turn with the communicator covering the wait?). One
+                // message that evolves, never a pile of ✓ / ✓✓ / thinking lines.
                 var handoffLine = Build_HandoffLine(target.OrchId);
 
-                if (Should_SendHandoffLine(target.OrchId, handoffLine))
-                    await _telegramClient.Send_Message_Async(target.ThreadId, handoffLine, cancellationToken);
+                var receiptText = Should_SendHandoffLine(target.OrchId, handoffLine)
+                    ? $"✓✓  ·  {handoffLine}"
+                    : "✓✓";
+
+                await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -2151,12 +2159,18 @@ internal sealed class BridgeEngineModel(
             : "🔴 Sup: busy mid-task — he'll pick this up when the current turn ends";
     }
 
-    /// <summary>Single tick = "received", sent immediately per message (delivery follows as ✓✓).</summary>
+    /// <summary>
+    /// Single tick = "received", sent immediately per message. Its id is remembered so the
+    /// delivery (✓✓) and the handoff line can REWRITE this very message instead of adding more.
+    /// </summary>
     async Task Send_ReceivedAck_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         try
         {
-            await client.Send_Message_Async(messageThreadId, "✓", cancellationToken);
+            var messageId = await client.Send_Message_Async(messageThreadId, "✓", cancellationToken);
+
+            if (messageId != null)
+                Remember_ReceiptMessage(messageThreadId, messageId.Value);
         }
         catch (OperationCanceledException)
         {
@@ -2166,6 +2180,57 @@ internal sealed class BridgeEngineModel(
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Received-ack send failed: {ex.Message}");
         }
+    }
+
+    void Remember_ReceiptMessage(long? messageThreadId, long messageId)
+    {
+        lock (_receiptLock)
+        {
+            _receiptMessageIdByThread[messageThreadId ?? 0] = messageId;
+        }
+    }
+
+    long? Take_ReceiptMessageId_OrNull(long? messageThreadId)
+    {
+        lock (_receiptLock)
+        {
+            var key = messageThreadId ?? 0;
+
+            if (!_receiptMessageIdByThread.TryGetValue(key, out var messageId))
+                return null;
+
+            // Consumed: the next batch starts its own receipt rather than rewriting this one.
+            _receiptMessageIdByThread.Remove(key);
+            return messageId;
+        }
+    }
+
+    /// <summary>
+    /// Turns the last ✓ of the batch into the final receipt, in place. Falls back to sending a new
+    /// message when there is nothing to edit or the edit fails (Telegram refuses very old edits).
+    /// </summary>
+    async Task Publish_DeliveryReceipt_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
+    {
+        var messageId = Take_ReceiptMessageId_OrNull(messageThreadId);
+
+        if (messageId != null)
+        {
+            try
+            {
+                await client.Edit_MessageText_Async(messageId.Value, text, cancellationToken);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"Receipt edit failed, sending a new message: {ex.Message}");
+            }
+        }
+
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
     }
 
     /// <summary>

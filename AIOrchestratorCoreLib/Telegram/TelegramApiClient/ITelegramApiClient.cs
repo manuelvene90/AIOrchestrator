@@ -20,7 +20,14 @@ public interface ITelegramApiClient
     /// </summary>
     Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken);
 
-    Task Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken);
+    /// <summary>Returns the sent message's id (null when Telegram's reply carried none), so it can be edited later.</summary>
+    Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Rewrites an already-sent message. Used for the delivery receipt, which EVOLVES in place
+    /// (✓ → ✓✓ → ✓✓ · handoff) instead of stacking three messages in the topic.
+    /// </summary>
+    Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken);
 
     /// <summary>sendMessage with an inline keyboard — one tappable button per (data, label) pair.</summary>
     Task Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);

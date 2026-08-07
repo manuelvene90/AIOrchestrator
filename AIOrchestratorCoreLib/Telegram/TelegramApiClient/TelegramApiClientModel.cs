@@ -94,7 +94,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         }
     }
 
-    public async Task Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public async Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
         {
@@ -105,7 +105,38 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
-        await Post_Async("sendMessage", payload, cancellationToken);
+        var responseJson = await Post_Async("sendMessage", payload, cancellationToken);
+
+        return Read_MessageId_OrNull(responseJson);
+    }
+
+    public async Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_id"] = messageId,
+            ["text"] = text,
+        };
+
+        await Post_Async("editMessageText", payload, cancellationToken);
+    }
+
+    static long? Read_MessageId_OrNull(string responseJson)
+    {
+        try
+        {
+            var node = (JsonNode.Parse(responseJson) as JsonObject)?["result"]?["message_id"];
+
+            if (node == null)
+                return null;
+
+            return node.GetValue<long>();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public async Task Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
