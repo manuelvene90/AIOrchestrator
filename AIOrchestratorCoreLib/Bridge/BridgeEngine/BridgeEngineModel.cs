@@ -178,13 +178,21 @@ internal sealed class BridgeEngineModel(
     sealed class AwayTracker
     {
         public int UnansweredCount;
-        public DateTime FirstUnansweredUtc;
-        public bool IsAway;
-        public DateTime LastAwayUpdateUtc;
+        public bool IsQuiet;
     }
 
-    /// <summary>Per-orchestration "is the owner reading?" state. See AwayMode_Policy.</summary>
+    /// <summary>Per-orchestration "have I been talking into the void?" counter. See AwayMode_Policy.</summary>
     readonly Dictionary<string, AwayTracker> _awayTrackers = [];
+
+    /// <summary>
+    /// APP-WIDE away state. The owner is at their phone or not — never present for one orchestration
+    /// and absent for another, which is why this is one flag and the app drives every orchestration
+    /// from it instead of supervisors relaying to each other.
+    /// </summary>
+    bool _awayActive;
+
+    /// <summary>The owner's last message in ANY topic — presence anywhere counts everywhere.</summary>
+    DateTime _lastOwnerMessageUtc = DateTime.UtcNow;
 
     /// <summary>
     /// Guards _holdReceipts and _pendingOwnerReplies. GO flushes from the INBOUND loop (waiting for
@@ -1162,7 +1170,10 @@ internal sealed class BridgeEngineModel(
                 // so far unanswered. Only the supervisor's own voice counts — app notices and
                 // presence lines are not something the owner is expected to reply to.
                 if (append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor && chunks.Count > 0)
-                    Note_SupervisorSpokeToOwner(append.Channel.OrchId);
+                {
+                    if (Note_SupervisorSpokeToOwner_AndJustWentQuiet(append.Channel.OrchId))
+                        Enter_QuietMode(append.Channel.OrchId);
+                }
 
                 // The buttons NEVER ride on the body. Agents write long, thorough messages, and
                 // options hanging off the bottom of one arrive on a phone as a wall of text with
@@ -2378,7 +2389,7 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
-            var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(baseName, Resolve_EffectiveMode(session.OrchId));
+            var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode());
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -2968,8 +2979,8 @@ internal sealed class BridgeEngineModel(
         }
 
         // Any word from the owner — including a button tap — means they are back.
-        if (Note_OwnerSpoke_AndWasAway(orchId))
-            await Exit_AwayMode_Async(orchId, cancellationToken);
+        if (Note_OwnerSpoke_AndWasAway())
+            await Exit_AwayMode_Async(cancellationToken);
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
@@ -3226,7 +3237,7 @@ internal sealed class BridgeEngineModel(
             // Away mode: the owner cannot reply, so this update is their ONLY window into the
             // orchestration — it goes out whether or not the ledger says work is in flight,
             // because "imp-1 is blocked waiting for you" is exactly what they need to know.
-            if (Is_AwayMode(session.OrchId))
+            if (Is_AwayMode())
             {
                 _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
                 await Send_AwayUpdate_Async(session, cancellationToken);
@@ -3263,33 +3274,44 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>A supervisor message reached the owner's phone and is so far unanswered.</summary>
-    void Note_SupervisorSpokeToOwner(string orchId)
+    /// <summary>
+    /// A supervisor message reached the owner's phone and is so far unanswered. The 3rd one makes
+    /// this orchestration go QUIET immediately — waiting out the 15-minute clock before reacting is
+    /// exactly how the owner ended up with a hundred questions from a single flight.
+    /// </summary>
+    bool Note_SupervisorSpokeToOwner_AndJustWentQuiet(string orchId)
     {
         lock (_ownerStateLock)
         {
             var tracker = Get_AwayTracker(orchId);
-
-            if (tracker.UnansweredCount == 0)
-                tracker.FirstUnansweredUtc = DateTime.UtcNow;
-
             tracker.UnansweredCount++;
+
+            if (tracker.IsQuiet || !AwayMode_Policy.Should_GoQuiet(tracker.UnansweredCount))
+                return false;
+
+            tracker.IsQuiet = true;
+            return true;
         }
     }
 
     /// <summary>
-    /// The owner said ANYTHING (including tapping a button) — they are here. Returns true when this
-    /// ends an away spell, so the caller can announce the return.
+    /// The owner said ANYTHING, in ANY topic (including tapping a button) — they are here, for every
+    /// orchestration at once. Returns true when this ends an away spell.
     /// </summary>
-    bool Note_OwnerSpoke_AndWasAway(string orchId)
+    bool Note_OwnerSpoke_AndWasAway()
     {
         lock (_ownerStateLock)
         {
-            var tracker = Get_AwayTracker(orchId);
-            var wasAway = tracker.IsAway;
+            var wasAway = _awayActive;
 
-            tracker.UnansweredCount = 0;
-            tracker.IsAway = false;
+            _lastOwnerMessageUtc = DateTime.UtcNow;
+            _awayActive = false;
+
+            foreach (var tracker in _awayTrackers.Values)
+            {
+                tracker.UnansweredCount = 0;
+                tracker.IsQuiet = false;
+            }
 
             return wasAway;
         }
@@ -3305,12 +3327,34 @@ internal sealed class BridgeEngineModel(
         return created;
     }
 
-    public bool Is_AwayMode(string orchId)
+    public bool Is_AwayMode()
     {
         lock (_ownerStateLock)
         {
-            return _awayTrackers.TryGetValue(orchId, out var tracker) && tracker.IsAway;
+            return _awayActive;
         }
+    }
+
+    /// <summary>
+    /// Told to ONE orchestration the moment it hits three unanswered messages. Nothing is announced
+    /// to the owner and nothing is parked yet — they may be seconds from replying. This only stops
+    /// the flood while we find out.
+    /// </summary>
+    void Enter_QuietMode(string orchId)
+    {
+        _log.Log_Info(orchId, $"QUIET — {AwayMode_Policy.QUIET_THRESHOLD} unanswered messages; supervisor told to hold further questions");
+
+        ChannelAppender.Append_AppEntry(
+            _paths.Get_OwnerChannelFile(orchId),
+            "HOLD — the owner has not answered your last messages",
+            $"{AwayMode_Policy.QUIET_THRESHOLD} of your messages are unanswered. They may simply be mid-task, so nothing is being "
+            + "assumed yet — but STOP sending them anything more for now: no questions, no options, no updates.\n\n"
+            + "Park what you would have asked (keep the list; you will re-ask from it) and carry on with what you can "
+            + $"decide and delegate yourself. If they stay silent for {AwayMode_Policy.AWAY_AFTER_MINUTES} minutes you will get an "
+            + "AWAY MODE ON entry; if they reply, everything returns to normal on its own.",
+            DateTime.Now);
+
+        Raise_OrchestrationActivity(orchId);
     }
 
     /// <summary>
@@ -3320,75 +3364,92 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Check_AwayMode_Async(CancellationToken cancellationToken)
     {
+        bool shouldEnter;
+
+        lock (_ownerStateLock)
+        {
+            var anyQuiet = _awayTrackers.Values.Any(tracker => tracker.IsQuiet);
+
+            shouldEnter = !_awayActive && AwayMode_Policy.Should_EnterAway(anyQuiet, _lastOwnerMessageUtc, DateTime.UtcNow);
+
+            if (shouldEnter)
+                _awayActive = true;
+        }
+
+        if (shouldEnter)
+            await Enter_AwayMode_Async(cancellationToken);
+    }
+
+    /// <summary>
+    /// APP-WIDE. Every open orchestration is told, the general supervisor is told, every topic gets
+    /// the ✈ glyph and one notice. The app coordinates all of it directly — supervisors relaying
+    /// this to each other would be slower, lossier, and would cost tokens to do worse.
+    /// </summary>
+    async Task Enter_AwayMode_Async(CancellationToken cancellationToken)
+    {
+        _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE ON (app-wide) — owner unresponsive; every supervisor told to proceed without questions");
+
+        ChannelAppender.Append_AppEntry(
+            _paths.GeneralChannelFile,
+            "AWAY MODE ON — the owner is not reading",
+            "Every orchestration has been told directly; you do not need to relay it. Ask them nothing until the "
+            + "AWAY MODE OFF entry arrives.",
+            DateTime.Now);
+
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
                 continue;
 
-            bool shouldEnter;
+            ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(session.OrchId),
+                "AWAY MODE ON — the owner is not reading",
+                "They have not answered. Assume they are unavailable, NOT ignoring you.\n\n"
+                + "Until further notice: ask NOTHING. Park every question you would have asked (keep a list — you will "
+                + "re-ask the ones that still matter). Decide everything you can safely decide yourself and keep the "
+                + "implementers working; the owner-approval gate and the merge gate still stand, so work that genuinely "
+                + "needs their decision waits rather than proceeding without it.\n\n"
+                + "The app posts a short update to them every 30 min — you do not need to. When they return you get an "
+                + "AWAY MODE OFF entry; then re-ask ONLY what is still relevant, updated to the current state, and drop "
+                + "what events have overtaken.",
+                DateTime.Now);
 
-            lock (_ownerStateLock)
-            {
-                var tracker = Get_AwayTracker(session.OrchId);
+            Raise_OrchestrationActivity(session.OrchId);
 
-                shouldEnter = !tracker.IsAway
-                    && AwayMode_Policy.Should_EnterAway(tracker.UnansweredCount, tracker.FirstUnansweredUtc, DateTime.UtcNow);
-
-                if (shouldEnter)
-                {
-                    tracker.IsAway = true;
-                    tracker.LastAwayUpdateUtc = DateTime.UtcNow;
-                }
-            }
-
-            if (shouldEnter)
-                await Enter_AwayMode_Async(session, cancellationToken);
+            await Park_OpenQuestions_Async(session.OrchId, cancellationToken);
+            await Send_AwayNotice_Async(session, AwayMode_Policy.AWAY_ON_NOTICE, cancellationToken);
         }
     }
 
-    async Task Enter_AwayMode_Async(IOrchestrationSession session, CancellationToken cancellationToken)
+    async Task Exit_AwayMode_Async(CancellationToken cancellationToken)
     {
-        _log.Log_Info(session.OrchId, "AWAY MODE ON — owner unresponsive; supervisor told to proceed without questions");
+        _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE OFF (app-wide) — owner is back");
 
         ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
-            "AWAY MODE ON — the owner is not reading",
-            "They have not answered your last messages. Assume they are unavailable, NOT ignoring you.\n\n"
-            + "Until further notice: ask NOTHING. Park every question you would have asked (keep a list — you will "
-            + "re-ask the ones that still matter). Decide everything you can safely decide yourself and keep the "
-            + "implementers working; the owner-approval gate and the merge gate still stand, so work that genuinely "
-            + "needs their decision waits rather than proceeding without it.\n\n"
-            + "The app posts a short update to them every 30 min — you do not need to. When they return you get an "
-            + "AWAY MODE OFF entry; then re-ask ONLY what is still relevant, updated to the current state, and drop "
-            + "what events have overtaken.",
-            DateTime.Now);
-
-        Raise_OrchestrationActivity(session.OrchId);
-
-        await Park_OpenQuestions_Async(session.OrchId, cancellationToken);
-        await Send_AwayNotice_Async(session, AwayMode_Policy.AWAY_ON_NOTICE, cancellationToken);
-    }
-
-    async Task Exit_AwayMode_Async(string orchId, CancellationToken cancellationToken)
-    {
-        _log.Log_Info(orchId, "AWAY MODE OFF — owner is back");
-
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(orchId),
+            _paths.GeneralChannelFile,
             "AWAY MODE OFF — the owner is back",
-            "Normal mode: they are reading and can answer within a short time.\n\n"
-            + "Go through the questions you parked. Re-ask ONLY the ones that still matter, rewritten against the "
-            + "CURRENT state (facts may have moved while they were away), and say in one line what you decided "
-            + "yourself in the meantime. Drop the rest without ceremony — a re-asked obsolete question is exactly "
-            + "the mess this mode exists to prevent.",
+            "Every orchestration has been told directly.",
             DateTime.Now);
 
-        Raise_OrchestrationActivity(orchId);
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
 
-        var session = _store.Get_Session_OrNull(orchId);
+            ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(session.OrchId),
+                "AWAY MODE OFF — the owner is back",
+                "Normal mode: they are reading and can answer within a short time.\n\n"
+                + "Go through the questions you parked. Re-ask ONLY the ones that still matter, rewritten against the "
+                + "CURRENT state (facts may have moved while they were away), and say in one line what you decided "
+                + "yourself in the meantime. Drop the rest without ceremony — a re-asked obsolete question is exactly "
+                + "the mess this mode exists to prevent.",
+                DateTime.Now);
 
-        if (session != null)
+            Raise_OrchestrationActivity(session.OrchId);
+
             await Send_AwayNotice_Async(session, AwayMode_Policy.AWAY_OFF_NOTICE, cancellationToken);
+        }
     }
 
     async Task Send_AwayNotice_Async(IOrchestrationSession session, string text, CancellationToken cancellationToken)
