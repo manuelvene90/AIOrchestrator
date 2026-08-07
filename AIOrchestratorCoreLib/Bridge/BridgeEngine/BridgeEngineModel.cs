@@ -53,6 +53,9 @@ internal sealed class BridgeEngineModel(
     /// <summary>How long an implementer may leave a brief unanswered before the app nudges it.</summary>
     const int IMPLEMENTER_NUDGE_MINUTES = 8;
 
+    /// <summary>How long the owner may wait for their supervisor's acknowledgement before the app steps in.</summary>
+    const int OWNER_REPLY_GRACE_SECONDS = 150;
+
     const int MIRROR_TICK_MILLISECONDS = 2000;
     const int INBOUND_LONG_POLL_SECONDS = 20;
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
@@ -99,6 +102,22 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<long, long> _receiptMessageIdByThread = [];
     readonly Lock _receiptLock = new();
+
+    /// <summary>
+    /// Owner messages handed over and NOT yet answered by their supervisor. Tracked so a receipt
+    /// can never stay frozen on "thinking…" — the owner always learns what became of what they
+    /// sent, even if the supervisor goes idle without replying.
+    /// </summary>
+    readonly Dictionary<string, PendingOwnerReply> _pendingOwnerReplies = [];
+
+    sealed class PendingOwnerReply
+    {
+        public long? ThreadId;
+        public long? ReceiptMessageId;
+        public int SupervisorEntryCountAtDelivery;
+        public DateTime DeliveredUtc;
+        public bool Nudged;
+    }
 
     long _lastUpdateId = initialLastUpdateId;
     DateTime _lastLimitCheckUtc = DateTime.MinValue;
@@ -196,6 +215,7 @@ internal sealed class BridgeEngineModel(
         await Send_StallAlerts_Async(cancellationToken);
         await Send_BudgetAlerts_Async(cancellationToken);
         await Nudge_IdleImplementers_Async(cancellationToken);
+        await Resolve_PendingOwnerReplies_Async(cancellationToken);
 
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
@@ -2080,6 +2100,10 @@ internal sealed class BridgeEngineModel(
             if (_configProvider.Get_Current().TelegramItalianLayer)
                 deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
 
+            // Counted BEFORE the owner entry lands, so a later increase can only mean the
+            // supervisor answered THIS message.
+            var supervisorEntryCountBefore = Count_SupervisorEntries(delivery.Key);
+
             ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now);
             _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
             Raise_OrchestrationActivity(target.OrchId);
@@ -2098,7 +2122,18 @@ internal sealed class BridgeEngineModel(
                     ? $"✓✓  ·  {handoffLine}"
                     : "✓✓";
 
-                await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
+                var receiptMessageId = await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
+
+                // Tracked until the supervisor actually answers — the owner must never be left
+                // staring at a receipt frozen on "thinking…".
+                _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
+                {
+                    ThreadId = target.ThreadId,
+                    ReceiptMessageId = receiptMessageId,
+                    SupervisorEntryCountAtDelivery = supervisorEntryCountBefore,
+                    DeliveredUtc = DateTime.UtcNow,
+                    Nudged = false,
+                };
             }
             catch (OperationCanceledException)
             {
@@ -2206,10 +2241,92 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// The owner must always learn what became of their message. If the supervisor's turn ends
+    /// without a reply here (it went idle, typically waiting on an implementer), the app says so
+    /// on the receipt AND nudges the supervisor in its channel — which trips its watcher, so a
+    /// real answer follows instead of a receipt frozen on "thinking…".
+    /// </summary>
+    async Task Resolve_PendingOwnerReplies_Async(CancellationToken cancellationToken)
+    {
+        foreach (var orchId in _pendingOwnerReplies.Keys.ToList())
+        {
+            var pending = _pendingOwnerReplies[orchId];
+            var ownerChannel = orchId == ChannelDiscovery.GENERAL_ORCH_ID
+                ? _paths.GeneralChannelFile
+                : _paths.Get_OwnerChannelFile(orchId);
+
+            var supervisorEntryCount = Count_SupervisorEntries(ownerChannel);
+
+            // Answered: the supervisor wrote to the owner. The mirrored entry IS the feedback.
+            if (supervisorEntryCount > pending.SupervisorEntryCountAtDelivery)
+            {
+                _pendingOwnerReplies.Remove(orchId);
+                continue;
+            }
+
+            if (pending.Nudged || (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds < OWNER_REPLY_GRACE_SECONDS)
+                continue;
+
+            // Still mid-turn: it is thinking for real, and the receipt is telling the truth.
+            var supervisorUsageFile = orchId == ChannelDiscovery.GENERAL_ORCH_ID
+                ? Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE)
+                : Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
+            if (Is_SessionMidTurn(supervisorUsageFile))
+                continue;
+
+            pending.Nudged = true;
+
+            ChannelAppender.Append_AppEntry(
+                ownerChannel,
+                "the owner is still waiting for your reply",
+                "Your turn ended without answering the owner's message above. Reply now, even one line (what you are doing / what you are waiting on). The owner is looking at an unanswered receipt.",
+                DateTime.Now);
+
+            _log.Log_Warning(orchId, "Owner message went unanswered past the grace window — supervisor nudged");
+            Raise_OrchestrationActivity(orchId);
+
+            if (_telegramClient == null || Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
+                continue;
+
+            var text = "✓✓  ·  🔴 Sup: turn ended without a reply — nudged, an answer is coming";
+
+            try
+            {
+                if (pending.ReceiptMessageId != null)
+                    await _telegramClient.Edit_MessageText_Async(pending.ReceiptMessageId.Value, text, cancellationToken);
+                else
+                    await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, text, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(orchId, $"Could not update the stale receipt: {ex.Message}");
+            }
+        }
+    }
+
+    int Count_SupervisorEntries(string channelFile)
+    {
+        var count = 0;
+
+        foreach (var entry in ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile)))
+        {
+            if (entry.Author == ChannelAuthors.Supervisor)
+                count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
     /// Turns the last ✓ of the batch into the final receipt, in place. Falls back to sending a new
     /// message when there is nothing to edit or the edit fails (Telegram refuses very old edits).
     /// </summary>
-    async Task Publish_DeliveryReceipt_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
+    async Task<long?> Publish_DeliveryReceipt_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
     {
         var messageId = Take_ReceiptMessageId_OrNull(messageThreadId);
 
@@ -2218,7 +2335,7 @@ internal sealed class BridgeEngineModel(
             try
             {
                 await client.Edit_MessageText_Async(messageId.Value, text, cancellationToken);
-                return;
+                return messageId;
             }
             catch (OperationCanceledException)
             {
@@ -2230,7 +2347,19 @@ internal sealed class BridgeEngineModel(
             }
         }
 
-        await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
+        try
+        {
+            return await client.Send_Message_Async(messageThreadId, text, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Receipt send failed: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>

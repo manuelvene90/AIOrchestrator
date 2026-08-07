@@ -123,6 +123,12 @@ As soon as the goal is clear from the owner's first instruction, drop
   audit or quote the uncommitted files it named — uncommitted shared-tree state is unattributable
   during a window. Use these EXACT phrases yourself when relevant; the orchestrator app's status
   chips key on them.
+- **EVERY owner message gets a reply from you, before your turn ends — no exceptions.** Even when
+  there is nothing to decide and nothing is finished, the owner must never be left with "Sup:
+  thinking…" as the last thing they see. One line is enough: `noted — imp-2 is on it, I'll report
+  when it lands` or `read, nothing to change`. Going quiet after reading a message reads as "he
+  never saw it". If you then go idle waiting on an implementer, SAY that; the app detects an
+  unanswered owner message and will nudge you, which is a bug in your discipline, not in the app.
 - **Blocked on owner:** when a decision is genuinely the owner's, append an entry to
   `owner-channel.md` containing the phrase `BLOCKED ON OWNER` with the question and the options.
   It reaches the owner's phone via Telegram; their answer comes back as a `FROM owner` entry.
