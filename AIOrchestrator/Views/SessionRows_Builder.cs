@@ -47,14 +47,15 @@ public static class SessionRows_Builder
     {
         var ownerChannel = paths.Get_OwnerChannelFile(session.OrchId);
         var isOpen = session.ClosedUtc == null;
-
-        var cost = Read_SessionCost_OrNull(Path.Combine(paths.Get_OrchestrationFolder(session.OrchId), SUPERVISOR_USAGE_FILE));
+        var supervisorUsageFile = Path.Combine(paths.Get_OrchestrationFolder(session.OrchId), SUPERVISOR_USAGE_FILE);
+        var cost = Read_SessionCost_OrNull(supervisorUsageFile);
+        var isWorkingNow = isOpen && SessionActivity_Probe.Is_MidTurn(supervisorUsageFile);
 
         return new MemberRowView
         {
             MemberLabel = "SUPERVISOR",
             RoleBrush = findBrush("AccentSupervisor"),
-            StateText = isOpen ? "supervising" : "closed",
+            StateText = isOpen ? (isWorkingNow ? "working now" : "idle — waiting") : "closed",
             StateBrush = isOpen ? findBrush("StateWorking") : findBrush("StateClosed"),
             LastActivityText = File.Exists(ownerChannel) ? Get_LastWriteText(ownerChannel) : "",
             FocusTitleFragment = $"SUP · {session.OrchId}",
@@ -102,12 +103,16 @@ public static class SessionRows_Builder
 
         var isClosed = member.ClosedUtc != null || session.ClosedUtc != null;
 
+        // LIVE activity outranks the declared marker: "window open" only says an agent announced a
+        // writing window and never closed it, which is stale the moment it starts working again.
+        var isWorkingNow = !isClosed && SessionActivity_Probe.Is_MidTurn(usageFile);
+
         return new MemberRowView
         {
             MemberLabel = memberId,
             RoleBrush = findBrush("AccentImplementer"),
-            StateText = isClosed ? "closed" : Describe_State(state),
-            StateBrush = isClosed ? findBrush("StateClosed") : findBrush(Brush_KeyFor(state)),
+            StateText = isClosed ? "closed" : Describe_MemberState(state, isWorkingNow),
+            StateBrush = isClosed ? findBrush("StateClosed") : findBrush(isWorkingNow ? "StateWorking" : Brush_KeyFor(state)),
             LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",
             DetailText = Build_MemberDetailText(entries, usageFile),
             FocusTitleFragment = $"{memberId.ToUpperInvariant()} · {session.OrchId}",
@@ -207,14 +212,33 @@ public static class SessionRows_Builder
         return lastWrite.ToString("dd/MM HH:mm");
     }
 
+    /// <summary>
+    /// What the owner actually wants to know. A session whose transcript is growing is WORKING,
+    /// whatever the channel markers claim; the declared state is shown alongside so the protocol
+    /// information is not lost (e.g. "working now (writing window open)").
+    /// </summary>
+    public static string Describe_MemberState(MemberStates state, bool isWorkingNow)
+    {
+        if (!isWorkingNow)
+            return Describe_State(state);
+
+        return state switch
+        {
+            MemberStates.WritingWindowOpen => "working now (writing window open)",
+            MemberStates.BlockedOnOwner => "working now (was blocked on you)",
+            MemberStates.AwaitingSupervisorReview => "working now (report filed)",
+            _ => "working now",
+        };
+    }
+
     public static string Describe_State(MemberStates state)
     {
         return state switch
         {
             MemberStates.NewNoTraffic => "new — no traffic",
-            MemberStates.ImplementerWorking => "working",
+            MemberStates.ImplementerWorking => "briefed — not started yet",
             MemberStates.AwaitingSupervisorReview => "awaiting review",
-            MemberStates.WritingWindowOpen => "window open",
+            MemberStates.WritingWindowOpen => "idle — writing window left open",
             MemberStates.BlockedOnOwner => "BLOCKED ON OWNER",
             _ => throw new Exception($"Unhandled MemberStates: {state}"),
         };

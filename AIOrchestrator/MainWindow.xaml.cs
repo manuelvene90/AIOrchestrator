@@ -528,6 +528,58 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Tiles this orchestration's WORKING terminals across the screen: the supervisor and every
+    /// open implementer. The communicator is deliberately excluded — it narrates, it is not work
+    /// to watch — and so is this app's own window, which the tiles are laid out around.
+    /// </summary>
+    void OrganizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not OrchestrationCardView card)
+            return;
+
+        try
+        {
+            var session = _store.Get_Session_OrNull(card.OrchId);
+
+            if (session == null)
+                return;
+
+            List<string> titleFragments = [$"SUP · {session.OrchId}"];
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc == null)
+                    titleFragments.Add($"{member.MemberId.ToUpperInvariant()} · {session.OrchId}");
+            }
+
+            // Only windows that actually exist get a tile, so a dead session leaves no gap.
+            var living = titleFragments
+                .Where(fragment => AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(fragment))
+                .ToList();
+
+            if (living.Count == 0)
+            {
+                Add_LogRow(LogLevels.Warning, $"[{card.OrchId}] Organize: no terminal windows found");
+                return;
+            }
+
+            var area = SystemParameters.WorkArea;
+
+            var tiles = AIOrchestratorCoreLib.Layout.TileLayout_Calculator.Build_Tiles(
+                living.Count, (int)area.Left, (int)area.Top, (int)area.Width, (int)area.Height);
+
+            for (var i = 0; i < living.Count && i < tiles.Count; i++)
+                AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_PlaceWindow_ByTitleFragment(living[i], tiles[i].X, tiles[i].Y, tiles[i].Width, tiles[i].Height);
+
+            Add_LogRow(LogLevels.Info, $"[{card.OrchId}] Organize: tiled {living.Count} terminal(s)");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Organize failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     void DetailsButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button || button.Tag is not OrchestrationCardView card)

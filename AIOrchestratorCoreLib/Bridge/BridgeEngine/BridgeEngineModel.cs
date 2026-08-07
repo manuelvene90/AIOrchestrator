@@ -14,6 +14,7 @@ using AIOrchestratorCoreLib.Mirroring;
 using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Tailing.CompletedChannelAppend;
 using AIOrchestratorCoreLib.Telegram;
@@ -46,9 +47,6 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>Channel silence that counts as a stall once nobody is mid-turn.</summary>
     const int STALL_ALERT_MINUTES = 25;
-
-    /// <summary>Transcript/probe freshness that means "this session is working right now".</summary>
-    const int SESSION_MIDTURN_SECONDS = 120;
 
     /// <summary>How long an implementer may leave a brief unanswered before the app nudges it.</summary>
     const int IMPLEMENTER_NUDGE_MINUTES = 8;
@@ -417,26 +415,10 @@ internal sealed class BridgeEngineModel(
         return false;
     }
 
-    /// <summary>
-    /// Is THIS session working right now? Its status-line probe hands us the exact transcript
-    /// path, and a transcript growing in the last couple of minutes means a turn is in flight.
-    /// </summary>
+    /// <summary>Shared with the UI's chips, so "working right now" means one thing everywhere.</summary>
     static bool Is_SessionMidTurn(string usageFilePath)
     {
-        try
-        {
-            if (!File.Exists(usageFilePath))
-                return false;
-
-            var transcriptPath = RateLimits_Reader.Read_TranscriptPath_OrNull(UsageTotals_Reader.Read_Text_Safe(usageFilePath));
-            var probedFile = transcriptPath != null && File.Exists(transcriptPath) ? transcriptPath : usageFilePath;
-
-            return (DateTime.UtcNow - File.GetLastWriteTimeUtc(probedFile)).TotalSeconds < SESSION_MIDTURN_SECONDS;
-        }
-        catch
-        {
-            return false;
-        }
+        return SessionActivity_Probe.Is_MidTurn(usageFilePath);
     }
 
     /// <summary>
@@ -1474,6 +1456,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Clear_Topic_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "status")
+                    {
+                        await Send_MemberStatusReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command != null && command.StartsWith("imp", StringComparison.Ordinal))
                     {
                         await Send_ImplementerPeek_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
@@ -1543,6 +1529,7 @@ internal sealed class BridgeEngineModel(
         {
             await client.Set_MyCommands_Async(
                 [
+                    ("status", "What every session of this orchestration is doing"),
                     ("progress", "Task ledger of this orchestration (all of them in General)"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
@@ -1980,6 +1967,85 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Warning(session.OrchId, $"Topic name sync failed: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// /status — the per-session state, the same reading the app's chips show. LIVE activity
+    /// (transcript growing) outranks the declared channel markers, because a marker only records
+    /// what an agent announced, not what it is doing now.
+    /// </summary>
+    async Task Send_MemberStatusReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_MemberStatusText(messageThreadId);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_MemberStatusText(long? messageThreadId)
+    {
+        if (messageThreadId == null)
+            return "send /status inside an orchestration's topic — it reports that orchestration's sessions";
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+            return "no orchestration is bound to this topic";
+
+        var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
+
+        List<string> lines =
+        [
+            $"{session.DisplayName ?? session.OrchId}",
+            $"- supervisor: {Describe_SessionActivity(Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE), "idle — waiting")}",
+            $"- communicator: {Describe_SessionActivity(Path.Combine(orchFolder, UsageTotals_Reader.COMMUNICATOR_USAGE_FILE), "on watch")}",
+        ];
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+            {
+                lines.Add($"- {member.MemberId}: closed");
+                continue;
+            }
+
+            var memberFolder = _paths.Get_ImplementerFolder(session.OrchId, member.MemberId);
+            var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var declared = MemberState_Resolver.Resolve(entries);
+            var workingNow = SessionActivity_Probe.Is_MidTurn(Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
+
+            var lastWrite = File.Exists(channelFile)
+                ? $" · last wrote {SessionDuration_Formatter.Describe(DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile))} ago"
+                : "";
+
+            lines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow)}{lastWrite}");
+        }
+
+        return string.Join('\n', lines);
+    }
+
+    string Describe_SessionActivity(string usageFilePath, string idleText)
+    {
+        return SessionActivity_Probe.Is_MidTurn(usageFilePath) ? "working now" : idleText;
+    }
+
+    static string Describe_DeclaredState(MemberStates declared, bool workingNow)
+    {
+        var declaredText = declared switch
+        {
+            MemberStates.NewNoTraffic => "new — no traffic",
+            MemberStates.ImplementerWorking => "briefed — not started yet",
+            MemberStates.AwaitingSupervisorReview => "awaiting review",
+            MemberStates.WritingWindowOpen => "idle — writing window left open",
+            MemberStates.BlockedOnOwner => "BLOCKED ON OWNER",
+            _ => throw new Exception($"Unhandled MemberStates: {declared}"),
+        };
+
+        return workingNow ? $"working now (channel says: {declaredText})" : declaredText;
     }
 
     /// <summary>

@@ -38,7 +38,31 @@ public static class TerminalWindow_Focuser
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern bool SetWindowText(IntPtr hWnd, string text);
 
+    [DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
     const uint WM_CLOSE = 0x0010;
+    const uint SWP_NOZORDER = 0x0004;
+    const uint SWP_SHOWWINDOW = 0x0040;
+
+    /// <summary>
+    /// Moves and resizes a session's terminal to an exact rectangle (the "Organize" tiling), and
+    /// brings it up. Returns false when no window carries the fragment — a session that is not
+    /// running is simply skipped by the caller.
+    /// </summary>
+    public static bool Try_PlaceWindow_ByTitleFragment(string titleFragment, int x, int y, int width, int height)
+    {
+        var foundHandle = Find_WindowHandle_ByTitleFragment(titleFragment);
+
+        if (foundHandle == IntPtr.Zero)
+            return false;
+
+        // A minimised window ignores SetWindowPos geometry until it is restored.
+        if (IsIconic(foundHandle))
+            ShowWindow(foundHandle, SW_RESTORE);
+
+        return SetWindowPos(foundHandle, IntPtr.Zero, x, y, width, height, SWP_NOZORDER | SWP_SHOWWINDOW);
+    }
 
     /// <summary>Returns false when no visible window carries the fragment in its title.</summary>
     public static bool Try_Focus_ByTitleFragment(string titleFragment)
