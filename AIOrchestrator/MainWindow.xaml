@@ -169,9 +169,14 @@
         <Border Grid.Row="1" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="0,1,0,0" Padding="12,5">
             <DockPanel>
                 <TextBlock x:Name="TelegramStatusText" Text="Telegram: …" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
-                <CheckBox x:Name="MuteTelegramCheckBox" Content="🔕 Mute Telegram (I'm at the PC)" FontSize="11"
+                <CheckBox x:Name="MuteTelegramCheckBox" Content="🌙 DND everywhere" FontSize="11"
                           Foreground="{StaticResource TextSecondary}" Margin="18,0,0,0" VerticalAlignment="Center"
+                          ToolTip="Do-Not-Disturb, app-wide: messages are HELD and all arrive when you switch it off. Nothing is lost. (= /dnd_all)"
                           Checked="MuteTelegramCheckBox_Changed" Unchecked="MuteTelegramCheckBox_Changed"/>
+                <CheckBox x:Name="SilenceAllCheckBox" Content="🔕 Silence everywhere" FontSize="11"
+                          Foreground="{StaticResource TextSecondary}" Margin="14,0,0,0" VerticalAlignment="Center"
+                          ToolTip="Silence, app-wide: messages are DROPPED while this is on — for working at the PC, where you read the same thing in the terminals. (= /mute_all)"
+                          Checked="SilenceAllCheckBox_Changed" Unchecked="SilenceAllCheckBox_Changed"/>
                 <TextBlock x:Name="RootPathText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>

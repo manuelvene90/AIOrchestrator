@@ -138,6 +138,28 @@ internal sealed class BridgeEngineModel(
 
     public event Action<string>? OrchestrationActivity;
     public event Action<bool>? MutedChanged;
+    public event Action<bool>? SilenceAllChanged;
+
+    public void Set_SilenceAllTopics(bool silenced)
+    {
+        if (_silenceAllTopics == silenced)
+            return;
+
+        _silenceAllTopics = silenced;
+
+        _log.Log_Info(GLOBAL_ORCH_ID, silenced
+            ? "App-wide silence ON — every topic's messages are DROPPED (not queued)"
+            : "App-wide silence OFF");
+
+        try
+        {
+            SilenceAllChanged?.Invoke(silenced);
+        }
+        catch
+        {
+            // A faulty subscriber must not take the bridge down.
+        }
+    }
 
     public void Set_TelegramMuted(bool muted)
     {
@@ -1884,14 +1906,9 @@ internal sealed class BridgeEngineModel(
         var turningOn = !forceNormal && !alreadyOn;
 
         if (wantedMode == TelegramDeliveryModes.Deferred)
-        {
             Set_TelegramMuted(turningOn);
-        }
         else
-        {
-            _silenceAllTopics = turningOn;
-            _log.Log_Info(GLOBAL_ORCH_ID, turningOn ? "App-wide silence ON — all topics dropped" : "App-wide silence OFF");
-        }
+            Set_SilenceAllTopics(turningOn);
 
         var effective = turningOn ? wantedMode : TelegramDeliveryModes.Normal;
 

@@ -67,10 +67,18 @@ public partial class MainWindow : Window
 
         log.EntryLogged += On_LogEntry;
         engine.OrchestrationActivity += _ => Dispatcher.BeginInvoke(Refresh_Orchestrations);
+        // Both app-wide modes are also togglable from Telegram (/dnd_all, /mute_all) and by the
+        // owner texting (auto-unmute), so the checkboxes follow the engine rather than own it.
         engine.MutedChanged += muted => Dispatcher.BeginInvoke(() =>
         {
             if (MuteTelegramCheckBox.IsChecked != muted)
                 MuteTelegramCheckBox.IsChecked = muted;
+        });
+
+        engine.SilenceAllChanged += silenced => Dispatcher.BeginInvoke(() =>
+        {
+            if (SilenceAllCheckBox.IsChecked != silenced)
+                SilenceAllCheckBox.IsChecked = silenced;
         });
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(REFRESH_INTERVAL_SECONDS) };
@@ -385,6 +393,11 @@ public partial class MainWindow : Window
     void MuteTelegramCheckBox_Changed(object sender, RoutedEventArgs e)
     {
         _engine.Set_TelegramMuted(MuteTelegramCheckBox.IsChecked == true);
+    }
+
+    void SilenceAllCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        _engine.Set_SilenceAllTopics(SilenceAllCheckBox.IsChecked == true);
     }
 
     void ShowSessionButton_Click(object sender, RoutedEventArgs e)
