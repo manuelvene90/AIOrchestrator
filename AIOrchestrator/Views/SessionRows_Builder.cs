@@ -133,9 +133,9 @@ public static class SessionRows_Builder
 
         if (lastBrief != null)
         {
-            // Agents write full-sentence subjects; the card needs a glance, not a paragraph. The
+            // Agents write full-sentence subjects; the card needs the gist, not a paragraph. The
             // whole thing is still readable in the detail window's activity feed.
-            parts.Add($"task: {TextSummary_Formatter.Take_Words(lastBrief.Subject, TextSummary_Formatter.CARD_TASK_WORDS)}");
+            parts.Add($"task: {TextSummary_Formatter.Summarize_Task(lastBrief.Subject, TextSummary_Formatter.CARD_TASK_WORDS)}");
 
             var onTaskFor = Describe_TimeSince_OrNull(lastBrief.DateText);
             if (onTaskFor != null)
