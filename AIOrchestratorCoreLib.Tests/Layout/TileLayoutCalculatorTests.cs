@@ -45,27 +45,61 @@ public class TileLayoutCalculatorTests
     }
 
     [Fact]
-    public void Build_Tiles_OnAWideScreen_PicksTheLayoutAPersonWouldDraw()
+    public void Build_Tiles_One_FillsTheScreen()
     {
-        var two = TileLayout_Calculator.Build_Tiles(2, 0, 0, AREA_WIDTH, AREA_HEIGHT);
-        var three = TileLayout_Calculator.Build_Tiles(3, 0, 0, AREA_WIDTH, AREA_HEIGHT);
-        var four = TileLayout_Calculator.Build_Tiles(4, 0, 0, AREA_WIDTH, AREA_HEIGHT);
-        var six = TileLayout_Calculator.Build_Tiles(6, 0, 0, AREA_WIDTH, AREA_HEIGHT);
+        var tiles = TileLayout_Calculator.Build_Tiles(1, 0, 0, AREA_WIDTH, AREA_HEIGHT);
 
-        // Two: side by side, one row.
-        Assert.Single(two.Select(tile => tile.Y).Distinct());
+        Assert.Equal((0, 0, AREA_WIDTH, AREA_HEIGHT), Assert.Single(tiles));
+    }
 
-        // Three: two over one — and the lone bottom tile STRETCHES to the full width.
-        Assert.Equal(2, three.Select(tile => tile.Y).Distinct().Count());
-        Assert.Equal(AREA_WIDTH, three[^1].Width);
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void Build_Tiles_TwoOrThree_AreSideBySideColumns(int count)
+    {
+        var tiles = TileLayout_Calculator.Build_Tiles(count, 0, 0, AREA_WIDTH, AREA_HEIGHT);
 
-        // Four: a proper 2x2, not an awkward three-plus-one.
-        Assert.Equal(2, four.Select(tile => tile.Y).Distinct().Count());
-        Assert.Equal(2, four.Select(tile => tile.X).Distinct().Count());
+        Assert.Single(tiles.Select(tile => tile.Y).Distinct());
+        Assert.Equal(count, tiles.Select(tile => tile.X).Distinct().Count());
+        Assert.All(tiles, tile => Assert.Equal(AREA_HEIGHT, tile.Height));
+    }
 
-        // Six: 3 columns x 2 rows.
-        Assert.Equal(3, six.Select(tile => tile.X).Distinct().Count());
-        Assert.Equal(2, six.Select(tile => tile.Y).Distinct().Count());
+    [Fact]
+    public void Build_Tiles_Four_IsATwoByTwo()
+    {
+        var tiles = TileLayout_Calculator.Build_Tiles(4, 0, 0, AREA_WIDTH, AREA_HEIGHT);
+
+        Assert.Equal(2, tiles.Select(tile => tile.X).Distinct().Count());
+        Assert.Equal(2, tiles.Select(tile => tile.Y).Distinct().Count());
+    }
+
+    [Fact]
+    public void Build_Tiles_Five_IsTheSupervisorsColumnPlusATwoByTwo()
+    {
+        var tiles = TileLayout_Calculator.Build_Tiles(5, 0, 0, AREA_WIDTH, AREA_HEIGHT);
+
+        // The FIRST tile is the supervisor's: its own full-height column on the left.
+        var supervisor = tiles[0];
+        Assert.Equal(0, supervisor.X);
+        Assert.Equal(AREA_HEIGHT, supervisor.Height);
+        Assert.Equal(AREA_WIDTH / 3, supervisor.Width);
+
+        // The four implementers form a 2x2 in the remaining two thirds — same width as the
+        // supervisor's column, so the screen reads as three even columns.
+        var implementers = tiles.Skip(1).ToList();
+        Assert.Equal(2, implementers.Select(tile => tile.X).Distinct().Count());
+        Assert.Equal(2, implementers.Select(tile => tile.Y).Distinct().Count());
+        Assert.Equal(supervisor.Width, implementers[0].Width);
+    }
+
+    [Fact]
+    public void Build_Tiles_Seven_KeepsTheSupervisorsColumn_AndSpreadsTheRestOverTwoRows()
+    {
+        var tiles = TileLayout_Calculator.Build_Tiles(7, 0, 0, AREA_WIDTH, AREA_HEIGHT);
+
+        Assert.Equal(AREA_HEIGHT, tiles[0].Height);
+        Assert.Equal(3, tiles.Skip(1).Select(tile => tile.X).Distinct().Count());
+        Assert.Equal(2, tiles.Skip(1).Select(tile => tile.Y).Distinct().Count());
     }
 
     [Fact]
