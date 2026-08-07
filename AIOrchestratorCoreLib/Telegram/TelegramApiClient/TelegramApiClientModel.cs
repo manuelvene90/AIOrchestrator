@@ -165,6 +165,15 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
 
     public async Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken)
     {
+        // Registered under BOTH the default scope and all_group_chats: group chats sit at the
+        // BOTTOM of Telegram's scope fallback chain, and some clients only surface the command
+        // menu in a group when a group-applicable scope explicitly carries commands.
+        await Post_Async("setMyCommands", Build_CommandsPayload(commands, null), cancellationToken);
+        await Post_Async("setMyCommands", Build_CommandsPayload(commands, "all_group_chats"), cancellationToken);
+    }
+
+    static JsonObject Build_CommandsPayload(IReadOnlyList<(string Command, string Description)> commands, string? scopeType)
+    {
         var commandsArray = new JsonArray();
 
         foreach (var command in commands)
@@ -181,7 +190,10 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["commands"] = commandsArray,
         };
 
-        await Post_Async("setMyCommands", payload, cancellationToken);
+        if (scopeType != null)
+            payload["scope"] = new JsonObject { ["type"] = scopeType };
+
+        return payload;
     }
 
     public async Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken)
