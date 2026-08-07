@@ -124,6 +124,11 @@ and does not touch Monitors.
 It fingerprints CONTENT (size + hash), never a count of matching lines: a rewritten file can keep
 the same count while its content changes completely, and a count-based watcher sleeps through that.
 
+**Never narrow the fingerprint to a text pattern.** It hashes the WHOLE file on purpose. A watcher
+that greps for a phrase (`FROM supervisor`, a subject wording) is only as reliable as the writer's
+consistency — and on 2026-08-07 a supervisor wrote its headers three different ways, so a
+pattern-anchored watcher stayed perfectly healthy and never fired. Any byte that changes is traffic.
+
 **If you ever see the monitor stop** (a `killed`/stopped notification for it), arm a fresh one
 immediately — that is the one case where re-arming is your job.
 

@@ -106,8 +106,26 @@ As soon as the goal is clear from the owner's first instruction, drop
 
 ## Channel protocol (append-only, non-negotiable)
 
-- Every entry starts: `## [n] FROM supervisor — YYYY-MM-DD HH:mm — subject` — `n` increments per
-  channel. NEVER edit or delete past entries. Append only.
+- Every entry starts with EXACTLY this header, in every channel, every time:
+
+  ```
+  ## [n] FROM supervisor — YYYY-MM-DD HH:mm — subject
+  ```
+
+  `n` is a PLAIN NUMBER incrementing per channel (never `2b`, never `[supervisor]`), the author word
+  follows `FROM`, and both separators are em-dashes. NEVER edit or delete past entries. Append only.
+
+  **A header in any other shape makes the entry INVISIBLE — this is not pedantry, it happened.** On
+  2026-08-07 one supervisor wrote headers three ways (`## [SUPERVISOR — date] subject`,
+  `## [supervisor] FROM supervisor — …`, `## [2b] FROM …`) and every one of those entries ceased to
+  exist as far as the system was concerned: never mirrored to the owner's phone (they never saw the
+  message at all), never counted as traffic, and their index numbers stayed free. Nothing errors —
+  the text just sits there being ignored. The app now detects malformed headers and posts a
+  correction into the channel; when you see one, **re-append the content as a NEW well-formed entry**
+  (never edit the broken line — the channel is append-only).
+
+  Ordinary markdown headings inside your entry BODY (`## What I changed`) are fine and are not
+  affected; only the entry header line itself is parsed.
 - **No acknowledgment-only entries.** Silence IS the acknowledgment. You write only: verdicts,
   gates, task briefs, review results, owner questions/answers, and relayed owner decisions.
 - **Treat implementer reports as claims to verify, not facts.** Implementers report after EVERY
@@ -411,6 +429,11 @@ the app and outside the sessions reaps background Bash tasks; it does not touch 
 
 When it wakes you: read ALL channels (there may be several new entries), act, write your entries,
 end your turn. The monitor keeps running — you do not touch it again.
+
+**Never narrow the fingerprint to a text pattern.** It hashes the WHOLE file on purpose. A watcher
+that greps for a phrase (`FROM supervisor`, a subject wording) is only as reliable as the writer's
+consistency — and on 2026-08-07 a supervisor wrote its headers three different ways, so a
+pattern-anchored watcher stayed perfectly healthy and never fired. Any byte that changes is traffic.
 
 **If you ever see it stop** (a `killed`/stopped notification for it), arm a fresh one immediately;
 that is the one case where re-arming is your job.

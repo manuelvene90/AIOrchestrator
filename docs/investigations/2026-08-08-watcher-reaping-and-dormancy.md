@@ -155,6 +155,59 @@ work you announced" / "read the traffic you have not answered" / "these reports 
 
 ---
 
+---
+
+## Mode C — a healthy watcher that never matches (added after the owner reported it)
+
+A third way a session goes silent with nothing dead: the watcher is alive and the traffic arrives,
+but the watcher's text pattern stops matching because the writer changed their wording. Reported by
+the owner: the supervisor "wrote channel headers three different ways", and an implementer fixed its
+own side by matching on **who wrote it** rather than on words in the subject — immune to the
+supervisor's sloppiness instead of dependent on its consistency.
+
+Both halves are now fixed, and the reading side is already immune:
+
+**Reader side (done, and stronger than pattern-matching):** the persistent Monitor fingerprints the
+WHOLE FILE (`wc -c` + `md5sum`). Any byte that changes is traffic, so no wording can hide from it.
+All the role commands now say explicitly not to narrow it to a text pattern, with this incident as
+the reason — otherwise the next session "optimises" it into a grep and reintroduces the bug.
+
+**Writer side — the damage is worse than a missed wake, and it was invisible.** A malformed header
+is not merely unmatched by a watcher: `ChannelEntry_Parser` folds the line into the previous entry's
+body, so the entry **does not exist for the app**. It is never mirrored to Telegram (the owner never
+sees that message at all), never counted as traffic by the idle detector, never resolves state, and
+`Get_NextIndex` keeps handing out an index that is already taken. Nothing errors.
+
+Five such lines are sitting in the live channels right now, all supervisor-written, in three shapes:
+
+```
+imp-1/channel.md:2961  ## [SUPERVISOR — 2026-08-08 04:14] SWITCH YOUR WATCHER: …
+imp-2/channel.md:343   ## [2b] FROM supervisor — 2026-08-07 12:56 — Excellent pass. …
+imp-2/channel.md:2145  ## [supervisor] FROM supervisor — 2026-08-08 04:48 — CHECK YOUR WATCHER ANCHOR …
+imp-3/channel.md:1591  ## [SUPERVISOR — 2026-08-08 04:14] SWITCH YOUR WATCHER: …
+imp-3/channel.md:1664  ## [supervisor] FROM supervisor — 2026-08-08 04:48 — CHECK YOUR WATCHER ANCHOR …
+```
+
+The last one is the supervisor's own entry *warning the implementers about bad header formats* —
+itself malformed, and therefore invisible to everyone it was warning.
+
+`ChannelShape_Validator` now finds these and the engine posts a correction into the offending
+channel (once per offence), naming the exact line and the only accepted format, and telling the
+writer to **re-append as a NEW entry** rather than edit — the channel is append-only. When the
+malformed entry was on the owner channel, the owner also gets a Telegram alert, because the loss is
+theirs: content they were supposed to receive never arrived.
+
+The false positive that would make this useless is covered by test: ordinary markdown headings in a
+report body (`## BRANCH SUMMARY — …`, `## What I changed`) are NOT entry headers and are never
+flagged. A line counts as an attempted header only if it opens a bracket like one does, or names an
+author with `FROM`. Verified against the real channels: exactly the five above, and `## BRANCH
+SUMMARY` correctly ignored.
+
+Supervisor-side prose was tightened too (`kit/commands/supervisor.md`) — but prose is the weakest
+lever here, which is why the detector exists.
+
+---
+
 ## Live experiment still running
 
 All sessions were moved to persistent Monitors on 2026-08-07 at ~12:22–12:23 UTC — **except the

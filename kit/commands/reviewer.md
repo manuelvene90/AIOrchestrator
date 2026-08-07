@@ -167,6 +167,11 @@ that arrives while you work can fall into a gap.
 
 **If the monitor ever stops** (a `killed`/stopped notification for it), arm a fresh one immediately.
 
+**Never narrow the fingerprint to a text pattern.** It hashes the WHOLE file on purpose. A watcher
+that greps for a phrase (`FROM supervisor`, a subject wording) is only as reliable as the writer's
+consistency — and on 2026-08-07 a supervisor wrote its headers three different ways, so a
+pattern-anchored watcher stayed perfectly healthy and never fired. Any byte that changes is traffic.
+
 **Nothing wakes you except this monitor.** It fires only when your supervisor writes. A long review
 is yours to carry to its end within your turn — if you end a turn mid-review expecting to resume by
 yourself, you will simply sleep.

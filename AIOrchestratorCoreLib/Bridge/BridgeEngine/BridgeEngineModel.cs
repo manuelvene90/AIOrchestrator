@@ -86,6 +86,9 @@ internal sealed class BridgeEngineModel(
     readonly IVoiceTranscriber _transcriber = transcriber;
     readonly Dictionary<string, (long? ThreadId, string OptionText, long GroupId, string QuestionText)> _buttonOptions = [];
     readonly Queue<string> _buttonOrder = new();
+
+    /// <summary>"&lt;file&gt;|&lt;line&gt;" of every malformed header already reported — say it once, not every tick.</summary>
+    readonly HashSet<string> _reportedMalformedHeaders = [];
     readonly Lock _buttonLock = new();
     long _buttonSequence;
     long _buttonGroupSequence;
@@ -280,6 +283,7 @@ internal sealed class BridgeEngineModel(
         await Sync_TopicNames_BestEffort_Async(cancellationToken);
 
         await Check_LedgerHealth_Async(cancellationToken);
+        await Check_ChannelShapes_Async(cancellationToken);
 
         Compact_LongChannels();
         Persist_BridgeState();
@@ -523,6 +527,71 @@ internal sealed class BridgeEngineModel(
                 _nudgedMemberUtc.Remove(memberKey);
                 await Recover_OrphanedImplementer_Async(session, member.MemberId, cancellationToken);
             }
+        }
+    }
+
+    /// <summary>
+    /// A third way a session goes silent while everything is healthy: a header written in a shape
+    /// the parser does not recognise. The entry then exists on disk but NOT to the app — never
+    /// mirrored to the owner, never counted, its index still free. The writer has no way to notice;
+    /// only the app can see the discrepancy, so the app says so, in the channel, once per offence.
+    /// </summary>
+    async Task Check_ChannelShapes_Async(CancellationToken cancellationToken)
+    {
+        foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
+        {
+            var malformed = ChannelShape_Validator.Find_MalformedHeaders(UsageTotals_Reader.Read_Text_Safe(channel.FilePath));
+
+            if (malformed.Count == 0)
+                continue;
+
+            List<(int LineNumber, string Line)> unreported = [];
+
+            foreach (var entry in malformed)
+            {
+                if (_reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}"))
+                    unreported.Add(entry);
+            }
+
+            if (unreported.Count == 0)
+                continue;
+
+            ChannelAppender.Append_AppEntry(
+                channel.FilePath,
+                $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
+                ChannelShape_Validator.Build_ReportBody(unreported),
+                DateTime.Now);
+
+            _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} malformed entry header(s) — those entries were never mirrored");
+            Raise_OrchestrationActivity(channel.OrchId);
+
+            // On the OWNER channel the loss is the owner's: the content never reached their phone.
+            if (channel.IsOwnerChannel)
+                await Alert_MalformedOwnerEntries_Async(channel.OrchId, unreported.Count, cancellationToken);
+        }
+    }
+
+    async Task Alert_MalformedOwnerEntries_Async(string orchId, int count, CancellationToken cancellationToken)
+    {
+        var session = _store.Get_Session_OrNull(orchId);
+
+        if (_telegramClient == null || session == null || Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
+            return;
+
+        try
+        {
+            await _telegramClient.Send_Message_Async(
+                session.TelegramTopicId,
+                $"⚠️ {count} message{(count == 1 ? "" : "s")} in this orchestration never reached you — the session wrote a malformed channel header, so the app could not see {(count == 1 ? "it" : "them")}. It has been told to re-post.",
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Malformed-header alert send failed: {ex.Message}");
         }
     }
 
