@@ -166,6 +166,26 @@ internal sealed class BridgeEngineModel(
     /// <summary>Target channel → the WAIT acknowledgement being kept up to date while held.</summary>
     readonly Dictionary<string, HoldReceipt> _holdReceipts = [];
 
+    sealed class OpenQuestion
+    {
+        public string OrchId = "";
+        public string Text = "";
+    }
+
+    /// <summary>Telegram message id → a question the owner has NOT answered yet.</summary>
+    readonly Dictionary<long, OpenQuestion> _openQuestions = [];
+
+    sealed class AwayTracker
+    {
+        public int UnansweredCount;
+        public DateTime FirstUnansweredUtc;
+        public bool IsAway;
+        public DateTime LastAwayUpdateUtc;
+    }
+
+    /// <summary>Per-orchestration "is the owner reading?" state. See AwayMode_Policy.</summary>
+    readonly Dictionary<string, AwayTracker> _awayTrackers = [];
+
     /// <summary>
     /// Guards _holdReceipts and _pendingOwnerReplies. GO flushes from the INBOUND loop (waiting for
     /// the 2 s mirror tick would be exactly the lag GO exists to remove), so both dictionaries are
@@ -327,6 +347,7 @@ internal sealed class BridgeEngineModel(
 
         await Check_LedgerHealth_Async(cancellationToken);
         await Check_ChannelShapes_Async(cancellationToken);
+        await Check_AwayMode_Async(cancellationToken);
         await Push_PeriodicStatus_Async(cancellationToken);
 
         Compact_LongChannels();
@@ -1137,6 +1158,12 @@ internal sealed class BridgeEngineModel(
                 foreach (var chunk in chunks)
                     Remember_TopicMessage(threadId, await Send_MirrorChunk_Async(threadId, chunk, cancellationToken));
 
+                // Counts toward away detection: a supervisor message that reached the phone and is
+                // so far unanswered. Only the supervisor's own voice counts — app notices and
+                // presence lines are not something the owner is expected to reply to.
+                if (append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor && chunks.Count > 0)
+                    Note_SupervisorSpokeToOwner(append.Channel.OrchId);
+
                 // The buttons NEVER ride on the body. Agents write long, thorough messages, and
                 // options hanging off the bottom of one arrive on a phone as a wall of text with
                 // taps underneath and no visible question. They get their own short message.
@@ -1281,6 +1308,17 @@ internal sealed class BridgeEngineModel(
             threadId, prompt, Register_Buttons(threadId, optionLabels, prompt), cancellationToken);
 
         Remember_TopicMessage(threadId, messageId);
+
+        // Remembered UNANSWERED, so away mode can mark it parked. This is the exact thing that made
+        // the owner's plane landing unusable: a screen of questions with no way to tell which were
+        // still live.
+        if (messageId != null)
+        {
+            lock (_ownerStateLock)
+            {
+                _openQuestions[messageId.Value] = new OpenQuestion { OrchId = channel.OrchId, Text = prompt };
+            }
+        }
     }
 
     IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionLabels, string questionText)
@@ -2661,6 +2699,12 @@ internal sealed class BridgeEngineModel(
         // answered. Editing the text also drops the keyboard, so it replaces the strip step.
         if (tap.MessageId != null)
         {
+            // Answered — it must never be marked "parked" by a later away-mode sweep.
+            lock (_ownerStateLock)
+            {
+                _openQuestions.Remove(tap.MessageId.Value);
+            }
+
             try
             {
                 await client.Edit_MessageText_Async(
@@ -2923,6 +2967,10 @@ internal sealed class BridgeEngineModel(
             _deliveryTargets[channelFile] = (orchId, message.MessageThreadId);
         }
 
+        // Any word from the owner — including a button tap — means they are back.
+        if (Note_OwnerSpoke_AndWasAway(orchId))
+            await Exit_AwayMode_Async(orchId, cancellationToken);
+
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
     }
@@ -3175,6 +3223,16 @@ internal sealed class BridgeEngineModel(
             if ((DateTime.UtcNow - lastUtc).TotalSeconds < PERIODIC_STATUS_SECONDS)
                 continue;
 
+            // Away mode: the owner cannot reply, so this update is their ONLY window into the
+            // orchestration — it goes out whether or not the ledger says work is in flight,
+            // because "imp-1 is blocked waiting for you" is exactly what they need to know.
+            if (Is_AwayMode(session.OrchId))
+            {
+                _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
+                await Send_AwayUpdate_Async(session, cancellationToken);
+                continue;
+            }
+
             if (!Has_WorkInFlight(session))
             {
                 // Nothing running: the supervisor's rule was to stop the cadence, not to report
@@ -3203,6 +3261,278 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Warning(session.OrchId, $"Periodic status send failed: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>A supervisor message reached the owner's phone and is so far unanswered.</summary>
+    void Note_SupervisorSpokeToOwner(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            var tracker = Get_AwayTracker(orchId);
+
+            if (tracker.UnansweredCount == 0)
+                tracker.FirstUnansweredUtc = DateTime.UtcNow;
+
+            tracker.UnansweredCount++;
+        }
+    }
+
+    /// <summary>
+    /// The owner said ANYTHING (including tapping a button) — they are here. Returns true when this
+    /// ends an away spell, so the caller can announce the return.
+    /// </summary>
+    bool Note_OwnerSpoke_AndWasAway(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            var tracker = Get_AwayTracker(orchId);
+            var wasAway = tracker.IsAway;
+
+            tracker.UnansweredCount = 0;
+            tracker.IsAway = false;
+
+            return wasAway;
+        }
+    }
+
+    AwayTracker Get_AwayTracker(string orchId)
+    {
+        if (_awayTrackers.TryGetValue(orchId, out var existing))
+            return existing;
+
+        var created = new AwayTracker();
+        _awayTrackers[orchId] = created;
+        return created;
+    }
+
+    public bool Is_AwayMode(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            return _awayTrackers.TryGetValue(orchId, out var tracker) && tracker.IsAway;
+        }
+    }
+
+    /// <summary>
+    /// Flips away mode on once the owner has visibly stopped reading, and keeps the short updates
+    /// coming while it is on. The supervisor is told through its channel (that is the only thing it
+    /// reads); the owner is told on Telegram.
+    /// </summary>
+    async Task Check_AwayMode_Async(CancellationToken cancellationToken)
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            bool shouldEnter;
+
+            lock (_ownerStateLock)
+            {
+                var tracker = Get_AwayTracker(session.OrchId);
+
+                shouldEnter = !tracker.IsAway
+                    && AwayMode_Policy.Should_EnterAway(tracker.UnansweredCount, tracker.FirstUnansweredUtc, DateTime.UtcNow);
+
+                if (shouldEnter)
+                {
+                    tracker.IsAway = true;
+                    tracker.LastAwayUpdateUtc = DateTime.UtcNow;
+                }
+            }
+
+            if (shouldEnter)
+                await Enter_AwayMode_Async(session, cancellationToken);
+        }
+    }
+
+    async Task Enter_AwayMode_Async(IOrchestrationSession session, CancellationToken cancellationToken)
+    {
+        _log.Log_Info(session.OrchId, "AWAY MODE ON — owner unresponsive; supervisor told to proceed without questions");
+
+        ChannelAppender.Append_AppEntry(
+            _paths.Get_OwnerChannelFile(session.OrchId),
+            "AWAY MODE ON — the owner is not reading",
+            "They have not answered your last messages. Assume they are unavailable, NOT ignoring you.\n\n"
+            + "Until further notice: ask NOTHING. Park every question you would have asked (keep a list — you will "
+            + "re-ask the ones that still matter). Decide everything you can safely decide yourself and keep the "
+            + "implementers working; the owner-approval gate and the merge gate still stand, so work that genuinely "
+            + "needs their decision waits rather than proceeding without it.\n\n"
+            + "The app posts a short update to them every 30 min — you do not need to. When they return you get an "
+            + "AWAY MODE OFF entry; then re-ask ONLY what is still relevant, updated to the current state, and drop "
+            + "what events have overtaken.",
+            DateTime.Now);
+
+        Raise_OrchestrationActivity(session.OrchId);
+
+        await Park_OpenQuestions_Async(session.OrchId, cancellationToken);
+        await Send_AwayNotice_Async(session, AwayMode_Policy.AWAY_ON_NOTICE, cancellationToken);
+    }
+
+    async Task Exit_AwayMode_Async(string orchId, CancellationToken cancellationToken)
+    {
+        _log.Log_Info(orchId, "AWAY MODE OFF — owner is back");
+
+        ChannelAppender.Append_AppEntry(
+            _paths.Get_OwnerChannelFile(orchId),
+            "AWAY MODE OFF — the owner is back",
+            "Normal mode: they are reading and can answer within a short time.\n\n"
+            + "Go through the questions you parked. Re-ask ONLY the ones that still matter, rewritten against the "
+            + "CURRENT state (facts may have moved while they were away), and say in one line what you decided "
+            + "yourself in the meantime. Drop the rest without ceremony — a re-asked obsolete question is exactly "
+            + "the mess this mode exists to prevent.",
+            DateTime.Now);
+
+        Raise_OrchestrationActivity(orchId);
+
+        var session = _store.Get_Session_OrNull(orchId);
+
+        if (session != null)
+            await Send_AwayNotice_Async(session, AwayMode_Policy.AWAY_OFF_NOTICE, cancellationToken);
+    }
+
+    async Task Send_AwayNotice_Async(IOrchestrationSession session, string text, CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+            return;
+
+        try
+        {
+            await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(session.OrchId, $"Away-mode notice send failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Marks every unanswered question as parked and strips its buttons, so a returning owner can
+    /// see at a glance which ones are dead instead of having to work it out.
+    /// </summary>
+    async Task Park_OpenQuestions_Async(string orchId, CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        List<(long MessageId, string Text)> parked = [];
+
+        lock (_ownerStateLock)
+        {
+            foreach (var pair in _openQuestions)
+            {
+                if (pair.Value.OrchId == orchId)
+                    parked.Add((pair.Key, pair.Value.Text));
+            }
+
+            foreach (var entry in parked)
+                _openQuestions.Remove(entry.MessageId);
+        }
+
+        foreach (var entry in parked)
+        {
+            try
+            {
+                await _telegramClient.Edit_MessageText_Async(
+                    entry.MessageId, $"{entry.Text}{AwayMode_Policy.PARKED_SUFFIX}", cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(orchId, $"Parking question message {entry.MessageId} failed: {ex.Message}");
+            }
+        }
+    }
+
+    async Task Send_AwayUpdate_Async(IOrchestrationSession session, CancellationToken cancellationToken)
+    {
+        var client = _telegramClient
+            ?? throw new Exception($"Send_AwayUpdate_Async called without a Telegram client (orchestration '{session.OrchId}')");
+
+        var text = Build_AwayUpdateText(session);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        try
+        {
+            await client.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(session.OrchId, $"Away update send failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// THREE LINES MAX, by owner mandate: enough to stay oriented while unable to reply, short
+    /// enough to read on a lock screen. Anything past three members collapses into the last line.
+    /// </summary>
+    public const int AWAY_UPDATE_MAX_LINES = 3;
+
+    string Build_AwayUpdateText(IOrchestrationSession session)
+    {
+        List<string> memberLines = [];
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+                continue;
+
+            var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
+            memberLines.Add($"{member.MemberId}: {Describe_AwayMemberState(entries, usageFile)}");
+        }
+
+        if (memberLines.Count == 0)
+            return "🌙 away · no open members";
+
+        List<string> lines = [.. memberLines.Take(AWAY_UPDATE_MAX_LINES - 1)];
+
+        var remaining = memberLines.Skip(AWAY_UPDATE_MAX_LINES - 1).ToList();
+
+        if (remaining.Count == 1)
+            lines.Add(remaining[0]);
+        else if (remaining.Count > 1)
+            lines.Add(string.Join(" · ", remaining));
+
+        return $"🌙 {string.Join('\n', lines)}";
+    }
+
+    static string Describe_AwayMemberState(IReadOnlyList<Channels.ChannelEntry.IChannelEntry> entries, string usageFilePath)
+    {
+        var state = MemberState_Resolver.Resolve(entries);
+
+        if (state == MemberStates.BlockedOnOwner)
+            return "BLOCKED — needs you";
+
+        var working = SessionActivity_Probe.Is_MidTurn(usageFilePath);
+        var lastBrief = entries.LastOrDefault(e => e.Author == ChannelAuthors.Supervisor);
+
+        var task = lastBrief == null
+            ? ""
+            : $" — {TextSummary_Formatter.Summarize_Task(lastBrief.Subject, TextSummary_Formatter.CARD_TASK_WORDS)}";
+
+        if (working)
+            return $"working{task}";
+
+        if (state == MemberStates.AwaitingSupervisorReview)
+            return "report filed, awaiting review";
+
+        return $"idle{task}";
     }
 
     string Build_PeriodicStatusText(IOrchestrationSession session)
