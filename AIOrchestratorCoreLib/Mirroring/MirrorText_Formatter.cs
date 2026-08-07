@@ -39,8 +39,10 @@ public static class MirrorText_Formatter
         return entry.Author switch
         {
             // App entries: the subject IS the message ("orchestration 'crm-2' closed"); the body
-            // is agent-facing detail the owner explicitly does not want texted.
-            ChannelAuthors.App => $"⚙ App: {entry.Subject}",
+            // is agent-facing detail the owner explicitly does not want texted. The ONE exception
+            // is the periodic STATUS, whose body is the report — it rides the channel precisely so
+            // that Do-Not-Disturb queues it (and collapses it to the newest) instead of dropping it.
+            ChannelAuthors.App => Is_StatusEntry(entry) ? Pick_Content(entry) : $"⚙ App: {entry.Subject}",
 
             // Supervisor entries: the body is the message; the subject is channel metadata.
             // The GENERAL supervisor speaks with its own color so the owner never confuses

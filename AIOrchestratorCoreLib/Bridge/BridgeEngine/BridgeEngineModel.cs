@@ -2333,6 +2333,8 @@ internal sealed class BridgeEngineModel(
             _log.Log_Info(session.OrchId, $"Topic delivery mode â†’ {newMode}");
             Raise_OrchestrationActivity(session.OrchId);
 
+            Tell_Supervisor_AboutMode(session.OrchId, session.TelegramMode, newMode);
+
             // Sent BEFORE the new mode takes hold on the next tick, so the confirmation gets through.
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Mode(newMode, appWide: false), cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
@@ -3227,9 +3229,8 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
 
-            if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
-                continue;
-
+            // No mode gate here: the status now rides the channel, so Normal mirrors it, Deferred
+            // queues it (newest only) and Silenced drops it — all handled by the mirror already.
             _lastPeriodicStatusUtc.TryGetValue(session.OrchId, out var lastUtc);
 
             if ((DateTime.UtcNow - lastUtc).TotalSeconds < PERIODIC_STATUS_SECONDS)
@@ -3241,7 +3242,7 @@ internal sealed class BridgeEngineModel(
             if (Is_AwayMode())
             {
                 _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
-                await Send_AwayUpdate_Async(session, cancellationToken);
+                Post_StatusEntry(session.OrchId, Build_AwayUpdateText(session));
                 continue;
             }
 
@@ -3254,25 +3255,10 @@ internal sealed class BridgeEngineModel(
             }
 
             _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
-
-            var text = Build_PeriodicStatusText(session);
-
-            if (_configProvider.Get_Current().TelegramItalianLayer)
-                text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
-
-            try
-            {
-                await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _log.Log_Warning(session.OrchId, $"Periodic status send failed: {ex.Message}");
-            }
+            Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session));
         }
+
+        await Task.CompletedTask;
     }
 
     /// <summary>
@@ -3282,6 +3268,13 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     bool Note_SupervisorSpokeToOwner_AndJustWentQuiet(string orchId)
     {
+        // SILENCED means the owner is reading this orchestration LIVE in its terminal and asked
+        // not to be texted it twice. They are present, and nothing was delivered to ignore — so no
+        // reply is expected and none of this counts. Counting it would manufacture an absence out
+        // of a setting the owner deliberately chose.
+        if (Resolve_EffectiveMode(orchId) == TelegramDeliveryModes.Silenced)
+            return false;
+
         lock (_ownerStateLock)
         {
             var tracker = Get_AwayTracker(orchId);
@@ -3333,6 +3326,46 @@ internal sealed class BridgeEngineModel(
         lock (_ownerStateLock)
         {
             return _awayActive;
+        }
+    }
+
+    /// <summary>
+    /// Do-Not-Disturb is the owner SAYING they are away, so it needs no detection and no 15-minute
+    /// wait: the supervisor is told at once to behave exactly as in away mode. (Silenced is the
+    /// opposite — they are reading the terminal live, so nothing changes for the supervisor.)
+    /// </summary>
+    void Tell_Supervisor_AboutMode(string orchId, TelegramDeliveryModes previousMode, TelegramDeliveryModes newMode)
+    {
+        if (newMode == previousMode)
+            return;
+
+        if (newMode == TelegramDeliveryModes.Deferred)
+        {
+            ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(orchId),
+                "the owner switched this topic to Do-Not-Disturb — treat it as AWAY",
+                "They set DND deliberately, so this is not a guess: they are away and nothing you write reaches them "
+                + "until they switch back.\n\n"
+                + "Behave exactly as in AWAY MODE: ask NOTHING, park what you need from them, decide and delegate "
+                + "everything you safely can, and leave the owner-approval and merge gates standing. The app queues a "
+                + "short status for them and keeps only the newest, so they return to the CURRENT state instead of a "
+                + "backlog. You get an entry here when they switch back.",
+                DateTime.Now);
+
+            Raise_OrchestrationActivity(orchId);
+            return;
+        }
+
+        if (previousMode == TelegramDeliveryModes.Deferred && newMode == TelegramDeliveryModes.Normal)
+        {
+            ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(orchId),
+                "Do-Not-Disturb is off — the owner is back",
+                "Normal mode. Re-ask ONLY what still matters, rewritten against the CURRENT state, and drop what "
+                + "events have overtaken. One line on what you decided while they were away.",
+                DateTime.Now);
+
+            Raise_OrchestrationActivity(orchId);
         }
     }
 
@@ -3532,28 +3565,23 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    async Task Send_AwayUpdate_Async(IOrchestrationSession session, CancellationToken cancellationToken)
+    /// <summary>
+    /// Written to the CHANNEL, not straight to Telegram, so the existing delivery modes handle it:
+    ///   Normal   — mirrored now.
+    ///   Deferred — queued while DND lasts and collapsed to the NEWEST, so returning shows the
+    ///              current state rather than a hundred stale reports.
+    ///   Silenced — dropped, because the owner is reading the terminal live.
+    /// Doing this by hand at each send site would have meant reimplementing all three.
+    /// </summary>
+    void Post_StatusEntry(string orchId, string text)
     {
-        var client = _telegramClient
-            ?? throw new Exception($"Send_AwayUpdate_Async called without a Telegram client (orchestration '{session.OrchId}')");
+        ChannelAppender.Append_AppEntry(
+            _paths.Get_OwnerChannelFile(orchId),
+            MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
+            text,
+            DateTime.Now);
 
-        var text = Build_AwayUpdateText(session);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
-
-        try
-        {
-            await client.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Warning(session.OrchId, $"Away update send failed: {ex.Message}");
-        }
+        Raise_OrchestrationActivity(orchId);
     }
 
     /// <summary>
