@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Media;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -132,7 +133,9 @@ public static class SessionRows_Builder
 
         if (lastBrief != null)
         {
-            parts.Add($"task: {lastBrief.Subject}");
+            // Agents write full-sentence subjects; the card needs a glance, not a paragraph. The
+            // whole thing is still readable in the detail window's activity feed.
+            parts.Add($"task: {TextSummary_Formatter.Take_Words(lastBrief.Subject, TextSummary_Formatter.CARD_TASK_WORDS)}");
 
             var onTaskFor = Describe_TimeSince_OrNull(lastBrief.DateText);
             if (onTaskFor != null)
