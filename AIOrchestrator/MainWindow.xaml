@@ -55,7 +55,9 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type views:OrchestrationCardView}">
                                 <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1"
-                                        CornerRadius="6" Margin="4,4,4,8" Padding="12,10" Opacity="{Binding CardOpacity}">
+                                        CornerRadius="6" Margin="4,4,4,8" Padding="12,10" Opacity="{Binding CardOpacity}"
+                                        Tag="{Binding}" MouseLeftButtonUp="OrchestrationCard_Click" Cursor="Hand"
+                                        ToolTip="Click for the full detail view">
                                     <StackPanel>
                                         <DockPanel Margin="0,0,0,6">
                                             <StackPanel Orientation="Horizontal">
@@ -68,6 +70,8 @@
                                                 <Button Content="＋ Implementer" Tag="{Binding}" Click="AddImplementerButton_Click" Margin="0,0,6,0"
                                                         Visibility="{Binding OrchestrationButtonsVisibility}"
                                                         IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"/>
+                                                <Button Content="📊 Details" Tag="{Binding}" Click="DetailsButton_Click" Margin="0,0,6,0"
+                                                        ToolTip="Task ledger, live activity feed and every session's state"/>
                                                 <Button Content="📂" Tag="{Binding}" Click="OpenFolderButton_Click" ToolTip="Open orchestration folder" Margin="0,0,6,0"/>
                                                 <Button Content="✕ Close" Tag="{Binding}" Click="CloseOrchestrationButton_Click"
                                                         Visibility="{Binding OrchestrationButtonsVisibility}"

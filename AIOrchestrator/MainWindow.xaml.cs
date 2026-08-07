@@ -270,12 +270,10 @@ public partial class MainWindow : Window
 
     OrchestrationCardView Build_Card(IOrchestrationSession session)
     {
-        List<MemberRowView> rows = [Build_SupervisorRow(session), Build_CommunicatorRow(session)];
-
         // Closed implementers keep their row (disabled, no Show button) — their channel and usage
-        // stay on disk, so the chips and totals remain meaningful.
-        foreach (var member in session.Members)
-            rows.Add(Build_MemberRow(session, member));
+        // stay on disk, so the chips and totals remain meaningful. Row shaping is shared with the
+        // detail window (SessionRows_Builder) so the two views can never drift apart.
+        var rows = SessionRows_Builder.Build_AllRows(_paths, Find_Brush, session);
 
         var openImplementers = session.Members.Count(m => m.ClosedUtc == null);
         var age = (session.ClosedUtc ?? DateTime.UtcNow) - session.CreatedUtc;
@@ -318,292 +316,23 @@ public partial class MainWindow : Window
         return string.Join("  ·  ", parts);
     }
 
-    MemberRowView Build_SupervisorRow(IOrchestrationSession session)
-    {
-        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
-        var lastActivity = File.Exists(ownerChannel) ? Get_LastWriteText(ownerChannel) : "";
-
-        return new MemberRowView
-        {
-            MemberLabel = "SUPERVISOR",
-            RoleBrush = Find_Brush("AccentSupervisor"),
-            StateText = session.ClosedUtc == null ? "supervising" : "closed",
-            StateBrush = session.ClosedUtc == null ? Find_Brush("StateWorking") : Find_Brush("StateClosed"),
-            LastActivityText = lastActivity,
-            FocusTitleFragment = $"SUP · {session.OrchId}",
-            DetailText = Build_SupervisorCostText(session.OrchId),
-            ShowButtonVisibility = session.ClosedUtc == null ? Visibility.Visible : Visibility.Collapsed,
-        };
-    }
-
-    /// <summary>The green press-secretary session: narrates the supervisor's activity, never works.</summary>
-    MemberRowView Build_CommunicatorRow(IOrchestrationSession session)
-    {
-        var isOpen = session.ClosedUtc == null;
-        var communicatorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), ".communicator.usage.json");
-        var cost = Read_SessionCost_OrNull(communicatorUsageFile);
-
-        return new MemberRowView
-        {
-            MemberLabel = "COM",
-            RoleBrush = Find_Brush("AccentCommunicator"),
-            StateText = isOpen ? "on watch" : "closed",
-            StateBrush = isOpen ? Find_Brush("AccentCommunicator") : Find_Brush("StateClosed"),
-            LastActivityText = "",
-            DetailText = cost == null ? "" : $"≈${cost.Value:F2} equiv",
-            FocusTitleFragment = $"COM · {session.OrchId}",
-            ShowButtonVisibility = isOpen ? Visibility.Visible : Visibility.Collapsed,
-        };
-    }
-
-    string Build_SupervisorCostText(string orchId)
-    {
-        var usageFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), ".usage.json");
-        var cost = Read_SessionCost_OrNull(usageFile);
-
-        // API-EQUIVALENT usage, not a charge — subscription plans (Max) are not billed per token.
-        return cost == null ? "" : $"usage ≈${cost.Value:F2} equiv (not billed)";
-    }
-
-    MemberRowView Build_MemberRow(IOrchestrationSession session, AIOrchestratorCoreLib.Sessions.OrchestrationMember.IOrchestrationMember member)
-    {
-        var memberId = member.MemberId;
-        var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, memberId);
-
-        var entries = ChannelEntry_Parser.Parse_All(Read_FileText_Safe(channelFile));
-        var state = MemberState_Resolver.Resolve(entries);
-        var usageFile = _paths.Get_ImplementerPidFile(session.OrchId, memberId).Replace(".pid", ".usage.json");
-
-        var isClosed = member.ClosedUtc != null || session.ClosedUtc != null;
-
-        return new MemberRowView
-        {
-            MemberLabel = memberId,
-            RoleBrush = Find_Brush("AccentImplementer"),
-            StateText = isClosed ? "closed" : Describe_State(state),
-            StateBrush = isClosed ? Find_Brush("StateClosed") : Find_Brush(Brush_KeyFor(state)),
-            LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",
-            DetailText = Build_MemberDetailText(entries, usageFile),
-            FocusTitleFragment = $"{memberId.ToUpperInvariant()} · {session.OrchId}",
-            ShowButtonVisibility = isClosed ? Visibility.Collapsed : Visibility.Visible,
-            // A closed member inside a still-open card dims on its own; closed cards dim as a whole.
-            RowOpacity = member.ClosedUtc != null && session.ClosedUtc == null ? 0.55 : 1.0,
-        };
-    }
-
-    /// <summary>Second row per member: current task · worktree (from the brief's WORKTREE: marker) · time on task · session cost.</summary>
-    static string Build_MemberDetailText(
-        IReadOnlyList<AIOrchestratorCoreLib.Channels.ChannelEntry.IChannelEntry> entries,
-        string usageFilePath)
-    {
-        List<string> parts = [];
-
-        var lastBrief = entries.LastOrDefault(e => e.Author == ChannelAuthors.Supervisor);
-
-        if (lastBrief != null)
-        {
-            parts.Add($"task: {lastBrief.Subject}");
-
-            var onTaskFor = Describe_TimeSince_OrNull(lastBrief.DateText);
-            if (onTaskFor != null)
-                parts.Add($"on task {onTaskFor}");
-
-            var worktree = Find_LastWorktreeMarker_OrNull(entries);
-            if (worktree != null)
-                parts.Add($"wt: {worktree}");
-        }
-
-        var cost = Read_SessionCost_OrNull(usageFilePath);
-        if (cost != null)
-            parts.Add($"≈${cost.Value:F2} equiv");
-
-        return string.Join("  ·  ", parts);
-    }
-
-    static string? Find_LastWorktreeMarker_OrNull(IReadOnlyList<AIOrchestratorCoreLib.Channels.ChannelEntry.IChannelEntry> entries)
-    {
-        for (var i = entries.Count - 1; i >= 0; i--)
-        {
-            if (entries[i].Author != ChannelAuthors.Supervisor)
-                continue;
-
-            var match = System.Text.RegularExpressions.Regex.Match(
-                entries[i].RawText, @"^WORKTREE:\s*(.+)$", System.Text.RegularExpressions.RegexOptions.Multiline);
-
-            if (match.Success)
-                return match.Groups[1].Value.Trim();
-        }
-
-        return null;
-    }
-
-    static string? Describe_TimeSince_OrNull(string entryDateText)
-    {
-        if (!DateTime.TryParse(entryDateText, out var entryTime))
-            return null;
-
-        return Describe_Duration(DateTime.Now - entryTime);
-    }
-
     static string Describe_Duration(TimeSpan duration)
     {
-        if (duration.TotalMinutes < 1)
-            return "under a minute";
-        if (duration.TotalHours < 1)
-            return $"{(int)duration.TotalMinutes} min";
-        if (duration.TotalDays < 1)
-            return $"{(int)duration.TotalHours} h {duration.Minutes} min";
-
-        return $"{(int)duration.TotalDays} d {duration.Hours} h";
+        return SessionRows_Builder.Describe_Duration(duration);
     }
 
-    /// <summary>
-    /// Orchestration-wide usage: supervisor + ALL members, CLOSED ones included (their last
-    /// .usage.json persists). Caveat: each file holds the member's current/last session, so a
-    /// respawn resets that member's contribution.
-    /// </summary>
+    /// <summary>Orchestration-wide LIFETIME usage (supervisor + communicator + every member, closed included).</summary>
     string Build_UsageTotalText(IOrchestrationSession session)
     {
-        List<string> usageFiles =
-        [
-            Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), ".usage.json"),
-            Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), ".communicator.usage.json"),
-        ];
-
-        foreach (var member in session.Members)
-            usageFiles.Add(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), ".usage.json"));
-
-        var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
-        var costTotal = 0.0;
-        long tokenTotal = 0;
-
-        foreach (var usageFile in usageFiles)
-        {
-            if (!File.Exists(usageFile))
-                continue;
-
-            // Lifetime accumulation: each respawn resets the session's own .usage.json, so raw
-            // sums under-report long orchestrations — the accumulator folds dead sessions in.
-            var sourceKey = Path.GetRelativePath(orchFolder, usageFile);
-
-            var (lifetimeCost, lifetimeTokens) = AIOrchestratorCoreLib.Usage.UsageLifetime_Accumulator.Accumulate(
-                orchFolder,
-                sourceKey,
-                Read_SessionCost_OrNull(usageFile) ?? 0.0,
-                Read_SessionTokens_OrNull(usageFile) ?? 0L);
-
-            costTotal += lifetimeCost;
-            tokenTotal += lifetimeTokens;
-        }
+        var (costTotal, tokenTotal) = SessionRows_Builder.Build_UsageTotals(_paths, session);
 
         if (costTotal <= 0 && tokenTotal <= 0)
             return "";
 
-        var tokenPart = tokenTotal > 0 ? $" · Σ {Format_Tokens(tokenTotal)}" : "";
+        var tokenPart = tokenTotal > 0 ? $" · Σ {SessionRows_Builder.Format_Tokens(tokenTotal)}" : "";
         var costPart = costTotal > 0 ? $" · Σ ≈${costTotal:F2} equiv" : "";
 
         return $"{tokenPart}{costPart}";
-    }
-
-    /// <summary>Tolerant token extraction — the statusline schema varies by Claude Code version.</summary>
-    static long? Read_SessionTokens_OrNull(string usageFilePath)
-    {
-        try
-        {
-            if (!File.Exists(usageFilePath))
-                return null;
-
-            var root = System.Text.Json.Nodes.JsonNode.Parse(Read_FileText_Safe(usageFilePath));
-
-            if (root == null)
-                return null;
-
-            long total = 0;
-            Sum_TokenFields(root, ref total);
-
-            return total > 0 ? total : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    static void Sum_TokenFields(System.Text.Json.Nodes.JsonNode node, ref long total)
-    {
-        if (node is System.Text.Json.Nodes.JsonObject jsonObject)
-        {
-            foreach (var pair in jsonObject)
-            {
-                if (pair.Value == null)
-                    continue;
-
-                var isTokenCountField = System.Text.RegularExpressions.Regex.IsMatch(
-                    pair.Key, @"^(total_)?(cache_creation_|cache_read_)?(input|output)_tokens$");
-
-                if (isTokenCountField && pair.Value is System.Text.Json.Nodes.JsonValue value && value.TryGetValue<long>(out var count))
-                    total += count;
-                else
-                    Sum_TokenFields(pair.Value, ref total);
-            }
-        }
-    }
-
-    static string Format_Tokens(long tokens)
-    {
-        if (tokens < 1_000)
-            return $"{tokens} tok";
-        if (tokens < 1_000_000)
-            return $"{tokens / 1_000.0:F1}k tok";
-
-        return $"{tokens / 1_000_000.0:F1}M tok";
-    }
-
-    static double? Read_SessionCost_OrNull(string usageFilePath)
-    {
-        try
-        {
-            if (!File.Exists(usageFilePath))
-                return null;
-
-            var root = System.Text.Json.Nodes.JsonNode.Parse(Read_FileText_Safe(usageFilePath));
-            var costNode = root?["cost"]?["total_cost_usd"];
-
-            if (costNode == null)
-                return null;
-
-            return costNode.GetValue<double>();
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    static string Describe_State(MemberStates state)
-    {
-        return state switch
-        {
-            MemberStates.NewNoTraffic => "new — no traffic",
-            MemberStates.ImplementerWorking => "working",
-            MemberStates.AwaitingSupervisorReview => "awaiting review",
-            MemberStates.WritingWindowOpen => "window open",
-            MemberStates.BlockedOnOwner => "BLOCKED ON OWNER",
-            _ => throw new Exception($"Unhandled MemberStates: {state}"),
-        };
-    }
-
-    static string Brush_KeyFor(MemberStates state)
-    {
-        return state switch
-        {
-            MemberStates.NewNoTraffic => "StateNew",
-            MemberStates.ImplementerWorking => "StateWorking",
-            MemberStates.AwaitingSupervisorReview => "StateAwaitingReview",
-            MemberStates.WritingWindowOpen => "StateWindowOpen",
-            MemberStates.BlockedOnOwner => "StateBlocked",
-            _ => throw new Exception($"Unhandled MemberStates: {state}"),
-        };
     }
 
     Brush Find_Brush(string resourceKey)
@@ -616,34 +345,12 @@ public partial class MainWindow : Window
 
     static string Read_FileText_Safe(string filePath)
     {
-        try
-        {
-            if (!File.Exists(filePath))
-                return string.Empty;
-
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-            return reader.ReadToEnd();
-        }
-        catch
-        {
-            return string.Empty;
-        }
+        return SafeFile_Reader.Read_Text_Safe(filePath);
     }
 
     static string Get_LastWriteText(string filePath)
     {
-        var lastWrite = File.GetLastWriteTime(filePath);
-        var elapsed = DateTime.Now - lastWrite;
-
-        if (elapsed.TotalMinutes < 1)
-            return "just now";
-        if (elapsed.TotalHours < 1)
-            return $"{(int)elapsed.TotalMinutes} min ago";
-        if (elapsed.TotalDays < 1)
-            return $"{(int)elapsed.TotalHours} h ago";
-
-        return lastWrite.ToString("dd/MM HH:mm");
+        return SessionRows_Builder.Get_LastWriteText(filePath);
     }
 
     void StartSupervisorButton_Click(object sender, RoutedEventArgs e)
@@ -736,6 +443,40 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             MessageBox.Show(ex.Message, "Close failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Clicking anywhere on a card (buttons excepted — they mark the event handled) opens its detail view.</summary>
+    void OrchestrationCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is not Border border || border.Tag is not OrchestrationCardView card)
+            return;
+
+        Open_DetailWindow(card);
+    }
+
+    void DetailsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not OrchestrationCardView card)
+            return;
+
+        Open_DetailWindow(card);
+    }
+
+    void Open_DetailWindow(OrchestrationCardView card)
+    {
+        // The general supervisor has no orchestration folder, ledger or implementers to detail.
+        if (card.OrchId == ChannelDiscovery.GENERAL_ORCH_ID)
+            return;
+
+        try
+        {
+            var detailWindow = new OrchestrationDetailWindow(_paths, _store, card.OrchId) { Owner = this };
+            detailWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Detail view failed", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
