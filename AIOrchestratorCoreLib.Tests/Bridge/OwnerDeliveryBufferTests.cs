@@ -10,7 +10,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void Take_ReadyDeliveries_BeforeQuietWindow_ReturnsNothing()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
         buffer.Add_Segment("chan-a", "first", T0);
 
         Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(10)));
@@ -20,7 +20,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void Take_ReadyDeliveries_RapidBurst_AggregatesIntoOneText()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
         buffer.Add_Segment("chan-a", "increase the throughput", T0);
         buffer.Add_Segment("chan-a", "I meant the CSV extraction", T0.AddSeconds(8));
 
@@ -33,7 +33,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void Take_ReadyDeliveries_NewMessageResetsTheQuietWindow()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
         buffer.Add_Segment("chan-a", "first", T0);
         buffer.Add_Segment("chan-a", "second", T0.AddSeconds(14));
 
@@ -45,7 +45,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void Take_ReadyDeliveries_IndependentTargets_FlushIndependently()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
         buffer.Add_Segment("chan-a", "for the crm", T0);
         buffer.Add_Segment("chan-b", "for the general", T0.AddSeconds(10));
 

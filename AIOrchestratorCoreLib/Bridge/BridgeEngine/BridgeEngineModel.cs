@@ -82,7 +82,15 @@ internal sealed class BridgeEngineModel(
     const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
 
     /// <summary>The owner often texts several messages in a row â€” quiet time before delivery as ONE entry.</summary>
-    const int OWNER_AGGREGATION_SECONDS = 8;
+    /// <summary>
+    /// Short ON PURPOSE: most messages arrive alone, and a long window makes every one of them feel
+    /// slow. The multi-message case is covered explicitly by WAIT … GO instead of by making
+    /// everyone wait (owner directive).
+    /// </summary>
+    const int OWNER_AGGREGATION_SECONDS = 4;
+
+    /// <summary>A forgotten WAIT must not swallow the owner's messages forever.</summary>
+    const int OWNER_HOLD_CAP_SECONDS = 60;
 
     const string GLOBAL_ORCH_ID = "";
 
@@ -117,7 +125,7 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _reportedLedgerShapeByOrchId = [];
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
-    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
+    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS, OWNER_HOLD_CAP_SECONDS);
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
     readonly Lock _deliveryLock = new();
 
@@ -148,6 +156,15 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>Per-orchestration clock for the app-emitted periodic STATUS.</summary>
     readonly Dictionary<string, DateTime> _lastPeriodicStatusUtc = [];
+
+    sealed class HoldReceipt
+    {
+        public long? MessageId;
+        public int HeldCount;
+    }
+
+    /// <summary>Target channel → the WAIT acknowledgement being kept up to date while held.</summary>
+    readonly Dictionary<string, HoldReceipt> _holdReceipts = [];
 
     sealed class PendingOwnerReply
     {
@@ -1834,8 +1851,18 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var message in routableMessages)
                 {
+                    if (await Apply_HoldControlWord_Async(client, message, cancellationToken))
+                        continue;
+
                     await Route_OwnerMessage_Async(message, cancellationToken);
-                    await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+
+                    // While HELD the phone stays quiet: no per-message tick. The single WAIT
+                    // acknowledgement already said "I have you" and is updated with the count
+                    // instead; the ✓/✓✓ pair comes after GO.
+                    if (Is_TargetHeld(message))
+                        await Update_HoldReceipt_Async(client, message, cancellationToken);
+                    else
+                        await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
                 }
 
                 foreach (var tap in batch.CallbackTaps)
@@ -2693,6 +2720,127 @@ internal sealed class BridgeEngineModel(
     /// aggregate into one entry after a quiet window (Flush_OwnerDeliveries_Async does the
     /// delivery and sends the 'âœ“ â†’ Sup' receipt).
     /// </summary>
+    /// <summary>
+    /// WAIT / GO — the owner's own hold on delivery. Returns true when the message WAS the control
+    /// word, in which case it is consumed: it never reaches the session, because "wait" alone is
+    /// not something the supervisor should read as an instruction.
+    ///
+    /// Only a message that is EXACTLY the word counts (see OwnerControlWords) — "wait for imp-2" is
+    /// a real instruction and must pass through untouched.
+    /// </summary>
+    async Task<bool> Apply_HoldControlWord_Async(
+        ITelegramApiClient client, Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
+    {
+        // Only typed text can be a control word; a voice note or photo is content.
+        if (message.VoiceFileId != null || message.PhotoFileId != null)
+            return false;
+
+        var targetKey = Resolve_TargetChannelFile_OrNull(message);
+
+        if (targetKey == null)
+            return false;
+
+        if (OwnerControlWords.Is_Wait(message.Text))
+        {
+            _ownerDeliveryBuffer.Hold(targetKey, DateTime.UtcNow);
+            _log.Log_Info(Describe_MessageOrch(message), "Owner sent WAIT — delivery held until GO");
+
+            // ONE message that then evolves in place as messages land — the owner gets no per-
+            // message tick while held, so this is the only thing telling them they are still heard.
+            try
+            {
+                var receiptId = await client.Send_Message_Async(message.MessageThreadId, Build_HoldReceiptText(0), cancellationToken);
+                _holdReceipts[targetKey] = new HoldReceipt { MessageId = receiptId, HeldCount = 0 };
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(Describe_MessageOrch(message), $"WAIT acknowledgement failed: {ex.Message}");
+            }
+
+            return true;
+        }
+
+        if (OwnerControlWords.Is_Go(message.Text))
+        {
+            _ownerDeliveryBuffer.Release(targetKey);
+            _holdReceipts.Remove(targetKey);
+            _log.Log_Info(Describe_MessageOrch(message), "Owner sent GO — releasing held messages");
+
+            // The tick the owner did not get per message, now that the thought is complete.
+            await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool Is_TargetHeld(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message)
+    {
+        var targetKey = Resolve_TargetChannelFile_OrNull(message);
+
+        return targetKey != null && _ownerDeliveryBuffer.Is_Holding(targetKey);
+    }
+
+    static string Build_HoldReceiptText(int heldCount)
+    {
+        if (heldCount == 0)
+            return "⏸ holding — send GO when you're done";
+
+        return $"⏸ holding · {heldCount} message{(heldCount == 1 ? "" : "s")} — send GO when you're done";
+    }
+
+    /// <summary>
+    /// Counts a message that landed during a hold, and rewrites the WAIT acknowledgement in place.
+    /// Held messages get no tick of their own, so without this the owner is typing into silence.
+    /// </summary>
+    async Task Update_HoldReceipt_Async(
+        ITelegramApiClient client, Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
+    {
+        var targetKey = Resolve_TargetChannelFile_OrNull(message);
+
+        if (targetKey == null || !_holdReceipts.TryGetValue(targetKey, out var receipt) || receipt.MessageId == null)
+            return;
+
+        receipt.HeldCount++;
+
+        try
+        {
+            await client.Edit_MessageText_Async(receipt.MessageId.Value, Build_HoldReceiptText(receipt.HeldCount), cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(Describe_MessageOrch(message), $"Hold receipt update failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>The buffer keys on the channel file — one resolver, so hold and delivery cannot disagree.</summary>
+    string? Resolve_TargetChannelFile_OrNull(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message)
+    {
+        if (message.MessageThreadId == null)
+            return _paths.GeneralChannelFile;
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(message.MessageThreadId.Value);
+
+        return session == null ? null : _paths.Get_OwnerChannelFile(session.OrchId);
+    }
+
+    string Describe_MessageOrch(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message)
+    {
+        if (message.MessageThreadId == null)
+            return ChannelDiscovery.GENERAL_ORCH_ID;
+
+        return _store.Find_ByTelegramTopicId_OrNull(message.MessageThreadId.Value)?.OrchId ?? GLOBAL_ORCH_ID;
+    }
+
     async Task Route_OwnerMessage_Async(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
     {
         string orchId;
@@ -2754,6 +2902,9 @@ internal sealed class BridgeEngineModel(
 
         foreach (var delivery in _ownerDeliveryBuffer.Take_ReadyDeliveries(DateTime.UtcNow))
         {
+            // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
+            _holdReceipts.Remove(delivery.Key);
+
             (string OrchId, long? ThreadId) target;
 
             lock (_deliveryLock)

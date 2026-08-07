@@ -1,14 +1,17 @@
 namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 
-internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerDeliveryBuffer
+internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdCapSeconds) : IOwnerDeliveryBuffer
 {
     sealed class PendingDelivery
     {
         public readonly List<string> Segments = [];
         public DateTime LastArrivalUtc;
+        public bool Held;
+        public bool ReleaseRequested;
     }
 
     readonly int _aggregationSeconds = aggregationSeconds;
+    readonly int _holdCapSeconds = holdCapSeconds;
     readonly Dictionary<string, PendingDelivery> _pending = [];
     readonly Lock _lock = new();
 
@@ -16,14 +19,45 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
     {
         lock (_lock)
         {
-            if (!_pending.TryGetValue(targetKey, out var delivery))
-            {
-                delivery = new PendingDelivery();
-                _pending[targetKey] = delivery;
-            }
+            var delivery = Get_OrCreate(targetKey);
 
             delivery.Segments.Add(segment);
             delivery.LastArrivalUtc = nowUtc;
+        }
+    }
+
+    public void Hold(string targetKey, DateTime nowUtc)
+    {
+        lock (_lock)
+        {
+            var delivery = Get_OrCreate(targetKey);
+
+            delivery.Held = true;
+            delivery.ReleaseRequested = false;
+
+            // A WAIT with nothing buffered yet still starts the idle clock, so a forgotten hold
+            // cannot sit there forever waiting for a first message that never comes.
+            delivery.LastArrivalUtc = nowUtc;
+        }
+    }
+
+    public void Release(string targetKey)
+    {
+        lock (_lock)
+        {
+            if (!_pending.TryGetValue(targetKey, out var delivery))
+                return;
+
+            delivery.Held = false;
+            delivery.ReleaseRequested = true;
+        }
+    }
+
+    public bool Is_Holding(string targetKey)
+    {
+        lock (_lock)
+        {
+            return _pending.TryGetValue(targetKey, out var delivery) && delivery.Held;
         }
     }
 
@@ -34,12 +68,26 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
         lock (_lock)
         {
             List<string> readyKeys = [];
+            List<string> emptyKeys = [];
 
             foreach (var pair in _pending)
             {
-                if ((nowUtc - pair.Value.LastArrivalUtc).TotalSeconds >= _aggregationSeconds)
-                    readyKeys.Add(pair.Key);
+                if (!Is_Ready(pair.Value, nowUtc))
+                    continue;
+
+                // A hold that only ever received WAIT (or WAIT then GO) has nothing to deliver —
+                // drop the entry rather than sending the session an empty entry.
+                if (pair.Value.Segments.Count == 0)
+                {
+                    emptyKeys.Add(pair.Key);
+                    continue;
+                }
+
+                readyKeys.Add(pair.Key);
             }
+
+            foreach (var key in emptyKeys)
+                _pending.Remove(key);
 
             foreach (var key in readyKeys)
             {
@@ -49,6 +97,33 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
         }
 
         return ready;
+    }
+
+    bool Is_Ready(PendingDelivery delivery, DateTime nowUtc)
+    {
+        // GO: deliver now, no window — the owner has said they are done typing.
+        if (delivery.ReleaseRequested)
+            return true;
+
+        var idleSeconds = (nowUtc - delivery.LastArrivalUtc).TotalSeconds;
+
+        // Held: nothing goes out until GO, EXCEPT after a long silence. Without that cap a
+        // forgotten WAIT would swallow the owner's messages indefinitely, and the session would sit
+        // idle waiting for traffic it can never receive.
+        if (delivery.Held)
+            return idleSeconds >= _holdCapSeconds;
+
+        return idleSeconds >= _aggregationSeconds;
+    }
+
+    PendingDelivery Get_OrCreate(string targetKey)
+    {
+        if (_pending.TryGetValue(targetKey, out var existing))
+            return existing;
+
+        var created = new PendingDelivery();
+        _pending[targetKey] = created;
+        return created;
     }
 
     public bool Has_PendingDeliveries()
