@@ -293,6 +293,10 @@ public partial class MainWindow : Window
             ClosedLabel = session.ClosedUtc == null ? "" : $"CLOSED {session.ClosedUtc.Value.ToLocalTime():dd/MM HH:mm}",
             CardOpacity = session.ClosedUtc == null ? 1.0 : 0.5,
             Members = rows,
+            SilenceGlyph = session.TelegramSilenced ? "🔕" : "🔔",
+            SilenceTooltip = session.TelegramSilenced
+                ? "This topic is SILENCED — its messages are dropped, not queued. Click to resume texting."
+                : "Silence this topic — nothing from it gets texted while you work in its terminal (not queued).",
             ProgressVisibility = progress == null ? Visibility.Collapsed : Visibility.Visible,
             ProgressText = progress == null ? "" : Build_ProgressText(progress),
             ProgressDoneStar = new GridLength(progress?.Done ?? 0, GridUnitType.Star),
@@ -453,6 +457,32 @@ public partial class MainWindow : Window
             return;
 
         Open_DetailWindow(card);
+    }
+
+    /// <summary>
+    /// Per-topic silence: for when the owner is working directly in that supervisor's terminal and
+    /// wants nothing texted. Distinct from the global DND checkbox, which QUEUES instead of dropping.
+    /// </summary>
+    void SilenceButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not OrchestrationCardView card)
+            return;
+
+        try
+        {
+            var session = _store.Get_Session_OrNull(card.OrchId);
+
+            if (session == null)
+                return;
+
+            _store.Set_TelegramSilenced(card.OrchId, !session.TelegramSilenced);
+            Add_LogRow(LogLevels.Info, $"[{card.OrchId}] topic {(session.TelegramSilenced ? "unsilenced" : "silenced")}");
+            Refresh_Orchestrations();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Silence toggle failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     void DetailsButton_Click(object sender, RoutedEventArgs e)

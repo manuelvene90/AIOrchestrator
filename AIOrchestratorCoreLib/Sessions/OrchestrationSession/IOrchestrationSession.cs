@@ -33,6 +33,14 @@ public interface IOrchestrationSession
 
     IReadOnlyList<IOrchestrationMember> Members { get; }
 
+    /// <summary>
+    /// TOPIC SILENCE — the "I'm at the PC talking to this supervisor in its terminal" mode.
+    /// Different from Do-Not-Disturb: DND QUEUES outbound traffic and delivers it in a burst on
+    /// unmute, while silence DROPS this orchestration's outbound traffic entirely (the owner is
+    /// reading it in the terminal). Inbound still works, and other topics are unaffected.
+    /// </summary>
+    bool TelegramSilenced { get; }
+
     /// <summary>Set when the general supervisor closed this orchestration. Folder stays as audit trail.</summary>
     DateTime? ClosedUtc { get; }
 }

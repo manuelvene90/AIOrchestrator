@@ -224,7 +224,7 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var alert in _watchdog.Take_PendingCrashLoopAlerts())
         {
-            if (_telegramClient == null)
+            if (_telegramClient == null || Is_TopicSilenced(alert.OrchId))
                 continue;
 
             try
@@ -272,6 +272,9 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             if (!_stallAlertedOrchIds.Add(session.OrchId))
+                continue;
+
+            if (session.TelegramSilenced)
                 continue;
 
             var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: quiet for {SessionDuration_Formatter.Describe(quietFor)} and no session is working — the supervisor may have ended its turn without re-arming its watcher. Text it to wake it up.";
@@ -420,7 +423,9 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Warning(session.OrchId, $"{member.MemberId} had unread traffic for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
                 Raise_OrchestrationActivity(session.OrchId);
 
-                if (_telegramClient == null)
+                // The channel nudge above ALWAYS happens (it is what unsticks the implementer);
+                // only the owner-facing text respects the topic's silence.
+                if (_telegramClient == null || session.TelegramSilenced)
                     continue;
 
                 try
@@ -461,6 +466,9 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             if (!_budgetAlertedOrchIds.Add(session.OrchId))
+                continue;
+
+            if (session.TelegramSilenced)
                 continue;
 
             var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} used — past the {UsageTotals_Reader.Format_Tokens(budgetTokens.Value)} budget you set.";
@@ -635,6 +643,12 @@ internal sealed class BridgeEngineModel(
         if (mirrorableEntries.Count == 0)
             return;
 
+        // TOPIC SILENCE ("I'm at the PC, talking to this supervisor in its terminal"): drop this
+        // orchestration's outbound traffic entirely. Unlike DND, nothing is queued for later —
+        // the owner is already reading it live in the terminal, and offsets keep advancing.
+        if (Is_TopicSilenced(append.Channel.OrchId))
+            return;
+
         var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
 
         foreach (var entry in mirrorableEntries)
@@ -704,6 +718,19 @@ internal sealed class BridgeEngineModel(
             return (string.Empty, text);
 
         return (match.Groups[1].Value, match.Groups[2].Value);
+    }
+
+    /// <summary>
+    /// Is this orchestration's topic silenced? Silence is TOTAL for that topic — mirrored entries
+    /// and its alerts alike — because the owner asked for no messages while they work in the
+    /// terminal. Other topics and the General topic are unaffected.
+    /// </summary>
+    bool Is_TopicSilenced(string orchId)
+    {
+        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
+            return false;
+
+        return _store.Get_Session_OrNull(orchId)?.TelegramSilenced == true;
     }
 
     /// <summary>Pulls '<marker>: value' lines out of the text (which shrinks accordingly) and returns the values.</summary>
@@ -1272,6 +1299,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_ImplementerPeek_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
                     }
+                    else if (command == "mute" || command == "unmute")
+                    {
+                        await Set_TopicSilence_Async(client, message.MessageThreadId, command == "mute", cancellationToken);
+                    }
                     else
                     {
                         routableMessages.Add(message);
@@ -1340,6 +1371,8 @@ internal sealed class BridgeEngineModel(
                     ("limits", "5-hour and weekly usage limits"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
+                    ("mute", "Silence THIS topic — I'm working in its terminal"),
+                    ("unmute", "Resume messages in this topic"),
                     ("summary", "What is going on across all orchestrations"),
                     ("pending", "Open questions awaiting me"),
                     ("dnd", "Mute texts (text anything to unmute)"),
@@ -1657,6 +1690,49 @@ internal sealed class BridgeEngineModel(
             return $"{session.RepoPath} is not a git repository";
 
         return string.Join("\n\n", blocks);
+    }
+
+    /// <summary>
+    /// /mute and /unmute — TOPIC silence, the "I'm at the PC in this supervisor's terminal" mode.
+    /// Deliberately not the same as Do-Not-Disturb: DND queues everything and dumps it on unmute,
+    /// this DROPS the topic's outbound traffic while it lasts. Survives app restarts (session.json).
+    /// </summary>
+    async Task Set_TopicSilence_Async(ITelegramApiClient client, long? messageThreadId, bool silenced, CancellationToken cancellationToken)
+    {
+        if (messageThreadId == null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, null, "/mute works inside an orchestration's topic — for ALL topics use /dnd", cancellationToken);
+            return;
+        }
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "no orchestration is bound to this topic", cancellationToken);
+            return;
+        }
+
+        try
+        {
+            _store.Set_TelegramSilenced(session.OrchId, silenced);
+            _log.Log_Info(session.OrchId, silenced ? "Topic silenced — outbound traffic dropped until /unmute" : "Topic unsilenced");
+            Raise_OrchestrationActivity(session.OrchId);
+
+            // Sent BEFORE the silence takes hold on the next tick, so the confirmation itself gets through.
+            await Send_DirectReply_BestEffort_Async(
+                client,
+                messageThreadId,
+                silenced
+                    ? "🔕 topic silenced — nothing from this orchestration will be texted (not queued: you're reading it in the terminal). /unmute to resume."
+                    : "🔔 topic unsilenced — messages resume from here on (what happened while silent stays in the terminal and the app).",
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "set topic silence failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"could not change silence: {ex.Message}", cancellationToken);
+        }
     }
 
     /// <summary>/imp 2 — the latest entries of one implementer's spoke, which never reaches Telegram otherwise.</summary>

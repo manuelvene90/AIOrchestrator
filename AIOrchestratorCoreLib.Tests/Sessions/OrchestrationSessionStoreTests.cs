@@ -37,6 +37,30 @@ public class OrchestrationSessionStoreTests : IDisposable
     }
 
     [Fact]
+    public void Set_TelegramSilenced_RoundTrips_AndLeavesEverythingElseIntact()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+        _store.Add_Implementer("arb-fix");
+        _store.Set_DisplayName("arb-fix", "drift guard");
+        _store.Set_SupervisorModelOverride("arb-fix", "fable");
+
+        Assert.False(_store.Get_Session("arb-fix").TelegramSilenced);
+
+        _store.Set_TelegramSilenced("arb-fix", true);
+
+        var silenced = _store.Get_Session("arb-fix");
+        Assert.True(silenced.TelegramSilenced);
+
+        // The copy-with-overrides path must not drop neighbouring fields.
+        Assert.Equal("drift guard", silenced.DisplayName);
+        Assert.Equal("fable", silenced.SupervisorModelOverride);
+        Assert.Single(silenced.Members);
+
+        _store.Set_TelegramSilenced("arb-fix", false);
+        Assert.False(_store.Get_Session("arb-fix").TelegramSilenced);
+    }
+
+    [Fact]
     public void Create_Orchestration_DuplicateId_Throws()
     {
         _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");

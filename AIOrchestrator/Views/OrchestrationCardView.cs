@@ -21,6 +21,11 @@ public class OrchestrationCardView
     /// <summary>Collapsed on the general supervisor's card: it has no implementers and cannot be closed.</summary>
     public System.Windows.Visibility OrchestrationButtonsVisibility { get; init; } = System.Windows.Visibility.Visible;
 
+    /// <summary>🔕 when this topic's outbound Telegram traffic is dropped ("I'm in its terminal").</summary>
+    public string SilenceGlyph { get; init; } = "🔔";
+
+    public string SilenceTooltip { get; init; } = string.Empty;
+
     /// <summary>PLAN.md ledger progress — collapsed when the supervisor keeps no plan file.</summary>
     public System.Windows.Visibility ProgressVisibility { get; init; } = System.Windows.Visibility.Collapsed;
 

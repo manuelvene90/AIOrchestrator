@@ -37,6 +37,7 @@ public static class SessionJson_Serializer
             ["supervisorModelOverride"] = session.SupervisorModelOverride,
             ["implementerModelOverride"] = session.ImplementerModelOverride,
             ["members"] = membersArray,
+            ["telegramSilenced"] = session.TelegramSilenced,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
         };
 
@@ -86,7 +87,17 @@ public static class SessionJson_Serializer
             Get_String_OrNull(root, "supervisorModelOverride"),
             Get_String_OrNull(root, "implementerModelOverride"),
             members,
+            Get_Bool_OrNull(root, "telegramSilenced") ?? false,
             Get_DateTime_OrNull(root, "closedUtc"));
+    }
+
+    static bool? Get_Bool_OrNull(JsonObject root, string key)
+    {
+        var node = root[key];
+        if (node == null)
+            return null;
+
+        return node.GetValue<bool>();
     }
 
     static string? Get_String_OrNull(JsonObject root, string key)

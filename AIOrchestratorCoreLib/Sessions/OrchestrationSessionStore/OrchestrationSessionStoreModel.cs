@@ -128,6 +128,15 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_TelegramSilenced(string orchId, bool silenced)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithTelegramSilenced(session, silenced));
+        }
+    }
+
     public void Set_MemberPid(string orchId, string memberId, int? pid)
     {
         lock (_writeLock)

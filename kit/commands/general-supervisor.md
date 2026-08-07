@@ -64,6 +64,11 @@ One level up, `~/.claude/supervision/`:
   (mute), `/progress` (PLAN.md ledgers), `/tokens` (usage totals) and `/limits` (5-hour and
   weekly windows) are answered by the app itself and never involve you.
 
+  Two different silences, do not confuse them: `/dnd` (or `set-telegram-muted`) is SUITE-WIDE and
+  QUEUES everything for a catch-up burst; `/mute` inside one orchestration's topic SILENCES just
+  that topic and DROPS its messages — the owner is working in that supervisor's terminal and does
+  not want the same content twice. Both survive restarts.
+
   `telegramItalianLayer` (default true, read LIVE): the APP translates Telegram traffic — the
   owner reads/writes Italian on the phone while every channel and session stays 100% English.
   You NEVER translate anything yourself; write English as always and the app handles the rest.

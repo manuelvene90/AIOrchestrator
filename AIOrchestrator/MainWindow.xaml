@@ -70,6 +70,9 @@
                                                 <Button Content="＋ Implementer" Tag="{Binding}" Click="AddImplementerButton_Click" Margin="0,0,6,0"
                                                         Visibility="{Binding OrchestrationButtonsVisibility}"
                                                         IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"/>
+                                                <Button Content="{Binding SilenceGlyph}" Tag="{Binding}" Click="SilenceButton_Click" Margin="0,0,6,0"
+                                                        Visibility="{Binding OrchestrationButtonsVisibility}"
+                                                        ToolTip="{Binding SilenceTooltip}"/>
                                                 <Button Content="📊 Details" Tag="{Binding}" Click="DetailsButton_Click" Margin="0,0,6,0"
                                                         ToolTip="Task ledger, live activity feed and every session's state"/>
                                                 <Button Content="📂" Tag="{Binding}" Click="OpenFolderButton_Click" ToolTip="Open orchestration folder" Margin="0,0,6,0"/>
