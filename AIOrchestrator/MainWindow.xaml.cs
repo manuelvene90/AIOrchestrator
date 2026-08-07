@@ -282,6 +282,9 @@ public partial class MainWindow : Window
         var ranWord = session.ClosedUtc == null ? "running" : "ran";
         var orchIdSuffix = session.DisplayName == null ? "" : $"· {session.OrchId} ";
 
+        var progress = AIOrchestratorCoreLib.Planning.PlanLedger_Parser.Parse_OrNull(
+            Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
+
         return new OrchestrationCardView
         {
             OrchId = session.OrchId,
@@ -292,7 +295,27 @@ public partial class MainWindow : Window
             ClosedLabel = session.ClosedUtc == null ? "" : $"CLOSED {session.ClosedUtc.Value.ToLocalTime():dd/MM HH:mm}",
             CardOpacity = session.ClosedUtc == null ? 1.0 : 0.5,
             Members = rows,
+            ProgressVisibility = progress == null ? Visibility.Collapsed : Visibility.Visible,
+            ProgressText = progress == null ? "" : Build_ProgressText(progress),
+            ProgressDoneStar = new GridLength(progress?.Done ?? 0, GridUnitType.Star),
+            ProgressLeftStar = new GridLength(Math.Max(0, (progress?.Total ?? 1) - (progress?.Done ?? 0)), GridUnitType.Star),
         };
+    }
+
+    static string Build_ProgressText(AIOrchestratorCoreLib.Planning.PlanProgress.IPlanProgress progress)
+    {
+        List<string> parts = [$"{progress.Done}/{progress.Total} tasks"];
+
+        if (progress.InProgress > 0)
+            parts.Add($"{progress.InProgress} running");
+
+        if (progress.Blocked > 0)
+            parts.Add($"{progress.Blocked} BLOCKED");
+
+        if (progress.CurrentTaskText != null)
+            parts.Add($"now: {progress.CurrentTaskText}");
+
+        return string.Join("  ·  ", parts);
     }
 
     MemberRowView Build_SupervisorRow(IOrchestrationSession session)
@@ -450,13 +473,27 @@ public partial class MainWindow : Window
         foreach (var member in session.Members)
             usageFiles.Add(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), ".usage.json"));
 
+        var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
         var costTotal = 0.0;
         long tokenTotal = 0;
 
         foreach (var usageFile in usageFiles)
         {
-            costTotal += Read_SessionCost_OrNull(usageFile) ?? 0.0;
-            tokenTotal += Read_SessionTokens_OrNull(usageFile) ?? 0L;
+            if (!File.Exists(usageFile))
+                continue;
+
+            // Lifetime accumulation: each respawn resets the session's own .usage.json, so raw
+            // sums under-report long orchestrations — the accumulator folds dead sessions in.
+            var sourceKey = Path.GetRelativePath(orchFolder, usageFile);
+
+            var (lifetimeCost, lifetimeTokens) = AIOrchestratorCoreLib.Usage.UsageLifetime_Accumulator.Accumulate(
+                orchFolder,
+                sourceKey,
+                Read_SessionCost_OrNull(usageFile) ?? 0.0,
+                Read_SessionTokens_OrNull(usageFile) ?? 0L);
+
+            costTotal += lifetimeCost;
+            tokenTotal += lifetimeTokens;
         }
 
         if (costTotal <= 0 && tokenTotal <= 0)

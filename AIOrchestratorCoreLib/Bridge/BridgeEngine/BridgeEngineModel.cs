@@ -141,8 +141,11 @@ internal sealed class BridgeEngineModel(
 
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
+        // Crash-loop alerts stay queued in the watchdog until unmute for the same reason.
         if (_telegramMuted && _telegramClient != null)
             return;
+
+        await Send_CrashLoopAlerts_Async(cancellationToken);
 
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
@@ -159,6 +162,30 @@ internal sealed class BridgeEngineModel(
         await Check_UsageLimits_Async(cancellationToken);
 
         Persist_BridgeState();
+    }
+
+    /// <summary>A session respawning repeatedly without coming alive is INVISIBLE from the phone — escalate it.</summary>
+    async Task Send_CrashLoopAlerts_Async(CancellationToken cancellationToken)
+    {
+        foreach (var alert in _watchdog.Take_PendingCrashLoopAlerts())
+        {
+            if (_telegramClient == null)
+                continue;
+
+            try
+            {
+                var session = _store.Get_Session_OrNull(alert.OrchId);
+                await _telegramClient.Send_Message_Async(session?.TelegramTopicId, alert.AlertText, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(alert.OrchId, $"Crash-loop alert send failed: {ex.Message}");
+            }
+        }
     }
 
     /// <summary>

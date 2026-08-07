@@ -23,6 +23,11 @@ internal sealed class SupervisionPathsModel(string root) : ISupervisionPaths
         return Path.Combine(Get_OrchestrationFolder(orchId), "session.json");
     }
 
+    public string Get_PlanFile(string orchId)
+    {
+        return Path.Combine(Get_OrchestrationFolder(orchId), "PLAN.md");
+    }
+
     public string Get_OwnerChannelFile(string orchId)
     {
         return Path.Combine(Get_OrchestrationFolder(orchId), "owner-channel.md");

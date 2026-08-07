@@ -9,4 +9,10 @@ namespace AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 public interface ISessionWatchdog
 {
     void Check_AndRestart_DeadSessions();
+
+    /// <summary>
+    /// Drains crash-loop alerts (a slot respawned repeatedly without ever coming alive) for the
+    /// engine to escalate to Telegram — silent respawning is right for one death, wrong for a loop.
+    /// </summary>
+    IReadOnlyList<(string OrchId, string AlertText)> Take_PendingCrashLoopAlerts();
 }

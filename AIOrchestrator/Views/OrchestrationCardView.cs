@@ -20,6 +20,16 @@ public class OrchestrationCardView
 
     /// <summary>Collapsed on the general supervisor's card: it has no implementers and cannot be closed.</summary>
     public System.Windows.Visibility OrchestrationButtonsVisibility { get; init; } = System.Windows.Visibility.Visible;
+
+    /// <summary>PLAN.md ledger progress — collapsed when the supervisor keeps no plan file.</summary>
+    public System.Windows.Visibility ProgressVisibility { get; init; } = System.Windows.Visibility.Collapsed;
+
+    public string ProgressText { get; init; } = string.Empty;
+
+    /// <summary>Star-sized pair driving the slim progress bar: done fraction vs the rest.</summary>
+    public System.Windows.GridLength ProgressDoneStar { get; init; } = new(0, System.Windows.GridUnitType.Star);
+
+    public System.Windows.GridLength ProgressLeftStar { get; init; } = new(1, System.Windows.GridUnitType.Star);
 }
 
 /// <summary>One row inside a card: the supervisor or an implementer, with its state chip.</summary>

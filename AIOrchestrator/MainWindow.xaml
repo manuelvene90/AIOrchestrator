@@ -76,6 +76,20 @@
                                             </StackPanel>
                                         </DockPanel>
 
+                                        <!-- PLAN.md ledger: slim progress bar + counts (collapsed when no plan exists) -->
+                                        <StackPanel Visibility="{Binding ProgressVisibility}" Margin="0,0,0,6">
+                                            <Grid Height="4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="{Binding ProgressDoneStar}"/>
+                                                    <ColumnDefinition Width="{Binding ProgressLeftStar}"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Border Grid.Column="0" Background="{StaticResource StateWorking}" CornerRadius="2,0,0,2"/>
+                                                <Border Grid.Column="1" Background="{StaticResource BorderSubtle}" CornerRadius="0,2,2,0"/>
+                                            </Grid>
+                                            <TextBlock Text="{Binding ProgressText}" Foreground="{StaticResource TextSecondary}" FontSize="10"
+                                                       Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+
                                         <ItemsControl ItemsSource="{Binding Members}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type views:MemberRowView}">

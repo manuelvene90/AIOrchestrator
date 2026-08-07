@@ -30,6 +30,9 @@ public interface ISupervisionPaths
 
     string Get_OrchestrationFolder(string orchId);
     string Get_SessionFile(string orchId);
+
+    /// <summary>The supervisor-maintained task ledger (PLAN.md) the card's progress bar reads.</summary>
+    string Get_PlanFile(string orchId);
     string Get_OwnerChannelFile(string orchId);
     string Get_OrchestrationLogFile(string orchId);
     string Get_ImplementerFolder(string orchId, string memberId);

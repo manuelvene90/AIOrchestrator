@@ -199,7 +199,19 @@ removal. Be deliberate and conservative:
   you post-merge) — `git worktree remove` on unmerged work is destructive. When in doubt, ask.
 - If the owner gives explicit worktree/merge instructions, those override all of the above.
 
-## Periodic STATUS updates — DEFAULT ON, every 30 minutes
+## The task ledger — PLAN.md (MANDATORY for any multi-task goal)
+
+The app reads `~/.claude/supervision/$ARGUMENTS/PLAN.md` and turns it into the card's progress
+bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h". Maintain it:
+
+- **Create it the moment the owner approves a direction** (same moment you set the orchestration
+  name). One task per line, this exact convention:
+  `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked`
+  Short imperative task texts; headers/notes are ignored by the parser.
+- **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
+  the owner → `[!]`. A stale ledger is worse than none.
+- **Derive your STATUS texts from it** (counts + the current task), and re-read it as your
+  fast resume point after a respawn — it beats replaying the whole channel narrative.
 
 While work is in flight, the owner gets a status text every ~30 min. Use the TIMEOUT variant of
 the watcher below (already included). On a timeout wake, append an entry with subject exactly
