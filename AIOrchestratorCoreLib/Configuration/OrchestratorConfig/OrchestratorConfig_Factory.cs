@@ -21,7 +21,8 @@ public static class OrchestratorConfig_Factory
         long? telegramOwnerUserId,
         string? telegramBotToken,
         bool? telegramItalianLayer,
-        string? voiceTranscribeCommand)
+        string? voiceTranscribeCommand,
+        long? orchestrationTokenBudget)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -33,11 +34,12 @@ public static class OrchestratorConfig_Factory
             telegramOwnerUserId,
             telegramBotToken,
             telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER,
-            voiceTranscribeCommand);
+            voiceTranscribeCommand,
+            orchestrationTokenBudget);
     }
 
     public static IOrchestratorConfig Create_Empty()
     {
-        return Create([], null, null, null, null, null, null, null, null, null);
+        return Create([], null, null, null, null, null, null, null, null, null, null);
     }
 }

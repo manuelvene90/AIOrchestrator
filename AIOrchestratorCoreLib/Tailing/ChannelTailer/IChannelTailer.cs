@@ -15,4 +15,11 @@ public interface IChannelTailer
 
     /// <summary>Current offsets snapshot, persisted by the bridge so restarts do not re-mirror.</summary>
     IReadOnlyDictionary<string, long> Get_OffsetsSnapshot();
+
+    /// <summary>
+    /// Re-anchors a file's offset after the bridge itself rewrote it (channel compaction). Without
+    /// this the shrink would look like the append-only protocol breaking and the whole remaining
+    /// file would be re-mirrored to Telegram.
+    /// </summary>
+    void Set_Offset(string channelFilePath, long offset);
 }

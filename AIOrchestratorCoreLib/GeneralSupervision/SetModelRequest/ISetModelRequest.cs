@@ -13,5 +13,9 @@ public interface ISetModelRequest
     string Role { get; }
 
     string Model { get; }
+
+    /// <summary>WHY the model is being switched — relayed to the owner, never silent.</summary>
+    string Reason { get; }
+
     string SourceFilePath { get; }
 }

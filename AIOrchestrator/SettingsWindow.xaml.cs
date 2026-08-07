@@ -66,7 +66,8 @@ public partial class SettingsWindow : Window
             ownerId,
             Null_IfEmpty(BotTokenTextBox.Text),
             ItalianLayerCheckBox.IsChecked == true,
-            _config.VoiceTranscribeCommand);
+            _config.VoiceTranscribeCommand,
+            _config.OrchestrationTokenBudget);
 
         OrchestratorConfig_Loader.Save(updated, _paths);
         Close();

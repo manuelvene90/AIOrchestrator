@@ -26,6 +26,15 @@ public class ActivityRowView
     public string BodyPreview { get; init; } = string.Empty;
 }
 
+/// <summary>One working tree's real git state in the detail window — ground truth, not agent prose.</summary>
+public class GitTreeView
+{
+    public string HeaderText { get; init; } = string.Empty;
+    public string StateText { get; init; } = string.Empty;
+    public Brush StateBrush { get; init; } = Brushes.Gray;
+    public string CommitsText { get; init; } = string.Empty;
+}
+
 /// <summary>A labelled figure in the detail window's header strip.</summary>
 public class StatChipView
 {

@@ -35,5 +35,11 @@ public interface IOrchestratorConfig
     /// </summary>
     string? VoiceTranscribeCommand { get; }
 
+    /// <summary>
+    /// Runaway guard: text the owner once an orchestration's lifetime tokens pass this ceiling.
+    /// Null or 0 = no guard.
+    /// </summary>
+    long? OrchestrationTokenBudget { get; }
+
     bool Is_TelegramConfigured();
 }

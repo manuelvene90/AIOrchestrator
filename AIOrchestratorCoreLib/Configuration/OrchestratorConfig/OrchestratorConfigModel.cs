@@ -12,7 +12,8 @@ internal sealed class OrchestratorConfigModel(
     long? telegramOwnerUserId,
     string? telegramBotToken,
     bool telegramItalianLayer,
-    string? voiceTranscribeCommand) : IOrchestratorConfig
+    string? voiceTranscribeCommand,
+    long? orchestrationTokenBudget) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -24,6 +25,7 @@ internal sealed class OrchestratorConfigModel(
     public string? TelegramBotToken { get; } = telegramBotToken;
     public bool TelegramItalianLayer { get; } = telegramItalianLayer;
     public string? VoiceTranscribeCommand { get; } = voiceTranscribeCommand;
+    public long? OrchestrationTokenBudget { get; } = orchestrationTokenBudget;
 
     public bool Is_TelegramConfigured()
     {

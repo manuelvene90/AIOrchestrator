@@ -7,5 +7,12 @@ namespace AIOrchestratorCoreLib.GeneralSupervision.AddImplementerRequest;
 public interface IAddImplementerRequest
 {
     string OrchId { get; }
+
+    /// <summary>
+    /// WHY this implementer is being spawned, in one short line. MANDATORY: every autonomous
+    /// action costs the owner tokens, so it is relayed to them with its reason — never silently.
+    /// </summary>
+    string Reason { get; }
+
     string SourceFilePath { get; }
 }

@@ -37,6 +37,12 @@ public static class OrchestrationRequests_Reader
     public const string SET_ORCHESTRATION_NAME_ACTION = "set-orchestration-name";
     public const string SET_MODEL_ACTION = "set-model";
 
+    /// <summary>
+    /// Every autonomous action costs the owner tokens, so it must justify itself: the app relays
+    /// the reason to them. Rejecting is deliberate — a silent spawn left the owner in the dark.
+    /// </summary>
+    public const string MISSING_REASON_MESSAGE = "missing 'reason' — every autonomous action must state WHY in one short line (it is relayed to the owner)";
+
     public static IPendingRequests Read_Pending(ISupervisionPaths paths)
     {
         List<IStartOrchestrationRequest> startRequests = [];
@@ -56,12 +62,25 @@ public static class OrchestrationRequests_Reader
                     file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests);
 
                 if (rejectionReason != null)
-                    malformedRequests.Add(MalformedRequest_Factory.Create(file, rejectionReason));
+                    malformedRequests.Add(MalformedRequest_Factory.Create(file, rejectionReason, Peek_OrchId_OrNull(file)));
             }
         }
 
         return PendingRequests_Factory.Create(
             startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests, malformedRequests);
+    }
+
+    /// <summary>Best-effort orchId of a REJECTED file, so the rejection can be reported in its channel.</summary>
+    static string? Peek_OrchId_OrNull(string filePath)
+    {
+        try
+        {
+            return (JsonNode.Parse(File.ReadAllText(filePath)) as JsonObject)?["orchId"]?.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>Returns null on success, otherwise the rejection reason.</summary>
@@ -111,7 +130,11 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(orchId))
                         return "missing 'orchId'";
 
-                    addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, filePath));
+                    var reason = root["reason"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(reason))
+                        return MISSING_REASON_MESSAGE;
+
+                    addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, reason.Trim(), filePath));
                     return null;
                 }
                 case CLOSE_IMPLEMENTER_ACTION:
@@ -120,7 +143,11 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(orchId) || string.IsNullOrWhiteSpace(memberId))
                         return "missing 'orchId' or 'memberId'";
 
-                    closeImplementerRequests.Add(CloseImplementerRequest_Factory.Create(orchId, memberId, filePath));
+                    var reason = root["reason"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(reason))
+                        return MISSING_REASON_MESSAGE;
+
+                    closeImplementerRequests.Add(CloseImplementerRequest_Factory.Create(orchId, memberId, reason.Trim(), filePath));
                     return null;
                 }
                 case CLOSE_ORCHESTRATION_ACTION:
@@ -128,7 +155,13 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(orchId))
                         return "missing 'orchId'";
 
-                    closeOrchestrationRequests.Add(CloseOrchestrationRequest_Factory.Create(orchId, filePath));
+                    // The owner's own UI close button carries no reason — only AGENT-initiated
+                    // closes must justify themselves, so this one defaults instead of rejecting.
+                    var reason = root["reason"]?.GetValue<string>();
+
+                    closeOrchestrationRequests.Add(CloseOrchestrationRequest_Factory.Create(
+                        orchId, string.IsNullOrWhiteSpace(reason) ? "work concluded" : reason.Trim(), filePath));
+
                     return null;
                 }
                 case SET_TELEGRAM_MUTED_ACTION:
@@ -161,7 +194,11 @@ public static class OrchestrationRequests_Reader
                     if (normalizedRole != SetModelRequest_Factory.SUPERVISOR_ROLE && normalizedRole != SetModelRequest_Factory.IMPLEMENTER_ROLE)
                         return $"role must be '{SetModelRequest_Factory.SUPERVISOR_ROLE}' or '{SetModelRequest_Factory.IMPLEMENTER_ROLE}', got '{roleValue}'";
 
-                    setModelRequests.Add(SetModelRequest_Factory.Create(orchId, normalizedRole, modelValue, filePath));
+                    var modelReason = root["reason"]?.GetValue<string>();
+
+                    setModelRequests.Add(SetModelRequest_Factory.Create(
+                        orchId, normalizedRole, modelValue, string.IsNullOrWhiteSpace(modelReason) ? "owner's request" : modelReason.Trim(), filePath));
+
                     return null;
                 }
                 default:

@@ -36,6 +36,11 @@ internal sealed class OrchestrationLauncherModel(
         var orchId = OrchId_Allocator.Allocate_NextOrchId(_paths, repoName);
 
         _store.Create_Orchestration(orchId, repoName, repoPath);
+
+        // The ledger exists from minute one: the card shows a bar and /progress answers, instead
+        // of both looking broken until the supervisor gets around to writing the file.
+        Planning.PlanSeed_Writer.Ensure_Exists(_paths, orchId, repoName);
+
         _log.Log_Info(orchId, $"Orchestration created for repo '{repoName}' ({repoPath})");
 
         Respawn_Supervisor(orchId);

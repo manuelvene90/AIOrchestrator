@@ -77,6 +77,21 @@ internal sealed class ChannelTailerModel : IChannelTailer
         return TailerPollResult_Factory.Create(completedAppends, truncatedFiles);
     }
 
+    public void Set_Offset(string channelFilePath, long offset)
+    {
+        if (!_states.TryGetValue(channelFilePath, out var state))
+        {
+            _states[channelFilePath] = new FileTailState { Offset = offset };
+            return;
+        }
+
+        // Pending bytes belong to the pre-rewrite file — dropping them is the point: everything
+        // up to the new length has already been mirrored.
+        state.Offset = offset;
+        state.Pending.Clear();
+        state.QuietPolls = 0;
+    }
+
     public IReadOnlyDictionary<string, long> Get_OffsetsSnapshot()
     {
         Dictionary<string, long> snapshot = [];

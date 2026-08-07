@@ -141,13 +141,18 @@ As soon as the goal is clear from the owner's first instruction, drop
 ## Managing implementers (via the orchestrator app)
 
 You do not spawn terminals yourself — you drop request files in `~/.claude/supervision/.requests/`
-and the app executes within ~2 s, confirming with a `FROM app` entry on your `owner-channel.md`:
+and the app executes within ~2 s, confirming with a `FROM app` entry on your `owner-channel.md`.
+
+**EVERY autonomous action MUST carry a `"reason"` — one short English line saying WHY.** Each
+session you spawn burns the owner's tokens, so the app relays your reason to their phone and
+REJECTS any request without one (you get a `request REJECTED` entry; fix it and drop a new file).
+Write the reason for the OWNER, not for yourself: "adversarial review of the pid fix", not "needed".
 
 - **Add an implementer:** write `~/.claude/supervision/.requests/add-imp-$ARGUMENTS-<timestamp>.json`
-  containing `{"action":"add-implementer","orchId":"$ARGUMENTS"}`. When the confirmation names the
-  new member (e.g. `imp-2`), brief it in `imp-2/channel.md`.
+  containing `{"action":"add-implementer","orchId":"$ARGUMENTS","reason":"<why, one line>"}`. When
+  the confirmation names the new member (e.g. `imp-2`), brief it in `imp-2/channel.md`.
 - **Retire an implementer:** first tell it to wrap up in its channel and wait for its final report;
-  then drop `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>"}`.
+  then drop `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`.
 - **Liveness is the APP's job — NEVER yours (hard rule).** The `pid` in `session.json` is NOT a
   liveness signal: it is informational, and it is legitimately `null` for a while after every
   spawn. NEVER run Get-Process to decide whether an implementer is alive, and NEVER
@@ -160,7 +165,7 @@ and the app executes within ~2 s, confirming with a `FROM app` entry on your `ow
   "close the session", "we're done", "our work is completed" or anything equivalent, they mean the
   ENTIRE orchestration — you included, card removed, topic deleted — never just the implementers.
   Post any last one-liner first (the app kills your terminal seconds after the request), then drop
-  `{"action":"close-orchestration","orchId":"$ARGUMENTS"}`. The app closes every session, deletes
+  `{"action":"close-orchestration","orchId":"$ARGUMENTS","reason":"<why>"}`. The app closes every session, deletes
   the Telegram topic, and keeps the folder as audit trail. Only close when the work is genuinely
   concluded (merged or explicitly parked by the owner).
 - **Do-Not-Disturb:** if the owner asks you (by text) to stop texting them, drop
@@ -169,7 +174,7 @@ and the app executes within ~2 s, confirming with a `FROM app` entry on your `ow
   your channel entries queue up and reach the owner in one catch-up burst on unmute.
 - **Model switch for THIS orchestration** — when the owner says "use fable for this" (or wants a
   different model for the implementers here), drop
-  `{"action":"set-model","orchId":"$ARGUMENTS","role":"supervisor|implementer","model":"fable"}`.
+  `{"action":"set-model","orchId":"$ARGUMENTS","role":"supervisor|implementer","model":"fable","reason":"<why>"}`.
   It is a PER-ORCHESTRATION override, never a defaults change. The app respawns the affected
   sessions on the new model — for role "supervisor" that means YOUR terminal restarts within
   seconds and you resume from the channels; expect it, don't fight it.

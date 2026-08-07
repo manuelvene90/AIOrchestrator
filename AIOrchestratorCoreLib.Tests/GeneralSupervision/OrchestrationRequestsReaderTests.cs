@@ -30,8 +30,8 @@ public class OrchestrationRequestsReaderTests : IDisposable
     public void Read_Pending_AllFourActions_ParsedIntoTheirLists()
     {
         Write_Request("a.json", """{"action":"start-orchestration","repo":"skeleton client"}""");
-        Write_Request("b.json", """{"action":"add-implementer","orchId":"skel-work"}""");
-        Write_Request("c.json", """{"action":"close-implementer","orchId":"skel-work","memberId":"imp-2"}""");
+        Write_Request("b.json", """{"action":"add-implementer","orchId":"skel-work","reason":"adversarial review of the drift guard"}""");
+        Write_Request("c.json", """{"action":"close-implementer","orchId":"skel-work","memberId":"imp-2","reason":"task finished and verified"}""");
         Write_Request("d.json", """{"action":"close-orchestration","orchId":"old-orch"}""");
 
         var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
@@ -41,14 +41,39 @@ public class OrchestrationRequestsReaderTests : IDisposable
 
         var add = Assert.Single(pending.AddImplementerRequests);
         Assert.Equal("skel-work", add.OrchId);
+        Assert.Equal("adversarial review of the drift guard", add.Reason);
 
         var closeImp = Assert.Single(pending.CloseImplementerRequests);
         Assert.Equal("imp-2", closeImp.MemberId);
+        Assert.Equal("task finished and verified", closeImp.Reason);
 
+        // The owner's own UI close carries no reason — only AGENT actions must justify themselves.
         var closeOrch = Assert.Single(pending.CloseOrchestrationRequests);
         Assert.Equal("old-orch", closeOrch.OrchId);
+        Assert.Equal("work concluded", closeOrch.Reason);
 
         Assert.Empty(pending.MalformedRequests);
+    }
+
+    [Fact]
+    public void Read_Pending_SpawningOrRetiringWithoutAReason_IsRejected_TheOwnerMustNeverBeInTheDark()
+    {
+        Write_Request("no-reason-add.json", """{"action":"add-implementer","orchId":"skel-work"}""");
+        Write_Request("no-reason-close.json", """{"action":"close-implementer","orchId":"skel-work","memberId":"imp-2"}""");
+
+        var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
+
+        Assert.Empty(pending.AddImplementerRequests);
+        Assert.Empty(pending.CloseImplementerRequests);
+        Assert.Equal(2, pending.MalformedRequests.Count);
+
+        foreach (var malformed in pending.MalformedRequests)
+        {
+            Assert.Contains("missing 'reason'", malformed.Reason);
+
+            // The orchId is carried so the rejection can be reported in the agent's own channel.
+            Assert.Equal("skel-work", malformed.OrchId);
+        }
     }
 
     [Fact]
@@ -57,7 +82,7 @@ public class OrchestrationRequestsReaderTests : IDisposable
         Write_Request("bad1.json", "not json at all");
         Write_Request("bad2.json", """{"action":"start-orchestration"}""");
         Write_Request("bad3.json", """{"action":"start-orchestration-retry","orchId":"x","repo":"crm"}""");
-        Write_Request("good.json", """{"action":"add-implementer","orchId":"x"}""");
+        Write_Request("good.json", """{"action":"add-implementer","orchId":"x","reason":"second pair of eyes on the failing test"}""");
 
         var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
 

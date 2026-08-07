@@ -5,6 +5,8 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.WindowFocus;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
+using AIOrchestratorCoreLib.Formatting;
+using AIOrchestratorCoreLib.Git;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
@@ -42,6 +44,12 @@ internal sealed class BridgeEngineModel(
     /// <summary>In-memory inline-button registry cap — taps on evicted buttons get an "expired" toast.</summary>
     const int BUTTON_REGISTRY_CAP = 300;
 
+    /// <summary>Channel silence that counts as a stall once nobody is mid-turn.</summary>
+    const int STALL_ALERT_MINUTES = 25;
+
+    /// <summary>Transcript/probe freshness that means "this session is working right now".</summary>
+    const int SESSION_MIDTURN_SECONDS = 120;
+
     const int MIRROR_TICK_MILLISECONDS = 2000;
     const int INBOUND_LONG_POLL_SECONDS = 20;
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
@@ -68,6 +76,10 @@ internal sealed class BridgeEngineModel(
     readonly Lock _buttonLock = new();
     long _buttonSequence;
     long _buttonGroupSequence;
+
+    /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
+    readonly HashSet<string> _stallAlertedOrchIds = [];
+    readonly HashSet<string> _budgetAlertedOrchIds = [];
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
@@ -161,6 +173,8 @@ internal sealed class BridgeEngineModel(
             return;
 
         await Send_CrashLoopAlerts_Async(cancellationToken);
+        await Send_StallAlerts_Async(cancellationToken);
+        await Send_BudgetAlerts_Async(cancellationToken);
 
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
@@ -176,7 +190,27 @@ internal sealed class BridgeEngineModel(
 
         await Check_UsageLimits_Async(cancellationToken);
 
+        Compact_LongChannels();
         Persist_BridgeState();
+    }
+
+    /// <summary>
+    /// Archives the old tail of long channels so respawned sessions boot cheaply. Runs AFTER the
+    /// mirror poll and re-anchors the tailer's offset to the rewritten file — otherwise the
+    /// shrink reads as a protocol anomaly and the whole file is re-mirrored to Telegram.
+    /// </summary>
+    void Compact_LongChannels()
+    {
+        foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
+        {
+            var newLength = Channel_Compactor.Compact_IfNeeded(channel.FilePath);
+
+            if (newLength == null)
+                continue;
+
+            _tailer.Set_Offset(channel.FilePath, newLength.Value);
+            _log.Log_Info(channel.OrchId, $"Channel compacted — older entries archived beside it ({Path.GetFileName(channel.FilePath)})");
+        }
     }
 
     /// <summary>A session respawning repeatedly without coming alive is INVISIBLE from the phone — escalate it.</summary>
@@ -199,6 +233,149 @@ internal sealed class BridgeEngineModel(
             catch (Exception ex)
             {
                 _log.Log_Warning(alert.OrchId, $"Crash-loop alert send failed: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The failure the watchdog CANNOT see: every session is alive, but the orchestration has gone
+    /// silent — typically a turn that ended without re-arming its watcher, which freezes the whole
+    /// duplex loop. Detected as "no channel traffic for a long while AND nobody is mid-turn".
+    /// </summary>
+    async Task Send_StallAlerts_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            var quietFor = DateTime.UtcNow - Get_LastChannelActivityUtc(session);
+
+            if (quietFor.TotalMinutes < STALL_ALERT_MINUTES)
+            {
+                // Traffic resumed — the next stall gets its own alert.
+                _stallAlertedOrchIds.Remove(session.OrchId);
+                continue;
+            }
+
+            // Someone is actually working (transcript growing): a long thinking turn, not a stall.
+            if (Is_AnySessionMidTurn(session))
+                continue;
+
+            if (!_stallAlertedOrchIds.Add(session.OrchId))
+                continue;
+
+            var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: quiet for {SessionDuration_Formatter.Describe(quietFor)} and no session is working — the supervisor may have ended its turn without re-arming its watcher. Text it to wake it up.";
+
+            try
+            {
+                await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
+                _log.Log_Warning(session.OrchId, alertText);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(session.OrchId, $"Stall alert send failed: {ex.Message}");
+            }
+        }
+    }
+
+    DateTime Get_LastChannelActivityUtc(IOrchestrationSession session)
+    {
+        var latest = session.CreatedUtc;
+
+        List<string> channelFiles = [_paths.Get_OwnerChannelFile(session.OrchId)];
+
+        foreach (var member in session.Members)
+            channelFiles.Add(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId));
+
+        foreach (var channelFile in channelFiles)
+        {
+            if (!File.Exists(channelFile))
+                continue;
+
+            var lastWrite = File.GetLastWriteTimeUtc(channelFile);
+
+            if (lastWrite > latest)
+                latest = lastWrite;
+        }
+
+        return latest;
+    }
+
+    /// <summary>
+    /// A session mid-turn is writing its transcript RIGHT NOW (the status line hands us the exact
+    /// path). Falls back to the probe file's own mtime when a transcript path is unavailable.
+    /// </summary>
+    bool Is_AnySessionMidTurn(IOrchestrationSession session)
+    {
+        var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
+
+        List<string> usageFiles =
+        [
+            Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE),
+            Path.Combine(orchFolder, UsageTotals_Reader.COMMUNICATOR_USAGE_FILE),
+        ];
+
+        foreach (var member in session.Members)
+            usageFiles.Add(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE));
+
+        foreach (var usageFile in usageFiles)
+        {
+            if (!File.Exists(usageFile))
+                continue;
+
+            var transcriptPath = RateLimits_Reader.Read_TranscriptPath_OrNull(UsageTotals_Reader.Read_Text_Safe(usageFile));
+            var probedFile = transcriptPath != null && File.Exists(transcriptPath) ? transcriptPath : usageFile;
+
+            if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(probedFile)).TotalSeconds < SESSION_MIDTURN_SECONDS)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Runaway guard: a per-orchestration token ceiling the owner sets in config.json.</summary>
+    async Task Send_BudgetAlerts_Async(CancellationToken cancellationToken)
+    {
+        var budgetTokens = _configProvider.Get_Current().OrchestrationTokenBudget;
+
+        if (_telegramClient == null || budgetTokens == null || budgetTokens.Value <= 0)
+            return;
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            var (_, tokens) = UsageTotals_Reader.Build_OrchestrationTotals(_paths, session);
+
+            if (tokens < budgetTokens.Value)
+                continue;
+
+            if (!_budgetAlertedOrchIds.Add(session.OrchId))
+                continue;
+
+            var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} used — past the {UsageTotals_Reader.Format_Tokens(budgetTokens.Value)} budget you set.";
+
+            try
+            {
+                await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
+                _log.Log_Warning(session.OrchId, alertText);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(session.OrchId, $"Budget alert send failed: {ex.Message}");
             }
         }
     }
@@ -585,6 +762,12 @@ internal sealed class BridgeEngineModel(
         foreach (var malformedRequest in pending.MalformedRequests)
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Malformed request file deleted — {malformedRequest.Reason}: {malformedRequest.FilePath}");
+
+            // Tell the AGENT why, in its own channel — a silently deleted request file used to
+            // look to the supervisor like an action that simply never happened.
+            if (malformedRequest.OrchId != null && _store.Get_Session_OrNull(malformedRequest.OrchId) != null)
+                Append_OrchestrationAppEntry(malformedRequest.OrchId, "request REJECTED", $"Your request file was rejected: {malformedRequest.Reason}. Fix it and drop a new file (same action string).");
+
             Delete_RequestFile(malformedRequest.FilePath);
         }
 
@@ -631,7 +814,7 @@ internal sealed class BridgeEngineModel(
 
                 Append_OrchestrationAppEntry(
                     request.OrchId,
-                    $"model set: {request.Role} → {request.Model}",
+                    $"model set: {request.Role} → {request.Model} — {request.Reason}",
                     "Affected sessions respawned on the new model; they resume from their channels.");
             }
             catch (Exception ex)
@@ -794,9 +977,11 @@ internal sealed class BridgeEngineModel(
                 var session = _launcher.Add_Implementer(request.OrchId);
                 var newMember = session.Members[session.Members.Count - 1];
 
+                // The REASON rides in the subject because App entries mirror subject-only — the
+                // owner must never see a session appear (and burn tokens) without knowing why.
                 Append_OrchestrationAppEntry(
                     request.OrchId,
-                    $"implementer '{newMember.MemberId}' added",
+                    $"implementer '{newMember.MemberId}' added — {request.Reason}",
                     $"New implementer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}'. Its channel is {newMember.MemberId}/channel.md — brief it there.");
             }
             catch (Exception ex)
@@ -822,7 +1007,7 @@ internal sealed class BridgeEngineModel(
 
                 Append_OrchestrationAppEntry(
                     request.OrchId,
-                    $"implementer '{request.MemberId}' closed",
+                    $"implementer '{request.MemberId}' closed — {request.Reason}",
                     $"Implementer '{request.MemberId}' is retired: its terminal was closed and its channel stays on disk as audit trail.");
             }
             catch (Exception ex)
@@ -851,7 +1036,7 @@ internal sealed class BridgeEngineModel(
                     Delete_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value);
 
                 Append_GeneralAppEntry(
-                    $"orchestration '{request.OrchId}' closed",
+                    $"orchestration '{request.OrchId}' closed — {request.Reason}",
                     "Sessions ended; folder kept as audit trail; Telegram topic deleted.");
             }
             catch (Exception ex)
@@ -978,6 +1163,14 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "diff")
+                    {
+                        await Send_GitReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command != null && command.StartsWith("imp", StringComparison.Ordinal))
+                    {
+                        await Send_ImplementerPeek_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
+                    }
                     else
                     {
                         routableMessages.Add(message);
@@ -1044,6 +1237,8 @@ internal sealed class BridgeEngineModel(
                     ("progress", "Task ledger of this orchestration (all of them in General)"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
+                    ("diff", "What the repo and worktrees ACTUALLY contain"),
+                    ("imp", "Latest traffic of an implementer (/imp 2)"),
                     ("summary", "What is going on across all orchestrations"),
                     ("pending", "Open questions awaiting me"),
                     ("dnd", "Mute texts (text anything to unmute)"),
@@ -1292,26 +1487,126 @@ internal sealed class BridgeEngineModel(
 
     string Build_LimitsReportText()
     {
-        Dictionary<string, double> worstPerWindow = [];
+        var windows = RateLimits_Reader.Read_WorstAcrossSessions(UsageTotals_Reader.Find_AllUsageFiles(_paths));
 
-        foreach (var usageFile in UsageTotals_Reader.Find_AllUsageFiles(_paths))
-        {
-            foreach (var pair in LimitData_Parser.Extract_LimitPercents(UsageTotals_Reader.Read_Text_Safe(usageFile)))
-            {
-                var label = LimitData_Parser.Build_ShortLabel(pair.Key);
-
-                if (!worstPerWindow.TryGetValue(label, out var known) || pair.Value > known)
-                    worstPerWindow[label] = pair.Value;
-            }
-        }
-
-        if (worstPerWindow.Count == 0)
+        if (windows.Count == 0)
             return "no limit data in the status line of this Claude Code version — nothing to report (the automatic limit alerts idle for the same reason)";
 
-        List<string> lines = ["LIMITS (highest reading across all sessions)"];
+        List<string> lines = [];
 
-        foreach (var pair in worstPerWindow.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
-            lines.Add($"- {pair.Key}: {pair.Value:F0}%");
+        foreach (var window in windows)
+        {
+            var resetPart = window.ResetsAtLocal == null
+                ? ""
+                : $" · resets in {SessionDuration_Formatter.Describe(window.ResetsAtLocal.Value - DateTime.Now)} ({window.ResetsAtLocal.Value:HH:mm})";
+
+            lines.Add($"{window.Window}: {window.Percent:F0}%{resetPart}");
+        }
+
+        // The account's limits are reported per WINDOW, never per model — say so rather than
+        // letting a per-model reading be inferred from the models that happened to report.
+        lines.Add($"(account-wide, all models — seen from: {string.Join(" | ", windows.Select(w => w.Models).Distinct())})");
+
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// /diff — GROUND TRUTH from git, not agent prose: branch, ahead/behind, dirty files and the
+    /// latest commits for the repo and every worktree the orchestration uses.
+    /// </summary>
+    async Task Send_GitReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_GitReportText(messageThreadId);
+
+        // NOT translated: this is verbatim git output (branch names, commit subjects, paths).
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_GitReportText(long? messageThreadId)
+    {
+        if (messageThreadId == null)
+            return "send /diff inside an orchestration's topic — it reports that orchestration's repo and worktrees";
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+            return "no orchestration is bound to this topic";
+
+        List<string> blocks = [];
+
+        foreach (var snapshot in GitSnapshot_Reader.Read_RepoAndWorktrees(session.RepoPath))
+        {
+            if (!snapshot.IsRepository)
+                continue;
+
+            var aheadPart = snapshot.AheadOfUpstream > 0 ? $" · {snapshot.AheadOfUpstream} ahead" : "";
+            var behindPart = snapshot.BehindUpstream > 0 ? $" · {snapshot.BehindUpstream} behind" : "";
+            var dirtyPart = snapshot.DirtyFileCount > 0 ? $" · {snapshot.DirtyFileCount} uncommitted" : " · clean";
+
+            List<string> lines = [$"{snapshot.ShortPath} [{snapshot.Branch}]{aheadPart}{behindPart}{dirtyPart}"];
+
+            foreach (var commit in snapshot.RecentCommits.Take(5))
+                lines.Add($"  {commit}");
+
+            blocks.Add(string.Join('\n', lines));
+        }
+
+        if (blocks.Count == 0)
+            return $"{session.RepoPath} is not a git repository";
+
+        return string.Join("\n\n", blocks);
+    }
+
+    /// <summary>/imp 2 — the latest entries of one implementer's spoke, which never reaches Telegram otherwise.</summary>
+    async Task Send_ImplementerPeek_Async(ITelegramApiClient client, long? messageThreadId, string command, string rawText, CancellationToken cancellationToken)
+    {
+        var text = Build_ImplementerPeekText(messageThreadId, command, rawText);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_ImplementerPeekText(long? messageThreadId, string command, string rawText)
+    {
+        const int PEEK_ENTRIES = 6;
+
+        if (messageThreadId == null)
+            return "send /imp inside an orchestration's topic (e.g. /imp 2)";
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+            return "no orchestration is bound to this topic";
+
+        // Accepts "/imp 2", "/imp2" and "/imp imp-2".
+        var digits = new string([.. $"{command} {rawText}".Where(char.IsAsciiDigit)]);
+
+        if (digits.Length == 0)
+            return $"which implementer? e.g. /imp 1 (open: {string.Join(", ", session.Members.Where(m => m.ClosedUtc == null).Select(m => m.MemberId))})";
+
+        var memberId = $"imp-{digits[0]}";
+        var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, memberId);
+        var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+
+        if (entries.Count == 0)
+            return $"{memberId}: no traffic yet";
+
+        List<string> lines = [$"{memberId} — last {Math.Min(PEEK_ENTRIES, entries.Count)} entries"];
+
+        foreach (var entry in entries.TakeLast(PEEK_ENTRIES))
+        {
+            var body = entry.Body.Replace('\n', ' ').Trim();
+            var preview = body.Length <= 180 ? body : $"{body[..180]}…";
+
+            lines.Add($"[{entry.Author.ToString().ToLowerInvariant()}] {entry.Subject}");
+
+            if (preview.Length > 0)
+                lines.Add($"   {preview}");
+        }
 
         return string.Join('\n', lines);
     }

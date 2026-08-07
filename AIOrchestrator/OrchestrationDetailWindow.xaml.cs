@@ -25,10 +25,15 @@ public partial class OrchestrationDetailWindow : Window
     const int MAX_ACTIVITY_ROWS = 80;
     const int BODY_PREVIEW_CHARS = 220;
 
+    /// <summary>git shells out per tree — cheap, but not every 3 seconds.</summary>
+    const int GIT_REFRESH_INTERVAL_SECONDS = 20;
+
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
     readonly string _orchId;
     readonly DispatcherTimer _refreshTimer;
+
+    DateTime _lastGitRefreshUtc = DateTime.MinValue;
 
     public OrchestrationDetailWindow(ISupervisionPaths paths, IOrchestrationSessionStore store, string orchId)
     {
@@ -69,6 +74,17 @@ public partial class OrchestrationDetailWindow : Window
             Refresh_Ledger(session);
             Refresh_Activity(session);
             MembersItemsControl.ItemsSource = SessionRows_Builder.Build_AllRows(_paths, Find_Brush, session);
+
+            AddImplementerButton.IsEnabled = session.ClosedUtc == null;
+            CloseOrchestrationButton.IsEnabled = session.ClosedUtc == null;
+
+            // Git shells out — refresh it on a slower beat than the file-based panels.
+            if ((DateTime.UtcNow - _lastGitRefreshUtc).TotalSeconds >= GIT_REFRESH_INTERVAL_SECONDS)
+            {
+                Refresh_Git(session);
+                _lastGitRefreshUtc = DateTime.UtcNow;
+            }
+
             RefreshedText.Text = $"refreshed {DateTime.Now:HH:mm:ss} · auto every {REFRESH_INTERVAL_SECONDS}s";
         }
         catch (Exception ex)
@@ -238,6 +254,77 @@ public partial class OrchestrationDetailWindow : Window
             ChannelAuthors.Unknown => "TextSecondary",
             _ => throw new Exception($"Unhandled ChannelAuthors: {author}"),
         };
+    }
+
+    /// <summary>What the repo and its worktrees ACTUALLY contain — independent of what agents report.</summary>
+    void Refresh_Git(IOrchestrationSession session)
+    {
+        List<GitTreeView> trees = [];
+
+        foreach (var snapshot in AIOrchestratorCoreLib.Git.GitSnapshot_Reader.Read_RepoAndWorktrees(session.RepoPath))
+        {
+            if (!snapshot.IsRepository)
+                continue;
+
+            List<string> stateParts = [];
+
+            if (snapshot.AheadOfUpstream > 0)
+                stateParts.Add($"{snapshot.AheadOfUpstream} ahead");
+
+            if (snapshot.BehindUpstream > 0)
+                stateParts.Add($"{snapshot.BehindUpstream} behind");
+
+            stateParts.Add(snapshot.DirtyFileCount > 0 ? $"{snapshot.DirtyFileCount} uncommitted" : "clean");
+
+            trees.Add(new GitTreeView
+            {
+                HeaderText = $"{snapshot.ShortPath}  [{snapshot.Branch}]",
+                StateText = string.Join(" · ", stateParts),
+                StateBrush = Find_Brush(snapshot.DirtyFileCount > 0 ? "StateAwaitingReview" : "AccentCommunicator"),
+                CommitsText = string.Join('\n', snapshot.RecentCommits.Take(5)),
+            });
+        }
+
+        GitItemsControl.ItemsSource = trees;
+    }
+
+    void AddImplementerButton_Click(object sender, RoutedEventArgs e)
+    {
+        Drop_Request(
+            $$"""{"action":"add-implementer","orchId":"{{_orchId}}","reason":"spawned by the owner from the detail window"}""",
+            "add-implementer requested");
+    }
+
+    void CloseOrchestrationButton_Click(object sender, RoutedEventArgs e)
+    {
+        var answer = MessageBox.Show(
+            $"Close orchestration '{_orchId}'?\n\nEvery session ends, the Telegram topic is deleted, and the folder stays on disk as audit trail.",
+            "AI Orchestrator",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        if (answer != MessageBoxResult.Yes)
+            return;
+
+        Drop_Request(
+            $$"""{"action":"close-orchestration","orchId":"{{_orchId}}","reason":"closed by the owner"}""",
+            "close requested");
+    }
+
+    /// <summary>Actions go through the SAME request-file protocol the agents use — one code path.</summary>
+    void Drop_Request(string json, string confirmation)
+    {
+        try
+        {
+            Directory.CreateDirectory(_paths.RequestsFolder);
+            File.WriteAllText(Path.Combine(_paths.RequestsFolder, $"ui-{_orchId}-{DateTime.UtcNow.Ticks}.json"), json);
+            RefreshedText.Text = $"{confirmation} — the app executes it within a couple of seconds";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Request failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     Brush Find_Brush(string resourceKey)
