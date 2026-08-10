@@ -44,7 +44,7 @@ internal sealed class BridgeEngineModel(
     IVoiceTranscriber transcriber,
     long initialLastUpdateId) : IBridgeEngine
 {
-    /// <summary>In-memory inline-button registry cap â€” taps on evicted buttons get an "expired" toast.</summary>
+    /// <summary>In-memory inline-button registry cap — taps on evicted buttons get an "expired" toast.</summary>
     const int BUTTON_REGISTRY_CAP = 300;
 
     /// <summary>Channel silence that counts as a stall once nobody is mid-turn.</summary>
@@ -70,7 +70,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// How long a nudged, idle session may stay frozen before it is declared ORPHANED. The nudge
-    /// changed its channel, so a live watcher fires within seconds â€” this window is generous
+    /// changed its channel, so a live watcher fires within seconds — this window is generous
     /// enough that only a genuinely absent listener runs it out.
     /// </summary>
     const int ORPHAN_CONFIRM_MINUTES = 6;
@@ -81,7 +81,7 @@ internal sealed class BridgeEngineModel(
     const int INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS = 60000;
     const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
 
-    /// <summary>The owner often texts several messages in a row â€” quiet time before delivery as ONE entry.</summary>
+    /// <summary>The owner often texts several messages in a row — quiet time before delivery as ONE entry.</summary>
     /// <summary>
     /// Short ON PURPOSE: most messages arrive alone, and a long window makes every one of them feel
     /// slow. The multi-message case is covered explicitly by WAIT … GO instead of by making
@@ -107,19 +107,19 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, (long? ThreadId, string OptionText, long GroupId, string QuestionText)> _buttonOptions = [];
     readonly Queue<string> _buttonOrder = new();
 
-    /// <summary>"&lt;file&gt;|&lt;line&gt;" of every malformed header already reported â€” say it once, not every tick.</summary>
+    /// <summary>"&lt;file&gt;|&lt;line&gt;" of every malformed header already reported — say it once, not every tick.</summary>
     readonly HashSet<string> _reportedMalformedHeaders = [];
     readonly Lock _buttonLock = new();
     long _buttonSequence;
     long _buttonGroupSequence;
 
-    /// <summary>One alert per stall/budget EPISODE â€” cleared when traffic resumes (stalls only).</summary>
+    /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
     readonly HashSet<string> _stallAlertedOrchIds = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
-    /// <summary>When each member was nudged â€” the nudge doubles as the PROBE that proves a watcher exists.</summary>
+    /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
 
-    /// <summary>When the supervisor last posted a verdict into a spoke â€” the ledger's due-by signal.</summary>
+    /// <summary>When the supervisor last posted a verdict into a spoke — the ledger's due-by signal.</summary>
     readonly Dictionary<string, DateTime> _lastSupervisorVerdictUtc = [];
     readonly HashSet<string> _ledgerBehindReportedOrchIds = [];
     readonly Dictionary<string, string> _reportedLedgerShapeByOrchId = [];
@@ -133,7 +133,7 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
-    /// The receipt message being EVOLVED per thread (âœ“ â†’ âœ“âœ“ â†’ âœ“âœ“ Â· handoff), so three states cost
+    /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
     /// one message instead of three. Key 0 = the General topic (no thread id).
     /// </summary>
     readonly Dictionary<long, long> _receiptMessageIdByThread = [];
@@ -141,7 +141,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Message ids KNOWN to belong to each topic (ours + the owner's), for /clear. Telegram message
-    /// ids are chat-wide, not per topic, so deleting a computed RANGE would wipe other topics â€”
+    /// ids are chat-wide, not per topic, so deleting a computed RANGE would wipe other topics —
     /// only ids observed in this topic may ever be deleted. Key 0 = the General topic.
     /// </summary>
     readonly Dictionary<long, List<long>> _knownMessageIdsByThread = [];
@@ -149,7 +149,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Owner messages handed over and NOT yet answered by their supervisor. Tracked so a receipt
-    /// can never stay frozen on "thinkingâ€¦" â€” the owner always learns what became of what they
+    /// can never stay frozen on "thinking…" — the owner always learns what became of what they
     /// sent, even if the supervisor goes idle without replying.
     /// </summary>
     readonly Dictionary<string, PendingOwnerReply> _pendingOwnerReplies = [];
@@ -238,7 +238,7 @@ internal sealed class BridgeEngineModel(
         _silenceAllTopics = silenced;
 
         _log.Log_Info(GLOBAL_ORCH_ID, silenced
-            ? "App-wide silence ON â€” every topic's messages are DROPPED (not queued)"
+            ? "App-wide silence ON — every topic's messages are DROPPED (not queued)"
             : "App-wide silence OFF");
 
         try
@@ -258,8 +258,8 @@ internal sealed class BridgeEngineModel(
 
         _telegramMuted = muted;
         _log.Log_Info(GLOBAL_ORCH_ID, muted
-            ? "Telegram DND ON â€” outbound paused; pending traffic accumulates and is delivered in one burst on unmute"
-            : "Telegram DND OFF â€” catching up: all pending channel traffic mirrors now");
+            ? "Telegram DND ON — outbound paused; pending traffic accumulates and is delivered in one burst on unmute"
+            : "Telegram DND OFF — catching up: all pending channel traffic mirrors now");
 
         try
         {
@@ -281,7 +281,7 @@ internal sealed class BridgeEngineModel(
             loops.Add(Run_InboundLoop_Async(cancellationToken));
 
         _log.Log_Info(GLOBAL_ORCH_ID, _telegramClient == null
-            ? "Bridge started (file-only mode â€” Telegram not configured)"
+            ? "Bridge started (file-only mode — Telegram not configured)"
             : "Bridge started (Telegram mirror + inbound routing active)");
 
         await Task.WhenAll(loops);
@@ -322,10 +322,10 @@ internal sealed class BridgeEngineModel(
         // After closes are processed, so a freshly-closed session is not immediately revived.
         _watchdog.Check_AndRestart_DeadSessions();
 
-        // Owner texts flow to the agents regardless of DND â€” mute only pauses OUTBOUND.
+        // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
-        // DND: skip tailing entirely â€” offsets freeze, so unmute delivers everything pending
+        // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
         // Crash-loop alerts stay queued in the watchdog until unmute for the same reason.
         if (_telegramMuted && _telegramClient != null)
@@ -352,7 +352,7 @@ internal sealed class BridgeEngineModel(
         await Check_UsageLimits_Async(cancellationToken);
 
         // Every tick, so a mode toggled from the APP's card or checkboxes reaches the Telegram
-        // topic name too â€” not just the ones toggled by a Telegram command. It only calls the API
+        // topic name too — not just the ones toggled by a Telegram command. It only calls the API
         // when a name actually changed.
         await Sync_TopicNames_BestEffort_Async(cancellationToken);
 
@@ -367,7 +367,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Archives the old tail of long channels so respawned sessions boot cheaply. Runs AFTER the
-    /// mirror poll and re-anchors the tailer's offset to the rewritten file â€” otherwise the
+    /// mirror poll and re-anchors the tailer's offset to the rewritten file — otherwise the
     /// shrink reads as a protocol anomaly and the whole file is re-mirrored to Telegram.
     /// </summary>
     void Compact_LongChannels()
@@ -380,11 +380,11 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             _tailer.Set_Offset(channel.FilePath, newLength.Value);
-            _log.Log_Info(channel.OrchId, $"Channel compacted â€” older entries archived beside it ({Path.GetFileName(channel.FilePath)})");
+            _log.Log_Info(channel.OrchId, $"Channel compacted — older entries archived beside it ({Path.GetFileName(channel.FilePath)})");
         }
     }
 
-    /// <summary>A session respawning repeatedly without coming alive is INVISIBLE from the phone â€” escalate it.</summary>
+    /// <summary>A session respawning repeatedly without coming alive is INVISIBLE from the phone — escalate it.</summary>
     async Task Send_CrashLoopAlerts_Async(CancellationToken cancellationToken)
     {
         foreach (var alert in _watchdog.Take_PendingCrashLoopAlerts())
@@ -410,7 +410,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// The failure the watchdog CANNOT see: every session is alive, but the orchestration has gone
-    /// silent â€” typically a turn that ended without re-arming its watcher, which freezes the whole
+    /// silent — typically a turn that ended without re-arming its watcher, which freezes the whole
     /// duplex loop. Detected as "no channel traffic for a long while AND nobody is mid-turn".
     /// </summary>
     async Task Send_StallAlerts_Async(CancellationToken cancellationToken)
@@ -427,7 +427,7 @@ internal sealed class BridgeEngineModel(
 
             if (quietFor.TotalMinutes < STALL_ALERT_MINUTES)
             {
-                // Traffic resumed â€” the next stall gets its own alert.
+                // Traffic resumed — the next stall gets its own alert.
                 _stallAlertedOrchIds.Remove(session.OrchId);
                 continue;
             }
@@ -442,7 +442,7 @@ internal sealed class BridgeEngineModel(
             if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
                 continue;
 
-            var alertText = $"âš ï¸ {session.DisplayName ?? session.OrchId}: quiet for {SessionDuration_Formatter.Describe(quietFor)} and no session is working â€” the supervisor may have ended its turn without re-arming its watcher. Text it to wake it up.";
+            var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: quiet for {SessionDuration_Formatter.Describe(quietFor)} and no session is working — the supervisor may have ended its turn without re-arming its watcher. Text it to wake it up.";
 
             try
             {
@@ -518,7 +518,7 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// The backstop for a missed hand-off: an implementer whose channel ends with SOMEONE ELSE'S
     /// entry (a brief it never answered), quiet for minutes, and not mid-turn. That is exactly the
-    /// state a watcher armed AFTER the brief landed produces â€” it can never fire on its own.
+    /// state a watcher armed AFTER the brief landed produces — it can never fire on its own.
     /// The app appends a FROM app entry, which changes the channel and therefore trips the
     /// (content-fingerprint) watcher: the orchestration heals itself instead of stalling.
     /// </summary>
@@ -552,15 +552,15 @@ internal sealed class BridgeEngineModel(
 
                 var spokeLast = ChannelAuthor_Kinds.Is_Member(entries[^1].Author);
 
-                // A session CANNOT give itself the next turn â€” its monitor fires only when someone
+                // A session CANNOT give itself the next turn — its monitor fires only when someone
                 // ELSE writes. So a member that spoke last and then went quiet is waiting for a
                 // message that is never coming, and the nudge IS that message.
                 //
                 // The two states that are LEGITIMATE dormancy are excluded: a filed report is
                 // waiting for the supervisor's verdict, and BLOCKED ON OWNER is waiting for the
                 // owner. Both have someone who owes them a reply; nudging them would be noise.
-                // Everything else the member said last â€” an open writing window, a "proceeding
-                // with X" â€” means it stopped mid-task with nobody about to speak to it.
+                // Everything else the member said last — an open writing window, a "proceeding
+                // with X" — means it stopped mid-task with nobody about to speak to it.
                 var memberState = MemberState_Resolver.Resolve(entries);
 
                 var waitingOnSomeoneElse =
@@ -593,9 +593,9 @@ internal sealed class BridgeEngineModel(
                 }
 
                 // ESCALATION. The nudge CHANGED the channel; a live watcher fires on that within
-                // seconds. Still frozen after the grace window â‡’ there is no listener at all (the
+                // seconds. Still frozen after the grace window ⇒ there is no listener at all (the
                 // turn ended abnormally, or never reached the point where a watcher is armed).
-                // Nothing the session can do about that â€” only a respawn brings it back, and it
+                // Nothing the session can do about that — only a respawn brings it back, and it
                 // resumes from its channel, which is the designed durable state.
                 if ((DateTime.UtcNow - nudgedUtc).TotalMinutes < ORPHAN_CONFIRM_MINUTES)
                     continue;
@@ -608,7 +608,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// A third way a session goes silent while everything is healthy: a header written in a shape
-    /// the parser does not recognise. The entry then exists on disk but NOT to the app â€” never
+    /// the parser does not recognise. The entry then exists on disk but NOT to the app — never
     /// mirrored to the owner, never counted, its index still free. The writer has no way to notice;
     /// only the app can see the discrepancy, so the app says so, in the channel, once per offence.
     /// </summary>
@@ -634,11 +634,11 @@ internal sealed class BridgeEngineModel(
 
             ChannelAppender.Append_AppEntry(
                 channel.FilePath,
-                $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE â€” malformed header",
+                $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
                 ChannelShape_Validator.Build_ReportBody(unreported),
                 DateTime.Now);
 
-            _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} malformed entry header(s) â€” those entries were never mirrored");
+            _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} malformed entry header(s) — those entries were never mirrored");
             Raise_OrchestrationActivity(channel.OrchId);
 
             // On the OWNER channel the loss is the owner's: the content never reached their phone.
@@ -658,7 +658,7 @@ internal sealed class BridgeEngineModel(
         {
             await _telegramClient.Send_Message_Async(
                 session.TelegramTopicId,
-                $"âš ï¸ {count} message{(count == 1 ? "" : "s")} in this orchestration never reached you â€” the session wrote a malformed channel header, so the app could not see {(count == 1 ? "it" : "them")}. It has been told to re-post.",
+                $"⚠️ {count} message{(count == 1 ? "" : "s")} in this orchestration never reached you — the session wrote a malformed channel header, so the app could not see {(count == 1 ? "it" : "them")}. It has been told to re-post.",
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -672,12 +672,12 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// The same backstop for the SUPERVISOR, which nothing else covered â€” and it is the session
+    /// The same backstop for the SUPERVISOR, which nothing else covered — and it is the session
     /// whose dormancy costs most, because every member's report waits behind it. It is nudged when
     /// a member's channel ends with that member's entry (a report nobody has answered), the wait is
     /// past the threshold, and the supervisor is not mid-turn.
     ///
-    /// The nudge goes on owner-channel.md â€” the supervisor's own channel â€” so it reaches the
+    /// The nudge goes on owner-channel.md — the supervisor's own channel — so it reaches the
     /// supervisor without landing in a member's channel, where it would read as traffic addressed
     /// to that member.
     /// </summary>
@@ -725,11 +725,11 @@ internal sealed class BridgeEngineModel(
 
         ChannelAppender.Append_AppEntry(
             _paths.Get_OwnerChannelFile(session.OrchId),
-            $"unread reports waiting on you â€” {string.Join(", ", waitingMembers)}",
+            $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
             $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
             DateTime.Now);
 
-        _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} â€” nudged");
+        _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
     }
 
@@ -743,17 +743,17 @@ internal sealed class BridgeEngineModel(
         CancellationToken cancellationToken)
     {
         var subject = dormantMidWork
-            ? "you stopped mid-task â€” nothing was going to wake you"
-            : "unread traffic â€” you have not answered";
+            ? "you stopped mid-task — nothing was going to wake you"
+            : "unread traffic — you have not answered";
 
         var body = dormantMidWork
-            ? $"Your own entry [{lastEntry.Index}] is the last thing on this channel and nothing has moved for {SessionDuration_Formatter.Describe(quietFor)}. Your monitor only fires when someone ELSE writes, so a turn ended mid-task can never continue on its own â€” this entry is the app waking you. Resume the work you announced. If you are in fact waiting on somebody, say so explicitly (file your report, or write BLOCKED ON OWNER with the question) instead of going quiet â€” silence is indistinguishable from a dead session."
+            ? $"Your own entry [{lastEntry.Index}] is the last thing on this channel and nothing has moved for {SessionDuration_Formatter.Describe(quietFor)}. Your monitor only fires when someone ELSE writes, so a turn ended mid-task can never continue on its own — this entry is the app waking you. Resume the work you announced. If you are in fact waiting on somebody, say so explicitly (file your report, or write BLOCKED ON OWNER with the question) instead of going quiet — silence is indistinguishable from a dead session."
             : $"Entry [{lastEntry.Index}] FROM {lastEntry.Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If your monitor is no longer running, arm a fresh one.";
 
         ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
 
         var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
-        _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} â€” nudged");
+        _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
 
         // The channel nudge above ALWAYS happens (it is what unsticks the implementer);
@@ -765,7 +765,7 @@ internal sealed class BridgeEngineModel(
         {
             await _telegramClient.Send_Message_Async(
                 session.TelegramTopicId,
-                $"âš ï¸ {memberId} left a brief unanswered for {SessionDuration_Formatter.Describe(quietFor)} â€” nudged it.",
+                $"⚠️ {memberId} left a brief unanswered for {SessionDuration_Formatter.Describe(quietFor)} — nudged it.",
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -780,13 +780,13 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Last resort for a session that is ALIVE but has no way back: it ignored a channel change
-    /// while idle, so nothing is listening for it. Respawning is the only recovery â€” its files and
+    /// while idle, so nothing is listening for it. Respawning is the only recovery — its files and
     /// its channel survive, and the role command's boot re-reads the channel. In-conversation
     /// context is lost, which is why this only runs after the nudge probe has failed.
     /// </summary>
     async Task Recover_OrphanedImplementer_Async(IOrchestrationSession session, string memberId, CancellationToken cancellationToken)
     {
-        _log.Log_Error(session.OrchId, $"{memberId} is ORPHANED (idle, ignored a channel change) â€” respawning it", null);
+        _log.Log_Error(session.OrchId, $"{memberId} is ORPHANED (idle, ignored a channel change) — respawning it", null);
 
         try
         {
@@ -796,7 +796,7 @@ internal sealed class BridgeEngineModel(
             ChannelAppender.Append_AppEntry(
                 _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
                 "session was orphaned and has been respawned",
-                "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact â€” read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
+                "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
                 DateTime.Now);
 
             Raise_OrchestrationActivity(session.OrchId);
@@ -814,7 +814,7 @@ internal sealed class BridgeEngineModel(
         {
             await _telegramClient.Send_Message_Async(
                 session.TelegramTopicId,
-                $"âš ï¸ {memberId} was ORPHANED (alive but nothing listening â€” it ignored the nudge). Respawned it; its work on disk is untouched, but its in-session context is gone.",
+                $"⚠️ {memberId} was ORPHANED (alive but nothing listening — it ignored the nudge). Respawned it; its work on disk is untouched, but its in-session context is gone.",
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -829,7 +829,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// The ledger's missing feedback loop. A supervisor verdict with no PLAN.md update is now
-    /// FLAGGED â€” visible to the owner, on the card, and to the turn-end hook that blocks the
+    /// FLAGGED — visible to the owner, on the card, and to the turn-end hook that blocks the
     /// supervisor. The ledger was the only artifact in the protocol whose omission produced no
     /// signal whatsoever, which is precisely why it was the one that kept being skipped.
     /// Shape is checked at the same time: a line covering "tasks 3-9" can never show progress,
@@ -856,10 +856,10 @@ internal sealed class BridgeEngineModel(
                 ChannelAppender.Append_AppEntry(
                     _paths.Get_OwnerChannelFile(session.OrchId),
                     "PLAN.md is behind your verdicts",
-                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends â€” the turn-end hook will block until you do.",
+                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
                     DateTime.Now);
 
-                _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts â€” flagged for the turn-end hook");
+                _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
                 Raise_OrchestrationActivity(session.OrchId);
             }
 
@@ -902,7 +902,7 @@ internal sealed class BridgeEngineModel(
         {
             await _telegramClient.Send_Message_Async(
                 session.TelegramTopicId,
-                $"âš ï¸ {session.DisplayName ?? session.OrchId}: the task ledger has {complaints.Count} line(s) that lump several tasks together â€” progress on them cannot be shown until they are split.",
+                $"⚠️ {session.DisplayName ?? session.OrchId}: the task ledger has {complaints.Count} line(s) that lump several tasks together — progress on them cannot be shown until they are split.",
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -939,7 +939,7 @@ internal sealed class BridgeEngineModel(
             if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
                 continue;
 
-            var alertText = $"âš ï¸ {session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} used â€” past the {UsageTotals_Reader.Format_Tokens(budgetTokens.Value)} budget you set.";
+            var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} used — past the {UsageTotals_Reader.Format_Tokens(budgetTokens.Value)} budget you set.";
 
             try
             {
@@ -1009,7 +1009,7 @@ internal sealed class BridgeEngineModel(
 
                 state[pair.Key] = newlyCrossed.Value;
 
-                var alertText = $"âš ï¸ LIMIT: {Limits.LimitData_Parser.Build_ShortLabel(pair.Key)} {pair.Value:F0}%";
+                var alertText = $"⚠️ LIMIT: {Limits.LimitData_Parser.Build_ShortLabel(pair.Key)} {pair.Value:F0}%";
                 _log.Log_Warning(GLOBAL_ORCH_ID, $"{alertText} (key '{pair.Key}')");
                 await _telegramClient.Send_Message_Async(null, alertText, cancellationToken);
             }
@@ -1046,7 +1046,7 @@ internal sealed class BridgeEngineModel(
         }
         catch
         {
-            // Corrupt state file â†’ re-alert once; harmless.
+            // Corrupt state file → re-alert once; harmless.
         }
 
         return state;
@@ -1083,7 +1083,7 @@ internal sealed class BridgeEngineModel(
 
             // DEFERRED topics are not polled at all, so their offsets FREEZE and everything they
             // produced replays the moment the mode goes back to Normal. (Silenced topics ARE
-            // polled â€” their traffic is dropped, deliberately never replayed.)
+            // polled — their traffic is dropped, deliberately never replayed.)
             if (Resolve_EffectiveMode(channel.OrchId) == TelegramDeliveryModes.Deferred)
                 continue;
 
@@ -1110,7 +1110,7 @@ internal sealed class BridgeEngineModel(
         {
             _log.Log_Info(append.Channel.OrchId, $"[{append.Channel.SpokeName}] entry #{entry.Index} FROM {entry.Author}: {entry.Subject}");
 
-            // A supervisor entry in a SPOKE is a brief or a verdict â€” either way the ledger owes
+            // A supervisor entry in a SPOKE is a brief or a verdict — either way the ledger owes
             // an update from this moment, and the flag below is what makes skipping it visible.
             if (!append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor)
                 _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
@@ -1125,7 +1125,7 @@ internal sealed class BridgeEngineModel(
             return;
 
         // TOPIC SILENCE ("I'm at the PC, talking to this supervisor in its terminal"): drop this
-        // orchestration's outbound traffic entirely. Unlike DND, nothing is queued for later â€”
+        // orchestration's outbound traffic entirely. Unlike DND, nothing is queued for later —
         // the owner is already reading it live in the terminal, and offsets keep advancing.
         if (Is_TopicSilenced(append.Channel.OrchId))
             return;
@@ -1148,8 +1148,8 @@ internal sealed class BridgeEngineModel(
             var questionPrompt = optionLabels.Count > 0 ? QuestionPrompt_Builder.Build(questionLines, text) : null;
 
             // Italian layer (live config): the owner reads Italian on the phone; sessions and
-            // channels stay English. The speaker prefix ("ðŸŸ¢ Com: ") is split off DETERMINISTICALLY
-            // and reattached â€” a live translation once mangled it into garbage. Presence lines
+            // channels stay English. The speaker prefix ("🟢 Com: ") is split off DETERMINISTICALLY
+            // and reattached — a live translation once mangled it into garbage. Presence lines
             // (implementer spokes' "online") are canned app strings and stay English entirely.
             if (_configProvider.Get_Current().TelegramItalianLayer && append.Channel.IsOwnerChannel)
             {
@@ -1204,7 +1204,7 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// Sends one mirrored chunk, as HTML when it carries a fenced block so an ASCII mockup keeps a
     /// MONOSPACED font and its alignment. Telegram rejects malformed HTML (a chunk boundary can
-    /// split a fence), so a rejection falls back to plain text â€” a mangled mockup beats a lost
+    /// split a fence), so a rejection falls back to plain text — a mangled mockup beats a lost
     /// message.
     /// </summary>
     async Task<long?> Send_MirrorChunk_Async(long? threadId, string chunk, CancellationToken cancellationToken)
@@ -1232,8 +1232,8 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// "ðŸ”´ Sup: body" â†’ ("ðŸ”´ Sup: ", "body") â€” the prefix must NEVER pass through the translator.
-    /// The bound covers the longest prefix ("ðŸŸ¡ Gen-Sup: " is already 12 UTF-16 units, its emoji
+    /// "🔴 Sup: body" → ("🔴 Sup: ", "body") — the prefix must NEVER pass through the translator.
+    /// The bound covers the longest prefix ("🟡 Gen-Sup: " is already 12 UTF-16 units, its emoji
     /// being a surrogate pair) with room to spare; the LAZY quantifier still stops at the first
     /// ": ", which is always the formatter's own prefix.
     /// </summary>
@@ -1249,7 +1249,7 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// A topic's OWN mode wins over the app-wide setting â€” "silence just this one while I work in
+    /// A topic's OWN mode wins over the app-wide setting — "silence just this one while I work in
     /// its terminal" must survive someone flipping the global DND, and vice versa. Only when the
     /// topic is Normal does the app-wide setting apply.
     /// </summary>
@@ -1372,7 +1372,7 @@ internal sealed class BridgeEngineModel(
 
             if (!File.Exists(photoPath))
             {
-                _log.Log_Warning(orchId, $"Entry photo not sent â€” file missing: {photoPath}");
+                _log.Log_Warning(orchId, $"Entry photo not sent — file missing: {photoPath}");
                 return;
             }
 
@@ -1390,7 +1390,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Owner-channel entries only, and of any QUEUED periodic STATUS entries (a DND catch-up
-    /// batch) only the NEWEST survives â€” hours of muted half-hour reports must not flood the
+    /// batch) only the NEWEST survives — hours of muted half-hour reports must not flood the
     /// owner on unmute.
     /// </summary>
     static IReadOnlyList<Channels.ChannelEntry.IChannelEntry> Select_MirrorableEntries(ICompletedChannelAppend append)
@@ -1430,7 +1430,7 @@ internal sealed class BridgeEngineModel(
         return deduplicated;
     }
 
-    /// <summary>General channel â†’ the General topic (null thread id). Orchestrations get a topic on first mirror.</summary>
+    /// <summary>General channel → the General topic (null thread id). Orchestrations get a topic on first mirror.</summary>
     async Task<long?> Resolve_ThreadId_OrNull_Async(IDiscoveredChannel channel, CancellationToken cancellationToken)
     {
         if (channel.OrchId == ChannelDiscovery.GENERAL_ORCH_ID)
@@ -1460,7 +1460,7 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Error(channel.OrchId, "Telegram topic creation failed â€” mirroring to the General topic for now", ex);
+            _log.Log_Error(channel.OrchId, "Telegram topic creation failed — mirroring to the General topic for now", ex);
             return null;
         }
     }
@@ -1471,9 +1471,9 @@ internal sealed class BridgeEngineModel(
 
         foreach (var malformedRequest in pending.MalformedRequests)
         {
-            _log.Log_Warning(GLOBAL_ORCH_ID, $"Malformed request file deleted â€” {malformedRequest.Reason}: {malformedRequest.FilePath}");
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Malformed request file deleted — {malformedRequest.Reason}: {malformedRequest.FilePath}");
 
-            // Tell the AGENT why, in its own channel â€” a silently deleted request file used to
+            // Tell the AGENT why, in its own channel — a silently deleted request file used to
             // look to the supervisor like an action that simply never happened.
             if (malformedRequest.OrchId != null && _store.Get_Session_OrNull(malformedRequest.OrchId) != null)
                 Append_OrchestrationAppEntry(malformedRequest.OrchId, "request REJECTED", $"Your request file was rejected: {malformedRequest.Reason}. Fix it and drop a new file (same action string).");
@@ -1491,7 +1491,7 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Per-orchestration model override (owner: "use fable for this") â€” stored on session.json,
+    /// Per-orchestration model override (owner: "use fable for this") — stored on session.json,
     /// then the affected sessions are killed and respawned on the new model; they resume from
     /// their channels. Never touches the global defaults.
     /// </summary>
@@ -1524,13 +1524,13 @@ internal sealed class BridgeEngineModel(
 
                 Append_OrchestrationAppEntry(
                     request.OrchId,
-                    $"model set: {request.Role} â†’ {request.Model} â€” {request.Reason}",
+                    $"model set: {request.Role} → {request.Model} — {request.Reason}",
                     "Affected sessions respawned on the new model; they resume from their channels.");
             }
             catch (Exception ex)
             {
-                _log.Log_Error(request.OrchId, $"set-model {request.Role} â†’ '{request.Model}' failed", ex);
-                Append_OrchestrationAppEntry(request.OrchId, $"set-model FAILED: {request.Role} â†’ {request.Model}", $"Error: {ex.Message}");
+                _log.Log_Error(request.OrchId, $"set-model {request.Role} → '{request.Model}' failed", ex);
+                Append_OrchestrationAppEntry(request.OrchId, $"set-model FAILED: {request.Role} → {request.Model}", $"Error: {ex.Message}");
             }
             finally
             {
@@ -1587,22 +1587,22 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Renames the session terminal windows to carry the goal name. The original fragment stays
-    /// as a prefix ("SUP Â· crm-2 Â· CRM invoice crash") so focusing/closing keep matching.
+    /// as a prefix ("SUP · crm-2 · CRM invoice crash") so focusing/closing keep matching.
     /// </summary>
     void Rename_SessionWindows_BestEffort(Sessions.OrchestrationSession.IOrchestrationSession session, string name)
     {
         try
         {
-            var supervisorFragment = $"SUP Â· {session.OrchId}";
-            TerminalWindow_Focuser.Try_Rename_ByTitleFragment(supervisorFragment, $"{supervisorFragment} Â· {name}");
+            var supervisorFragment = $"SUP · {session.OrchId}";
+            TerminalWindow_Focuser.Try_Rename_ByTitleFragment(supervisorFragment, $"{supervisorFragment} · {name}");
 
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc != null)
                     continue;
 
-                var memberFragment = $"{member.MemberId.ToUpperInvariant()} Â· {session.OrchId}";
-                TerminalWindow_Focuser.Try_Rename_ByTitleFragment(memberFragment, $"{memberFragment} Â· {name}");
+                var memberFragment = $"{member.MemberId.ToUpperInvariant()} · {session.OrchId}";
+                TerminalWindow_Focuser.Try_Rename_ByTitleFragment(memberFragment, $"{memberFragment} · {name}");
             }
         }
         catch (Exception ex)
@@ -1624,7 +1624,7 @@ internal sealed class BridgeEngineModel(
             }
             catch (Exception ex)
             {
-                _log.Log_Error(orchId, $"Telegram editForumTopic({topicId} â†’ '{newName}') failed", ex);
+                _log.Log_Error(orchId, $"Telegram editForumTopic({topicId} → '{newName}') failed", ex);
             }
         });
     }
@@ -1689,14 +1689,14 @@ internal sealed class BridgeEngineModel(
                 var kindWord = request.Kind.ToString().ToLowerInvariant();
 
                 var briefingHint = request.Kind == MemberKinds.Reviewer
-                    ? $"New reviewer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}' â€” READ-ONLY (it cannot edit or commit). Its channel is {newMember.MemberId}/channel.md â€” brief it there, and the brief MUST name a review DEPTH (quick | standard | deep | max) and exactly what to review."
-                    : $"New implementer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}'. Its channel is {newMember.MemberId}/channel.md â€” brief it there.";
+                    ? $"New reviewer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}' — READ-ONLY (it cannot edit or commit). Its channel is {newMember.MemberId}/channel.md — brief it there, and the brief MUST name a review DEPTH (quick | standard | deep | max) and exactly what to review."
+                    : $"New implementer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}'. Its channel is {newMember.MemberId}/channel.md — brief it there.";
 
-                // The REASON rides in the subject because App entries mirror subject-only â€” the
+                // The REASON rides in the subject because App entries mirror subject-only — the
                 // owner must never see a session appear (and burn tokens) without knowing why.
                 Append_OrchestrationAppEntry(
                     request.OrchId,
-                    $"{kindWord} '{newMember.MemberId}' added â€” {request.Reason}",
+                    $"{kindWord} '{newMember.MemberId}' added — {request.Reason}",
                     briefingHint);
             }
             catch (Exception ex)
@@ -1722,7 +1722,7 @@ internal sealed class BridgeEngineModel(
 
                 Append_OrchestrationAppEntry(
                     request.OrchId,
-                    $"implementer '{request.MemberId}' closed â€” {request.Reason}",
+                    $"implementer '{request.MemberId}' closed — {request.Reason}",
                     $"Implementer '{request.MemberId}' is retired: its terminal was closed and its channel stays on disk as audit trail.");
             }
             catch (Exception ex)
@@ -1751,7 +1751,7 @@ internal sealed class BridgeEngineModel(
                     Delete_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value);
 
                 Append_GeneralAppEntry(
-                    $"orchestration '{request.OrchId}' closed â€” {request.Reason}",
+                    $"orchestration '{request.OrchId}' closed — {request.Reason}",
                     "Sessions ended; folder kept as audit trail; Telegram topic deleted.");
             }
             catch (Exception ex)
@@ -1809,7 +1809,7 @@ internal sealed class BridgeEngineModel(
 
         if (!File.Exists(ownerChannel))
         {
-            _log.Log_Warning(orchId, $"No owner-channel.md for '{orchId}' â€” app entry '{subject}' logged only");
+            _log.Log_Warning(orchId, $"No owner-channel.md for '{orchId}' — app entry '{subject}' logged only");
             return;
         }
 
@@ -1864,7 +1864,7 @@ internal sealed class BridgeEngineModel(
                     if (command == "dnd" || command == "mute" || command == "unmute"
                         || command == "dnd-all" || command == "mute-all" || command == "dnd_all" || command == "mute_all")
                     {
-                        // Deferred until after the loop: toggling must not race the âœ“ acks, and a
+                        // Deferred until after the loop: toggling must not race the ✓ acks, and a
                         // /dnd must not be auto-unmuted by the very message that requested it.
                         modeCommands.Add((command, message.MessageThreadId));
                     }
@@ -1878,7 +1878,7 @@ internal sealed class BridgeEngineModel(
                     }
                     else if (command == "progress")
                     {
-                        // Answered by the APP straight from PLAN.md â€” instant, and it works even
+                        // Answered by the APP straight from PLAN.md — instant, and it works even
                         // while the supervisor is mid-turn (which is exactly when it gets asked).
                         await Send_ProgressReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
@@ -1917,7 +1917,7 @@ internal sealed class BridgeEngineModel(
                 }
 
                 // The owner texting or tapping ANYTHING (except a mode command) lifts app-wide DND
-                // â€” before routing, so the âœ“ acks go out.
+                // — before routing, so the ✓ acks go out.
                 if ((routableMessages.Count > 0 || batch.CallbackTaps.Count > 0) && _telegramMuted)
                     Set_TelegramMuted(false);
 
@@ -1943,7 +1943,7 @@ internal sealed class BridgeEngineModel(
                 foreach (var modeCommand in modeCommands)
                     await Apply_ModeCommand_Async(client, modeCommand.Command, modeCommand.ThreadId, cancellationToken);
 
-                // Our own topic renames make Telegram post "changed the topic name" notices â€”
+                // Our own topic renames make Telegram post "changed the topic name" notices —
                 // delete them so a mode toggle leaves the conversation clean.
                 foreach (var serviceMessageId in batch.TopicServiceMessageIds)
                     await Delete_ServiceMessage_BestEffort_Async(client, serviceMessageId, cancellationToken);
@@ -1962,7 +1962,7 @@ internal sealed class BridgeEngineModel(
             }
             catch (Exception ex)
             {
-                _log.Log_Error(GLOBAL_ORCH_ID, "Telegram getUpdates failed â€” backing off", ex);
+                _log.Log_Error(GLOBAL_ORCH_ID, "Telegram getUpdates failed — backing off", ex);
 
                 try
                 {
@@ -1978,7 +1978,7 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>Registers the chat's â˜° command menu â€” two taps beat typing the check-in ritual.</summary>
+    /// <summary>Registers the chat's ☰ command menu — two taps beat typing the check-in ritual.</summary>
     async Task Register_BotCommands_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
     {
         try
@@ -1995,10 +1995,10 @@ internal sealed class BridgeEngineModel(
                     ("pending", "Open questions awaiting me"),
                     ("resume", "Wake EVERY session — use when the usage limit resets"),
                     ("clear", "Wipe THIS topic's messages (the sessions keep running)"),
-                    ("mute", "Toggle ðŸ”• THIS topic â€” drop its messages (I'm in its terminal)"),
-                    ("dnd", "Toggle ðŸŒ™ THIS topic â€” hold its messages for later"),
-                    ("mute_all", "Toggle ðŸ”• everywhere"),
-                    ("dnd_all", "Toggle ðŸŒ™ everywhere"),
+                    ("mute", "Toggle 🔕 THIS topic — drop its messages (I'm in its terminal)"),
+                    ("dnd", "Toggle 🌙 THIS topic — hold its messages for later"),
+                    ("mute_all", "Toggle 🔕 everywhere"),
+                    ("dnd_all", "Toggle 🌙 everywhere"),
                 ],
                 cancellationToken);
         }
@@ -2012,7 +2012,7 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>"/summary", "/summary@BotName" â†’ "summary"; non-commands â†’ null.</summary>
+    /// <summary>"/summary", "/summary@BotName" → "summary"; non-commands → null.</summary>
     static string? Get_BotCommand_OrNull(string text)
     {
         var trimmed = text.Trim();
@@ -2037,7 +2037,7 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// /progress â€” the PLAN.md task ledger, straight from disk. In a topic: that orchestration's
+    /// /progress — the PLAN.md task ledger, straight from disk. In a topic: that orchestration's
     /// full ledger; in General: one line per open orchestration. Deliberately NOT routed to the
     /// supervisor: this is asked precisely when the supervisor is mid-turn and cannot answer.
     /// </summary>
@@ -2080,7 +2080,7 @@ internal sealed class BridgeEngineModel(
         return string.Join('\n', blocks);
     }
 
-    /// <summary>Full ledger for one orchestration â€” the raw '- [x]' lines are the point of the command.</summary>
+    /// <summary>Full ledger for one orchestration — the raw '- [x]' lines are the point of the command.</summary>
     string Build_OrchestrationLedgerText(string orchId, string displayName)
     {
         const int MAX_LEDGER_LINES = 40;
@@ -2089,7 +2089,7 @@ internal sealed class BridgeEngineModel(
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(planText);
 
         if (progress == null)
-            return $"{displayName}: no task ledger yet â€” the supervisor writes PLAN.md once you approve a direction";
+            return $"{displayName}: no task ledger yet — the supervisor writes PLAN.md once you approve a direction";
 
         List<string> taskLines = [];
 
@@ -2102,7 +2102,7 @@ internal sealed class BridgeEngineModel(
         }
 
         var shown = taskLines.Count <= MAX_LEDGER_LINES ? taskLines : [.. taskLines.Take(MAX_LEDGER_LINES)];
-        var truncationNote = taskLines.Count > MAX_LEDGER_LINES ? $"\nâ€¦ and {taskLines.Count - MAX_LEDGER_LINES} more" : "";
+        var truncationNote = taskLines.Count > MAX_LEDGER_LINES ? $"\n… and {taskLines.Count - MAX_LEDGER_LINES} more" : "";
 
         return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n\n{string.Join('\n', shown)}{truncationNote}";
     }
@@ -2114,8 +2114,8 @@ internal sealed class BridgeEngineModel(
         if (progress == null)
             return $"{displayName}: no task ledger yet";
 
-        var blockedPart = progress.Blocked > 0 ? $" Â· {progress.Blocked} BLOCKED" : "";
-        var runningPart = progress.InProgress > 0 ? $" Â· {progress.InProgress} running" : "";
+        var blockedPart = progress.Blocked > 0 ? $" · {progress.Blocked} BLOCKED" : "";
+        var runningPart = progress.InProgress > 0 ? $" · {progress.InProgress} running" : "";
 
         return $"{displayName}: {progress.Done}/{progress.Total} done{runningPart}{blockedPart}";
     }
@@ -2138,7 +2138,7 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// /tokens â€” LIFETIME token and usage figures (respawns folded in). In a topic: that
+    /// /tokens — LIFETIME token and usage figures (respawns folded in). In a topic: that
     /// orchestration, broken down per session; in General: every orchestration plus a grand total.
     /// The figures are API-EQUIVALENT: subscription plans are not billed per token.
     /// </summary>
@@ -2167,7 +2167,7 @@ internal sealed class BridgeEngineModel(
             if (tokens <= 0 && cost <= 0)
                 return $"{session.DisplayName ?? session.OrchId}: no usage recorded yet";
 
-            List<string> lines = [$"{session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} Â· â‰ˆ${cost:F2} equiv (not billed)"];
+            List<string> lines = [$"{session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} · ≈${cost:F2} equiv (not billed)"];
 
             foreach (var line in Build_PerSessionUsageLines(session))
                 lines.Add(line);
@@ -2188,13 +2188,13 @@ internal sealed class BridgeEngineModel(
             grandCost += cost;
             grandTokens += tokens;
 
-            blocks.Add($"{session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} Â· â‰ˆ${cost:F2}");
+            blocks.Add($"{session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} · ≈${cost:F2}");
         }
 
         if (blocks.Count == 0)
             return "no open orchestrations";
 
-        blocks.Add($"TOTAL: {UsageTotals_Reader.Format_Tokens(grandTokens)} Â· â‰ˆ${grandCost:F2} equiv (not billed)");
+        blocks.Add($"TOTAL: {UsageTotals_Reader.Format_Tokens(grandTokens)} · ≈${grandCost:F2} equiv (not billed)");
         return string.Join('\n', blocks);
     }
 
@@ -2227,7 +2227,7 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// /limits â€” the 5-hour and weekly usage windows, per model where the status line reports
+    /// /limits — the 5-hour and weekly usage windows, per model where the status line reports
     /// them. Data comes from the status-line probe files; every session writes what its Claude
     /// Code version exposes, and the WORST (highest) percent per window is what matters.
     /// </summary>
@@ -2247,7 +2247,7 @@ internal sealed class BridgeEngineModel(
         var windows = RateLimits_Reader.Read_WorstAcrossSessions(UsageTotals_Reader.Find_AllUsageFiles(_paths));
 
         if (windows.Count == 0)
-            return "no limit data in the status line of this Claude Code version â€” nothing to report (the automatic limit alerts idle for the same reason)";
+            return "no limit data in the status line of this Claude Code version — nothing to report (the automatic limit alerts idle for the same reason)";
 
         List<string> lines = [];
 
@@ -2255,20 +2255,20 @@ internal sealed class BridgeEngineModel(
         {
             var resetPart = window.ResetsAtLocal == null
                 ? ""
-                : $" Â· resets in {SessionDuration_Formatter.Describe(window.ResetsAtLocal.Value - DateTime.Now)} ({window.ResetsAtLocal.Value:HH:mm})";
+                : $" · resets in {SessionDuration_Formatter.Describe(window.ResetsAtLocal.Value - DateTime.Now)} ({window.ResetsAtLocal.Value:HH:mm})";
 
             lines.Add($"{window.Window}: {window.Percent:F0}%{resetPart}");
         }
 
-        // The account's limits are reported per WINDOW, never per model â€” say so rather than
+        // The account's limits are reported per WINDOW, never per model — say so rather than
         // letting a per-model reading be inferred from the models that happened to report.
-        lines.Add($"(account-wide, all models â€” seen from: {string.Join(" | ", windows.Select(w => w.Models).Distinct())})");
+        lines.Add($"(account-wide, all models — seen from: {string.Join(" | ", windows.Select(w => w.Models).Distinct())})");
 
         return string.Join('\n', lines);
     }
 
     /// <summary>
-    /// /diff â€” GROUND TRUTH from git, not agent prose: branch, ahead/behind, dirty files and the
+    /// /diff — GROUND TRUTH from git, not agent prose: branch, ahead/behind, dirty files and the
     /// latest commits for the repo and every worktree the orchestration uses.
     /// </summary>
     async Task Send_GitReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
@@ -2283,7 +2283,7 @@ internal sealed class BridgeEngineModel(
     string Build_GitReportText(long? messageThreadId)
     {
         if (messageThreadId == null)
-            return "send /diff inside an orchestration's topic â€” it reports that orchestration's repo and worktrees";
+            return "send /diff inside an orchestration's topic — it reports that orchestration's repo and worktrees";
 
         var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
@@ -2297,9 +2297,9 @@ internal sealed class BridgeEngineModel(
             if (!snapshot.IsRepository)
                 continue;
 
-            var aheadPart = snapshot.AheadOfUpstream > 0 ? $" Â· {snapshot.AheadOfUpstream} ahead" : "";
-            var behindPart = snapshot.BehindUpstream > 0 ? $" Â· {snapshot.BehindUpstream} behind" : "";
-            var dirtyPart = snapshot.DirtyFileCount > 0 ? $" Â· {snapshot.DirtyFileCount} uncommitted" : " Â· clean";
+            var aheadPart = snapshot.AheadOfUpstream > 0 ? $" · {snapshot.AheadOfUpstream} ahead" : "";
+            var behindPart = snapshot.BehindUpstream > 0 ? $" · {snapshot.BehindUpstream} behind" : "";
+            var dirtyPart = snapshot.DirtyFileCount > 0 ? $" · {snapshot.DirtyFileCount} uncommitted" : " · clean";
 
             List<string> lines = [$"{snapshot.ShortPath} [{snapshot.Branch}]{aheadPart}{behindPart}{dirtyPart}"];
 
@@ -2318,8 +2318,8 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// The four delivery toggles. All of them TOGGLE (one command to remember per scope), and the
     /// -all pair is the app-wide setting while the bare pair is this topic's own override:
-    ///   /mute      this topic â†’ Silenced (dropped)      /mute-all  app-wide Silenced
-    ///   /dnd       this topic â†’ Deferred (kept, replayed) /dnd-all app-wide Deferred
+    ///   /mute      this topic → Silenced (dropped)      /mute-all  app-wide Silenced
+    ///   /dnd       this topic → Deferred (kept, replayed) /dnd-all app-wide Deferred
     /// In the General topic (no orchestration behind it) the bare commands act app-wide too.
     /// </summary>
     async Task Apply_ModeCommand_Async(ITelegramApiClient client, string command, long? messageThreadId, CancellationToken cancellationToken)
@@ -2346,7 +2346,7 @@ internal sealed class BridgeEngineModel(
                 : wantedMode;
 
             _store.Set_TelegramMode(session.OrchId, newMode);
-            _log.Log_Info(session.OrchId, $"Topic delivery mode â†’ {newMode}");
+            _log.Log_Info(session.OrchId, $"Topic delivery mode → {newMode}");
             Raise_OrchestrationActivity(session.OrchId);
 
             Tell_Supervisor_AboutMode(session.OrchId, session.TelegramMode, newMode);
@@ -2384,17 +2384,17 @@ internal sealed class BridgeEngineModel(
 
         return mode switch
         {
-            TelegramDeliveryModes.Normal => $"ðŸ”” {scope}: messages ON",
-            TelegramDeliveryModes.Deferred => $"{TelegramDeliveryMode_Glyphs.DEFERRED} {scope}: Do-Not-Disturb â€” nothing is lost, it all arrives when you switch back",
-            TelegramDeliveryModes.Silenced => $"{TelegramDeliveryMode_Glyphs.SILENCED} {scope}: silenced â€” messages are DROPPED while this lasts (you're reading them in the terminal)",
+            TelegramDeliveryModes.Normal => $"🔔 {scope}: messages ON",
+            TelegramDeliveryModes.Deferred => $"{TelegramDeliveryMode_Glyphs.DEFERRED} {scope}: Do-Not-Disturb — nothing is lost, it all arrives when you switch back",
+            TelegramDeliveryModes.Silenced => $"{TelegramDeliveryMode_Glyphs.SILENCED} {scope}: silenced — messages are DROPPED while this lasts (you're reading them in the terminal)",
             _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
         };
     }
 
     /// <summary>
-    /// Keeps each Telegram topic's NAME carrying its mode glyph (ðŸ”• / ðŸŒ™), so the owner sees the
+    /// Keeps each Telegram topic's NAME carrying its mode glyph (🔕 / 🌙), so the owner sees the
     /// state in the topic list without opening anything. Only calls the API when the name actually
-    /// changes â€” the desired name is compared against the last one pushed.
+    /// changes — the desired name is compared against the last one pushed.
     /// </summary>
     async Task Sync_TopicNames_BestEffort_Async(CancellationToken cancellationToken)
     {
@@ -2430,7 +2430,7 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// /status â€” the per-session state, the same reading the app's chips show. LIVE activity
+    /// /status — the per-session state, the same reading the app's chips show. LIVE activity
     /// (transcript growing) outranks the declared channel markers, because a marker only records
     /// what an agent announced, not what it is doing now.
     /// </summary>
@@ -2506,7 +2506,7 @@ internal sealed class BridgeEngineModel(
     string Build_MemberStatusText(long? messageThreadId)
     {
         if (messageThreadId == null)
-            return "send /status inside an orchestration's topic â€” it reports that orchestration's sessions";
+            return "send /status inside an orchestration's topic — it reports that orchestration's sessions";
 
         var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
@@ -2527,7 +2527,7 @@ internal sealed class BridgeEngineModel(
 
         var supervisorLine = SessionActivity_Probe.Is_MidTurn(supervisorUsage)
             ? $"working now{Describe_Activity_Suffix(supervisorUsage)}"
-            : "idle â€” waiting";
+            : "idle — waiting";
 
         List<string> lines =
         [
@@ -2550,7 +2550,7 @@ internal sealed class BridgeEngineModel(
             var workingNow = SessionActivity_Probe.Is_MidTurn(Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
 
             var lastWrite = File.Exists(channelFile)
-                ? $" Â· last wrote {SessionDuration_Formatter.Describe(DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile))} ago"
+                ? $" · last wrote {SessionDuration_Formatter.Describe(DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile))} ago"
                 : "";
 
             lines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow)}{lastWrite}");
@@ -2559,12 +2559,12 @@ internal sealed class BridgeEngineModel(
         return string.Join('\n', lines);
     }
 
-    /// <summary>" â€” editing Foo.cs" when the transcript says so, empty when it cannot be read.</summary>
+    /// <summary>" — editing Foo.cs" when the transcript says so, empty when it cannot be read.</summary>
     static string Describe_Activity_Suffix(string usageFilePath)
     {
         var activity = SupervisorActivity_Describer.Describe_OrNull(usageFilePath);
 
-        return activity == null ? "" : $" â€” {activity}";
+        return activity == null ? "" : $" — {activity}";
     }
 
     string Describe_SessionActivity(string usageFilePath, string idleText)
@@ -2576,10 +2576,10 @@ internal sealed class BridgeEngineModel(
     {
         var declaredText = declared switch
         {
-            MemberStates.NewNoTraffic => "new â€” no traffic",
-            MemberStates.ImplementerWorking => "briefed â€” not started yet",
+            MemberStates.NewNoTraffic => "new — no traffic",
+            MemberStates.ImplementerWorking => "briefed — not started yet",
             MemberStates.AwaitingSupervisorReview => "awaiting review",
-            MemberStates.WritingWindowOpen => "idle â€” writing window left open",
+            MemberStates.WritingWindowOpen => "idle — writing window left open",
             MemberStates.BlockedOnOwner => "BLOCKED ON OWNER",
             _ => throw new Exception($"Unhandled MemberStates: {declared}"),
         };
@@ -2588,13 +2588,13 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// /clear â€” empties the TELEGRAM view, never the sessions: no terminal is touched, no channel
+    /// /clear — empties the TELEGRAM view, never the sessions: no terminal is touched, no channel
     /// file is altered, the work continues untouched. An orchestration topic is deleted and
     /// recreated with the same name, which wipes it completely; the General topic cannot be
     /// deleted, so there the app removes the messages it KNOWS belong to it.
     ///
     /// Telegram message ids are chat-wide, not per topic, so a computed range would delete other
-    /// topics' messages â€” only observed ids are ever touched.
+    /// topics' messages — only observed ids are ever touched.
     /// </summary>
     async Task Clear_Topic_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
@@ -2607,7 +2607,7 @@ internal sealed class BridgeEngineModel(
             await Send_DirectReply_BestEffort_Async(
                 client,
                 messageThreadId,
-                $"ðŸ§¹ removed {deleted} message(s) I could account for. Telegram does not let a bot wipe the General topic wholesale â€” older messages need Telegram's own \"clear history\".",
+                $"🧹 removed {deleted} message(s) I could account for. Telegram does not let a bot wipe the General topic wholesale — older messages need Telegram's own \"clear history\".",
                 cancellationToken);
 
             return;
@@ -2631,13 +2631,13 @@ internal sealed class BridgeEngineModel(
 
             await client.Remove_TopicCreationPin_Async(newTopicId, cancellationToken);
 
-            _log.Log_Info(session.OrchId, $"Telegram topic cleared (recreated as {newTopicId}) â€” sessions untouched");
+            _log.Log_Info(session.OrchId, $"Telegram topic cleared (recreated as {newTopicId}) — sessions untouched");
             Raise_OrchestrationActivity(session.OrchId);
 
             await Send_DirectReply_BestEffort_Async(
                 client,
                 newTopicId,
-                "ðŸ§¹ topic cleared. The sessions kept running â€” nothing was interrupted and the channel files still hold the full history.",
+                "🧹 topic cleared. The sessions kept running — nothing was interrupted and the channel files still hold the full history.",
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -2668,14 +2668,14 @@ internal sealed class BridgeEngineModel(
             }
             catch
             {
-                // Already gone, or older than Telegram's deletion window â€” expected, keep going.
+                // Already gone, or older than Telegram's deletion window — expected, keep going.
             }
         }
 
         return deleted;
     }
 
-    /// <summary>/imp 2 â€” the latest entries of one implementer's spoke, which never reaches Telegram otherwise.</summary>
+    /// <summary>/imp 2 — the latest entries of one implementer's spoke, which never reaches Telegram otherwise.</summary>
     async Task Send_ImplementerPeek_Async(ITelegramApiClient client, long? messageThreadId, string command, string rawText, CancellationToken cancellationToken)
     {
         var text = Build_ImplementerPeekText(messageThreadId, command, rawText);
@@ -2712,12 +2712,12 @@ internal sealed class BridgeEngineModel(
         if (entries.Count == 0)
             return $"{memberId}: no traffic yet";
 
-        List<string> lines = [$"{memberId} â€” last {Math.Min(PEEK_ENTRIES, entries.Count)} entries"];
+        List<string> lines = [$"{memberId} — last {Math.Min(PEEK_ENTRIES, entries.Count)} entries"];
 
         foreach (var entry in entries.TakeLast(PEEK_ENTRIES))
         {
             var body = entry.Body.Replace('\n', ' ').Trim();
-            var preview = body.Length <= 180 ? body : $"{body[..180]}â€¦";
+            var preview = body.Length <= 180 ? body : $"{body[..180]}…";
 
             lines.Add($"[{entry.Author.ToString().ToLowerInvariant()}] {entry.Subject}");
 
@@ -2753,7 +2753,7 @@ internal sealed class BridgeEngineModel(
         {
             found = _buttonOptions.TryGetValue(tap.Data, out registered);
 
-            // SINGLE-USE: the first tap consumes the WHOLE option group â€” a second tap (or a
+            // SINGLE-USE: the first tap consumes the WHOLE option group — a second tap (or a
             // sibling button) resolves to "expired" instead of double-firing a decision.
             if (found)
             {
@@ -2767,7 +2767,7 @@ internal sealed class BridgeEngineModel(
         try
         {
             // Must always be answered or the button spinner hangs on the phone.
-            await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, found ? "âœ“" : "expired â€” please type your choice", cancellationToken);
+            await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, found ? "✓" : "expired — please type your choice", cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -2781,9 +2781,9 @@ internal sealed class BridgeEngineModel(
         if (!found)
             return;
 
-        // Rewrite the question message to RECORD the choice ("â“ â€¦ / âœ… deep"). Telegram's tap
+        // Rewrite the question message to RECORD the choice ("❓ … / ✅ deep"). Telegram's tap
         // acknowledgement is a transient toast and the keyboard vanishes, so without this the chat
-        // keeps no trace of what was picked â€” the owner scrolls back and cannot tell what they
+        // keeps no trace of what was picked — the owner scrolls back and cannot tell what they
         // answered. Editing the text also drops the keyboard, so it replaces the strip step.
         if (tap.MessageId != null)
         {
@@ -2858,7 +2858,7 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// Owner texts are BUFFERED, not delivered immediately: several messages sent in a row
     /// aggregate into one entry after a quiet window (Flush_OwnerDeliveries_Async does the
-    /// delivery and sends the 'âœ“ â†’ Sup' receipt).
+    /// delivery and sends the '✓ → Sup' receipt).
     /// </summary>
     /// <summary>
     /// WAIT / GO — the owner's own hold on delivery. Returns true when the message WAS the control
@@ -3035,7 +3035,7 @@ internal sealed class BridgeEngineModel(
         {
             var voiceText = await Build_VoiceEntryText_OrNull_Async(message, channelFile, orchId, cancellationToken);
 
-            // Not configured or failed â€” the owner already got a direct reply; nothing to route.
+            // Not configured or failed — the owner already got a direct reply; nothing to route.
             if (voiceText == null)
                 return;
 
@@ -3082,14 +3082,14 @@ internal sealed class BridgeEngineModel(
             {
                 if (!_deliveryTargets.TryGetValue(delivery.Key, out target))
                 {
-                    _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner delivery for '{delivery.Key}' has no recorded target â€” dropped");
+                    _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner delivery for '{delivery.Key}' has no recorded target — dropped");
                     continue;
                 }
             }
 
             var deliveryText = delivery.Value;
 
-            // Italian layer: the SESSION must only ever see English â€” translate the aggregated
+            // Italian layer: the SESSION must only ever see English — translate the aggregated
             // owner text before it touches the channel. Already-English text passes unchanged.
             if (_configProvider.Get_Current().TelegramItalianLayer)
                 deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
@@ -3107,19 +3107,19 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                // The batch's âœ“ becomes "âœ“âœ“" â€” plus a TRUTHFUL handoff line (can the recipient
+                // The batch's ✓ becomes "✓✓" — plus a TRUTHFUL handoff line (can the recipient
                 // answer now, or is it mid-turn with the communicator covering the wait?). One
-                // message that evolves, never a pile of âœ“ / âœ“âœ“ / thinking lines.
+                // message that evolves, never a pile of ✓ / ✓✓ / thinking lines.
                 var handoffLine = Build_HandoffLine(target.OrchId);
 
                 var receiptText = Should_SendHandoffLine(target.OrchId, handoffLine)
-                    ? $"âœ“âœ“  Â·  {handoffLine}"
-                    : "âœ“âœ“";
+                    ? $"✓✓  ·  {handoffLine}"
+                    : "✓✓";
 
                 var receiptMessageId = await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
 
-                // Tracked until the supervisor actually answers â€” the owner must never be left
-                // staring at a receipt frozen on "thinkingâ€¦".
+                // Tracked until the supervisor actually answers — the owner must never be left
+                // staring at a receipt frozen on "thinking…".
                 lock (_ownerStateLock)
                 {
                     _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
@@ -3145,7 +3145,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Several messages sent minutes apart close separate aggregation windows, and repeating the
-    /// SAME handoff line after each âœ“âœ“ is pure noise (the owner saw three identical "thinkingâ€¦"
+    /// SAME handoff line after each ✓✓ is pure noise (the owner saw three identical "thinking…"
     /// lines in a row). Repeat it only when the state actually changed, or after a long gap when
     /// it has become informative again.
     /// </summary>
@@ -3165,7 +3165,7 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// What happens to the message the owner just sent. "thinkingâ€¦" is only honest when the
+    /// What happens to the message the owner just sent. "thinking…" is only honest when the
     /// recipient is free to pick it up; a session already mid-turn cannot, and saying so (with
     /// who will cover the wait) is the whole point of having a communicator.
     /// </summary>
@@ -3174,33 +3174,33 @@ internal sealed class BridgeEngineModel(
         if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
         {
             return Is_SessionMidTurn(Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE))
-                ? "ðŸŸ¡ Gen-Sup: busy â€” will read this the moment the current turn ends"
-                : "ðŸŸ¡ Gen-Sup: thinkingâ€¦";
+                ? "🟡 Gen-Sup: busy — will read this the moment the current turn ends"
+                : "🟡 Gen-Sup: thinking…";
         }
 
         var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
         if (!Is_SessionMidTurn(supervisorUsageFile))
-            return "ðŸ”´ Sup: thinkingâ€¦";
+            return "🔴 Sup: thinking…";
 
-        // Say WHAT it is doing, not just that it is busy â€” read straight off its transcript, which
+        // Say WHAT it is doing, not just that it is busy — read straight off its transcript, which
         // is where the communicator used to read it, minus the session and the turn it cost.
         var activity = SupervisorActivity_Describer.Describe_OrNull(supervisorUsageFile);
 
         return activity == null
-            ? "ðŸ”´ Sup: busy mid-task â€” he'll pick this up when the current turn ends"
-            : $"ðŸ”´ Sup: busy â€” {activity} â€” he'll pick this up when the current turn ends";
+            ? "🔴 Sup: busy mid-task — he'll pick this up when the current turn ends"
+            : $"🔴 Sup: busy — {activity} — he'll pick this up when the current turn ends";
     }
 
     /// <summary>
     /// Single tick = "received", sent immediately per message. Its id is remembered so the
-    /// delivery (âœ“âœ“) and the handoff line can REWRITE this very message instead of adding more.
+    /// delivery (✓✓) and the handoff line can REWRITE this very message instead of adding more.
     /// </summary>
     async Task Send_ReceivedAck_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         try
         {
-            var messageId = await client.Send_Message_Async(messageThreadId, "âœ“", cancellationToken);
+            var messageId = await client.Send_Message_Async(messageThreadId, "✓", cancellationToken);
 
             if (messageId != null)
             {
@@ -3226,7 +3226,7 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>Records a message id as belonging to a topic â€” the ONLY source /clear may delete from.</summary>
+    /// <summary>Records a message id as belonging to a topic — the ONLY source /clear may delete from.</summary>
     void Remember_TopicMessage(long? messageThreadId, long? messageId)
     {
         const int KNOWN_IDS_PER_TOPIC_CAP = 4000;
@@ -3284,11 +3284,11 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// The owner must always learn what became of their message. If the supervisor's turn ends
     /// without a reply here (it went idle, typically waiting on an implementer), the app says so
-    /// on the receipt AND nudges the supervisor in its channel â€” which trips its watcher, so a
-    /// real answer follows instead of a receipt frozen on "thinkingâ€¦".
+    /// on the receipt AND nudges the supervisor in its channel — which trips its watcher, so a
+    /// real answer follows instead of a receipt frozen on "thinking…".
     /// </summary>
     /// <summary>
-    /// The periodic STATUS the SUPERVISOR used to write every ~30 min â€” about 26 paid turns a day
+    /// The periodic STATUS the SUPERVISOR used to write every ~30 min — about 26 paid turns a day
     /// (~$44) spent restating what this process can compute for free from PLAN.md, the member
     /// states and the activity probes. Same cadence, same content, same "only while work is in
     /// flight" condition, and it runs on the bridge tick, so it adds no session and no idle wake.
@@ -3755,7 +3755,7 @@ internal sealed class BridgeEngineModel(
 
         var header = progress == null
             ? "STATUS"
-            : $"STATUS Â· {progress.Done}/{progress.Total} done{(progress.Blocked > 0 ? $" Â· {progress.Blocked} blocked" : "")}";
+            : $"STATUS · {progress.Done}/{progress.Total} done{(progress.Blocked > 0 ? $" · {progress.Blocked} blocked" : "")}";
 
         var current = progress?.CurrentTaskText;
 
@@ -3797,7 +3797,7 @@ internal sealed class BridgeEngineModel(
     /// What the COMMUNICATOR session used to do, for free. It cost $74/day per orchestration and
     /// 196 turns to emit 37 identical STATUS entries; every input it used (the supervisor's
     /// transcript, the owner channel) is readable from here, and the rules it followed are the ones
-    /// encoded below â€” wait ~45 s so an idle supervisor answers for itself, never speak once the
+    /// encoded below — wait ~45 s so an idle supervisor answers for itself, never speak once the
     /// supervisor has the floor, repeat every ~3 minutes while it stays busy, stay short.
     ///
     /// The line goes STRAIGHT to Telegram and never into owner-channel.md: the supervisor was told
@@ -3822,7 +3822,7 @@ internal sealed class BridgeEngineModel(
 
         var text = isFirst
             ? Build_FirstNarration(activity)
-            : $"ðŸ”´ Sup: still at it{(activity == null ? "" : $" â€” {activity}")} Â· your message has been waiting {waitedFor}";
+            : $"🔴 Sup: still at it{(activity == null ? "" : $" — {activity}")} · your message has been waiting {waitedFor}";
 
         try
         {
@@ -3841,9 +3841,9 @@ internal sealed class BridgeEngineModel(
 
     static string Build_FirstNarration(string? activity)
     {
-        var doing = activity == null ? "mid-task" : $"mid-task â€” {activity}";
+        var doing = activity == null ? "mid-task" : $"mid-task — {activity}";
 
-        return $"ðŸ”´ Sup: {doing}. Your message is delivered; he picks it up when this turn ends.";
+        return $"🔴 Sup: {doing}. Your message is delivered; he picks it up when this turn ends.";
     }
 
     async Task Resolve_PendingOwnerReplies_Async(CancellationToken cancellationToken)
@@ -3910,13 +3910,13 @@ internal sealed class BridgeEngineModel(
                 "Your turn ended without answering the owner's message above. Reply now, even one line (what you are doing / what you are waiting on). The owner is looking at an unanswered receipt.",
                 DateTime.Now);
 
-            _log.Log_Warning(orchId, "Owner message went unanswered past the grace window â€” supervisor nudged");
+            _log.Log_Warning(orchId, "Owner message went unanswered past the grace window — supervisor nudged");
             Raise_OrchestrationActivity(orchId);
 
             if (_telegramClient == null || Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
                 continue;
 
-            var text = "âœ“âœ“  Â·  ðŸ”´ Sup: turn ended without a reply â€” nudged, an answer is coming";
+            var text = "✓✓  ·  🔴 Sup: turn ended without a reply — nudged, an answer is coming";
 
             try
             {
@@ -3950,7 +3950,7 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Turns the last âœ“ of the batch into the final receipt, in place. Falls back to sending a new
+    /// Turns the last ✓ of the batch into the final receipt, in place. Falls back to sending a new
     /// message when there is nothing to edit or the edit fails (Telegram refuses very old edits).
     /// </summary>
     async Task<long?> Publish_DeliveryReceipt_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
@@ -3991,7 +3991,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Downloads an owner-sent image beside the channel (media/) and references it with an
-    /// 'IMAGE: &lt;path&gt;' line â€” the supervisor Reads the file to inspect the screenshot.
+    /// 'IMAGE: &lt;path&gt;' line — the supervisor Reads the file to inspect the screenshot.
     /// </summary>
     /// <summary>
     /// Downloads the voice note and runs the CONFIGURED transcription command; the transcript
@@ -4014,7 +4014,7 @@ internal sealed class BridgeEngineModel(
             await Send_DirectReply_BestEffort_Async(
                 client,
                 message.MessageThreadId,
-                "ðŸŽ™ voice received, but transcription is not configured â€” set voiceTranscribeCommand in config.json (a CLI printing the transcript to stdout, {input} = audio path), or type instead",
+                "🎙 voice received, but transcription is not configured — set voiceTranscribeCommand in config.json (a CLI printing the transcript to stdout, {input} = audio path), or type instead",
                 cancellationToken);
 
             return null;
@@ -4037,7 +4037,7 @@ internal sealed class BridgeEngineModel(
 
             if (transcript == null)
             {
-                await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "ðŸŽ™ couldn't transcribe the voice message â€” please type it", cancellationToken);
+                await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🎙 couldn't transcribe the voice message — please type it", cancellationToken);
                 return null;
             }
 
@@ -4051,7 +4051,7 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Error(orchId, "Voice note handling failed", ex);
-            await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "ðŸŽ™ voice message failed â€” please type it", cancellationToken);
+            await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🎙 voice message failed — please type it", cancellationToken);
             return null;
         }
     }
@@ -4082,7 +4082,7 @@ internal sealed class BridgeEngineModel(
 
             _log.Log_Info(orchId, $"Owner image downloaded to {imagePath}");
 
-            return $"{caption}\n\nIMAGE: {imagePath}\n(The owner sent this image â€” Read the file to inspect it.)";
+            return $"{caption}\n\nIMAGE: {imagePath}\n(The owner sent this image — Read the file to inspect it.)";
         }
         catch (OperationCanceledException)
         {
