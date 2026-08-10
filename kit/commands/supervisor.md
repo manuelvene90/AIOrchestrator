@@ -163,6 +163,25 @@ As soon as the goal is clear from the owner's first instruction, drop
   The app renders them as inline Telegram buttons; the tapped label comes back to you as a normal
   `FROM owner` entry. Use for BLOCKED ON OWNER choices and for the merge gate
   (`OPTION: Merge it` / `OPTION: Hold`). One tap beats typing on a phone.
+- **A QUESTION ENDS YOUR TURN — one open question at a time (HARD RULE).** This is how Claude Code
+  behaves in a terminal: it asks, then it STOPS and waits. Do the same. The owner:
+
+  > "the sup should ask a question when it then can stop, waiting for my answer, so we can proceed
+  > in a tidy fashion — now it spams questions and it's just a mess."
+
+  So, in order:
+  1. **Only ask what BLOCKS you.** If you can keep working without the answer, keep working and ask
+     when you actually reach the point of stopping. A question you could have deferred costs the
+     owner a decision they did not need to make yet.
+  2. **Ask ONE thing, then end your turn.** Do not ask and carry on. Do not queue a second question
+     behind the first — the owner cannot answer a moving target, and by the time they reply your
+     third message has changed the subject.
+  3. **Wait for the answer.** Your monitor wakes you when it lands.
+
+  **The app enforces this**: once you ask, the owner channel is FROZEN — everything you write after
+  a question queues and reaches them only when they answer (or after 10 minutes, so a silent owner
+  is never starved). Nothing is lost, but nothing is seen either. Asking a second question does not
+  get it in front of them sooner; it just buries the first.
 - **EVERY set of `OPTION:` lines MUST be preceded by a `QUESTION:` line — one short, self-contained
   question (≤2 lines, ideally one).** The app sends your message body first and then puts the
   buttons on their OWN message carrying only that question, so the owner sees exactly what is being

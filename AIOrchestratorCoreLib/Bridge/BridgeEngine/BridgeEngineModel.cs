@@ -173,7 +173,15 @@ internal sealed class BridgeEngineModel(
     {
         public string OrchId = "";
         public string Text = "";
+        public DateTime AskedUtc;
     }
+
+    /// <summary>
+    /// How long an unanswered question freezes the conversation. Long enough to make "a question
+    /// stops the turn" real; short enough that an owner who never answers is not starved of
+    /// everything else the orchestration has to say.
+    /// </summary>
+    const int QUESTION_HOLD_CAP_MINUTES = 10;
 
     /// <summary>Telegram message id → a question the owner has NOT answered yet.</summary>
     readonly Dictionary<long, OpenQuestion> _openQuestions = [];
@@ -1121,6 +1129,13 @@ internal sealed class BridgeEngineModel(
             if (channel.IsOwnerChannel && _ownerDeliveryBuffer.Is_Holding(channel.FilePath))
                 continue;
 
+            // A QUESTION STOPS THE CONVERSATION, exactly as it does in the terminal: once the
+            // supervisor asks, nothing further reaches the owner until they answer. Without this
+            // the supervisor kept working and kept asking, so the owner was always several
+            // questions behind and could never tell which were still live.
+            if (channel.IsOwnerChannel && Is_AwaitingAnswer(channel.OrchId))
+                continue;
+
             activeChannels.Add(channel);
         }
 
@@ -1366,7 +1381,12 @@ internal sealed class BridgeEngineModel(
         {
             lock (_ownerStateLock)
             {
-                _openQuestions[messageId.Value] = new OpenQuestion { OrchId = channel.OrchId, Text = prompt };
+                _openQuestions[messageId.Value] = new OpenQuestion
+                {
+                    OrchId = channel.OrchId,
+                    Text = prompt,
+                    AskedUtc = DateTime.UtcNow,
+                };
             }
         }
     }
@@ -3016,6 +3036,51 @@ internal sealed class BridgeEngineModel(
     /// un-receive them — it stops them being delivered. "✓ ⏸ holding · 1 message" is the honest
     /// state of a message that was mid-countdown when the owner realised they had more to say.
     /// </summary>
+    /// <summary>
+    /// True while a question of ours is unanswered — the owner channel stays frozen and everything
+    /// the supervisor writes queues behind it.
+    ///
+    /// Capped in time on purpose: an owner who simply never answers must not starve themselves of
+    /// everything else forever. Past the cap the queue flows again, and the quiet/away machinery is
+    /// what handles a genuinely absent owner.
+    /// </summary>
+    bool Is_AwaitingAnswer(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            var newestAskUtc = DateTime.MinValue;
+
+            foreach (var question in _openQuestions.Values)
+            {
+                if (question.OrchId == orchId && question.AskedUtc > newestAskUtc)
+                    newestAskUtc = question.AskedUtc;
+            }
+
+            if (newestAskUtc == DateTime.MinValue)
+                return false;
+
+            return (DateTime.UtcNow - newestAskUtc).TotalMinutes < QUESTION_HOLD_CAP_MINUTES;
+        }
+    }
+
+    /// <summary>The owner engaged — whatever they said, the conversation moves again.</summary>
+    void Clear_OpenQuestions(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            List<long> answered = [];
+
+            foreach (var pair in _openQuestions)
+            {
+                if (pair.Value.OrchId == orchId)
+                    answered.Add(pair.Key);
+            }
+
+            foreach (var messageId in answered)
+                _openQuestions.Remove(messageId);
+        }
+    }
+
     static string Build_HoldReceiptText(int heldCount)
     {
         if (heldCount == 0)
@@ -3135,6 +3200,10 @@ internal sealed class BridgeEngineModel(
         // Any word from the owner — including a button tap — means they are back.
         if (Note_OwnerSpoke_AndWasAway())
             await Exit_AwayMode_Async(cancellationToken);
+
+        // ...and it answers whatever was asked, whether or not it answers it. The conversation
+        // unfreezes and everything the supervisor queued behind the question flows now.
+        Clear_OpenQuestions(orchId);
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
