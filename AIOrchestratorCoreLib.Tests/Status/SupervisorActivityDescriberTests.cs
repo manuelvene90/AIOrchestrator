@@ -34,11 +34,35 @@ public class SupervisorActivityDescriberTests
     }
 
     [Fact]
-    public void Commands_AreShortenedToTheirFirstWords()
+    public void RecognisableCommands_AreShortenedToTheirFirstWords()
     {
         var tail = Line("Bash", """{"command":"dotnet test AIOrchestratorCoreLib.Tests --nologo -v q 2>&1 | tail"}""");
 
-        Assert.Equal("running dotnet test AIOrchestratorCoreLib.Tests --nologo", SupervisorActivity_Describer.Describe_FromTranscript_OrNull(tail));
+        Assert.Equal("running dotnet test AIOrchestratorCoreLib.Tests", SupervisorActivity_Describer.Describe_FromTranscript_OrNull(tail));
+    }
+
+    /// <summary>
+    /// Shell plumbing told the owner NOTHING and looked broken on their phone. This is verbatim
+    /// from a real conversation: "🔴 Sup: mid-task — running sup="$HOME/.claude/supervision/
+    /// strategy-lab-2"; sed -n '208,". Truncating a one-liner to N words cannot produce sense.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"command":"sup=\"$HOME/.claude/supervision/strategy-lab-2\"; sed -n '208,240p' \"$sup/PLAN.md\""}""")]
+    [InlineData("""{"command":"cd \"C:/Users/Gianpiero/Documents/Visual Studio 2022/Projects\" && ls"}""")]
+    [InlineData("""{"command":"cat >> \"$sup/owner-channel.md\" <<'EOF'"}""")]
+    public void ShellPlumbing_CollapsesToSomethingHonest_RatherThanGarbage(string input)
+    {
+        Assert.Equal("running a command", SupervisorActivity_Describer.Describe_FromTranscript_OrNull(Line("Bash", input)));
+    }
+
+    [Fact]
+    public void TheUsefulOnes_StillComeThrough()
+    {
+        Assert.Equal("running git status --short", SupervisorActivity_Describer.Describe_FromTranscript_OrNull(
+            Line("Bash", """{"command":"git status --short"}""")));
+
+        Assert.Equal("running dotnet build AIOrchestratorCoreLib", SupervisorActivity_Describer.Describe_FromTranscript_OrNull(
+            Line("Bash", """{"command":"dotnet build AIOrchestratorCoreLib -v q --nologo"}""")));
     }
 
     [Fact]

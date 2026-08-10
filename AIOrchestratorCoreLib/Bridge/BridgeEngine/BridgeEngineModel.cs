@@ -1114,6 +1114,13 @@ internal sealed class BridgeEngineModel(
             if (Resolve_EffectiveMode(channel.OrchId) == TelegramDeliveryModes.Deferred)
                 continue;
 
+            // WAIT holds BOTH directions. It means "hold on, I am still writing" — so the
+            // supervisor must stop adding to the screen too, not just stop receiving. Freezing the
+            // offset here is the same mechanism DND uses, so everything it produced replays in
+            // order on GO; nothing is lost, it just stops landing while the owner composes.
+            if (channel.IsOwnerChannel && _ownerDeliveryBuffer.Is_Holding(channel.FilePath))
+                continue;
+
             activeChannels.Add(channel);
         }
 

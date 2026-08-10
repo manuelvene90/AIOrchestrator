@@ -118,7 +118,20 @@ public static class SupervisorActivity_Describer
         return Path.GetFileName(value.Replace('\\', '/'));
     }
 
-    /// <summary>The first few words of a command — enough to recognise, short enough for a phone.</summary>
+    /// <summary>
+    /// Tools whose name alone tells the owner something. Everything else is shell plumbing.
+    /// </summary>
+    static readonly IReadOnlySet<string> RECOGNISABLE_COMMANDS = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "git", "dotnet", "npm", "yarn", "python", "python3", "node", "pytest", "cargo", "go", "make", "msbuild",
+    };
+
+    /// <summary>
+    /// The command, ONLY when it is recognisable at a glance. A shell one-liner truncated to four
+    /// words produced things like: running sup="$HOME/.claude/supervision/strategy-lab-2"; sed -n '208,
+    /// which is noise on the owner's phone and told them nothing. Now such commands collapse to
+    /// "a command" and the useful ones ("dotnet test", "git log") still come through.
+    /// </summary>
     static string Short_Command(JsonObject? input)
     {
         var command = Text_Field(input, "command");
@@ -128,9 +141,13 @@ public static class SupervisorActivity_Describer
 
         var firstLine = command.Split('\n')[0].Trim();
         var words = firstLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var kept = string.Join(' ', words.Take(4));
 
-        return kept.Length > 60 ? kept[..60] : kept;
+        if (words.Length == 0 || !RECOGNISABLE_COMMANDS.Contains(words[0]))
+            return "a command";
+
+        var kept = string.Join(' ', words.Take(3));
+
+        return kept.Length > 45 ? kept[..45] : kept;
     }
 
     static string? Text_Field(JsonObject? input, string field)
