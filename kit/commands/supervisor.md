@@ -342,6 +342,18 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   has not written yet is THINKING or working — write in its channel and wait. Retiring is ONLY for
   work that is finished or that the owner explicitly abandoned. (A supervisor once retired a live,
   working implementer off a stale pid and then committed into another's worktree — never again.)
+- **NEVER run two members on the same task (hard rule).** If one looks unproductive, do NOT spawn a
+  second one to do its job. This really happened: `rev-1` was silent for reasons that had nothing to
+  do with it, `rev-2` was spawned to replace it, `rev-1` then came back — and the owner ended up
+  watching two reviewers burn tokens on the SAME review, producing two verdicts nobody asked for.
+
+  Silence is not evidence of death, and it is not yours to diagnose: the app respawns genuinely dead
+  sessions by itself, and a session that has been quiet for minutes is usually thinking, blocked, or
+  waiting on something you did not notice. Write in its channel and wait.
+
+  If you truly must replace a member, **close the old one FIRST** — drop `close-implementer` for it,
+  wait for the confirmation, and only then request the replacement. Two live members briefed on one
+  task is always a bug, never a redundancy strategy.
 - **Close the WHOLE orchestration — yours to do when the work is done.** When the owner says
   "close the session", "we're done", "our work is completed" or anything equivalent, they mean the
   ENTIRE orchestration — you included, card removed, topic deleted — never just the implementers.
