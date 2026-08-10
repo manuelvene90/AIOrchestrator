@@ -1,4 +1,4 @@
-# AI Orchestrator status line for Claude Code.
+﻿# AI Orchestrator status line for Claude Code.
 # 1) Renders the session's orchestration role so every terminal is identifiable at a glance:
 #      red    SUPERVISOR · <orch-id>
 #      blue   IMP-N · <orch-id>
@@ -36,7 +36,7 @@ if ($role -and $raw) {
         if ($role -eq 'general') { $usageFile = Join-Path $supervisionRoot 'general\.usage.json' }
         elseif ($role -eq 'supervisor') { $usageFile = Join-Path $supervisionRoot "$orchId\.usage.json" }
         elseif ($role -eq 'communicator') { $usageFile = Join-Path $supervisionRoot "$orchId\.communicator.usage.json" }
-        elseif ($role -eq 'implementer') { $usageFile = Join-Path $supervisionRoot "$orchId\$member\.usage.json" }
+        elseif ($role -in @('implementer','reviewer','solo')) { $usageFile = Join-Path $supervisionRoot "$orchId\$member\.usage.json" }
         if ($usageFile -and (Test-Path (Split-Path $usageFile))) {
             Set-Content -LiteralPath $usageFile -Value $raw -Encoding utf8
         }
@@ -47,7 +47,7 @@ if ($role -and $raw) {
 if ($role -eq 'supervisor') {
     Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $orchId $esc[0m $model"
 }
-elseif ($role -eq 'implementer') {
+elseif ($role -in @('implementer','reviewer','solo')) {
     $memberUpper = if ($member) { $member.ToUpper() } else { 'IMPLEMENTER' }
     Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m $model"
 }
