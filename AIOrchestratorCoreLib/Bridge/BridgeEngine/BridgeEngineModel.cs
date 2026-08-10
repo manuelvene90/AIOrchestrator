@@ -109,6 +109,9 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>"&lt;file&gt;|&lt;line&gt;" of every malformed header already reported — say it once, not every tick.</summary>
     readonly HashSet<string> _reportedMalformedHeaders = [];
+
+    /// <summary>Channels whose pre-existing malformed headers have been absorbed as history.</summary>
+    readonly HashSet<string> _channelsShapeBaselined = [];
     readonly Lock _buttonLock = new();
     long _buttonSequence;
     long _buttonGroupSequence;
@@ -683,11 +686,19 @@ internal sealed class BridgeEngineModel(
             if (malformed.Count == 0)
                 continue;
 
+            // FIRST sight of this file — every malformed header in it is HISTORY. Record it
+            // silently. This warning means "the entry you just wrote was invisible", and it is
+            // actionable only then: an entry from days ago cannot be re-appended usefully, and
+            // re-announcing it at every startup trains the owner to ignore the one that matters.
+            var isFirstSight = _channelsShapeBaselined.Add(channel.FilePath);
+
             List<(int LineNumber, string Line)> unreported = [];
 
             foreach (var entry in malformed)
             {
-                if (_reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}"))
+                var isNew = _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
+
+                if (isNew && !isFirstSight)
                     unreported.Add(entry);
             }
 
