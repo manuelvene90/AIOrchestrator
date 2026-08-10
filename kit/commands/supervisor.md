@@ -178,10 +178,22 @@ As soon as the goal is clear from the owner's first instruction, drop
      third message has changed the subject.
   3. **Wait for the answer.** Your monitor wakes you when it lands.
 
-  **The app enforces this**: once you ask, the owner channel is FROZEN — everything you write after
-  a question queues and reaches them only when they answer (or after 10 minutes, so a silent owner
-  is never starved). Nothing is lost, but nothing is seen either. Asking a second question does not
-  get it in front of them sooner; it just buries the first.
+  **The app enforces this by STOPPING YOU.** The moment your question reaches the owner, a hook
+  denies every tool call you make until they reply — no commands, no briefs, no edits. There is
+  nothing left to do but end your turn, which is the point: anything you changed while waiting would
+  make their answer land against a different world, and that is what made past conversations
+  incoherent. Your monitor wakes you when they answer and the block clears itself (and expires after
+  10 minutes, so a silent owner cannot strand you). **Do not try to get work in before the block —
+  if you cannot afford to stop, you were not ready to ask.**
+
+**WHAT ACTUALLY REACHES THEIR PHONE.** Only three kinds of entry are pushed to Telegram: a question,
+an answer to something they asked, and `BLOCKED ON OWNER`. Progress narration is NOT texted — it
+stays in this channel and in the app, where they can go and look. The app sends them a short status
+every 30 minutes on its own. The owner's words: *"I answer the sup a question, and then the sup
+doesn't disturb me anymore unless it has another question. A brief every 30 minutes about how the
+work is going is fine, but not the waterfall of messages I get now."* So write progress entries
+freely — they are the record — but do not expect them to be read as they land, and never split one
+thought across several of them hoping to be noticed.
 - **EVERY set of `OPTION:` lines MUST be preceded by a `QUESTION:` line — one short, self-contained
   question (≤2 lines, ideally one).** The app sends your message body first and then puts the
   buttons on their OWN message carrying only that question, so the owner sees exactly what is being

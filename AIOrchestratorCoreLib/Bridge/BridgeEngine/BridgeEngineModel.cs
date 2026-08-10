@@ -183,6 +183,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     const int QUESTION_HOLD_CAP_MINUTES = 10;
 
+    /// <summary>Presence of this file in an orchestration folder stops its supervisor dead.</summary>
+    public const string AWAITING_ANSWER_FLAG_FILE = ".awaiting-answer";
+
     /// <summary>Telegram message id → a question the owner has NOT answered yet.</summary>
     readonly Dictionary<long, OpenQuestion> _openQuestions = [];
 
@@ -366,6 +369,7 @@ internal sealed class BridgeEngineModel(
 
         await Check_LedgerHealth_Async(cancellationToken);
         await Check_ChannelShapes_Async(cancellationToken);
+        Expire_StaleAwaitingAnswerFlags();
         await Check_AwayMode_Async(cancellationToken);
         await Push_PeriodicStatus_Async(cancellationToken);
 
@@ -1129,12 +1133,11 @@ internal sealed class BridgeEngineModel(
             if (channel.IsOwnerChannel && _ownerDeliveryBuffer.Is_Holding(channel.FilePath))
                 continue;
 
-            // A QUESTION STOPS THE CONVERSATION, exactly as it does in the terminal: once the
-            // supervisor asks, nothing further reaches the owner until they answer. Without this
-            // the supervisor kept working and kept asking, so the owner was always several
-            // questions behind and could never tell which were still live.
-            if (channel.IsOwnerChannel && Is_AwaitingAnswer(channel.OrchId))
-                continue;
+            // NOTE: a pending question does NOT freeze this channel. Queueing the supervisor's
+            // output would hide the real problem rather than fix it — the supervisor would still be
+            // working, briefing implementers and moving the state while the owner's answer was
+            // pending, so the answer would land against a world that had already changed. The
+            // supervisor is STOPPED instead, by the awaiting-answer hook (see Raise_AwaitingAnswerFlag).
 
             activeChannels.Add(channel);
         }
@@ -1183,6 +1186,24 @@ internal sealed class BridgeEngineModel(
 
         foreach (var entry in mirrorableEntries)
         {
+            // WHAT REACHES THE PHONE, owner's rule: "I answer the sup a question, and then the sup
+            // doesn't disturb me anymore unless it has another question. A brief every 30 minutes
+            // is fine, but not the waterfall." So a supervisor entry is pushed only when it asks
+            // something, answers something they asked, or reports being blocked. Progress narration
+            // stays in the channel and in the app — it is not lost, it is just not a notification.
+            if (append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author))
+            {
+                var ownerIsWaiting = false;
+
+                lock (_ownerStateLock)
+                {
+                    ownerIsWaiting = _pendingOwnerReplies.ContainsKey(append.Channel.OrchId);
+                }
+
+                if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting))
+                    continue;
+            }
+
             var text = MirrorText_Formatter.Format(append.Channel, entry);
 
             // Special lines in the entry become REAL Telegram artifacts, never raw text:
@@ -1387,6 +1408,12 @@ internal sealed class BridgeEngineModel(
                     Text = prompt,
                     AskedUtc = DateTime.UtcNow,
                 };
+            }
+
+            // It asked; now it stops. The hook refuses every tool until the owner answers.
+            if (channel.IsOwnerChannel)
+            {
+                Raise_AwaitingAnswerFlag(channel.OrchId);
             }
         }
     }
@@ -3044,22 +3071,69 @@ internal sealed class BridgeEngineModel(
     /// everything else forever. Past the cap the queue flows again, and the quiet/away machinery is
     /// what handles a genuinely absent owner.
     /// </summary>
-    bool Is_AwaitingAnswer(string orchId)
+    /// <summary>
+    /// Raised the moment the supervisor asks, so its PreToolUse hook refuses to let it do anything
+    /// else. This is the terminal's behaviour: a question ends the turn and NOTHING happens until
+    /// the answer arrives. Queueing its output instead would have left it working in the
+    /// background, which is precisely what makes an answer arrive against a changed world.
+    /// </summary>
+    void Raise_AwaitingAnswerFlag(string orchId)
     {
-        lock (_ownerStateLock)
+        try
         {
-            var newestAskUtc = DateTime.MinValue;
+            File.WriteAllText(
+                Path.Combine(_paths.Get_OrchestrationFolder(orchId), AWAITING_ANSWER_FLAG_FILE),
+                DateTime.UtcNow.ToString("O"));
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Could not raise the awaiting-answer flag: {ex.Message}");
+        }
+    }
 
-            foreach (var question in _openQuestions.Values)
+    void Clear_AwaitingAnswerFlag(string orchId)
+    {
+        try
+        {
+            var flagFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), AWAITING_ANSWER_FLAG_FILE);
+
+            if (File.Exists(flagFile))
+                File.Delete(flagFile);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Could not clear the awaiting-answer flag: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// A supervisor left waiting on an owner who never answers must not stay frozen forever — past
+    /// the cap it may work again, and the quiet/away machinery covers a genuinely absent owner.
+    /// </summary>
+    void Expire_StaleAwaitingAnswerFlags()
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            var flagFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), AWAITING_ANSWER_FLAG_FILE);
+
+            try
             {
-                if (question.OrchId == orchId && question.AskedUtc > newestAskUtc)
-                    newestAskUtc = question.AskedUtc;
+                if (!File.Exists(flagFile))
+                    continue;
+
+                if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(flagFile)).TotalMinutes >= QUESTION_HOLD_CAP_MINUTES)
+                {
+                    File.Delete(flagFile);
+                    _log.Log_Info(session.OrchId, $"Awaiting-answer flag expired after {QUESTION_HOLD_CAP_MINUTES} min — the supervisor may proceed");
+                }
             }
-
-            if (newestAskUtc == DateTime.MinValue)
-                return false;
-
-            return (DateTime.UtcNow - newestAskUtc).TotalMinutes < QUESTION_HOLD_CAP_MINUTES;
+            catch (Exception ex)
+            {
+                _log.Log_Warning(session.OrchId, $"Awaiting-answer flag check failed: {ex.Message}");
+            }
         }
     }
 
@@ -3204,6 +3278,7 @@ internal sealed class BridgeEngineModel(
         // ...and it answers whatever was asked, whether or not it answers it. The conversation
         // unfreezes and everything the supervisor queued behind the question flows now.
         Clear_OpenQuestions(orchId);
+        Clear_AwaitingAnswerFlag(orchId);
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");

@@ -141,6 +141,13 @@ public partial class App : Application
             // could mutate the repo just as effectively — this closes that route.
             var reviewerHookFile = Path.Combine(claudeHooksFolder, "reviewer-readonly-check.sh");
 
+            // A question stops the supervisor dead: no tool runs while the owner's answer is
+            // pending, so their answer can never arrive against a world that moved meanwhile.
+            var awaitingAnswerHookFile = Path.Combine(claudeHooksFolder, "supervisor-awaiting-answer-check.sh");
+
+            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, awaitingAnswerHookFile, AgentHookSettings_Wirer.PRE_TOOL_USE_EVENT, "*"))
+                log.Log_Info("", $"Awaiting-answer PreToolUse hook wired into {settingsFile}; a supervisor that asked a question cannot act until it is answered");
+
             if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, reviewerHookFile, AgentHookSettings_Wirer.PRE_TOOL_USE_EVENT, "Bash"))
                 log.Log_Info("", $"Reviewer read-only PreToolUse hook wired into {settingsFile}; reviewers spawned from now on cannot mutate the repo through Bash");
         }
