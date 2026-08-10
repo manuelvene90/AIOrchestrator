@@ -61,6 +61,14 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdC
         }
     }
 
+    public int Count_Pending(string targetKey)
+    {
+        lock (_lock)
+        {
+            return _pending.TryGetValue(targetKey, out var delivery) ? delivery.Segments.Count : 0;
+        }
+    }
+
     public IReadOnlyDictionary<string, string> Take_ReadyDeliveries(DateTime nowUtc)
     {
         Dictionary<string, string> ready = [];

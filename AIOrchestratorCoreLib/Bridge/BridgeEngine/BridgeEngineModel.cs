@@ -2935,15 +2935,30 @@ internal sealed class BridgeEngineModel(
             _ownerDeliveryBuffer.Hold(targetKey, DateTime.UtcNow);
             _log.Log_Info(Describe_MessageOrch(message), "Owner sent WAIT — delivery held until GO");
 
-            // ONE message that then evolves in place as messages land — the owner gets no per-
-            // message tick while held, so this is the only thing telling them they are still heard.
+            // WAIT also holds what is ALREADY buffered — the common case is realising mid-countdown
+            // that you have more to say. Those messages keep their tick (they WERE received) and
+            // the tick itself becomes the hold receipt, so the owner sees "✓ ⏸ holding · 1 message"
+            // where the bare "✓" was, instead of a stale tick plus a second message.
+            var heldAlready = _ownerDeliveryBuffer.Count_Pending(targetKey);
+            var existingTickId = Take_ReceiptMessageId_OrNull(message.MessageThreadId);
+
             try
             {
-                var receiptId = await client.Send_Message_Async(message.MessageThreadId, Build_HoldReceiptText(0), cancellationToken);
+                long? receiptId;
+
+                if (existingTickId != null)
+                {
+                    await client.Edit_MessageText_Async(existingTickId.Value, Build_HoldReceiptText(heldAlready), cancellationToken);
+                    receiptId = existingTickId;
+                }
+                else
+                {
+                    receiptId = await client.Send_Message_Async(message.MessageThreadId, Build_HoldReceiptText(heldAlready), cancellationToken);
+                }
 
                 lock (_ownerStateLock)
                 {
-                    _holdReceipts[targetKey] = new HoldReceipt { MessageId = receiptId, HeldCount = 0 };
+                    _holdReceipts[targetKey] = new HoldReceipt { MessageId = receiptId, HeldCount = heldAlready };
                 }
             }
             catch (OperationCanceledException)
@@ -2989,12 +3004,17 @@ internal sealed class BridgeEngineModel(
         return targetKey != null && _ownerDeliveryBuffer.Is_Holding(targetKey);
     }
 
+    /// <summary>
+    /// The tick is KEPT when messages are already waiting: they were received, and WAIT does not
+    /// un-receive them — it stops them being delivered. "✓ ⏸ holding · 1 message" is the honest
+    /// state of a message that was mid-countdown when the owner realised they had more to say.
+    /// </summary>
     static string Build_HoldReceiptText(int heldCount)
     {
         if (heldCount == 0)
             return "⏸ holding — send GO when you're done";
 
-        return $"⏸ holding · {heldCount} message{(heldCount == 1 ? "" : "s")} — send GO when you're done";
+        return $"✓ ⏸ holding · {heldCount} message{(heldCount == 1 ? "" : "s")} — send GO when you're done";
     }
 
     /// <summary>

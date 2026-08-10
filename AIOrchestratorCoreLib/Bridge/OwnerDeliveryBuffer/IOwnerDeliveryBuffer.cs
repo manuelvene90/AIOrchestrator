@@ -27,4 +27,7 @@ public interface IOwnerDeliveryBuffer
 
     /// <summary>True while held — the caller suppresses per-message receipts so the phone stays quiet.</summary>
     bool Is_Holding(string targetKey);
+
+    /// <summary>How many messages are waiting for this target — shown on the hold receipt.</summary>
+    int Count_Pending(string targetKey);
 }

@@ -84,6 +84,44 @@ public class OwnerDeliveryBufferHoldTests
         Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(45)));
     }
 
+    /// <summary>
+    /// The owner's actual habit: send a message, realise mid-countdown you have more to say, type
+    /// WAIT. The message already sitting in the window must be caught by it — otherwise the thing
+    /// you were trying to add to reaches the session without the addition.
+    /// </summary>
+    [Fact]
+    public void Wait_AlsoHolds_AMessageAlreadyMidCountdown()
+    {
+        var buffer = Buffer();
+        buffer.Add_Segment(KEY, "first thought", T0);
+
+        // WAIT arrives 2 s in, before the 4 s window would have delivered it.
+        buffer.Hold(KEY, T0.AddSeconds(2));
+
+        Assert.Equal(1, buffer.Count_Pending(KEY));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(6)));
+
+        buffer.Add_Segment(KEY, "the rest of it", T0.AddSeconds(30));
+        buffer.Release(KEY);
+
+        var delivered = Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(31)));
+        Assert.Equal("first thought\n\nthe rest of it", delivered.Value);
+    }
+
+    [Fact]
+    public void Count_Pending_TracksWhatTheHoldReceiptShows()
+    {
+        var buffer = Buffer();
+        Assert.Equal(0, buffer.Count_Pending(KEY));
+
+        buffer.Add_Segment(KEY, "a", T0);
+        buffer.Hold(KEY, T0.AddSeconds(1));
+        Assert.Equal(1, buffer.Count_Pending(KEY));
+
+        buffer.Add_Segment(KEY, "b", T0.AddSeconds(2));
+        Assert.Equal(2, buffer.Count_Pending(KEY));
+    }
+
     [Fact]
     public void Go_DeliversEverythingAtOnce_WithoutWaitingOutTheWindow()
     {
