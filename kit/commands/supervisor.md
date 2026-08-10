@@ -178,6 +178,16 @@ As soon as the goal is clear from the owner's first instruction, drop
   bridge downloads them next to your channel). Read the file to inspect it; pass the path on to an
   implementer's brief when the image is part of its task.
 
+## `GO AHEAD — resume` entries
+
+The owner can send `/resume` to wake every session at once — it exists for the usage-limit reset,
+where a turn ends without doing its work and nothing would ever speak to you again on its own.
+
+When you see that entry: re-read your channel from your last entry down and **pick up exactly where
+you left off**. If your last turn was cut short by a usage limit, redo that step now. If you were
+genuinely finished and waiting, say so in one line and go back to waiting — **do not invent work to
+look busy**, and do not re-run anything you already completed.
+
 ## AWAY MODE — when the owner is not there (hard rule)
 
 The owner is a person with a life: they board planes, sit in meetings, sleep. The app watches for

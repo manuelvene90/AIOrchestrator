@@ -135,6 +135,16 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 - Long review? Post progress at real boundaries (e.g. "finders done, 6 candidates, verifying now"),
   so the owner's card does not look stalled.
 
+## `GO AHEAD — resume` entries
+
+The owner can send `/resume` to wake every session at once — it exists for the usage-limit reset,
+where a turn ends without doing its work and nothing would speak to you again on its own.
+
+Pick up exactly where you left off: re-read your channel from your last entry down, and if your last
+turn was cut short by a usage limit, redo that step now. If you were genuinely finished and waiting,
+say so in one line and go back to waiting — do NOT invent work to look busy, and do not re-run
+anything you already completed.
+
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
 Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`,

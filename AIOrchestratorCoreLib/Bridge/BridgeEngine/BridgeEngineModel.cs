@@ -1846,6 +1846,12 @@ internal sealed class BridgeEngineModel(
                     // Tracked so /clear can remove the owner's own messages too.
                     Remember_TopicMessage(message.MessageThreadId, message.MessageId);
 
+                    // ANY message means the owner is here — including a bot command, which never
+                    // reaches Route_OwnerMessage_Async and so would otherwise leave away mode on
+                    // while they are visibly typing /resume at it.
+                    if (Note_OwnerSpoke_AndWasAway())
+                        await Exit_AwayMode_Async(cancellationToken);
+
                     var command = Get_BotCommand_OrNull(message.Text);
 
                     // Telegram's own command menu only allows [a-z0-9_], so the menu entries are
@@ -1890,6 +1896,10 @@ internal sealed class BridgeEngineModel(
                     else if (command == "status")
                     {
                         await Send_MemberStatusReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "resume")
+                    {
+                        await Resume_AllSessions_Async(client, message.MessageThreadId, cancellationToken);
                     }
                     else if (command != null && command.StartsWith("imp", StringComparison.Ordinal))
                     {
@@ -1978,6 +1988,7 @@ internal sealed class BridgeEngineModel(
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
                     ("summary", "What is going on across all orchestrations"),
                     ("pending", "Open questions awaiting me"),
+                    ("resume", "Wake EVERY session — use when the usage limit resets"),
                     ("clear", "Wipe THIS topic's messages (the sessions keep running)"),
                     ("mute", "Toggle ðŸ”• THIS topic â€” drop its messages (I'm in its terminal)"),
                     ("dnd", "Toggle ðŸŒ™ THIS topic â€” hold its messages for later"),
@@ -2418,6 +2429,64 @@ internal sealed class BridgeEngineModel(
     /// (transcript growing) outranks the declared channel markers, because a marker only records
     /// what an agent announced, not what it is doing now.
     /// </summary>
+    /// <summary>
+    /// /resume — wakes EVERY session in every open orchestration. Built for the usage-limit reset:
+    /// a session that hit the limit ends its turn without doing the work, and nothing will speak to
+    /// it again on its own, so the whole fleet sits idle until someone says go.
+    ///
+    /// It works by APPENDING to each channel rather than touching the terminals: a channel change
+    /// is what every monitor is already watching for, so the wake goes through the same path as
+    /// ordinary traffic and needs no window handling, no pids, no respawn.
+    /// </summary>
+    async Task Resume_AllSessions_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        const string SUBJECT = "GO AHEAD — resume";
+
+        var body = "The owner sent /resume (usage limits reset, or they want you moving again).\n\n"
+            + "Pick up exactly where you left off: re-read this channel from your last entry down, and if your last "
+            + "turn was cut short by a usage limit, redo that step now. If you were genuinely finished and waiting, "
+            + "say so in one line and go back to waiting — do NOT invent new work to look busy.";
+
+        var wokenSessions = 0;
+        var wokenOrchestrations = 0;
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            wokenOrchestrations++;
+
+            ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), SUBJECT, body, DateTime.Now);
+            wokenSessions++;
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc != null)
+                    continue;
+
+                ChannelAppender.Append_AppEntry(
+                    _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), SUBJECT, body, DateTime.Now);
+
+                wokenSessions++;
+            }
+
+            Raise_OrchestrationActivity(session.OrchId);
+        }
+
+        // The general supervisor too — it has the same problem and its own channel.
+        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, SUBJECT, body, DateTime.Now);
+        wokenSessions++;
+
+        _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — woke {wokenSessions} session(s) across {wokenOrchestrations} orchestration(s)");
+
+        await Send_DirectReply_BestEffort_Async(
+            client,
+            messageThreadId,
+            $"▶ go ahead sent to {wokenSessions} session{(wokenSessions == 1 ? "" : "s")} across {wokenOrchestrations} orchestration{(wokenOrchestrations == 1 ? "" : "s")} (+ general)",
+            cancellationToken);
+    }
+
     async Task Send_MemberStatusReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var text = Build_MemberStatusText(messageThreadId);
