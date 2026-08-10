@@ -90,6 +90,7 @@ public static partial class ChannelEntry_Parser
             "supervisor" => ChannelAuthors.Supervisor,
             "implementer" => ChannelAuthors.Implementer,
             "reviewer" => ChannelAuthors.Reviewer,
+            "solo" => ChannelAuthors.Solo,
             "owner" => ChannelAuthors.Owner,
             "app" => ChannelAuthors.App,
             "communicator" => ChannelAuthors.Communicator,

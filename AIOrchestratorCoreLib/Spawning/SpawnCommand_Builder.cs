@@ -66,6 +66,23 @@ public static class SpawnCommand_Builder
         return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", REVIEWER_TAB_COLOR, repoPath, script);
     }
 
+    /// <summary>Basic orchestrations: one session, orange, talking straight to the owner.</summary>
+    public const string SOLO_TAB_COLOR = "#F97316";
+
+    /// <summary>
+    /// A BASIC orchestration's only session. It reads and writes owner-channel.md directly — the
+    /// same file a supervisor would own — so the owner's Telegram topic reaches it with no routing
+    /// changes anywhere. No supervisor, no reviewer, no worktree assignment.
+    /// </summary>
+    public static ISpawnCommand Build_ForSolo(string orchId, string memberId, string repoPath, string? model, string pidFilePath)
+    {
+        Validate_OrchId(orchId);
+
+        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/solo {orchId}'", pidFilePath);
+
+        return Build_WindowsTerminalCommand($"SOLO · {orchId}", SOLO_TAB_COLOR, repoPath, script);
+    }
+
     /// <summary>The orchestration's green press-secretary voice: narrates, never works (see communicator.md).</summary>
     public static ISpawnCommand Build_ForCommunicator(string orchId, string repoPath, string? model, string pidFilePath)
     {

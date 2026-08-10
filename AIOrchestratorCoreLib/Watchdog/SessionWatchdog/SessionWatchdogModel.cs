@@ -45,7 +45,10 @@ internal sealed class SessionWatchdogModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            Check_OrchestrationSupervisor(session);
+            // A BASIC orchestration never had a supervisor — checking for one would respawn a
+            // supervisor into it forever, on top of the solo session that IS the orchestration.
+            if (!Sessions.MemberKind_Ids.Is_BasicOrchestration(session.Members.Select(member => member.MemberId)))
+                Check_OrchestrationSupervisor(session);
 
             // No Check_Communicator: the role is retired (the app narrates a busy supervisor
             // itself). Resurrecting one would put the $74/day session straight back.

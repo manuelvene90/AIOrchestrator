@@ -11,6 +11,9 @@ namespace AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 public interface IOrchestrationLauncher
 {
     IOrchestrationSession Start_Orchestration(string repoName, string repoPath);
+
+    /// <summary>ONE session talking straight to the owner — no supervisor, reviewer or gates.</summary>
+    IOrchestrationSession Start_BasicOrchestration(string repoName, string repoPath);
     IOrchestrationSession Add_Implementer(string orchId);
 
     /// <summary>Adds a member of the given kind — a reviewer spawns read-only, with no worktree.</summary>

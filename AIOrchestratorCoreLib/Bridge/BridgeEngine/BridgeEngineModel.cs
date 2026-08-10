@@ -1172,7 +1172,7 @@ internal sealed class BridgeEngineModel(
                 // Counts toward away detection: a supervisor message that reached the phone and is
                 // so far unanswered. Only the supervisor's own voice counts — app notices and
                 // presence lines are not something the owner is expected to reply to.
-                if (append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor && chunks.Count > 0)
+                if (append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) && chunks.Count > 0)
                 {
                     Nudge_IfTooVerbose(append.Channel.OrchId, text);
 

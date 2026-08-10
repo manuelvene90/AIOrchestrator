@@ -25,7 +25,10 @@
                     <TextBlock DockPanel.Dock="Top" Text="REPOSITORIES" Style="{StaticResource SectionHeader}"/>
 
                     <StackPanel DockPanel.Dock="Bottom" Margin="12,8,12,12">
-                        <Button x:Name="StartSupervisorButton" Content="▶  Start Orchestration on selected repo" Click="StartSupervisorButton_Click" Margin="0,0,0,8"/>
+                        <Button x:Name="StartSupervisorButton" Content="▶  Start Orchestration on selected repo" Click="StartSupervisorButton_Click" Margin="0,0,0,4"
+                                ToolTip="Supervisor + implementer + reviewer, with the owner-approval and merge gates — for real endeavours"/>
+                        <Button x:Name="StartBasicButton" Content="▷  Start Basic session on selected repo" Click="StartBasicButton_Click" Margin="0,0,0,8"
+                                ToolTip="ONE session you talk to directly — no supervisor, no reviewer, no gates. For small endeavours"/>
                         <Button x:Name="SettingsButton" Content="⚙  Settings" Click="SettingsButton_Click"/>
                     </StackPanel>
 

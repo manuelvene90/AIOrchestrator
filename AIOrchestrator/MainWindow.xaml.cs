@@ -412,6 +412,29 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// The other way to start work: ONE session talking straight to the owner, no supervisor and no
+    /// gates. For endeavours where the orchestration apparatus costs more than the work.
+    /// </summary>
+    void StartBasicButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ReposListBox.SelectedItem is not IRepoEntry repo)
+        {
+            MessageBox.Show("Select a repository first.", "AI Orchestrator");
+            return;
+        }
+
+        try
+        {
+            _launcher.Start_BasicOrchestration(repo.Name, repo.Path);
+            Refresh_Orchestrations();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Start basic session failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
         var settingsWindow = new SettingsWindow(_paths, _configProvider.Get_Current()) { Owner = this };

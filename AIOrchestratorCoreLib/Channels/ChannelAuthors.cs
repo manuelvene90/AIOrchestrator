@@ -20,6 +20,9 @@ public enum ChannelAuthors
     /// <summary>A read-only review session (rev-n). A MEMBER like an implementer — see Is_Member.</summary>
     Reviewer,
 
+    /// <summary>The single session of a BASIC orchestration, talking straight to the owner.</summary>
+    Solo,
+
     Unknown,
 }
 
@@ -34,6 +37,18 @@ public static class ChannelAuthor_Kinds
     /// </summary>
     public static bool Is_Member(ChannelAuthors author)
     {
-        return author == ChannelAuthors.Implementer || author == ChannelAuthors.Reviewer;
+        return author == ChannelAuthors.Implementer
+            || author == ChannelAuthors.Reviewer
+            || author == ChannelAuthors.Solo;
+    }
+
+    /// <summary>
+    /// Authors whose messages the OWNER is expected to answer. Used by the quiet/away detector: in a
+    /// basic orchestration the solo session is the only voice, so silence after it must count the
+    /// same way a supervisor's does.
+    /// </summary>
+    public static bool Speaks_ToOwner(ChannelAuthors author)
+    {
+        return author == ChannelAuthors.Supervisor || author == ChannelAuthors.Solo;
     }
 }

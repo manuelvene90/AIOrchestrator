@@ -62,6 +62,26 @@ internal sealed class OrchestrationLauncherModel(
         return Add_Member(orchId, MemberKinds.Reviewer);
     }
 
+    /// <summary>
+    /// A BASIC orchestration: ONE session, talking straight to the owner. No supervisor, no
+    /// reviewer, no communicator, no gates — for endeavours small enough that the coordination
+    /// apparatus costs more than the work it coordinates.
+    /// </summary>
+    public IOrchestrationSession Start_BasicOrchestration(string repoName, string repoPath)
+    {
+        if (!Directory.Exists(repoPath))
+            throw new Exception($"Repo path '{repoPath}' for '{repoName}' does not exist — cannot start a basic orchestration");
+
+        var orchId = OrchId_Allocator.Allocate_NextOrchId(_paths, repoName);
+
+        _store.Create_Orchestration(orchId, repoName, repoPath);
+        Planning.PlanSeed_Writer.Ensure_Exists(_paths, orchId, repoName);
+
+        _log.Log_Info(orchId, $"BASIC orchestration created for repo '{repoName}' ({repoPath}) — one session, no supervisor");
+
+        return Add_Member(orchId, MemberKinds.Solo);
+    }
+
     public IOrchestrationSession Add_Implementer(string orchId)
     {
         return Add_Member(orchId, MemberKinds.Implementer);
@@ -133,9 +153,13 @@ internal sealed class OrchestrationLauncherModel(
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
         var model = session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel;
 
-        var command = kind == MemberKinds.Reviewer
-            ? SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, pidFile)
-            : SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, pidFile);
+        var command = kind switch
+        {
+            MemberKinds.Reviewer => SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, pidFile),
+            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, pidFile),
+            MemberKinds.Implementer => SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, pidFile),
+            _ => throw new Exception($"Unhandled MemberKinds '{kind}' respawning '{memberId}' of '{orchId}'"),
+        };
 
         _store.Set_MemberPid(orchId, memberId, null);
         Delete_StalePidFile_BestEffort(pidFile);

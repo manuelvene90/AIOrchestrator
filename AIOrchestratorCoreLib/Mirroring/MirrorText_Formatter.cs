@@ -54,7 +54,12 @@ public static class MirrorText_Formatter
             // Communicator entries: live narration of what the supervisor is doing — green voice.
             ChannelAuthors.Communicator => $"🟢 Com: {Pick_Content(entry)}",
 
-            // Members never write on the owner channel; if one does, flag it rather than hide it.
+            // A BASIC orchestration's single session speaks here by design — it IS the conversation,
+            // there is no supervisor between it and the owner.
+            ChannelAuthors.Solo => $"🟠 {Pick_Content(entry)}",
+
+            // Members of an ORCHESTRATED session never write on the owner channel; if one does,
+            // flag it rather than hide it.
             ChannelAuthors.Implementer => $"⚠ Imp?: {Pick_Content(entry)}",
             ChannelAuthors.Reviewer => $"⚠ Rev?: {Pick_Content(entry)}",
             ChannelAuthors.Owner => throw new Exception($"Owner entries must be filtered by Should_Mirror (channel '{channel.FilePath}')"),
