@@ -2396,6 +2396,16 @@ internal sealed class BridgeEngineModel(
     /// state in the topic list without opening anything. Only calls the API when the name actually
     /// changes — the desired name is compared against the last one pushed.
     /// </summary>
+    /// <summary>
+    /// Telegram rejects an edit that would leave the topic unchanged. That is not an error for us —
+    /// the desired state already holds — so it must be treated as a success or the sync retries it
+    /// on every tick.
+    /// </summary>
+    static bool Is_TopicAlreadyNamed(Exception exception)
+    {
+        return exception.Message.Contains("TOPIC_NOT_MODIFIED", StringComparison.OrdinalIgnoreCase);
+    }
+
     async Task Sync_TopicNames_BestEffort_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
@@ -2422,8 +2432,21 @@ internal sealed class BridgeEngineModel(
             {
                 throw;
             }
+            catch (Exception ex) when (Is_TopicAlreadyNamed(ex))
+            {
+                // TOPIC_NOT_MODIFIED means the name is ALREADY what we want — success, not failure.
+                // The cache is what stops this running every tick, and it was only being written on
+                // the success path, so this case retried every 2 seconds forever: one orchestration
+                // logged 28 identical errors in minutes and would have done so for as long as the
+                // app ran. It happens on every restart, because the cache starts empty while
+                // Telegram already holds the correct names.
+                _appliedTopicNames[session.OrchId] = wantedName;
+            }
             catch (Exception ex)
             {
+                // A REAL failure still must not spin: remember the attempt so it is retried on the
+                // next name change rather than on the next tick.
+                _appliedTopicNames[session.OrchId] = wantedName;
                 _log.Log_Warning(session.OrchId, $"Topic name sync failed: {ex.Message}");
             }
         }
