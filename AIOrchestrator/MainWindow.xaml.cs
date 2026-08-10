@@ -605,9 +605,12 @@ public partial class MainWindow : Window
                     titleFragments.Add($"{member.MemberId.ToUpperInvariant()} · {session.OrchId}");
             }
 
-            // Only windows that actually exist get a tile, so a dead session leaves no gap.
+            // Only windows that actually EXIST get a tile, so the layout is computed for exactly the
+            // set about to be shown. This used to test focusability instead: Windows refuses
+            // SetForegroundWindow in several ordinary situations, so a perfectly real terminal could
+            // fail the test, still be sitting on screen, and be left out of the arrangement.
             var living = titleFragments
-                .Where(fragment => AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(fragment))
+                .Where(AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Exists_ByTitleFragment)
                 .ToList();
 
             if (living.Count == 0)
@@ -622,7 +625,13 @@ public partial class MainWindow : Window
                 living.Count, (int)area.Left, (int)area.Top, (int)area.Width, (int)area.Height);
 
             for (var i = 0; i < living.Count && i < tiles.Count; i++)
+            {
                 AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_PlaceWindow_ByTitleFragment(living[i], tiles[i].X, tiles[i].Y, tiles[i].Width, tiles[i].Height);
+
+                // Raise it AFTER placing. The old code raised windows while deciding which existed,
+                // so removing that from the filter would otherwise have left them tiled but buried.
+                AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(living[i]);
+            }
 
             Add_LogRow(LogLevels.Info, $"[{card.OrchId}] Organize: tiled {living.Count} terminal(s)");
         }

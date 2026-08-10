@@ -41,6 +41,24 @@ public static class TerminalWindow_Focuser
     [DllImport("user32.dll")]
     static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+    [DllImport("dwmapi.dll")]
+    static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, ref RECT value, int size);
+
+    /// <summary>DWMWA_EXTENDED_FRAME_BOUNDS — the window's VISIBLE rectangle, shadow excluded.</summary>
+    const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+
     const uint WM_CLOSE = 0x0010;
     const uint SWP_NOZORDER = 0x0004;
     const uint SWP_SHOWWINDOW = 0x0040;
@@ -50,6 +68,16 @@ public static class TerminalWindow_Focuser
     /// brings it up. Returns false when no window carries the fragment — a session that is not
     /// running is simply skipped by the caller.
     /// </summary>
+    /// <summary>
+    /// Does a window with this fragment EXIST? Deliberately separate from focusing: Windows refuses
+    /// SetForegroundWindow in several ordinary situations, so treating focus failure as "no window"
+    /// made the tiler mis-count what it was about to lay out.
+    /// </summary>
+    public static bool Exists_ByTitleFragment(string titleFragment)
+    {
+        return Find_WindowHandle_ByTitleFragment(titleFragment) != IntPtr.Zero;
+    }
+
     public static bool Try_PlaceWindow_ByTitleFragment(string titleFragment, int x, int y, int width, int height)
     {
         var foundHandle = Find_WindowHandle_ByTitleFragment(titleFragment);
@@ -61,7 +89,47 @@ public static class TerminalWindow_Focuser
         if (IsIconic(foundHandle))
             ShowWindow(foundHandle, SW_RESTORE);
 
-        return SetWindowPos(foundHandle, IntPtr.Zero, x, y, width, height, SWP_NOZORDER | SWP_SHOWWINDOW);
+        // A window is BIGGER than it looks: since Vista the resize border and drop shadow live
+        // outside the visible frame, so placing tiles at exact coordinates leaves a few pixels of
+        // desktop showing between them. The fix is to ask DWM where the window VISUALLY ends and
+        // grow the target rectangle by the invisible margin, so the visible edges meet.
+        var margin = Get_InvisibleBorder(foundHandle);
+
+        return SetWindowPos(
+            foundHandle,
+            IntPtr.Zero,
+            x - margin.Left,
+            y - margin.Top,
+            width + margin.Left + margin.Right,
+            height + margin.Top + margin.Bottom,
+            SWP_NOZORDER | SWP_SHOWWINDOW);
+    }
+
+    /// <summary>How far the window rectangle extends beyond what the user can actually see.</summary>
+    static (int Left, int Top, int Right, int Bottom) Get_InvisibleBorder(IntPtr windowHandle)
+    {
+        try
+        {
+            if (!GetWindowRect(windowHandle, out var outer))
+                return (0, 0, 0, 0);
+
+            var visible = new RECT();
+            var size = Marshal.SizeOf<RECT>();
+
+            if (DwmGetWindowAttribute(windowHandle, DWMWA_EXTENDED_FRAME_BOUNDS, ref visible, size) != 0)
+                return (0, 0, 0, 0);
+
+            return (
+                visible.Left - outer.Left,
+                visible.Top - outer.Top,
+                outer.Right - visible.Right,
+                outer.Bottom - visible.Bottom);
+        }
+        catch
+        {
+            // Compensation is cosmetic — never let it stop a window being placed.
+            return (0, 0, 0, 0);
+        }
     }
 
     /// <summary>Returns false when no visible window carries the fragment in its title.</summary>
