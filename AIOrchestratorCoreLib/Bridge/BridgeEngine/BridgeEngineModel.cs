@@ -829,26 +829,14 @@ internal sealed class BridgeEngineModel(
         _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
 
-        // The channel nudge above ALWAYS happens (it is what unsticks the implementer);
-        // only the owner-facing text respects the topic's mode.
-        if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
-            return;
-
-        try
-        {
-            await _telegramClient.Send_Message_Async(
-                session.TelegramTopicId,
-                $"⚠️ {memberId} left a brief unanswered for {SessionDuration_Formatter.Describe(quietFor)} — nudged it.",
-                cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Warning(session.OrchId, $"Idle-implementer alert send failed: {ex.Message}");
-        }
+        // The owner is NOT told. This is routine self-healing that already worked — the nudge is
+        // written, the member wakes, the work continues — and a "⚠️" for it reads like a fault
+        // report the owner must act on. Owner: "I don't want to receive, in telegram, stuff that is
+        // not an actual problem; those messages look like problems."
+        //
+        // It stays in the log, where diagnosing this belongs. If a nudge does NOT work, the
+        // orphan-recovery path speaks up — and that one IS a real problem, because context is lost.
+        await Task.CompletedTask;
     }
 
     /// <summary>
