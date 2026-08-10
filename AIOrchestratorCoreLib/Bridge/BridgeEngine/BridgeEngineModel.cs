@@ -186,6 +186,18 @@ internal sealed class BridgeEngineModel(
     /// <summary>Presence of this file in an orchestration folder stops its supervisor dead.</summary>
     public const string AWAITING_ANSWER_FLAG_FILE = ".awaiting-answer";
 
+    /// <summary>How long EVERYTHING must be idle before a suppressed last word is released.</summary>
+    const int SILENT_DEADLOCK_MINUTES = 5;
+
+    sealed class SuppressedEntry
+    {
+        public string Text = "";
+        public DateTime SuppressedUtc;
+    }
+
+    /// <summary>Per orchestration: the last supervisor entry we chose not to push.</summary>
+    readonly Dictionary<string, SuppressedEntry> _lastSuppressedEntry = [];
+
     /// <summary>Telegram message id → a question the owner has NOT answered yet.</summary>
     readonly Dictionary<long, OpenQuestion> _openQuestions = [];
 
@@ -370,6 +382,7 @@ internal sealed class BridgeEngineModel(
         await Check_LedgerHealth_Async(cancellationToken);
         await Check_ChannelShapes_Async(cancellationToken);
         Expire_StaleAwaitingAnswerFlags();
+        await Break_SilentDeadlock_Async(cancellationToken);
         await Check_AwayMode_Async(cancellationToken);
         await Push_PeriodicStatus_Async(cancellationToken);
 
@@ -1201,7 +1214,25 @@ internal sealed class BridgeEngineModel(
                 }
 
                 if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting))
+                {
+                    // Remembered, not discarded. If the whole orchestration then falls silent, this
+                    // was the last thing said and it gets released — see Break_SilentDeadlock_Async.
+                    lock (_ownerStateLock)
+                    {
+                        _lastSuppressedEntry[append.Channel.OrchId] = new SuppressedEntry
+                        {
+                            Text = MirrorText_Formatter.Format(append.Channel, entry),
+                            SuppressedUtc = DateTime.UtcNow,
+                        };
+                    }
+
                     continue;
+                }
+
+                lock (_ownerStateLock)
+                {
+                    _lastSuppressedEntry.Remove(append.Channel.OrchId);
+                }
             }
 
             var text = MirrorText_Formatter.Format(append.Channel, entry);
@@ -3083,6 +3114,80 @@ internal sealed class BridgeEngineModel(
     /// what handles a genuinely absent owner.
     /// </summary>
     /// <summary>
+    /// Makes the deadlock structurally impossible rather than heuristically unlikely.
+    ///
+    /// The push filter can only ever suppress a REAL question by mistake if that question carried
+    /// neither a marker nor a question mark. The consequence would be silent and symmetric: the
+    /// supervisor waits for an answer, the owner never saw anything to answer, and neither can
+    /// observe the other waiting.
+    ///
+    /// The escape is that a stalled orchestration looks unmistakable from here — the supervisor is
+    /// idle AND every member is idle AND nothing has been said for minutes. Work in progress never
+    /// looks like that, which is why this can be safe and still almost never fire. When it does, the
+    /// last thing the supervisor said is released, whatever it was: if it was a question the
+    /// deadlock breaks, and if it was not, the owner has lost nothing but one message about an
+    /// orchestration that had gone quiet anyway.
+    /// </summary>
+    async Task Break_SilentDeadlock_Async(CancellationToken cancellationToken)
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null || session.TelegramTopicId == null)
+                continue;
+
+            SuppressedEntry? suppressed;
+
+            lock (_ownerStateLock)
+            {
+                if (!_lastSuppressedEntry.TryGetValue(session.OrchId, out suppressed))
+                    continue;
+
+                if ((DateTime.UtcNow - suppressed.SuppressedUtc).TotalMinutes < SILENT_DEADLOCK_MINUTES)
+                    continue;
+            }
+
+            // Anything still running means this is ordinary progress, not a stall.
+            if (Is_AnySessionWorking(session))
+                continue;
+
+            lock (_ownerStateLock)
+            {
+                _lastSuppressedEntry.Remove(session.OrchId);
+            }
+
+            _log.Log_Warning(session.OrchId, "Everything went idle with an unsent supervisor entry — releasing it in case it was a question");
+
+            await Send_AwayNotice_Async(
+                session,
+                $"{suppressed.Text}\n\n(nothing has moved for {SILENT_DEADLOCK_MINUTES} min — sending you the last thing it said, in case it needed you)",
+                cancellationToken);
+        }
+    }
+
+    /// <summary>The supervisor or ANY open member mid-turn — i.e. the orchestration is alive.</summary>
+    bool Is_AnySessionWorking(IOrchestrationSession session)
+    {
+        var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
+
+        if (Is_SessionMidTurn(Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE)))
+            return true;
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+                continue;
+
+            var memberUsage = Path.Combine(
+                _paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
+            if (Is_SessionMidTurn(memberUsage))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Raised the moment the supervisor asks, so its PreToolUse hook refuses to let it do anything
     /// else. This is the terminal's behaviour: a question ends the turn and NOTHING happens until
     /// the answer arrives. Queueing its output instead would have left it working in the
@@ -3290,6 +3395,13 @@ internal sealed class BridgeEngineModel(
         // unfreezes and everything the supervisor queued behind the question flows now.
         Clear_OpenQuestions(orchId);
         Clear_AwaitingAnswerFlag(orchId);
+
+        // The owner is engaged, so nothing is deadlocked — a suppressed entry from before must not
+        // surface later, out of context, as if it were still waiting for them.
+        lock (_ownerStateLock)
+        {
+            _lastSuppressedEntry.Remove(orchId);
+        }
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");

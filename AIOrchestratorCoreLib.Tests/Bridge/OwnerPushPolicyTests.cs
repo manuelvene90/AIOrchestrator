@@ -58,7 +58,11 @@ public class OwnerPushPolicyTests
     [InlineData("## [4] FROM supervisor — d — s\nwhich approach do you prefer")]
     public void AQuestionInPlainProse_IsStillPushed(string entry)
     {
-        // The last one has no '?' at all and is the known limit — asserted so the gap is visible.
+        // The last case has no '?' and is NOT caught by this filter — deliberately asserted so the
+        // boundary stays visible. It is not a deadlock: an entry this filter suppresses is
+        // remembered, and the engine releases it once the supervisor AND every member have been
+        // idle for minutes (Break_SilentDeadlock_Async). The filter is the fast path; that is the
+        // guarantee.
         var pushed = OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false);
 
         Assert.Equal(entry.Contains('?'), pushed);
