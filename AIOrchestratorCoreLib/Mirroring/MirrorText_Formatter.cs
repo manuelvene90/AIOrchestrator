@@ -25,6 +25,14 @@ public static class MirrorText_Formatter
         if (!channel.IsOwnerChannel)
             return ChannelAuthor_Kinds.Is_Member(entry.Author) && Is_PresenceEntry(channel, entry);
 
+        // App entries that COACH THE AGENT are written to the owner channel because that is the
+        // only thing the supervisor reads — they were never meant for the owner, and texting them
+        // is how "⚙ App: unread reports waiting on you — rev-2" ended up on their phone, reading as
+        // if it were addressed to them. The owner-facing app notices are sent separately and
+        // directly, so nothing is lost by keeping these internal.
+        if (entry.Author == ChannelAuthors.App && Is_AgentCoaching(entry.Subject))
+            return false;
+
         // Owner entries came FROM Telegram (or the owner's own terminal) — never echoed back.
         return entry.Author != ChannelAuthors.Owner;
     }
@@ -77,6 +85,43 @@ public static class MirrorText_Formatter
             Sessions.MemberKinds.Implementer => "🔵",
             _ => throw new Exception($"Unhandled MemberKinds for spoke '{spokeName}'"),
         };
+    }
+
+    /// <summary>
+    /// App entries whose audience is the AGENT, not the owner. Listed explicitly rather than
+    /// suppressing app entries wholesale: some genuinely are owner news ("implementer 'imp-2'
+    /// added — <reason>", "orchestration closed", a rejected request), and losing those would be a
+    /// worse fault than the noise this removes.
+    /// </summary>
+    static readonly IReadOnlyList<string> AGENT_COACHING_SUBJECTS =
+    [
+        "unread reports waiting on you",
+        "that message was too long for a phone",
+        "HOLD — the owner has not answered",
+        "AWAY MODE ON",
+        "AWAY MODE OFF",
+        "the owner switched this topic to Do-Not-Disturb",
+        "Do-Not-Disturb is off",
+        "GO AHEAD — resume",
+        "unread traffic — you have not answered",
+        "you stopped mid-task",
+        "INVISIBLE — malformed header",
+        "entries are INVISIBLE",
+        "entry is INVISIBLE",
+        "session was orphaned",
+        "TASK LEDGER",
+        "PLAN.md",
+    ];
+
+    static bool Is_AgentCoaching(string subject)
+    {
+        foreach (var coaching in AGENT_COACHING_SUBJECTS)
+        {
+            if (subject.Contains(coaching, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     public static bool Is_StatusEntry(IChannelEntry entry)

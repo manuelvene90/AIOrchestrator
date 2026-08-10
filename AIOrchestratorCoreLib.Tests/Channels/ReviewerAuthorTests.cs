@@ -14,6 +14,40 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 /// </summary>
 public class ReviewerAuthorTests
 {
+    /// <summary>
+    /// App entries that coach the AGENT are written to the owner channel because that is the only
+    /// file the supervisor reads — they are not addressed to the owner, and texting them produced
+    /// "⚙ App: unread reports waiting on you — rev-2" on the owner's phone, which reads as if it
+    /// were an instruction to them.
+    /// </summary>
+    [Theory]
+    [InlineData("unread reports waiting on you — rev-2")]
+    [InlineData("that message was too long for a phone")]
+    [InlineData("HOLD — the owner has not answered your last messages")]
+    [InlineData("AWAY MODE ON — the owner is not reading")]
+    [InlineData("2 entries are INVISIBLE — malformed header")]
+    public void AgentCoaching_IsNotTextedToTheOwner(string subject)
+    {
+        var channel = DiscoveredChannel_Factory.Create_ForOwner("orch-1", "path/owner-channel.md");
+        var entry = Assert.Single(ChannelEntry_Parser.Parse_All($"## [1] FROM app — 2026-08-10 12:00 — {subject}\nbody"));
+
+        Assert.False(MirrorText_Formatter.Should_Mirror(channel, entry));
+    }
+
+    /// <summary>Real owner news must still get through — losing these is worse than the noise.</summary>
+    [Theory]
+    [InlineData("implementer 'imp-2' added — adversarial review of the pid fix")]
+    [InlineData("orchestration 'crm-2' closed")]
+    [InlineData("add-implementer FAILED")]
+    [InlineData("request REJECTED")]
+    public void OwnerFacingAppNews_IsStillTexted(string subject)
+    {
+        var channel = DiscoveredChannel_Factory.Create_ForOwner("orch-1", "path/owner-channel.md");
+        var entry = Assert.Single(ChannelEntry_Parser.Parse_All($"## [1] FROM app — 2026-08-10 12:00 — {subject}\nbody"));
+
+        Assert.True(MirrorText_Formatter.Should_Mirror(channel, entry));
+    }
+
     [Fact]
     public void Reviewer_IsParsedAsItsOwnAuthor_NotUnknown()
     {
