@@ -198,6 +198,13 @@ internal sealed class BridgeEngineModel(
     /// <summary>Per orchestration: the last supervisor entry we chose not to push.</summary>
     readonly Dictionary<string, SuppressedEntry> _lastSuppressedEntry = [];
 
+    /// <summary>
+    /// Orchestrations where the owner has spoken and the supervisor's reply has NOT yet been pushed.
+    /// Its whole purpose is to guarantee an answer always reaches them, so it is owned by the mirror
+    /// path alone — sharing _pendingOwnerReplies for this dropped every answer.
+    /// </summary>
+    readonly HashSet<string> _ownerAwaitingAnswer = [];
+
     /// <summary>Telegram message id → a question the owner has NOT answered yet.</summary>
     readonly Dictionary<long, OpenQuestion> _openQuestions = [];
 
@@ -238,6 +245,9 @@ internal sealed class BridgeEngineModel(
 
         /// <summary>Last time the owner was told what the busy supervisor is doing (the old communicator's job).</summary>
         public DateTime LastNarratedUtc;
+
+        /// <summary>Said once, when the turn the owner was told about actually ends.</summary>
+        public bool TurnEndAnnounced;
     }
 
     long _lastUpdateId = initialLastUpdateId;
@@ -1206,11 +1216,16 @@ internal sealed class BridgeEngineModel(
             // stays in the channel and in the app — it is not lost, it is just not a notification.
             if (append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author))
             {
+                // NOT _pendingOwnerReplies: that dictionary is cleared by the reply-resolver EARLIER
+                // in the same tick, the moment it counts the supervisor's new entry. By the time the
+                // answer reached this line the flag was already false, so every answer to the owner
+                // was silently suppressed — they asked, the supervisor replied, and they never saw
+                // it. This flag is owned solely by this path and cannot race.
                 var ownerIsWaiting = false;
 
                 lock (_ownerStateLock)
                 {
-                    ownerIsWaiting = _pendingOwnerReplies.ContainsKey(append.Channel.OrchId);
+                    ownerIsWaiting = _ownerAwaitingAnswer.Contains(append.Channel.OrchId);
                 }
 
                 if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting))
@@ -1232,6 +1247,9 @@ internal sealed class BridgeEngineModel(
                 lock (_ownerStateLock)
                 {
                     _lastSuppressedEntry.Remove(append.Channel.OrchId);
+
+                    // The owner has now had their answer; later entries are narration again.
+                    _ownerAwaitingAnswer.Remove(append.Channel.OrchId);
                 }
             }
 
@@ -3401,6 +3419,9 @@ internal sealed class BridgeEngineModel(
         lock (_ownerStateLock)
         {
             _lastSuppressedEntry.Remove(orchId);
+
+            // Whatever the supervisor says next is the answer to this, and it MUST reach them.
+            _ownerAwaitingAnswer.Add(orchId);
         }
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
@@ -4183,6 +4204,40 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// The owner's complaint, verbatim: "I should ALWAYS be advised when a sup finishes reasoning
+    /// ... otherwise I have no way of knowing that I can text him." They had been shown "Sup: busy",
+    /// the turn then ended silently, and nothing ever corrected that line.
+    ///
+    /// It EDITS the existing receipt rather than sending a new message — the whole point is that the
+    /// stale line stops lying, and one more notification would work against the quiet this system
+    /// has been fighting for.
+    /// </summary>
+    async Task Announce_SupervisorFree_Async(string orchId, PendingOwnerReply pending, CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null || pending.ReceiptMessageId == null)
+            return;
+
+        if (Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
+            return;
+
+        try
+        {
+            await _telegramClient.Edit_MessageText_Async(
+                pending.ReceiptMessageId.Value,
+                "✓✓  ·  🔴 Sup: turn ended — free now, he is reading this",
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Turn-ended announcement failed: {ex.Message}");
+        }
+    }
+
     static string Build_FirstNarration(string? activity)
     {
         var doing = activity == null ? "mid-task" : $"mid-task — {activity}";
@@ -4241,6 +4296,15 @@ internal sealed class BridgeEngineModel(
             {
                 await Narrate_BusySupervisor_Async(orchId, pending, supervisorUsageFile, cancellationToken);
                 continue;
+            }
+
+            // It was busy, the owner was told so, and now the turn has ENDED. Say so, once: without
+            // it the owner is left watching a "busy" line that never changes, with no way to know
+            // the supervisor is free and a message would be picked up immediately.
+            if (pending.LastNarratedUtc != default && !pending.TurnEndAnnounced)
+            {
+                pending.TurnEndAnnounced = true;
+                await Announce_SupervisorFree_Async(orchId, pending, cancellationToken);
             }
 
             if (pending.Nudged || (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds < OWNER_REPLY_GRACE_SECONDS)
