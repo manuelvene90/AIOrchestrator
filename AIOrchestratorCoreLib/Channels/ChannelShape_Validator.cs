@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace AIOrchestratorCoreLib.Channels;
 
 /// <summary>
@@ -19,7 +21,7 @@ namespace AIOrchestratorCoreLib.Channels;
 /// …`) is NOT a malformed header and must never be flagged. A line counts as an ATTEMPTED header
 /// only if it opens a bracket like a header does, or names an author with FROM.
 /// </summary>
-public static class ChannelShape_Validator
+public static partial class ChannelShape_Validator
 {
     public const string CANONICAL_FORMAT = "## [n] FROM <author> — YYYY-MM-DD HH:mm — <subject>";
 
@@ -49,17 +51,23 @@ public static class ChannelShape_Validator
         return malformed;
     }
 
+    /// <summary>
+    /// An attempted header opens with the index bracket, or names the author with FROM right where
+    /// a header would.
+    ///
+    /// It deliberately does NOT scan the whole line for "from". That is what the first version did,
+    /// and it flagged ordinary report headings — "## B6. Can deployment rules be built from existing
+    /// condition objects?" was reported to the owner as a malformed entry header. A false positive
+    /// here is worse than useless: it teaches the reader to ignore the warning, and the warning
+    /// exists to catch a silent, invisible failure.
+    /// </summary>
     static bool Looks_LikeAttemptedHeader(string line)
     {
-        if (!line.StartsWith("## ", StringComparison.Ordinal))
-            return false;
-
-        var afterHashes = line[3..].TrimStart();
-
-        // '## [' is the header's own opening; ' FROM ' names an author. A heading with neither is
-        // ordinary body markdown and none of our business.
-        return afterHashes.StartsWith('[') || line.Contains(" FROM ", StringComparison.OrdinalIgnoreCase);
+        return Attempted_Header_Regex().IsMatch(line);
     }
+
+    [GeneratedRegex(@"^##\s+(\[[^\]]*\]|FROM\s)", RegexOptions.IgnoreCase)]
+    private static partial Regex Attempted_Header_Regex();
 
     /// <summary>The channel entry the app posts when it finds one — it must say what to do, not just complain.</summary>
     public static string Build_ReportBody(IReadOnlyList<(int LineNumber, string Line)> malformed)

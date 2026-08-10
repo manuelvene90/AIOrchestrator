@@ -50,6 +50,42 @@ public class ChannelShapeValidatorTests
         Assert.Empty(ChannelShape_Validator.Find_MalformedHeaders($"## [1] FROM owner — d — s\n{line}"));
     }
 
+    /// <summary>
+    /// REAL false positives from the live channels. The first version scanned the whole line for
+    /// "from", so an implementer's own report heading was reported to the owner as a malformed
+    /// entry header. A warning that cries wolf is worse than no warning: this one exists to catch a
+    /// failure that is otherwise completely invisible, so it has to stay trustworthy.
+    /// </summary>
+    [Theory]
+    [InlineData("## B6. Can deployment rules be built from existing condition objects?")]
+    [InlineData("## F11 — NEW, from your item (6). The search-budget editor does not exist.")]
+    [InlineData("## F9 — LOW — CONFIRMED. The documented recovery from an unreadable document is a no-op.")]
+    [InlineData("## Notes from imp-1")]
+    public void ReportHeadingsContainingTheWordFrom_AreNotFlagged(string line)
+    {
+        Assert.Empty(ChannelShape_Validator.Find_MalformedHeaders($"## [1] FROM supervisor — d — s\nbody\n{line}"));
+    }
+
+    /// <summary>An attempted header that merely forgot its index is still an attempted header.</summary>
+    [Fact]
+    public void AHeaderMissingItsIndex_IsStillCaught()
+    {
+        var found = ChannelShape_Validator.Find_MalformedHeaders(
+            "## [1] FROM owner — d — s\n## FROM supervisor — 2026-08-10 12:00 — no index at all");
+
+        Assert.Single(found);
+    }
+
+    /// <summary>The genuine offenders from the live channels must still be caught.</summary>
+    [Theory]
+    [InlineData("## [FINAL] FROM supervisor — 2026-08-09 07:16 — MERGED to master.")]
+    [InlineData("## [88b] FROM implementer — 2026-08-07 — Harness landed.")]
+    [InlineData("## [supervisor] FROM supervisor — 2026-08-08 04:48 — CHECK YOUR WATCHER ANCHOR")]
+    public void NonNumericIndexes_AreStillCaught(string line)
+    {
+        Assert.Single(ChannelShape_Validator.Find_MalformedHeaders($"## [1] FROM owner — d — s\n{line}"));
+    }
+
     [Fact]
     public void SeveralMalformed_AreAllReported_WithTheirLineNumbers()
     {
