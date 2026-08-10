@@ -60,7 +60,13 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var claudeCommand = $"{Build_ClaudeInvocation(model)} {REVIEWER_LAUNCH_FLAGS} '/reviewer {orchId}/{memberId}'";
+        // The '--' is LOAD-BEARING. --disallowedTools is variadic (<tools...>), so without a
+        // terminator it swallows the prompt that follows it: the CLI parsed "/reviewer orch/rev-1"
+        // as TOOL NAMES and started a session with no prompt at all. Every reviewer therefore came
+        // up blank — never booted, never wrote to its channel, and was nudged then respawned on a
+        // loop. Verified against the real CLI, which reports "Permission deny rule ... matches no
+        // known tool" for each swallowed word.
+        var claudeCommand = $"{Build_ClaudeInvocation(model)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
         var script = Build_SessionScript("reviewer", orchId, memberId, claudeCommand, pidFilePath);
 
         return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", REVIEWER_TAB_COLOR, repoPath, script);

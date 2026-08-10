@@ -566,7 +566,22 @@ internal sealed class BridgeEngineModel(
                 var waitingOnSomeoneElse =
                     memberState == MemberStates.AwaitingSupervisorReview || memberState == MemberStates.BlockedOnOwner;
 
-                var dormantMidWork = spokeLast && !waitingOnSomeoneElse;
+                // A member that has NEVER been briefed is not dormant mid-work — it is waiting for
+                // work, which is the correct state for a freshly spawned imp-1 or rev-1. Without
+                // this, every orchestration's pre-spawned members were nudged for saying "online"
+                // and then respawned, losing their context on a loop.
+                var everBriefed = false;
+
+                foreach (var channelEntry in entries)
+                {
+                    if (channelEntry.Author == ChannelAuthors.Supervisor)
+                    {
+                        everBriefed = true;
+                        break;
+                    }
+                }
+
+                var dormantMidWork = spokeLast && everBriefed && !waitingOnSomeoneElse;
 
                 if (spokeLast && !dormantMidWork)
                 {
@@ -592,13 +607,25 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                // ESCALATION. The nudge CHANGED the channel; a live watcher fires on that within
-                // seconds. Still frozen after the grace window ⇒ there is no listener at all (the
-                // turn ended abnormally, or never reached the point where a watcher is armed).
-                // Nothing the session can do about that — only a respawn brings it back, and it
-                // resumes from its channel, which is the designed durable state.
                 if ((DateTime.UtcNow - nudgedUtc).TotalMinutes < ORPHAN_CONFIRM_MINUTES)
                     continue;
+
+                // ESCALATION, and the probe is the TRANSCRIPT, not the channel. The nudge changed
+                // the channel, so a live monitor fired and the session took a turn — but the
+                // protocol forbids acknowledgment-only entries, so a live, obedient session with
+                // nothing to say answers with SILENCE. Treating that silence as death respawned
+                // healthy sessions and threw away their context, repeatedly.
+                var memberUsageFile = Path.Combine(
+                    _paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
+                var lastActivityUtc = SessionActivity_Probe.Get_LastActivityUtc_OrNull(memberUsageFile);
+
+                if (lastActivityUtc != null && lastActivityUtc > nudgedUtc)
+                {
+                    // It woke after the nudge: alive, and its monitor works. Nothing is wrong.
+                    _nudgedMemberUtc.Remove(memberKey);
+                    continue;
+                }
 
                 _nudgedMemberUtc.Remove(memberKey);
                 await Recover_OrphanedImplementer_Async(session, member.MemberId, cancellationToken);

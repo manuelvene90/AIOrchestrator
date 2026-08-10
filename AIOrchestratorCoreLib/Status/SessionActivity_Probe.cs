@@ -14,6 +14,32 @@ public static class SessionActivity_Probe
     /// <summary>Transcript freshness that counts as "working right now".</summary>
     public const int MIDTURN_SECONDS = 120;
 
+    /// <summary>
+    /// When this session last did ANYTHING, from its transcript's mtime. The only trustworthy
+    /// liveness signal in the system: a session cannot observe its own dormancy, and its channel
+    /// silence proves nothing because the protocol forbids acknowledgment-only entries — a live,
+    /// obedient session with nothing to say writes nothing at all.
+    /// </summary>
+    public static DateTime? Get_LastActivityUtc_OrNull(string usageFilePath)
+    {
+        try
+        {
+            if (!File.Exists(usageFilePath))
+                return null;
+
+            var rawJson = UsageTotals_Reader.Read_Text_Safe(usageFilePath);
+            var transcriptPath = RateLimits_Reader.Read_TranscriptPath_OrNull(rawJson);
+
+            var probedFile = transcriptPath != null && File.Exists(transcriptPath) ? transcriptPath : usageFilePath;
+
+            return File.GetLastWriteTimeUtc(probedFile);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static bool Is_MidTurn(string usageFilePath)
     {
         try

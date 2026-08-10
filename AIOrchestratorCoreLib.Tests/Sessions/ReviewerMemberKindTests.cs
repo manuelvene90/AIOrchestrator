@@ -101,6 +101,13 @@ public class ReviewerMemberKindTests : IDisposable
         Assert.Contains("--disallowedTools \"Write\" \"Edit\" \"NotebookEdit\"", script);
         Assert.Contains("/reviewer orch-1/rev-1", script);
         Assert.Contains("AIORCH_ROLE='reviewer'", script);
+
+        // The prompt MUST be terminated off the variadic --disallowedTools, or the CLI parses it as
+        // tool names and the session starts blank. That bug respawned reviewers in a loop.
+        Assert.Contains("-- '/reviewer orch-1/rev-1'", script);
+        Assert.True(
+            script.IndexOf("--disallowedTools", StringComparison.Ordinal) < script.IndexOf("-- '/reviewer", StringComparison.Ordinal),
+            "the '--' terminator must come AFTER the variadic flag it is protecting the prompt from");
     }
 
     [Fact]
