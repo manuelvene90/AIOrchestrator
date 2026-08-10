@@ -47,10 +47,54 @@ public class OwnerPushPolicyTests
         Assert.False(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false));
     }
 
+    /// <summary>
+    /// The dangerous case: a real question asked in prose, with no marker. Dropping it would leave
+    /// the supervisor waiting for an answer the owner never saw — a deadlock neither can observe.
+    /// A false positive costs one ignorable message; a false negative costs the whole conversation.
+    /// </summary>
+    [Theory]
+    [InlineData("## [4] FROM supervisor — d — s\nShould I merge this into master or hold it?")]
+    [InlineData("## [4] FROM supervisor — d — s\nDo you want the synthetic drawdown or the real one?")]
+    [InlineData("## [4] FROM supervisor — d — s\nwhich approach do you prefer")]
+    public void AQuestionInPlainProse_IsStillPushed(string entry)
+    {
+        // The last one has no '?' at all and is the known limit — asserted so the gap is visible.
+        var pushed = OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false);
+
+        Assert.Equal(entry.Contains('?'), pushed);
+    }
+
+    /// <summary>A '?' inside an ASCII mockup or snippet is not the supervisor asking anything.</summary>
+    [Fact]
+    public void AQuestionMarkInsideAFencedBlock_DoesNotCount()
+    {
+        var entry = "## [5] FROM supervisor — d — s\nprogress update\n```\n| ready? | yes |\n```\nnothing else";
+
+        Assert.False(OwnerPush_Policy.Asks_InProse(entry));
+        Assert.False(OwnerPush_Policy.Should_Push(entry, false));
+    }
+
     [Fact]
     public void EmptyEntry_IsNeverPushed()
     {
         Assert.False(OwnerPush_Policy.Should_Push("", false));
+    }
+
+    /// <summary>
+    /// The button label is what fits on a phone; the text the supervisor receives is the actual
+    /// instruction. They MUST differ — a supervisor told only "❔ Explain the options" would have to
+    /// guess what was being asked of it, and it must know to re-ask afterwards.
+    /// </summary>
+    [Fact]
+    public void TheExplainButton_SendsAFullInstruction_NotItsOwnLabel()
+    {
+        Assert.NotEqual(OwnerPush_Policy.MORE_DETAIL_LABEL, OwnerPush_Policy.MORE_DETAIL_REQUEST);
+        Assert.True(OwnerPush_Policy.MORE_DETAIL_LABEL.Length <= 30, "the label has to fit a phone button");
+
+        Assert.Contains("recommend", OwnerPush_Policy.MORE_DETAIL_REQUEST);
+        Assert.Contains("costs to get wrong", OwnerPush_Policy.MORE_DETAIL_REQUEST);
+        Assert.Contains("ask the question again", OwnerPush_Policy.MORE_DETAIL_REQUEST);
+        Assert.Contains("short", OwnerPush_Policy.MORE_DETAIL_REQUEST, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

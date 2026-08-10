@@ -207,7 +207,13 @@ thought across several of them hoping to be noticed.
 
   Without a `QUESTION:` line the app falls back to your last question sentence, and if there is
   none the owner gets a bare "Your call:" — which is exactly the "buttons with no visible question"
-  problem you are avoiding. The body above can be as long and thorough as the decision deserves;
+  problem you are avoiding.
+- **The app adds an "❔ Explain the options" button to EVERY question — you do not write it.** If the
+  owner taps it you receive a request for what each option means in practice, what differs, what it
+  costs to get wrong, and your recommendation. Answer it SHORT and then **ask the question again**
+  (fresh `QUESTION:` + `OPTION:` lines — the old buttons are spent). Treat it as useful signal: a
+  tap there means your question was not answerable as written, so make the re-ask clearer rather
+  than longer. The body above can be as long and thorough as the decision deserves;
   the question underneath must be short enough to answer from a lock screen.
 - **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
   the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a

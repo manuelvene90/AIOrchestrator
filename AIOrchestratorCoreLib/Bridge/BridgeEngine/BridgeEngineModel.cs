@@ -1437,6 +1437,17 @@ internal sealed class BridgeEngineModel(
                 buttons.Add((data, label));
             }
 
+            // Every question also offers a way to ASK BACK. The button's label is short; the text
+            // the supervisor receives is the full instruction, which is why the two differ here.
+            // Tapping it consumes the group like any other choice, so the supervisor answers and
+            // then re-asks with fresh buttons.
+            _buttonSequence++;
+            var detailData = $"opt-{_buttonSequence}";
+
+            _buttonOptions[detailData] = (threadId, OwnerPush_Policy.MORE_DETAIL_REQUEST, _buttonGroupSequence, questionText);
+            _buttonOrder.Enqueue(detailData);
+            buttons.Add((detailData, OwnerPush_Policy.MORE_DETAIL_LABEL));
+
             while (_buttonOrder.Count > BUTTON_REGISTRY_CAP)
                 _buttonOptions.Remove(_buttonOrder.Dequeue());
         }
