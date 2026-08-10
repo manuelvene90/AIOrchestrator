@@ -157,6 +157,9 @@ internal sealed class BridgeEngineModel(
     /// <summary>Per-orchestration clock for the app-emitted periodic STATUS.</summary>
     readonly Dictionary<string, DateTime> _lastPeriodicStatusUtc = [];
 
+    /// <summary>Per-orchestration cooldown so the brevity feedback never becomes noise itself.</summary>
+    readonly Dictionary<string, DateTime> _lastVerbosityNudgeUtc = [];
+
     sealed class HoldReceipt
     {
         public long? MessageId;
@@ -1171,6 +1174,8 @@ internal sealed class BridgeEngineModel(
                 // presence lines are not something the owner is expected to reply to.
                 if (append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor && chunks.Count > 0)
                 {
+                    Nudge_IfTooVerbose(append.Channel.OrchId, text);
+
                     if (Note_SupervisorSpokeToOwner_AndJustWentQuiet(append.Channel.OrchId))
                         await Enter_QuietMode_Async(append.Channel.OrchId, cancellationToken);
                 }
@@ -3396,6 +3401,36 @@ internal sealed class BridgeEngineModel(
         {
             return _awayActive;
         }
+    }
+
+    /// <summary>
+    /// Tells the supervisor, with real numbers, when the message it just sent the owner was too
+    /// long. The rule has been in its role command from day one and the owner still reports it as
+    /// verbose — every rule in this system that actually held got a feedback loop, not firmer
+    /// wording. Rate-limited, because nagging after every message would itself become the noise.
+    /// </summary>
+    void Nudge_IfTooVerbose(string orchId, string mirroredText)
+    {
+        if (!Brevity_Policy.Is_TooLong(mirroredText))
+            return;
+
+        lock (_ownerStateLock)
+        {
+            _lastVerbosityNudgeUtc.TryGetValue(orchId, out var lastUtc);
+
+            if ((DateTime.UtcNow - lastUtc).TotalMinutes < Brevity_Policy.NUDGE_COOLDOWN_MINUTES)
+                return;
+
+            _lastVerbosityNudgeUtc[orchId] = DateTime.UtcNow;
+        }
+
+        ChannelAppender.Append_AppEntry(
+            _paths.Get_OwnerChannelFile(orchId),
+            "that message was too long for a phone",
+            Brevity_Policy.Build_NudgeBody(mirroredText),
+            DateTime.Now);
+
+        _log.Log_Info(orchId, $"Supervisor message exceeded the brevity cap ({Brevity_Policy.Count_Lines(mirroredText)} lines) — nudged");
     }
 
     /// <summary>
