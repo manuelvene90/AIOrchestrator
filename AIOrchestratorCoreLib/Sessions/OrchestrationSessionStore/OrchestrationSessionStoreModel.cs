@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Sessions.OrchestrationMember;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
+using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -255,8 +256,20 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         return maxNumber + 1;
     }
 
+    /// <summary>
+    /// ATOMIC, because nothing regenerates this file. session.json holds the repo path, the member
+    /// roster WITH their pids, the Telegram topic id, the model overrides and ClosedUtc — a
+    /// truncated write makes the orchestration disappear from the card list, stops the watchdog
+    /// respawning it, strands its processes beyond Kill_OrchestrationSessions' reach and loses the
+    /// topic id needed to clean up its Telegram side.
+    ///
+    /// It is written at the worst possible moment too: closing an orchestration saves this file
+    /// immediately before tree-killing the very processes whose pids it records. This is the shape
+    /// commit 3a0f8a2 introduced Atomic_FileWriter for — a write that fails must not destroy the
+    /// file it was updating.
+    /// </summary>
     void Save(IOrchestrationSession session)
     {
-        File.WriteAllText(_paths.Get_SessionFile(session.OrchId), SessionJson_Serializer.Serialize(session));
+        Atomic_FileWriter.Write_AllText(_paths.Get_SessionFile(session.OrchId), SessionJson_Serializer.Serialize(session));
     }
 }
