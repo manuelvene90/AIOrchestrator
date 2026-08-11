@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Planning;
@@ -28,31 +29,21 @@ public static class LedgerHealth_Tracker
     /// done: five false nudges on 2026-08-11, two of them inside two minutes, each one threatening a
     /// turn-end block.
     ///
-    /// App entries are skipped rather than counted: a nudge or a resume landing between the report
-    /// and the verdict does not make the verdict stop being one.
+    /// It asks WHO SPOKE LAST through <see cref="MemberState_Resolver.Find_LastConversationEntry_OrNull"/>
+    /// rather than deciding for itself, so the app-entry rule lives in one place: a nudge landing
+    /// between a report and its verdict must not make the verdict stop being one, and the app nudges
+    /// exactly there.
     /// </summary>
     public static bool Is_VerdictOnMemberWork(IReadOnlyList<IChannelEntry> spokeEntries)
     {
         if (spokeEntries.Count == 0 || spokeEntries[^1].Author != ChannelAuthors.Supervisor)
             return false;
 
-        for (var index = spokeEntries.Count - 2; index >= 0; index--)
-        {
-            var author = spokeEntries[index].Author;
+        // Everything before this supervisor entry — whoever spoke last there is who it answers.
+        var precedingEntry = MemberState_Resolver.Find_LastConversationEntry_OrNull(
+            [.. spokeEntries.Take(spokeEntries.Count - 1)]);
 
-            if (author == ChannelAuthors.App)
-                continue;
-
-            // A member spoke before this: the supervisor is answering filed work.
-            if (ChannelAuthor_Kinds.Is_Member(author))
-                return true;
-
-            // The supervisor spoke before this: it is briefing, or adding to its own brief.
-            return false;
-        }
-
-        // Nothing but app entries behind it — the supervisor is opening the conversation.
-        return false;
+        return precedingEntry != null && ChannelAuthor_Kinds.Is_Member(precedingEntry.Author);
     }
 
     /// <summary>The flag the turn-end hook reads. Present = this supervisor owes a ledger update.</summary>

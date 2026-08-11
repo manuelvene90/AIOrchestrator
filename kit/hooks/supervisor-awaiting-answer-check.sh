@@ -81,24 +81,29 @@ case "$TARGET" in
     fi ;;
 esac
 
-# A MEMBER CHANNEL is allowed only when that member SPOKE LAST — i.e. it filed something and is
-# sitting idle waiting on you. Unblocking someone who is already waiting does not start new work;
-# briefing does, and briefing while the owner decides is the precise behaviour the owner objected to
-# ("this means that the sup is moving in the background. This should not happen.").
-MEMBER=$(printf '%s' "$TARGET" | grep -oE "supervision/$AIORCH_ID/(imp|rev)-[0-9]+/channel\.md" | head -1)
+# A MEMBER CHANNEL is allowed only when that member is ALREADY WAITING on a verdict.
+#
+# UNBLOCKING IS NOT MOVING IN THE BACKGROUND; BRIEFING IS. Answering someone who has filed something
+# and is sitting idle releases work that was already in flight before the question. Writing to a
+# member that is NOT waiting starts new work while the owner decides, which is the precise behaviour
+# the owner objected to: "this means that the sup is moving in the background. This should not
+# happen. The sup should wait for my answer."
+#
+# The app decides who is waiting and publishes it in .awaiting-verdict — this hook only looks the
+# answer up. An earlier version re-derived it here by reading the last "FROM" line of the channel,
+# and that copy drifted from the app's within the hour: an app NUDGE lands between a member's report
+# and the supervisor's reply, so the last line read "app" and the hook denied exactly the reply it
+# exists to allow. One rule, one place, and this is not the place.
+MEMBER_ID=$(printf '%s' "$TARGET" | grep -oE "supervision/$AIORCH_ID/(imp|rev)-[0-9]+/channel\.md" | head -1 | grep -oE '(imp|rev)-[0-9]+')
 
-if [ -n "$MEMBER" ]; then
-  CHANNEL="$HOME/.claude/${MEMBER}"
+if [ -n "$MEMBER_ID" ]; then
+  AWAITING_FILE="$SUPERVISION/.awaiting-verdict"
 
-  if [ -f "$CHANNEL" ]; then
-    LAST_AUTHOR=$(grep -oE '^## \[[0-9]+\] FROM [a-zA-Z-]+' "$CHANNEL" 2>/dev/null | tail -1 | sed 's/.* FROM //')
-
-    case "$LAST_AUTHOR" in
-      implementer|reviewer|solo) exit 0 ;;
-    esac
+  if [ -f "$AWAITING_FILE" ] && grep -qx "$MEMBER_ID" "$AWAITING_FILE" 2>/dev/null; then
+    exit 0
   fi
 
-  deny "That member is not waiting on you — writing to it now is briefing new work, not unblocking someone."
+  deny "$MEMBER_ID is not waiting on a verdict — writing to it now is briefing new work, not unblocking someone."
 fi
 
 deny "Do not run anything, do not brief anyone, do not keep working."

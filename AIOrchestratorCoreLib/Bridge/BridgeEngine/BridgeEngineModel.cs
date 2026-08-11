@@ -232,6 +232,9 @@ internal sealed class BridgeEngineModel(
     /// <summary>Presence of this file in an orchestration folder stops its supervisor dead.</summary>
     public const string AWAITING_ANSWER_FLAG_FILE = ".awaiting-answer";
 
+    /// <summary>Members waiting on a verdict, one id per line — read by the awaiting-answer hook.</summary>
+    public const string AWAITING_VERDICT_FILE = ".awaiting-verdict";
+
     /// <summary>How long EVERYTHING must be idle before a suppressed last word is released.</summary>
     const int SILENT_DEADLOCK_MINUTES = 5;
 
@@ -822,6 +825,8 @@ internal sealed class BridgeEngineModel(
 
             Nudge_IdleSupervisor(session);
 
+            List<string> awaitingVerdict = [];
+
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc != null)
@@ -853,6 +858,13 @@ internal sealed class BridgeEngineModel(
                 // Everything else the member said last — an open writing window, a "proceeding
                 // with X" — means it stopped mid-task with nobody about to speak to it.
                 var memberState = MemberState_Resolver.Resolve(entries);
+
+                // Published for the awaiting-answer hook, which must let a supervisor answer someone
+                // who is already waiting while refusing to let it brief someone new. That question is
+                // answered HERE, by the resolver, and merely read by the hook — a bash re-derivation
+                // of the same rule drifted from this one within the hour it was written.
+                if (memberState == MemberStates.AwaitingSupervisorReview)
+                    awaitingVerdict.Add(member.MemberId);
 
                 var waitingOnSomeoneElse =
                     memberState == MemberStates.AwaitingSupervisorReview || memberState == MemberStates.BlockedOnOwner;
@@ -921,6 +933,40 @@ internal sealed class BridgeEngineModel(
                 _nudgedMemberUtc.Remove(memberKey);
                 await Recover_OrphanedImplementer_Async(session, member.MemberId, cancellationToken);
             }
+
+            Publish_AwaitingVerdict(session.OrchId, awaitingVerdict);
+        }
+    }
+
+    /// <summary>
+    /// Writes the members currently waiting on a verdict, one id per line, for the awaiting-answer
+    /// hook to read. The hook is bash and cannot call the resolver, so the app answers the question
+    /// and the hook only looks it up — the alternative, re-deriving "who spoke last" in shell, was
+    /// written and drifted from the C# within the hour (it counted an app nudge as the last speaker
+    /// and denied exactly the reply it was meant to allow).
+    ///
+    /// Best effort throughout: a file we cannot write costs the supervisor one allowed reply, never
+    /// a wedged session.
+    /// </summary>
+    void Publish_AwaitingVerdict(string orchId, IReadOnlyList<string> memberIds)
+    {
+        try
+        {
+            var file = Path.Combine(_paths.Get_OrchestrationFolder(orchId), AWAITING_VERDICT_FILE);
+
+            if (memberIds.Count == 0)
+            {
+                if (File.Exists(file))
+                    File.Delete(file);
+
+                return;
+            }
+
+            Storage.Atomic_FileWriter.Write_AllText(file, string.Join('\n', memberIds));
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Could not publish the awaiting-verdict list: {ex.Message}");
         }
     }
 

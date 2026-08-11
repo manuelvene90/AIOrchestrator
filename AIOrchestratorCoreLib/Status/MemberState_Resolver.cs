@@ -26,7 +26,10 @@ public static class MemberState_Resolver
         if (Has_OpenWindow(entries, MUTATION_WINDOW_OPEN_MARKER, MUTATION_WINDOW_CLOSED_MARKER))
             return MemberStates.WritingWindowOpen;
 
-        var lastEntry = entries[entries.Count - 1];
+        var lastEntry = Find_LastConversationEntry_OrNull(entries);
+
+        if (lastEntry == null)
+            return MemberStates.ImplementerWorking;
 
         if (ChannelAuthor_Kinds.Is_Member(lastEntry.Author))
         {
@@ -37,6 +40,28 @@ public static class MemberState_Resolver
         }
 
         return MemberStates.ImplementerWorking;
+    }
+
+    /// <summary>
+    /// WHO SPOKE LAST, ignoring the app. The app is not a participant in this conversation — its
+    /// nudges and resume notices are about the conversation, not part of it — and it writes into a
+    /// channel precisely when someone has been waiting, so counting it inverted the answer on the
+    /// most common path: a member filed a report, the app nudged the supervisor about it, and the
+    /// member instantly stopped reading as "awaiting review". That mislabelled the status line and
+    /// made the idle-nudge logic nudge a member for waiting on a reply it had already asked for.
+    ///
+    /// This is the ONE place the question is answered. The turn-end ledger trigger and the published
+    /// awaiting-verdict list both come through here rather than each deciding for themselves.
+    /// </summary>
+    public static IChannelEntry? Find_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
+    {
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            if (entries[index].Author != ChannelAuthors.App)
+                return entries[index];
+        }
+
+        return null;
     }
 
     static bool Has_OpenWindow(IReadOnlyList<IChannelEntry> entries, string openMarker, string closedMarker)
