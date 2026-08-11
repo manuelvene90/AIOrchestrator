@@ -83,6 +83,23 @@ internal sealed class BridgeEngineModel(
     const int INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS = 60000;
     const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
 
+    /// <summary>Pause before relaunching a bridge loop that ended, so a broken loop cannot spin.</summary>
+    const int LOOP_RELAUNCH_DELAY_MILLISECONDS = 5000;
+
+    /// <summary>Consecutive quick deaths after which a loop is abandoned instead of relaunched forever.</summary>
+    const int LOOP_RELAUNCH_CAP = 10;
+
+    /// <summary>
+    /// A loop that ran this long before dying was retrying, not spinning — its relaunch allowance
+    /// starts over. It MUST stay well below the Telegram HttpClient timeout (90 s): a wedged
+    /// endpoint kills each incarnation at ~90 s, and a threshold above that would classify every
+    /// one of those deaths as unhealthy, never reset the counter, and make the guard give up after
+    /// ~17 minutes — abandoning the bridge during precisely the outage it was written to survive.
+    /// Six times the relaunch pause is comfortably clear of a spin and comfortably under any
+    /// network timeout in this app.
+    /// </summary>
+    const int LOOP_HEALTHY_RUN_MILLISECONDS = 30000;
+
     /// <summary>Below this age /cost prints no burn rate — dividing by minutes invents a number.</summary>
     const double MINIMUM_BURN_RATE_HOURS = 0.25;
 
@@ -353,10 +370,10 @@ internal sealed class BridgeEngineModel(
     {
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
-        var loops = new List<Task> { Run_MirrorLoop_Async(cancellationToken) };
+        List<Task> loops = [Run_Supervised_Async("mirror", Run_MirrorLoop_Async, cancellationToken)];
 
         if (_telegramClient != null)
-            loops.Add(Run_InboundLoop_Async(cancellationToken));
+            loops.Add(Run_Supervised_Async("inbound", Run_InboundLoop_Async, cancellationToken));
 
         _log.Log_Info(GLOBAL_ORCH_ID, _telegramClient == null
             ? "Bridge started (file-only mode — Telegram not configured)"
@@ -365,6 +382,109 @@ internal sealed class BridgeEngineModel(
         await Task.WhenAll(loops);
     }
 
+    /// <summary>
+    /// A bridge loop that ENDS while the app is still running is by definition a bug — and it was
+    /// the one failure this app could not see. A loop that returns completes its Task
+    /// SUCCESSFULLY, so the Task.WhenAll above sees nothing wrong and TaskScheduler's
+    /// UnobservedTaskException never fires either. On 2026-08-11 both loops returned on a 90 s HTTP
+    /// timeout and the bridge became a dead shell for hours — no mirroring, no owner messages, no
+    /// request-file actions, no session respawns — while the app itself stayed alive and
+    /// responding, so nothing anywhere reported a fault. Only an app restart brought it back.
+    ///
+    /// So a loop that ends is relaunched, loudly. The delay and the cap are what stop a genuinely
+    /// broken loop from becoming a hot loop; the cap counts CONSECUTIVE quick deaths, so an app
+    /// that runs for days and relaunches once is never starved of its allowance.
+    /// </summary>
+    async Task Run_Supervised_Async(string loopName, Func<CancellationToken, Task> loop, CancellationToken cancellationToken)
+    {
+        var consecutiveRelaunches = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var startedUtc = DateTime.UtcNow;
+
+            try
+            {
+                await loop(cancellationToken);
+
+                if (cancellationToken.IsCancellationRequested)
+                    return;
+
+                _log.Log_Error(GLOBAL_ORCH_ID, $"Bridge '{loopName}' loop ENDED on its own while the app is running — that is a bug; relaunching it", null);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Error(GLOBAL_ORCH_ID, $"Bridge '{loopName}' loop FAULTED while the app is running — relaunching it", ex);
+            }
+
+            // Long-lived before it died, so this is not a crash loop and the allowance starts over.
+            if ((DateTime.UtcNow - startedUtc).TotalMilliseconds >= LOOP_HEALTHY_RUN_MILLISECONDS)
+                consecutiveRelaunches = 0;
+
+            consecutiveRelaunches++;
+
+            if (consecutiveRelaunches > LOOP_RELAUNCH_CAP)
+            {
+                _log.Log_Error(GLOBAL_ORCH_ID, $"Bridge '{loopName}' loop died {consecutiveRelaunches} times in a row — giving up on it; the app must be restarted to get it back", null);
+                await Alert_LoopAbandoned_BestEffort_Async(loopName, consecutiveRelaunches, cancellationToken);
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(LOOP_RELAUNCH_DELAY_MILLISECONDS, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The owner's complaint on 2026-08-11 was not that something broke — it was that they were cut
+    /// off and had no way to KNOW. So the give-up path may not be silent: a log line nobody is
+    /// reading is the same silence. Best-effort by construction, and it swallows everything
+    /// including cancellation: this runs while the guard is already abandoning a loop, and an alert
+    /// that threw out of the guard would take down the OTHER loop with it.
+    ///
+    /// If the bridge is abandoned because Telegram itself is unreachable, this send fails too — and
+    /// that is fine. It costs one attempt, the log keeps the record, and the case it does cover (a
+    /// loop failing for a reason that is not Telegram) is exactly the one the owner cannot
+    /// otherwise see.
+    /// </summary>
+    async Task Alert_LoopAbandoned_BestEffort_Async(string loopName, int deaths, CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        try
+        {
+            await _telegramClient.Send_Message_Async(
+                null,
+                $"🛑 The bridge's '{loopName}' loop failed {deaths} times in a row and has been abandoned. "
+                    + "Mirroring and/or your messages are DOWN until the app is restarted — nothing else will bring it back.",
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Loop-abandoned alert send failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The TOKEN decides whether this loop may end — never the exception type. An
+    /// HttpClient.Timeout expiry throws TaskCanceledException, which IS an
+    /// OperationCanceledException, so the bare catch this filter replaced read a wedged Telegram
+    /// endpoint as "shutting down, stop cleanly" and returned. On 2026-08-11 that killed the mirror
+    /// loop silently — a `return` logs nothing — and with it the request-file protocol, the session
+    /// watchdog and every alert, for hours. With the filter a timeout falls through to the generic
+    /// catch below, is logged, and the loop keeps ticking.
+    /// </summary>
     async Task Run_MirrorLoop_Async(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -373,7 +493,7 @@ internal sealed class BridgeEngineModel(
             {
                 await Execute_MirrorTick_Async(cancellationToken);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return;
             }
@@ -1985,6 +2105,12 @@ internal sealed class BridgeEngineModel(
         Raise_OrchestrationActivity(orchId);
     }
 
+    /// <summary>
+    /// Same rule as the mirror loop: only a cancelled TOKEN may end this loop. This is the one
+    /// whose silent death took the owner's phone offline on 2026-08-11 — the long poll hung, the
+    /// 90 s HttpClient timeout raised a TaskCanceledException, and the bare catch returned without
+    /// logging a thing, so the log stayed quiet instead of filling with backoff lines.
+    /// </summary>
     async Task Run_InboundLoop_Async(CancellationToken cancellationToken)
     {
         var client = _telegramClient
@@ -2132,7 +2258,7 @@ internal sealed class BridgeEngineModel(
 
                 backoffMilliseconds = INBOUND_ERROR_BACKOFF_START_MILLISECONDS;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return;
             }
@@ -2154,7 +2280,17 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>Registers the chat's ☰ command menu — two taps beat typing the check-in ritual.</summary>
+    /// <summary>
+    /// Registers the chat's ☰ command menu — two taps beat typing the check-in ritual.
+    ///
+    /// The OCE filter below is load-bearing, unlike the ~30 other rethrow sites: this is the only
+    /// helper awaited OUTSIDE the inbound loop's while, so its exception does not land in a guarded
+    /// catch — it escapes Run_InboundLoop_Async before the loop ever starts. An unfiltered rethrow
+    /// therefore let a wedged endpoint stop the poller from EXISTING (90 s HttpClient timeout →
+    /// TaskCanceledException → rethrown → loop never entered), which is the same outage this
+    /// change exists to prevent, arriving by a different door. A menu that failed to register is
+    /// worth a warning, never the owner's phone line.
+    /// </summary>
     async Task Register_BotCommands_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
     {
         try
@@ -2180,7 +2316,7 @@ internal sealed class BridgeEngineModel(
                 ],
                 cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
