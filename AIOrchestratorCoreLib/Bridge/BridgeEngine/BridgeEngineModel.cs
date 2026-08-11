@@ -1,6 +1,8 @@
 ﻿using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
+using AIOrchestratorCoreLib.Configuration;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.WindowFocus;
@@ -80,6 +82,9 @@ internal sealed class BridgeEngineModel(
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
     const int INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS = 60000;
     const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
+
+    /// <summary>Below this age /cost prints no burn rate — dividing by minutes invents a number.</summary>
+    const double MINIMUM_BURN_RATE_HOURS = 0.25;
 
     /// <summary>The owner often texts several messages in a row — quiet time before delivery as ONE entry.</summary>
     /// <summary>
@@ -249,6 +254,14 @@ internal sealed class BridgeEngineModel(
         /// <summary>Last time the owner was told what the busy supervisor is doing (the old communicator's job).</summary>
         public DateTime LastNarratedUtc;
 
+        /// <summary>
+        /// The ONE narration message, edited in place on every repeat. Without it a supervisor that
+        /// thinks for ten minutes left the owner with a column of near-identical "still at it" texts
+        /// — each one a phone notification — which is exactly the waterfall this system exists to
+        /// prevent (owner, 2026-08-10).
+        /// </summary>
+        public long? NarrationMessageId;
+
         /// <summary>Said once, when the turn the owner was told about actually ends.</summary>
         public bool TurnEndAnnounced;
     }
@@ -265,6 +278,35 @@ internal sealed class BridgeEngineModel(
     public event Action<string>? OrchestrationActivity;
     public event Action<bool>? MutedChanged;
     public event Action<bool>? SilenceAllChanged;
+    public event Action<bool>? ItalianLayerChanged;
+
+    /// <summary>
+    /// Flips the 🇮🇹 translation layer and PERSISTS it: the config provider reloads on the file's
+    /// write stamp, so the next outbound message already honours the new setting — there is no
+    /// in-memory copy of this flag to keep in step.
+    /// </summary>
+    public void Set_ItalianLayer(bool enabled)
+    {
+        var current = _configProvider.Get_Current();
+
+        if (current.TelegramItalianLayer == enabled)
+            return;
+
+        OrchestratorConfig_Loader.Save(OrchestratorConfig_Factory.Create_WithItalianLayer(current, enabled), _paths);
+
+        _log.Log_Info(GLOBAL_ORCH_ID, enabled
+            ? "Italian layer ON — outbound Telegram traffic is translated on the way out"
+            : "Italian layer OFF — outbound Telegram traffic goes out as the agents wrote it");
+
+        try
+        {
+            ItalianLayerChanged?.Invoke(enabled);
+        }
+        catch
+        {
+            // A faulty subscriber must not take the bridge down.
+        }
+    }
 
     public void Set_SilenceAllTopics(bool silenced)
     {
@@ -924,11 +966,16 @@ internal sealed class BridgeEngineModel(
                 Raise_OrchestrationActivity(session.OrchId);
             }
 
-            await Report_LedgerShape_Async(session, cancellationToken);
+            Report_LedgerShape(session);
         }
     }
 
-    async Task Report_LedgerShape_Async(IOrchestrationSession session, CancellationToken cancellationToken)
+    /// <summary>
+    /// A ledger-shape complaint goes to the SUPERVISOR's channel and the log, never to Telegram:
+    /// splitting a lumped task line is the supervisor's job and the owner can do nothing with the
+    /// warning, so texting it was pure noise on the phone (owner directive).
+    /// </summary>
+    void Report_LedgerShape(IOrchestrationSession session)
     {
         var planFile = _paths.Get_PlanFile(session.OrchId);
 
@@ -955,25 +1002,6 @@ internal sealed class BridgeEngineModel(
 
         _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
         Raise_OrchestrationActivity(session.OrchId);
-
-        if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
-            return;
-
-        try
-        {
-            await _telegramClient.Send_Message_Async(
-                session.TelegramTopicId,
-                $"⚠️ {session.DisplayName ?? session.OrchId}: the task ledger has {complaints.Count} line(s) that lump several tasks together — progress on them cannot be shown until they are split.",
-                cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Warning(session.OrchId, $"Ledger-shape alert send failed: {ex.Message}");
-        }
     }
 
     /// <summary>Runaway guard: a per-orchestration token ceiling the owner sets in config.json.</summary>
@@ -2026,6 +2054,14 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_TokensReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "cost")
+                    {
+                        await Send_CostReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "italian")
+                    {
+                        await Toggle_ItalianLayer_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "limits")
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
@@ -2127,6 +2163,7 @@ internal sealed class BridgeEngineModel(
                 [
                     ("status", "What every session of this orchestration is doing"),
                     ("progress", "Task ledger of this orchestration (all of them in General)"),
+                    ("cost", "What this has cost, per session, and the burn rate"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
@@ -2139,6 +2176,7 @@ internal sealed class BridgeEngineModel(
                     ("dnd", "Toggle 🌙 THIS topic — hold its messages for later"),
                     ("mute_all", "Toggle 🔕 everywhere"),
                     ("dnd_all", "Toggle 🌙 everywhere"),
+                    ("italian", "Toggle 🇮🇹 — translate what I send you"),
                 ],
                 cancellationToken);
         }
@@ -2254,10 +2292,7 @@ internal sealed class BridgeEngineModel(
         if (progress == null)
             return $"{displayName}: no task ledger yet";
 
-        var blockedPart = progress.Blocked > 0 ? $" · {progress.Blocked} BLOCKED" : "";
-        var runningPart = progress.InProgress > 0 ? $" · {progress.InProgress} running" : "";
-
-        return $"{displayName}: {progress.Done}/{progress.Total} done{runningPart}{blockedPart}";
+        return $"{displayName}: {Planning.PlanProgress_Formatter.Describe_Counts(progress)}";
     }
 
     static string Read_FileText_Safe(string filePath)
@@ -2364,6 +2399,127 @@ internal sealed class BridgeEngineModel(
         }
 
         return lines;
+    }
+
+    /// <summary>
+    /// /cost — the MONEY view of the same lifetime figures /tokens reports: what an orchestration
+    /// has cost, WHICH SESSION spent it, and how fast it is burning. Costs are API-EQUIVALENT —
+    /// a subscription is not billed per token — so this answers "was this worth it", not "what do
+    /// I owe".
+    /// </summary>
+    async Task Send_CostReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_CostReportText(messageThreadId);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_CostReportText(long? messageThreadId)
+    {
+        if (messageThreadId != null)
+        {
+            var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+            if (session == null)
+                return "no orchestration is bound to this topic";
+
+            return Build_OneOrchestrationCostText(session);
+        }
+
+        List<string> lines = [];
+        var grandCost = 0.0;
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            var (cost, _) = UsageTotals_Reader.Build_OrchestrationTotals(_paths, session);
+            grandCost += cost;
+
+            var burnRate = Describe_BurnRate_OrEmpty(session, cost);
+            var ratePart = burnRate.Length > 0 ? $" · {burnRate}" : "";
+
+            lines.Add($"{session.DisplayName ?? session.OrchId}: ≈${cost:F2}{ratePart}");
+        }
+
+        if (lines.Count == 0)
+            return "no open orchestrations";
+
+        // No combined burn rate: each rate is an average over that orchestration's own lifetime,
+        // and summing them would only be true if they had all run at the same time.
+        lines.Add($"TOTAL: ≈${grandCost:F2} equiv (not billed)");
+        return string.Join('\n', lines);
+    }
+
+    string Build_OneOrchestrationCostText(IOrchestrationSession session)
+    {
+        var perSource = UsageTotals_Reader.Build_PerSourceTotals(_paths, session);
+        var costTotal = 0.0;
+
+        foreach (var source in perSource)
+            costTotal += source.Cost;
+
+        if (costTotal <= 0)
+            return $"{session.DisplayName ?? session.OrchId}: no cost recorded yet";
+
+        List<string> lines =
+        [
+            $"{session.DisplayName ?? session.OrchId}: ≈${costTotal:F2} lifetime (equiv, not billed)",
+        ];
+
+        foreach (var source in perSource)
+        {
+            if (source.Cost <= 0)
+                continue;
+
+            var share = costTotal > 0 ? source.Cost / costTotal * 100.0 : 0.0;
+            lines.Add($"- {source.Label}: ≈${source.Cost:F2} ({share:F0}%) · {UsageTotals_Reader.Format_Tokens(source.Tokens)}");
+        }
+
+        var burnRate = Describe_BurnRate_OrEmpty(session, costTotal);
+
+        if (burnRate.Length > 0)
+            lines.Add($"{burnRate} over {SessionDuration_Formatter.Describe(DateTime.UtcNow - session.CreatedUtc)}");
+
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// "≈$0.82/h", or nothing at all for an orchestration too young to have a meaningful average —
+    /// a rate extrapolated from the first minutes is noise, not information.
+    /// </summary>
+    static string Describe_BurnRate_OrEmpty(IOrchestrationSession session, double cost)
+    {
+        var elapsedHours = (DateTime.UtcNow - session.CreatedUtc).TotalHours;
+
+        if (elapsedHours < MINIMUM_BURN_RATE_HOURS || cost <= 0)
+            return "";
+
+        return $"≈${cost / elapsedHours:F2}/h";
+    }
+
+    /// <summary>
+    /// /italian — flips the translation layer from the phone. The confirmation is written in the
+    /// language the layer is being switched TO, so the toggle demonstrates itself.
+    /// </summary>
+    async Task Toggle_ItalianLayer_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var enabled = !_configProvider.Get_Current().TelegramItalianLayer;
+        Set_ItalianLayer(enabled);
+
+        var text = enabled
+            ? "🇮🇹 Italian layer ON — everything I send you is translated from here on."
+            : "🇬🇧 Italian layer OFF — messages now reach you exactly as the sessions wrote them.";
+
+        if (enabled)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
     }
 
     /// <summary>
@@ -2692,9 +2848,12 @@ internal sealed class BridgeEngineModel(
             ? $"working now{Describe_Activity_Suffix(supervisorUsage)}"
             : "idle — waiting";
 
+        // The header carries the ledger counts, so "who is doing what" and "how far along are we"
+        // arrive in one answer — the owner asked for both without having to send /progress too.
+        // Same builder /progress uses, so the two can never quote different figures.
         List<string> lines =
         [
-            $"{session.DisplayName ?? session.OrchId}",
+            Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId),
             $"- supervisor: {supervisorLine}",
         ];
 
@@ -4117,9 +4276,9 @@ internal sealed class BridgeEngineModel(
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(
             UsageTotals_Reader.Read_Text_Safe(_paths.Get_PlanFile(session.OrchId)));
 
-        var header = progress == null
-            ? "STATUS"
-            : $"STATUS · {progress.Done}/{progress.Total} done{(progress.Blocked > 0 ? $" · {progress.Blocked} blocked" : "")}";
+        // Just the word: the counts now lead the body (the same line /status shows), and printing
+        // them here as well put the same figures twice in one message.
+        const string header = "STATUS";
 
         var current = progress?.CurrentTaskText;
 
@@ -4190,7 +4349,18 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await _telegramClient.Send_Message_Async(pending.ThreadId, text, cancellationToken);
+            // Repeats EDIT the first narration instead of sending another message — one line that
+            // keeps counting up, not a column of notifications. Same reasoning as the turn-ended
+            // receipt below, which has always worked this way.
+            if (pending.NarrationMessageId != null)
+            {
+                await _telegramClient.Edit_MessageText_Async(pending.NarrationMessageId.Value, text, cancellationToken);
+            }
+            else
+            {
+                pending.NarrationMessageId = await _telegramClient.Send_Message_Async(pending.ThreadId, text, cancellationToken);
+            }
+
             pending.LastNarratedUtc = now;
         }
         catch (OperationCanceledException)
@@ -4199,6 +4369,9 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
+            // A failed EDIT must not freeze the narration forever on a dead message id: drop it so
+            // the next repeat sends a fresh line and starts editing that one instead.
+            pending.NarrationMessageId = null;
             _log.Log_Warning(orchId, $"Busy-supervisor narration failed: {ex.Message}");
         }
     }
@@ -4343,17 +4516,15 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    int Count_SupervisorEntries(string channelFile)
+    /// <summary>
+    /// Counts across the archive too. The pending-reply logic compares a count taken at delivery
+    /// against a count taken later, and that only works if the number cannot go DOWN — but
+    /// compaction moves older entries out of the live file. See
+    /// <see cref="ChannelHistory_Counter"/> for the 2026-08-10 incident this caused.
+    /// </summary>
+    static int Count_SupervisorEntries(string channelFile)
     {
-        var count = 0;
-
-        foreach (var entry in ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile)))
-        {
-            if (entry.Author == ChannelAuthors.Supervisor)
-                count++;
-        }
-
-        return count;
+        return ChannelHistory_Counter.Count_Entries_ByAuthor(channelFile, ChannelAuthors.Supervisor);
     }
 
     /// <summary>

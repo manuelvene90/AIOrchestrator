@@ -61,8 +61,10 @@ One level up, `~/.claude/supervision/`:
 
   The owner also has bot menu commands the APP handles directly: `/summary` and `/pending` reach
   YOU as canned English requests ("make a summary…", "list every pending question…"); `/dnd`
-  (mute), `/progress` (PLAN.md ledgers), `/tokens` (usage totals) and `/limits` (5-hour and
-  weekly windows) are answered by the app itself and never involve you.
+  (mute), `/progress` (PLAN.md ledgers), `/tokens` (usage totals), `/cost` (the same lifetime
+  figures read as money — per session, with the burn rate), `/limits` (5-hour and weekly windows)
+  and `/italian` (toggle the translation layer) are answered by the app itself and never involve
+  you.
 
   Two different silences, do not confuse them, and all four are TOGGLES:
   `/dnd` 🌙 holds a topic's messages and replays them later (the owner is away); `/mute` 🔕 DROPS
@@ -114,6 +116,11 @@ sub-agents, no extra shell work**. Be reachable fast; learn things when a reques
 ## Channel protocol
 
 - Entries: `## [n] FROM supervisor — YYYY-MM-DD HH:mm — subject`, append-only, never edit the past.
+- **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
+  immediately before appending and add one (the app appends while you work, so a remembered number
+  collides — real duplicates happened on 2026-08-10), and take the time from the system clock
+  (`date +'%Y-%m-%d %H:%M'`). The app measures time-on-task from that field and now BLANKS it when
+  the stamp is in the future, so guessing costs you the display.
 - **ENGLISH, always** — even when the owner texts you in Italian, you answer in English. Applies
   to every message, summary, and channel entry.
 - **Stay mostly SILENT, and MINIMAL VERBOSITY always** (owner mandate, applies everywhere this

@@ -38,6 +38,11 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
 
 - Entries start EXACTLY: `## [n] FROM solo — YYYY-MM-DD HH:mm — subject`. `n` increments per
   channel. A header in any other shape is INVISIBLE to the app — never mirrored, never counted.
+- **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
+  immediately before appending and add one (the app appends while you work, so a remembered number
+  collides — real duplicates happened on 2026-08-10), and take the time from the system clock
+  (`date +'%Y-%m-%d %H:%M'`). The app measures time-on-task from that field and now BLANKS it when
+  the stamp is in the future, so guessing costs you the display.
 - **APPEND ONLY — never `Write` the channel file.** A whole-file write destroys entries.
 - **ENGLISH always**, even when the owner writes in Italian (the app translates for their phone).
 - **Everything you write lands on a PHONE. THREE lines is the norm, FIVE the hard ceiling, 600

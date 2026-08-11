@@ -184,22 +184,17 @@ public static class SessionRows_Builder
 
     public static string? Describe_TimeSince_OrNull(string entryDateText)
     {
-        if (!DateTime.TryParse(entryDateText, out var entryTime))
-            return null;
-
-        return Describe_Duration(DateTime.Now - entryTime);
+        return SessionDuration_Formatter.Describe_SinceStamp_OrNull(entryDateText, DateTime.Now);
     }
 
+    /// <summary>
+    /// Delegates rather than reimplementing: this file used to carry its OWN copy of the duration
+    /// wording, and the copy lacked the negative-span guard the shared one has always had — which
+    /// is exactly how a future agent timestamp came out as "on task under a minute".
+    /// </summary>
     public static string Describe_Duration(TimeSpan duration)
     {
-        if (duration.TotalMinutes < 1)
-            return "under a minute";
-        if (duration.TotalHours < 1)
-            return $"{(int)duration.TotalMinutes} min";
-        if (duration.TotalDays < 1)
-            return $"{(int)duration.TotalHours} h {duration.Minutes} min";
-
-        return $"{(int)duration.TotalDays} d {duration.Hours} h";
+        return SessionDuration_Formatter.Describe(duration);
     }
 
     public static string Get_LastWriteText(string filePath)

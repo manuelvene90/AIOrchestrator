@@ -123,6 +123,20 @@ As soon as the goal is clear from the owner's first instruction, drop
   `n` is a PLAIN NUMBER incrementing per channel (never `2b`, never `[supervisor]`), the author word
   follows `FROM`, and both separators are em-dashes. NEVER edit or delete past entries. Append only.
 
+  **Both `n` and the date come from a FRESH READ, never from memory** — you read the channel at the
+  start of your turn, the app and other members appended while you worked, and the values you
+  remember are stale by the time you write:
+  - **`n`**: re-read the LAST header of the file immediately before appending and add one. On
+    2026-08-10 an `option-lab-2` channel ended up with two `[80]` and two `[81]` entries, because the
+    supervisor numbered from a read taken minutes earlier while the app appended in between. The
+    index is how we cite each other ("act on entry [83]"), so a duplicate makes a citation ambiguous.
+  - **The timestamp**: take it from the system clock (`date +'%Y-%m-%d %H:%M'`), never from your own
+    sense of the time. On the same day a supervisor stamped `2026-08-11 01:34` on an entry written at
+    `15:20` the day before — a day ahead and ten hours off. The app measures "time on task" from this
+    field, and a future stamp made every member card read "on task under a minute" for hours. The app
+    now refuses to display a future stamp, so the cost of getting it wrong is a BLANK where your
+    working time should be.
+
   **A header in any other shape makes the entry INVISIBLE — this is not pedantry, it happened.** On
   2026-08-07 one supervisor wrote headers three ways (`## [SUPERVISOR — date] subject`,
   `## [supervisor] FROM supervisor — …`, `## [2b] FROM …`) and every one of those entries ceased to

@@ -42,4 +42,24 @@ public static class OrchestratorConfig_Factory
     {
         return Create([], null, null, null, null, null, null, null, null, null, null);
     }
+
+    /// <summary>
+    /// The same config with only the Italian layer changed — the app's status-bar toggle and the
+    /// /italian command both flip it live, and neither should have to restate every other field.
+    /// </summary>
+    public static IOrchestratorConfig Create_WithItalianLayer(IOrchestratorConfig source, bool telegramItalianLayer)
+    {
+        return Create(
+            source.Repos,
+            source.SupervisorModel,
+            source.ImplementerModel,
+            source.GeneralSupervisorModel,
+            source.CommunicatorModel,
+            source.TelegramSupergroupChatId,
+            source.TelegramOwnerUserId,
+            source.TelegramBotToken,
+            telegramItalianLayer,
+            source.VoiceTranscribeCommand,
+            source.OrchestrationTokenBudget);
+    }
 }

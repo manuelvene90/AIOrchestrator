@@ -79,6 +79,9 @@
                                                 <Button Content="🪟 Organize" Tag="{Binding}" Click="OrganizeButton_Click" Margin="0,0,6,0"
                                                         Visibility="{Binding OrchestrationButtonsVisibility}"
                                                         ToolTip="Tile this orchestration's working terminals (supervisor + implementers) across the screen"/>
+                                                <Button Content="🪟 Organize supervisors" Tag="{Binding}" Click="OrganizeSupervisorsButton_Click" Margin="0,0,6,0"
+                                                        Visibility="{Binding GeneralButtonsVisibility}"
+                                                        ToolTip="Tile the SUPERVISOR terminal of every open orchestration across the screen — one glance at all of them working. This card's own general-supervisor terminal is left where it is."/>
                                                 <Button Content="📊 Details" Tag="{Binding}" Click="DetailsButton_Click" Margin="0,0,6,0"
                                                         ToolTip="Task ledger, live activity feed and every session's state"/>
                                                 <Button Content="📂" Tag="{Binding}" Click="OpenFolderButton_Click" ToolTip="Open orchestration folder" Margin="0,0,6,0"/>
@@ -183,6 +186,10 @@
                           Foreground="{StaticResource TextSecondary}" Margin="14,0,0,0" VerticalAlignment="Center"
                           ToolTip="Silence, app-wide: messages are DROPPED while this is on — for working at the PC, where you read the same thing in the terminals. (= /mute_all)"
                           Checked="SilenceAllCheckBox_Changed" Unchecked="SilenceAllCheckBox_Changed"/>
+                <CheckBox x:Name="ItalianLayerCheckBox" Content="🇮🇹 Italian" FontSize="11"
+                          Foreground="{StaticResource TextSecondary}" Margin="14,0,0,0" VerticalAlignment="Center"
+                          ToolTip="Translation layer: everything the bot sends you is translated to Italian on the way out. The sessions themselves keep working in English. (= /italian)"
+                          Checked="ItalianLayerCheckBox_Changed" Unchecked="ItalianLayerCheckBox_Changed"/>
                 <TextBlock x:Name="RootPathText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>

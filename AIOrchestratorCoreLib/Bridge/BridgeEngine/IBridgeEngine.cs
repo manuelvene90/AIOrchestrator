@@ -23,6 +23,13 @@ public interface IBridgeEngine
     /// </summary>
     void Set_SilenceAllTopics(bool silenced);
 
+    /// <summary>
+    /// The 🇮🇹 translation layer: whether outbound Telegram traffic is translated to Italian on the
+    /// way out. Unlike the two mode switches this one is PERSISTED (config.json), because it is a
+    /// preference rather than a passing state — it must survive an app restart.
+    /// </summary>
+    void Set_ItalianLayer(bool enabled);
+
     /// <summary>Raised (from background threads) whenever an orchestration's channels changed.</summary>
     event Action<string>? OrchestrationActivity;
 
@@ -31,4 +38,7 @@ public interface IBridgeEngine
 
     /// <summary>Raised when app-wide silence toggles, so the UI stays in sync with /mute_all.</summary>
     event Action<bool>? SilenceAllChanged;
+
+    /// <summary>Raised when the Italian layer toggles, so the UI stays in sync with /italian.</summary>
+    event Action<bool>? ItalianLayerChanged;
 }

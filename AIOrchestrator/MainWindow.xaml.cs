@@ -82,6 +82,15 @@ public partial class MainWindow : Window
                 SilenceAllCheckBox.IsChecked = silenced;
         });
 
+        // Persisted, unlike the two modes above — so it starts from config rather than from off.
+        ItalianLayerCheckBox.IsChecked = configProvider.Get_Current().TelegramItalianLayer;
+
+        engine.ItalianLayerChanged += enabled => Dispatcher.BeginInvoke(() =>
+        {
+            if (ItalianLayerCheckBox.IsChecked != enabled)
+                ItalianLayerCheckBox.IsChecked = enabled;
+        });
+
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(REFRESH_INTERVAL_SECONDS) };
         _refreshTimer.Tick += (_, _) => Refresh_Orchestrations();
         _refreshTimer.Start();
@@ -275,6 +284,7 @@ public partial class MainWindow : Window
             RepoName = "always-on · General topic",
             Members = [row],
             OrchestrationButtonsVisibility = Visibility.Collapsed,
+            GeneralButtonsVisibility = Visibility.Visible,
         };
     }
 
@@ -452,6 +462,11 @@ public partial class MainWindow : Window
         _engine.Set_SilenceAllTopics(SilenceAllCheckBox.IsChecked == true);
     }
 
+    void ItalianLayerCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        _engine.Set_ItalianLayer(ItalianLayerCheckBox.IsChecked == true);
+    }
+
     void ShowSessionButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button || button.Tag is not MemberRowView row)
@@ -605,40 +620,72 @@ public partial class MainWindow : Window
                     titleFragments.Add($"{member.MemberId.ToUpperInvariant()} · {session.OrchId}");
             }
 
-            // Only windows that actually EXIST get a tile, so the layout is computed for exactly the
-            // set about to be shown. This used to test focusability instead: Windows refuses
-            // SetForegroundWindow in several ordinary situations, so a perfectly real terminal could
-            // fail the test, still be sitting on screen, and be left out of the arrangement.
-            var living = titleFragments
-                .Where(AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Exists_ByTitleFragment)
-                .ToList();
-
-            if (living.Count == 0)
-            {
-                Add_LogRow(LogLevels.Warning, $"[{card.OrchId}] Organize: no terminal windows found");
-                return;
-            }
-
-            var area = SystemParameters.WorkArea;
-
-            var tiles = AIOrchestratorCoreLib.Layout.TileLayout_Calculator.Build_Tiles(
-                living.Count, (int)area.Left, (int)area.Top, (int)area.Width, (int)area.Height);
-
-            for (var i = 0; i < living.Count && i < tiles.Count; i++)
-            {
-                AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_PlaceWindow_ByTitleFragment(living[i], tiles[i].X, tiles[i].Y, tiles[i].Width, tiles[i].Height);
-
-                // Raise it AFTER placing. The old code raised windows while deciding which existed,
-                // so removing that from the filter would otherwise have left them tiled but buried.
-                AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(living[i]);
-            }
-
-            Add_LogRow(LogLevels.Info, $"[{card.OrchId}] Organize: tiled {living.Count} terminal(s)");
+            Tile_Terminals(titleFragments, card.OrchId);
         }
         catch (Exception ex)
         {
             MessageBox.Show(ex.Message, "Organize failed", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    /// <summary>
+    /// The general supervisor's own Organize: one tile per OPEN orchestration's SUPERVISOR, so the
+    /// owner sees every supervisor at work in a single glance. The general supervisor's own
+    /// terminal is excluded on purpose — it is the window you are organizing FROM, and tiling it
+    /// away is the one thing that would make the view less useful.
+    /// </summary>
+    void OrganizeSupervisorsButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            List<string> titleFragments = [];
+
+            foreach (var session in _store.Load_All())
+            {
+                if (session.ClosedUtc == null)
+                    titleFragments.Add($"SUP · {session.OrchId}");
+            }
+
+            Tile_Terminals(titleFragments, ChannelDiscovery.GENERAL_ORCH_ID);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Organize failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Shared by both Organize buttons, so a fix to the tiling can never apply to only one.</summary>
+    void Tile_Terminals(IReadOnlyList<string> titleFragments, string logContext)
+    {
+        // Only windows that actually EXIST get a tile, so the layout is computed for exactly the
+        // set about to be shown. This used to test focusability instead: Windows refuses
+        // SetForegroundWindow in several ordinary situations, so a perfectly real terminal could
+        // fail the test, still be sitting on screen, and be left out of the arrangement.
+        var living = titleFragments
+            .Where(AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Exists_ByTitleFragment)
+            .ToList();
+
+        if (living.Count == 0)
+        {
+            Add_LogRow(LogLevels.Warning, $"[{logContext}] Organize: no terminal windows found");
+            return;
+        }
+
+        var area = SystemParameters.WorkArea;
+
+        var tiles = AIOrchestratorCoreLib.Layout.TileLayout_Calculator.Build_Tiles(
+            living.Count, (int)area.Left, (int)area.Top, (int)area.Width, (int)area.Height);
+
+        for (var i = 0; i < living.Count && i < tiles.Count; i++)
+        {
+            AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_PlaceWindow_ByTitleFragment(living[i], tiles[i].X, tiles[i].Y, tiles[i].Width, tiles[i].Height);
+
+            // Raise it AFTER placing. The old code raised windows while deciding which existed,
+            // so removing that from the filter would otherwise have left them tiled but buried.
+            AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(living[i]);
+        }
+
+        Add_LogRow(LogLevels.Info, $"[{logContext}] Organize: tiled {living.Count} terminal(s)");
     }
 
     void DetailsButton_Click(object sender, RoutedEventArgs e)

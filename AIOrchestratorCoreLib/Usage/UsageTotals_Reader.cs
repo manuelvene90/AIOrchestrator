@@ -41,36 +41,56 @@ public static partial class UsageTotals_Reader
     /// </summary>
     public static (double Cost, long Tokens) Build_OrchestrationTotals(ISupervisionPaths paths, IOrchestrationSession session)
     {
-        var orchFolder = paths.Get_OrchestrationFolder(session.OrchId);
-
-        List<string> usageFiles =
-        [
-            Path.Combine(orchFolder, SESSION_USAGE_FILE),
-            Path.Combine(orchFolder, COMMUNICATOR_USAGE_FILE),
-        ];
-
-        foreach (var member in session.Members)
-            usageFiles.Add(Path.Combine(paths.Get_ImplementerFolder(session.OrchId, member.MemberId), SESSION_USAGE_FILE));
-
         var costTotal = 0.0;
         long tokenTotal = 0;
 
-        foreach (var usageFile in usageFiles)
+        foreach (var source in Build_PerSourceTotals(paths, session))
         {
-            if (!File.Exists(usageFile))
+            costTotal += source.Cost;
+            tokenTotal += source.Tokens;
+        }
+
+        return (costTotal, tokenTotal);
+    }
+
+    /// <summary>
+    /// The same LIFETIME figures, kept per SOURCE instead of summed — supervisor, communicator and
+    /// every member, in roster order, skipping sources that never wrote a probe file. This is the
+    /// breakdown /cost reports; <see cref="Build_OrchestrationTotals"/> is this list summed, so
+    /// there is exactly ONE path through the respawn accumulator.
+    /// </summary>
+    public static IReadOnlyList<(string Label, double Cost, long Tokens)> Build_PerSourceTotals(
+        ISupervisionPaths paths,
+        IOrchestrationSession session)
+    {
+        var orchFolder = paths.Get_OrchestrationFolder(session.OrchId);
+
+        List<(string Label, string File)> sources =
+        [
+            ("supervisor", Path.Combine(orchFolder, SESSION_USAGE_FILE)),
+            ("communicator", Path.Combine(orchFolder, COMMUNICATOR_USAGE_FILE)),
+        ];
+
+        foreach (var member in session.Members)
+            sources.Add((member.MemberId, Path.Combine(paths.Get_ImplementerFolder(session.OrchId, member.MemberId), SESSION_USAGE_FILE)));
+
+        List<(string Label, double Cost, long Tokens)> totals = [];
+
+        foreach (var source in sources)
+        {
+            if (!File.Exists(source.File))
                 continue;
 
             var (cost, tokens) = UsageLifetime_Accumulator.Accumulate(
                 orchFolder,
-                Path.GetRelativePath(orchFolder, usageFile),
-                Read_Cost_OrNull(usageFile) ?? 0.0,
-                Read_Tokens_OrNull(usageFile) ?? 0L);
+                Path.GetRelativePath(orchFolder, source.File),
+                Read_Cost_OrNull(source.File) ?? 0.0,
+                Read_Tokens_OrNull(source.File) ?? 0L);
 
-            costTotal += cost;
-            tokenTotal += tokens;
+            totals.Add((source.Label, cost, tokens));
         }
 
-        return (costTotal, tokenTotal);
+        return totals;
     }
 
     public static string Format_Tokens(long tokens)

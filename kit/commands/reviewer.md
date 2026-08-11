@@ -128,6 +128,11 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 ## Channel protocol
 
 - Entries start: `## [n] FROM reviewer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
+- **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
+  immediately before appending and add one (the supervisor and the app append while you work, so a
+  remembered number collides — real duplicates happened on 2026-08-10), and take the time from the
+  system clock (`date +'%Y-%m-%d %H:%M'`). The app measures time-on-task from that field and now
+  BLANKS it when the stamp is in the future, so guessing costs you the display.
 - **APPEND ONLY — never `Write` a channel file** (a whole-file write DESTROYS earlier entries; this
   really happened and cost 35 minutes). Append with `>>`.
 - **ENGLISH, always**, even when the traffic reaching you is Italian.
