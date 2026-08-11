@@ -87,7 +87,12 @@ check "Write PLAN.md, backslash path" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK"
 # A command line cannot be scoped, so it gets nothing — not even for the ledger. This is the
 # compound command our own supervisor.md prescribes at a boundary, which used to be allowed in full.
 check "Bash mentioning PLAN.md is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat >> $SUPERVISION/imp-1/channel.md && echo x >> $SUPERVISION/PLAN.md\"}}")")"
-check "Monitor executes, so it is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Monitor\",\"tool_input\":{\"command\":\"rm -f $SUPERVISION/.awaiting-answer\"}}")")"
+# Monitor is ALLOWED, and not because it is safe. supervisor.md makes arming the persistent Monitor
+# part of booting and it is the only thing that ever wakes a supervisor, so denying it left a
+# respawned session unable to arm a watcher, unable to end the deny loop, and unwakeable forever —
+# while stopping nobody who did not want to comply, since the flag and this script are both writable
+# by the session itself.
+check "Monitor is allowed (the only waker)" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Monitor\",\"tool_input\":{\"command\":\"bash watcher.sh\"}}")")"
 check "an unknown tool is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"SomeFutureTool","tool_input":{"command":"anything"}}')")"
 check "Edit into the repo" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Edit","tool_input":{"file_path":"C:/repo/Foo.cs"}}')")"
 
@@ -107,6 +112,12 @@ printf 'imp-2\n' > "$SUPERVISION/.awaiting-verdict"
 check "Edit a member that IS waiting" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SUPERVISION/imp-2/channel.md\"}}")")"
 check "same, backslash path" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WIN_SUPERVISION\\\\imp-2\\\\channel.md\"}}")")"
 check "Edit a member that is NOT waiting" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SUPERVISION/imp-1/channel.md\"}}")")"
+
+# A channel is append-only and Write REPLACES it. A supervisor's Write on imp-3/channel.md once
+# destroyed that member's own boot entry, and it waited 35 minutes for a brief already in its file.
+# An earlier version of this hook allowed it AND recommended it in the deny text.
+check "Write on a WAITING member is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$SUPERVISION/imp-2/channel.md\"}}")")"
+check "NotebookEdit on a member is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"NotebookEdit\",\"tool_input\":{\"notebook_path\":\"$SUPERVISION/imp-2/channel.md\"}}")")"
 
 rm -f "$SUPERVISION/.awaiting-verdict"
 check "no awaiting-verdict file (fail closed)" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SUPERVISION/imp-2/channel.md\"}}")")"

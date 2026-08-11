@@ -15,6 +15,9 @@ public static class MemberState_Resolver
     public const string MUTATION_WINDOW_CLOSED_MARKER = "MUTATION WINDOW CLOSED";
     public const string BLOCKED_ON_OWNER_MARKER = "BLOCKED ON OWNER";
 
+    /// <summary>The second word of the boot subject every member is required to write: "imp-1 online".</summary>
+    public const string BOOT_ANNOUNCEMENT_WORD = "online";
+
     public static MemberStates Resolve(IReadOnlyList<IChannelEntry> entries)
     {
         if (entries.Count == 0)
@@ -55,25 +58,66 @@ public static class MemberState_Resolver
     /// awaiting-answer hook permit BRIEFING it during an open question. Both consumers inherited one
     /// wrong answer.
     ///
-    /// Two conditions, and the first is what "online" fails: the member must have been BRIEFED at
-    /// least once (there is a supervisor entry in the channel), and it must have spoken since the
-    /// conversation last passed to it. A member that has only said hello is waiting for WORK, not
-    /// for a verdict.
+    /// **Since the supervisor LAST SPOKE in this channel, has the member filed at least one entry
+    /// that is not merely its boot announcement?**
+    ///
+    /// Anchored to a POSITION, not to existence. The first version of this asked whether a
+    /// supervisor entry existed ANYWHERE, which is permanently true from entry [2] onward — so from
+    /// that moment it silently became the "spoke last" rule it was written to replace, and only a
+    /// member's very first boot still answered correctly. Our own lifecycle then made the failure
+    /// routine: resume is a fresh role-command re-entry, so a settled channel reads
+    /// `verdict → imp-1 online` after any restart, and the member was published as awaiting a
+    /// verdict while it was waiting for WORK.
+    ///
+    /// The same sentence decides the ledger too, from the other side: judged AT a verdict, the
+    /// entries before it show work filed since the brief, so the ledger arms — and the same channel
+    /// read afterwards shows the member no longer waiting.
     /// </summary>
     public static bool Is_AwaitingVerdict(IReadOnlyList<IChannelEntry> entries)
     {
-        var lastEntry = Find_LastConversationEntry_OrNull(entries);
+        var lastSupervisorPosition = -1;
 
-        if (lastEntry == null || !ChannelAuthor_Kinds.Is_Member(lastEntry.Author))
+        for (var position = entries.Count - 1; position >= 0; position--)
+        {
+            if (entries[position].Author != ChannelAuthors.Supervisor)
+                continue;
+
+            lastSupervisorPosition = position;
+            break;
+        }
+
+        // The supervisor has never spoken here, so nothing has been asked of this member and it
+        // cannot be waiting for an answer.
+        if (lastSupervisorPosition < 0)
             return false;
 
-        foreach (var entry in entries)
+        for (var position = lastSupervisorPosition + 1; position < entries.Count; position++)
         {
-            if (entry.Author == ChannelAuthors.Supervisor)
+            if (ChannelAuthor_Kinds.Is_Member(entries[position].Author) && !Is_BootAnnouncement(entries[position]))
                 return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The "&lt;id&gt; online" entry a member writes as its FIRST act on every boot. It is protocol
+    /// vocabulary, not prose — implementer.md and reviewer.md mandate that subject verbatim — which
+    /// is what makes matching it legitimate here, in the same way the window markers are matched.
+    ///
+    /// It has to be excluded because our lifecycle repeats it: resume is a fresh role-command
+    /// re-entry for every role, so after any restart or respawn a settled channel reads
+    /// `[4] verdict → [5] imp-1 online`, and counting that hello as filed work published the member
+    /// as awaiting a verdict while it was actually waiting for WORK.
+    ///
+    /// Matched as ONE token then the word "online", so a genuine report titled "the server is back
+    /// online" is not swallowed by it.
+    /// </summary>
+    static bool Is_BootAnnouncement(IChannelEntry entry)
+    {
+        var words = entry.Subject.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        return words.Length == 2 && words[1].Equals(BOOT_ANNOUNCEMENT_WORD, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

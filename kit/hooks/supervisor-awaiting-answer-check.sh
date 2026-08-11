@@ -68,16 +68,33 @@ fi
 # which is also what catches the next execution-capable tool nobody has told this hook about. It ran
 # arbitrary shell for the life of a session and sat in the read-only list.
 
+deny() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"YOU ASKED THE OWNER A QUESTION — STOP AND WAIT. %s Whatever you change now makes their answer arrive against a different world, which is exactly what made previous conversations incoherent. END YOUR TURN: your monitor wakes you the moment they reply and this clears automatically. Reading is allowed; so is updating PLAN.md, or answering a member already waiting on you — with Edit, never Write."}}\n' "$1"
+  exit 0
+}
+
 # Pure readers: nothing they do can change the world the owner is deciding about.
 case "$TOOL" in
   Read|Grep|Glob|NotebookRead|WebFetch|WebSearch|TodoWrite|BashOutput|TaskOutput|TaskList|TaskGet)
     exit 0 ;;
 esac
 
-deny() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"YOU ASKED THE OWNER A QUESTION — STOP AND WAIT. %s Whatever you change now makes their answer arrive against a different world, which is exactly what made previous conversations incoherent. END YOUR TURN: your monitor wakes you the moment they reply and this clears automatically. Reading is allowed; so is updating PLAN.md, or answering a member already waiting on you, with Write or Edit."}}\n' "$1"
-  exit 0
-}
+# MONITOR IS ALLOWED, and not because it is safe — it runs arbitrary shell for the life of the
+# session, which is why the capability rule below denies everything else that executes.
+#
+# It is allowed because denying it cannot buy anything and can cost everything. A session that wants
+# to work while the owner decides does not need Monitor: it can delete .awaiting-answer, edit this
+# script, or remove this hook from settings.json, all in its own tree and as the same OS user. So the
+# denial stops nobody who does not want to comply — while for an HONEST session it was total:
+# supervisor.md makes arming the persistent Monitor part of booting, and it is the ONLY thing that
+# ever wakes a supervisor. A session respawned with this flag still up was denied its watcher, ended
+# its turn as instructed, and could never be woken again by anything — a live process, a green pid, a
+# healthy card, and an orchestration that would never take another turn.
+#
+# An advisory guard that can permanently brick the thing it advises has its priorities inverted.
+case "$TOOL" in
+  Monitor) exit 0 ;;
+esac
 
 # Anything not a pure reader and not an exactly-scoped write is refused, whatever it is called.
 case "$TOOL" in
@@ -95,11 +112,6 @@ TARGET=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; d=json.load(sys.std
 if [ -z "$TARGET" ]; then
   deny "That write names no file this hook can check."
 fi
-
-deny() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"YOU ASKED THE OWNER A QUESTION — STOP AND WAIT. %s Whatever you change now makes their answer arrive against a different world, which is exactly what made previous conversations incoherent. END YOUR TURN: your monitor wakes you the moment they reply and this clears automatically. Reading, updating PLAN.md, and answering a member that is already waiting on you all remain allowed — everything else waits."}}\n' "$1"
-  exit 0
-}
 
 SUPERVISION="$HOME/.claude/supervision/$AIORCH_ID"
 
@@ -134,6 +146,16 @@ esac
 MEMBER_ID=$(printf '%s' "$TARGET" | grep -oE "/supervision/$AIORCH_ID/(imp|rev)-[0-9]+/channel\.md$" | grep -oE '(imp|rev)-[0-9]+')
 
 if [ -n "$MEMBER_ID" ]; then
+  # EDIT ONLY. A channel is append-only and Write REPLACES it: a supervisor's Write on
+  # imp-3/channel.md once destroyed that member's own boot entry, and it then waited 35 minutes for a
+  # brief that was already in its file. supervisor.md forbids it in as many words — so this guard
+  # must not be the thing that permits it, and an earlier version of this message actively
+  # RECOMMENDED it.
+  case "$TOOL" in
+    Edit) ;;
+    *) deny "A member channel is append-only: use Edit, never $TOOL, which replaces the file and destroys what the member wrote." ;;
+  esac
+
   AWAITING_FILE="$SUPERVISION/.awaiting-verdict"
 
   if [ -f "$AWAITING_FILE" ] && grep -qx "$MEMBER_ID" "$AWAITING_FILE" 2>/dev/null; then

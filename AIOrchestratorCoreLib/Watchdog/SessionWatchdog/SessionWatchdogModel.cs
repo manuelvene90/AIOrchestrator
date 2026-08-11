@@ -108,7 +108,37 @@ internal sealed class SessionWatchdogModel(
 
         Register_Respawn($"sup:{session.OrchId}", session.OrchId, "supervisor");
         _log.Log_Warning(session.OrchId, "Supervisor session not running — respawning (it resumes from the channels)");
+
+        Clear_AwaitingAnswer_ForDeadSession(session.OrchId);
+
         _launcher.Respawn_Supervisor(session.OrchId);
+    }
+
+    /// <summary>
+    /// The awaiting-answer flag belongs to a PROCESS, and that process is gone. A session respawned
+    /// under it never saw the question, cannot be held to it, and — worse — cannot escape it: its
+    /// boot sequence is denied, because arming the persistent Monitor and greeting the owner are
+    /// both blocked while the flag is up. It would end its turn as instructed and never be woken
+    /// again, since nothing but that Monitor wakes a supervisor and its process is alive, so the
+    /// watchdog would never respawn it either. A live pid, a healthy card, and an orchestration that
+    /// takes no further turn.
+    ///
+    /// The owner's question is not lost by clearing it: it is in the channel the new session reads
+    /// on boot.
+    /// </summary>
+    void Clear_AwaitingAnswer_ForDeadSession(string orchId)
+    {
+        try
+        {
+            var flagFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), Bridge.BridgeEngine.BridgeEngineModel.AWAITING_ANSWER_FLAG_FILE);
+
+            if (File.Exists(flagFile))
+                File.Delete(flagFile);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Could not clear the awaiting-answer flag for a respawned supervisor: {ex.Message}");
+        }
     }
 
     void Check_Communicator(Sessions.OrchestrationSession.IOrchestrationSession session)
