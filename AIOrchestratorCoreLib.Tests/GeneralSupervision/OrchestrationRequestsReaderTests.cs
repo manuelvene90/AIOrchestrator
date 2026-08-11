@@ -33,7 +33,7 @@ public class OrchestrationRequestsReaderTests : IDisposable
         Write_Request("a.json", """{"action":"start-orchestration","repo":"skeleton client"}""");
         Write_Request("b.json", """{"action":"add-implementer","orchId":"skel-work","reason":"adversarial review of the drift guard"}""");
         Write_Request("c.json", """{"action":"close-implementer","orchId":"skel-work","memberId":"imp-2","reason":"task finished and verified"}""");
-        Write_Request("d.json", """{"action":"close-orchestration","orchId":"old-orch"}""");
+        Write_Request("d.json", """{"action":"close-orchestration","orchId":"old-orch","requester":"the owner, from the app"}""");
 
         var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
 
@@ -52,8 +52,25 @@ public class OrchestrationRequestsReaderTests : IDisposable
         var closeOrch = Assert.Single(pending.CloseOrchestrationRequests);
         Assert.Equal("old-orch", closeOrch.OrchId);
         Assert.Equal("work concluded", closeOrch.Reason);
+        Assert.Equal("the owner, from the app", closeOrch.Requester);
 
         Assert.Empty(pending.MalformedRequests);
+    }
+
+    /// <summary>
+    /// The reason 'requester' does not default the way 'reason' does: on 2026-08-11
+    /// 'ai-orchestrator-1' closed and nothing on disk could name who asked, because the request file
+    /// is deleted on execution and carried no attribution. A default would rebuild that hole.
+    /// </summary>
+    [Fact]
+    public void Read_Pending_CloseOrchestrationWithoutARequester_IsRejected()
+    {
+        Write_Request("a.json", """{"action":"close-orchestration","orchId":"old-orch","reason":"work is done"}""");
+
+        var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
+
+        Assert.Empty(pending.CloseOrchestrationRequests);
+        Assert.Contains("missing 'requester'", Assert.Single(pending.MalformedRequests).Reason);
     }
 
     /// <summary>

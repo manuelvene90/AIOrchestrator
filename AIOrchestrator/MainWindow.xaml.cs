@@ -520,7 +520,9 @@ public partial class MainWindow : Window
         {
             Directory.CreateDirectory(_paths.RequestsFolder);
             var requestFile = Path.Combine(_paths.RequestsFolder, $"ui-close-{card.OrchId}-{DateTime.UtcNow.Ticks}.json");
-            File.WriteAllText(requestFile, $$"""{"action":"close-orchestration","orchId":"{{card.OrchId}}"}""");
+            // ownerConfirmed: the modal above IS the owner's confirmation, so the engine must not
+            // ask a second time in Telegram. requester: every close now names who asked.
+            File.WriteAllText(requestFile, $$"""{"action":"close-orchestration","orchId":"{{card.OrchId}}","requester":"the owner, from the app","ownerConfirmed":true}""");
             Add_LogRow(LogLevels.Info, $"[{card.OrchId}] close requested from the UI");
         }
         catch (Exception ex)

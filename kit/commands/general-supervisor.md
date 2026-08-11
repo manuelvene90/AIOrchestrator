@@ -159,9 +159,13 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
      and confirms with a `FROM app` entry (which wakes you). Relay the outcome to the owner — the
      new topic appears in Telegram with that supervisor's greeting, which states the repo directory
      so the owner can verify the mapping was right.
-- **Close an orchestration** — confirm with the owner first (name what would be closed), then:
-  `{"action":"close-orchestration","orchId":"<id>"}`. The folder stays as audit trail; the topic
-  is closed.
+- **Close an orchestration** — ask the owner first and name exactly what would be closed, then:
+  `{"action":"close-orchestration","orchId":"<id>","requester":"general supervisor","reason":"<why, one line>"}`.
+  **`requester` is required** and the request is rejected without it. Never infer a close from
+  ambiguous phrasing — "I need the repo", "wrap that up" and "stop that one" are NOT closes; ask.
+  The app then asks the owner to confirm with a tap and closes ONLY on that tap, so your own check
+  is still worth doing but is no longer the last word. It lapses unanswered after 12 hours. The
+  folder stays as audit trail; the topic is deleted.
 
 - **Model DEFAULTS — only when the owner EXPLICITLY asks for a default/global change** ("change
   the default supervisor model to X", "all implementers from now on..."): edit `../config.json`

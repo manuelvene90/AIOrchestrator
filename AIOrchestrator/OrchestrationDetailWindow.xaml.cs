@@ -316,8 +316,10 @@ public partial class OrchestrationDetailWindow : Window
         if (answer != MessageBoxResult.Yes)
             return;
 
+        // ownerConfirmed: the modal above IS the owner's confirmation, so the engine must not ask a
+        // second time in Telegram. requester: every close now names who asked.
         Drop_Request(
-            $$"""{"action":"close-orchestration","orchId":"{{_orchId}}","reason":"closed by the owner"}""",
+            $$"""{"action":"close-orchestration","orchId":"{{_orchId}}","reason":"closed by the owner","requester":"the owner, from the app","ownerConfirmed":true}""",
             "close requested");
     }
 

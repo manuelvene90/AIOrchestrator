@@ -159,6 +159,33 @@ internal sealed class BridgeEngineModel(
     long _buttonSequence;
     long _buttonGroupSequence;
 
+    /// <summary>
+    /// Live close-confirmation prompts, keyed by their callback data. Deliberately NOT the shared
+    /// button registry above, for three reasons that only matter because this action is
+    /// irreversible: that registry evicts FIFO past BUTTON_REGISTRY_CAP, so a pending confirmation
+    /// could be silently dropped while its keyboard is still on screen; its tickets are
+    /// "opt-{sequence}" from a counter that restarts at zero every launch, so a stale on-screen
+    /// button can collide with a freshly minted one; and every tap through it ends up routed to an
+    /// AGENT as a synthetic owner message, whereas this one is the app's own decision to act on.
+    /// The GUID data below cannot collide across restarts.
+    ///
+    /// Losing this dictionary on restart is safe by design: the parked FILE is the durable state,
+    /// and a parked request with no live prompt is simply asked again.
+    /// </summary>
+    readonly Dictionary<string, CloseConfirmation> _closeConfirmations = [];
+    readonly Lock _closeConfirmationLock = new();
+
+    sealed class CloseConfirmation
+    {
+        public required string OrchId { get; init; }
+        public required string ParkedPath { get; init; }
+
+        /// <summary>True for the "close it" button, false for "keep it open".</summary>
+        public required bool Confirms { get; init; }
+
+        public long? PromptMessageId { get; init; }
+    }
+
     /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
     readonly HashSet<string> _stallAlertedOrchIds = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
@@ -549,6 +576,11 @@ internal sealed class BridgeEngineModel(
         // Crash-loop alerts stay queued in the watchdog until unmute for the same reason.
         if (_telegramMuted && _telegramClient != null)
             return;
+
+        // Deliberately AFTER the DND return: nothing closes while the owner is not being disturbed,
+        // and a parked close simply keeps waiting. Failing in the direction of "still running" is
+        // the only acceptable way for this particular guard to fail.
+        await Resolve_CloseConfirmations_Async(cancellationToken);
 
         await Send_CrashLoopAlerts_Async(cancellationToken);
         await Send_StallAlerts_Async(cancellationToken);
@@ -2142,33 +2174,323 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// A close request is NOT executed on arrival — it is parked until the owner taps to confirm
+    /// (owner directive 2026-08-11, verbatim: "Always confirm with a tap").
+    ///
+    /// The reason it is a directive: on 2026-08-11 'ai-orchestrator-1' was closed because its
+    /// supervisor read "mi serve che chiudi questo" as an instruction to end the whole
+    /// orchestration. The request executed within ~2 s of being written, killed every session and
+    /// deleted the topic, and nothing on disk could afterwards say who had asked.
+    /// </summary>
     void Process_CloseOrchestrationRequests(IPendingRequests pending)
     {
         foreach (var request in pending.CloseOrchestrationRequests)
         {
+            // The app's own UI already asked, with a modal the owner had to answer. Asking a second
+            // time in Telegram would be two prompts for one decision.
+            if (request.OwnerConfirmed)
+            {
+                Execute_ConfirmedClose_FromUi(request);
+                continue;
+            }
+
             try
             {
-                var session = _store.Get_Session(request.OrchId);
-                _store.Close_Orchestration(request.OrchId);
-                SessionTerminator.Kill_OrchestrationSessions(_paths, request.OrchId);
+                var parkedPath = CloseConfirmation_Parking.Park(_paths, request.SourceFilePath);
 
-                if (_telegramClient != null && session.TelegramTopicId != null)
-                    Delete_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value);
+                _log.Log_Info(request.OrchId, $"close-orchestration held for the owner's confirmation — asked by {request.Requester} ({parkedPath})");
 
-                Append_GeneralAppEntry(
-                    $"orchestration '{request.OrchId}' closed — {request.Reason}",
-                    "Sessions ended; folder kept as audit trail; Telegram topic deleted.");
+                // The requester is told immediately, because the old contract had it expect to be
+                // killed seconds later. A supervisor that posts a farewell and then keeps running
+                // with no explanation is a worse failure than the one being fixed.
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    "close request HELD — the owner confirms every close with a tap now",
+                    $"Nothing has been closed and your sessions are still running. The owner has been asked to confirm.\n\n"
+                    + $"Asked by: {request.Requester}\nReason relayed: {request.Reason}\n\n"
+                    + $"You will get an entry here either way. If they do not answer within {CloseConfirmation_Parking.EXPIRY_HOURS} hours the request lapses and you are told — do NOT re-drop it in the meantime, and carry on working.");
             }
             catch (Exception ex)
             {
-                _log.Log_Error(request.OrchId, "close-orchestration failed", ex);
-                Append_GeneralAppEntry($"close-orchestration FAILED: '{request.OrchId}'", $"Error: {ex.Message}");
-            }
-            finally
-            {
+                // Parking failed, so the guard cannot be honoured — the one thing not to do here is
+                // fall through and close it anyway.
+                _log.Log_Error(request.OrchId, "close-orchestration could not be held for confirmation — NOT closed", ex);
+                Append_GeneralAppEntry($"close-orchestration FAILED: '{request.OrchId}'", $"Nothing was closed. Error: {ex.Message}");
                 Delete_RequestFile(request.SourceFilePath);
             }
         }
+    }
+
+    /// <summary>
+    /// The owner closed it from the app, having already answered the modal. Same execution as the
+    /// confirmed-by-tap path; the request file is archived rather than deleted so that every close,
+    /// however it was authorised, leaves the same audit record.
+    /// </summary>
+    void Execute_ConfirmedClose_FromUi(GeneralSupervision.CloseOrchestrationRequest.ICloseOrchestrationRequest request)
+    {
+        try
+        {
+            var session = _store.Get_Session(request.OrchId);
+            _store.Close_Orchestration(request.OrchId);
+            SessionTerminator.Kill_OrchestrationSessions(_paths, request.OrchId);
+
+            if (_telegramClient != null && session.TelegramTopicId != null)
+                Delete_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value);
+
+            Append_GeneralAppEntry(
+                $"orchestration '{request.OrchId}' closed — {request.Reason}",
+                $"Closed by the owner from the app. Asked by: {request.Requester}. Sessions ended; folder kept as audit trail; Telegram topic deleted.");
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(request.OrchId, "close-orchestration failed", ex);
+            Append_GeneralAppEntry($"close-orchestration FAILED: '{request.OrchId}'", $"Error: {ex.Message}");
+        }
+        finally
+        {
+            Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "closed");
+        }
+    }
+
+    void Archive_ResolvedRequest_BestEffort(string requestFilePath, string outcome)
+    {
+        try
+        {
+            CloseConfirmation_Parking.Archive(_paths, requestFilePath, outcome);
+        }
+        catch (Exception ex)
+        {
+            // The audit copy is worth having, but never at the price of leaving an executable
+            // request file behind to run a second time.
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not archive a resolved request ({outcome}): {ex.Message}");
+            Delete_RequestFile(requestFilePath);
+        }
+    }
+
+    /// <summary>
+    /// Walks the parked close requests every tick: expires the stale ones, and asks about any that
+    /// has no prompt currently live. The second half is what makes a restart safe — the in-memory
+    /// prompts are gone but the parked files are not, so the owner is simply asked again instead of
+    /// the request either vanishing or executing unconfirmed.
+    /// </summary>
+    async Task Resolve_CloseConfirmations_Async(CancellationToken cancellationToken)
+    {
+        foreach (var parkedPath in CloseConfirmation_Parking.Find_Parked(_paths))
+        {
+            if (CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow))
+            {
+                Expire_CloseConfirmation(parkedPath);
+                continue;
+            }
+
+            bool alreadyAsked;
+
+            lock (_closeConfirmationLock)
+                alreadyAsked = _closeConfirmations.Values.Any(confirmation => confirmation.ParkedPath == parkedPath);
+
+            if (alreadyAsked)
+                continue;
+
+            await Ask_OwnerToConfirmClose_Async(parkedPath, cancellationToken);
+        }
+    }
+
+    async Task Ask_OwnerToConfirmClose_Async(string parkedPath, CancellationToken cancellationToken)
+    {
+        var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(parkedPath);
+
+        if (request == null)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Parked close request is unreadable — archived unexecuted: {parkedPath}");
+            CloseConfirmation_Parking.Archive(_paths, parkedPath, "unreadable");
+            return;
+        }
+
+        var session = _store.Get_Session_OrNull(request.OrchId);
+
+        // Already gone, or closed by the owner from the UI while this waited: there is nothing left
+        // to ask about, and asking would offer to close something twice.
+        if (session == null || session.ClosedUtc != null)
+        {
+            _log.Log_Info(request.OrchId, "Parked close request is moot — the orchestration is already closed");
+            CloseConfirmation_Parking.Archive(_paths, parkedPath, "moot");
+            return;
+        }
+
+        // No way to ask means no way to confirm, and this guard fails CLOSED: it keeps waiting and
+        // eventually lapses. Nothing is closed on a machine that cannot reach the owner.
+        if (_telegramClient == null || session.TelegramTopicId == null)
+            return;
+
+        var text =
+            $"⚠️ Close orchestration '{request.OrchId}'?\n\n"
+            + $"Asked by: {request.Requester}\n"
+            + $"Reason: {request.Reason}\n\n"
+            + "This ends every session in it and deletes this topic. It cannot be undone — the folder stays on disk as audit trail. Nothing happens unless you tap.";
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        var confirmData = $"close-yes-{Guid.NewGuid():N}";
+        var declineData = $"close-no-{Guid.NewGuid():N}";
+
+        try
+        {
+            var messageId = await _telegramClient.Send_MessageWithButtons_Async(
+                session.TelegramTopicId,
+                text,
+                [(confirmData, "✅ Close it"), (declineData, "✋ Keep it open")],
+                cancellationToken);
+
+            Remember_TopicMessage(session.TelegramTopicId, messageId);
+
+            lock (_closeConfirmationLock)
+            {
+                _closeConfirmations[confirmData] = new CloseConfirmation { OrchId = request.OrchId, ParkedPath = parkedPath, Confirms = true, PromptMessageId = messageId };
+                _closeConfirmations[declineData] = new CloseConfirmation { OrchId = request.OrchId, ParkedPath = parkedPath, Confirms = false, PromptMessageId = messageId };
+            }
+
+            _log.Log_Info(request.OrchId, $"Asked the owner to confirm closing '{request.OrchId}' (asked by {request.Requester})");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Nothing registered, so the next tick asks again. The request stays parked meanwhile.
+            _log.Log_Warning(request.OrchId, $"Could not ask the owner to confirm a close: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Returns true when the tap was a close confirmation and has been dealt with, so the generic
+    /// button path does not also route it to an agent as a synthetic owner message.
+    /// </summary>
+    async Task<bool> Try_HandleCloseConfirmationTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
+    {
+        CloseConfirmation? confirmation;
+
+        lock (_closeConfirmationLock)
+        {
+            if (!_closeConfirmations.TryGetValue(tap.Data, out confirmation))
+                return false;
+
+            // SINGLE-USE, both ways: the first tap retires this prompt's other button too, so a
+            // second tap can neither close what was just declined nor decline what is closing.
+            foreach (var key in _closeConfirmations.Where(pair => pair.Value.ParkedPath == confirmation.ParkedPath).Select(pair => pair.Key).ToList())
+                _closeConfirmations.Remove(key);
+        }
+
+        try
+        {
+            await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, confirmation.Confirms ? "closing…" : "kept open", cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(confirmation.OrchId, $"answerCallbackQuery failed on a close confirmation: {ex.Message}");
+        }
+
+        // Record the decision on the prompt itself BEFORE acting: confirming deletes the topic, and
+        // an edit sent afterwards would have nowhere to land.
+        if (tap.MessageId != null)
+        {
+            var decided = confirmation.Confirms
+                ? $"⚠️ Close '{confirmation.OrchId}'?\n\n✅ Closed — you confirmed."
+                : $"⚠️ Close '{confirmation.OrchId}'?\n\n✋ Kept open — you declined. Its sessions keep running.";
+
+            try
+            {
+                await client.Edit_MessageText_Async(tap.MessageId.Value, decided, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(confirmation.OrchId, $"Could not record the close decision on the prompt: {ex.Message}");
+            }
+        }
+
+        if (confirmation.Confirms)
+            Execute_ConfirmedClose(confirmation);
+        else
+            Decline_CloseConfirmation(confirmation);
+
+        return true;
+    }
+
+    void Execute_ConfirmedClose(CloseConfirmation confirmation)
+    {
+        var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(confirmation.ParkedPath);
+
+        try
+        {
+            var session = _store.Get_Session(confirmation.OrchId);
+            _store.Close_Orchestration(confirmation.OrchId);
+            SessionTerminator.Kill_OrchestrationSessions(_paths, confirmation.OrchId);
+
+            if (_telegramClient != null && session.TelegramTopicId != null)
+                Delete_TelegramTopic_FireAndForget(confirmation.OrchId, session.TelegramTopicId.Value);
+
+            Append_GeneralAppEntry(
+                $"orchestration '{confirmation.OrchId}' closed — {request?.Reason ?? "no reason recorded"}",
+                $"The owner confirmed it with a tap. Asked by: {request?.Requester ?? "unrecorded"}. Sessions ended; folder kept as audit trail; Telegram topic deleted.");
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(confirmation.OrchId, "close-orchestration failed after the owner confirmed it", ex);
+            Append_GeneralAppEntry($"close-orchestration FAILED: '{confirmation.OrchId}'", $"The owner confirmed, but the close failed. Error: {ex.Message}");
+        }
+        finally
+        {
+            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "closed");
+        }
+    }
+
+    void Decline_CloseConfirmation(CloseConfirmation confirmation)
+    {
+        var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(confirmation.ParkedPath);
+
+        _log.Log_Info(confirmation.OrchId, "The owner declined a close request");
+
+        Append_OrchestrationAppEntry(
+            confirmation.OrchId,
+            "close DECLINED by the owner — keep working",
+            $"You asked to close this orchestration ({request?.Reason ?? "no reason recorded"}) and the owner said no. Nothing was closed and every session is still running.\n\n"
+            + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
+
+        Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "declined");
+    }
+
+    void Expire_CloseConfirmation(string parkedPath)
+    {
+        var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(parkedPath);
+
+        lock (_closeConfirmationLock)
+        {
+            foreach (var key in _closeConfirmations.Where(pair => pair.Value.ParkedPath == parkedPath).Select(pair => pair.Key).ToList())
+                _closeConfirmations.Remove(key);
+        }
+
+        if (request != null)
+        {
+            _log.Log_Info(request.OrchId, $"A close request lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h");
+
+            Append_OrchestrationAppEntry(
+                request.OrchId,
+                "close request LAPSED — the owner never answered",
+                $"Your close request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and nothing was closed. "
+                + "It is not carried over: a close must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
+        }
+
+        Archive_ResolvedRequest_BestEffort(parkedPath, "expired");
     }
 
     static void Delete_RequestFile(string filePath)
@@ -3324,6 +3646,11 @@ internal sealed class BridgeEngineModel(
 
     async Task Handle_CallbackTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
     {
+        // Close confirmations are the app's OWN decision to act on, so they are resolved here and
+        // never fall through to the generic path below, which forwards a tapped label to an agent.
+        if (await Try_HandleCloseConfirmationTap_Async(client, tap, cancellationToken))
+            return;
+
         (long? ThreadId, string OptionText, long GroupId, string QuestionText) registered;
         bool found;
 

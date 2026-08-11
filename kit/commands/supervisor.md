@@ -372,13 +372,27 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   If you truly must replace a member, **close the old one FIRST** — drop `close-implementer` for it,
   wait for the confirmation, and only then request the replacement. Two live members briefed on one
   task is always a bug, never a redundancy strategy.
-- **Close the WHOLE orchestration — yours to do when the work is done.** When the owner says
-  "close the session", "we're done", "our work is completed" or anything equivalent, they mean the
-  ENTIRE orchestration — you included, card removed, topic deleted — never just the implementers.
-  Post any last one-liner first (the app kills your terminal seconds after the request), then drop
-  `{"action":"close-orchestration","orchId":"$ARGUMENTS","reason":"<why>"}`. The app closes every session, deletes
-  the Telegram topic, and keeps the folder as audit trail. Only close when the work is genuinely
-  concluded (merged or explicitly parked by the owner).
+- **Close the WHOLE orchestration — only on an UNAMBIGUOUS instruction.** This is the one
+  irreversible action you have: it ends every session including yours, deletes the topic, and cannot
+  be undone.
+
+  **Never infer it.** On 2026-08-11 an orchestration was closed because its supervisor read the
+  owner's *"mi serve che chiudi questo"* ("I need you to close this") as ending the whole
+  orchestration. The owner meant *wrap this up, I need the repo* — and believed nothing had been
+  closed. If the words could equally mean "finish the current task", "stop working on this for now",
+  or "free the repo up", they are AMBIGUOUS: ask, in one line, and wait for the answer. A close
+  delayed by one question costs nothing. A close that should not have happened costs the session,
+  its context, and the owner's trust in the whole system.
+
+  When it genuinely is unambiguous, post any last one-liner, then drop
+  `{"action":"close-orchestration","orchId":"$ARGUMENTS","reason":"<why, one line>","requester":"supervisor of $ARGUMENTS"}`.
+  **`requester` is required** and the request is rejected without it — when this went wrong, nothing
+  on disk could answer "who asked".
+
+  **Dropping it no longer kills you.** The app holds the request and asks the OWNER to confirm with
+  a tap; nothing closes until they do. You get a `FROM app` entry either way — held, then closed,
+  declined, or lapsed unanswered after 12 hours. While it is held: keep working normally, and do NOT
+  drop the request again.
 - **Do-Not-Disturb:** if the owner asks you (by text) to stop texting them, drop
   `{"action":"set-telegram-muted","muted":true}` — this pauses ALL app→owner Telegram traffic
   suite-wide until the owner texts again (auto-unmute) or re-enables. Keep working normally:

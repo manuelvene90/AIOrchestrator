@@ -24,7 +24,10 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 ///   {"action":"add-implementer","orchId":"..."}                       (orchestration supervisor)
 ///   {"action":"add-reviewer","orchId":"..."}                          (orchestration supervisor; read-only member)
 ///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor; also closes rev-n)
-///   {"action":"close-orchestration","orchId":"..."}                   (general supervisor)
+///   {"action":"close-orchestration","orchId":"...","requester":"...","reason":"..."}
+///                                       (general supervisor OR that orchestration's supervisor —
+///                                        the owner is asked to confirm it either way, so the
+///                                        'requester' is what they are shown, not a gate)
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
 ///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
 ///   {"action":"set-model","orchId":"...","role":"supervisor|implementer","model":"..."}  (per-orchestration override)
@@ -45,6 +48,8 @@ public static class OrchestrationRequests_Reader
     /// the reason to them. Rejecting is deliberate — a silent spawn left the owner in the dark.
     /// </summary>
     public const string MISSING_REASON_MESSAGE = "missing 'reason' — every autonomous action must state WHY in one short line (it is relayed to the owner)";
+
+    public const string MISSING_REQUESTER_MESSAGE = "missing 'requester' — closing an orchestration is irreversible, so the audit trail and the owner's confirmation must both be able to name WHO asked (e.g. \"supervisor of crm-2\")";
 
     public static IPendingRequests Read_Pending(ISupervisionPaths paths)
     {
@@ -74,6 +79,38 @@ public static class OrchestrationRequests_Reader
     }
 
     /// <summary>Best-effort orchId of a REJECTED file, so the rejection can be reported in its channel.</summary>
+    /// <summary>
+    /// Re-reads ONE close-orchestration request by path, for files parked outside the scanned
+    /// folder while they await the owner's confirmation. It goes through the same parse as every
+    /// other request — including the 'requester' requirement — so a parked file can never be
+    /// honoured on terms the scanner would have rejected.
+    /// </summary>
+    public static ICloseOrchestrationRequest? Read_CloseOrchestrationRequest_OrNull(string filePath)
+    {
+        List<IStartOrchestrationRequest> startRequests = [];
+        List<IAddImplementerRequest> addImplementerRequests = [];
+        List<ICloseImplementerRequest> closeImplementerRequests = [];
+        List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
+        List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
+        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<ISetModelRequest> setModelRequests = [];
+
+        var rejection = Try_ParseInto_OrReason(
+            filePath,
+            startRequests,
+            addImplementerRequests,
+            closeImplementerRequests,
+            closeOrchestrationRequests,
+            setTelegramMutedRequests,
+            setOrchestrationNameRequests,
+            setModelRequests);
+
+        if (rejection != null)
+            return null;
+
+        return closeOrchestrationRequests.Count == 1 ? closeOrchestrationRequests[0] : null;
+    }
+
     static string? Peek_OrchId_OrNull(string filePath)
     {
         try
@@ -165,8 +202,26 @@ public static class OrchestrationRequests_Reader
                     // closes must justify themselves, so this one defaults instead of rejecting.
                     var reason = root["reason"]?.GetValue<string>();
 
+                    // The requester does NOT default. On 2026-08-11 an orchestration closed and no
+                    // artifact on disk could say who asked, because the request file is deleted on
+                    // execution and its schema carried no attribution at all. A default would
+                    // re-create that same hole under a new name.
+                    var requester = root["requester"]?.GetValue<string>();
+
+                    if (string.IsNullOrWhiteSpace(requester))
+                        return MISSING_REQUESTER_MESSAGE;
+
+                    // Written only by the app's own UI, where the modal dialog already IS the
+                    // owner's confirmation. Absent (the agent case) it stays false and the request
+                    // is held until they tap.
+                    var ownerConfirmed = root["ownerConfirmed"]?.GetValue<bool>() ?? false;
+
                     closeOrchestrationRequests.Add(CloseOrchestrationRequest_Factory.Create(
-                        orchId, string.IsNullOrWhiteSpace(reason) ? "work concluded" : reason.Trim(), filePath));
+                        orchId,
+                        string.IsNullOrWhiteSpace(reason) ? "work concluded" : reason.Trim(),
+                        requester.Trim(),
+                        ownerConfirmed,
+                        filePath));
 
                     return null;
                 }
