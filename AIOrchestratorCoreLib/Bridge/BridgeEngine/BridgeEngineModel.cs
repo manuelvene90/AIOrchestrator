@@ -2366,6 +2366,15 @@ internal sealed class BridgeEngineModel(
             if (Is_BeingResolved(parkedPath))
                 continue;
 
+            // An expired request is never re-asked, even if lapsing it failed. Splitting expiry into
+            // its own pass dropped the `continue` that used to guarantee this: if the lapse cleared
+            // the registrations and then BOTH the archive and its fallback failed, the file stayed
+            // parked with nothing registered, and this loop posted a fresh prompt with live buttons
+            // to the owner's phone every two seconds. The old single loop produced repeated channel
+            // entries; this produced a waterfall (CLAUDE.md item 14).
+            if (CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow))
+                continue;
+
             bool alreadyAsked;
 
             lock (_closeConfirmationLock)
@@ -2607,16 +2616,23 @@ internal sealed class BridgeEngineModel(
         // guard exists to prevent, reached through the guard itself.
         if (request == null)
         {
-            _log.Log_Error(
+            _log.Log_Warning(
                 confirmation.OrchId,
-                $"A confirmed close had no readable request — NOTHING was closed ({confirmation.ParkedPath})",
-                new Exception("close-orchestration request unreadable at confirmation time"));
+                $"A confirmed close had no readable request — NOTHING was closed, left parked to be re-asked ({confirmation.ParkedPath})");
 
-            Append_GeneralAppEntry(
-                $"close-orchestration ABANDONED: '{confirmation.OrchId}'",
-                "The owner's tap arrived but the request behind it could not be read, so nothing was closed. If the close is still wanted, ask again.");
+            // NOT archived. A sharing violation at tap time is transient, and archiving would throw
+            // away a close the owner had already approved with no way back. Left parked, this heals
+            // itself: the registrations are already gone, so the next sweep asks again — and if the
+            // file is genuinely corrupt, Ask_OwnerToConfirmClose_Async has the same null check and
+            // files it as unreadable there.
+            //
+            // Told to the REQUESTER, in its own channel, because that is where this guard promised
+            // an answer either way — the general channel cannot be read by the session waiting.
+            Append_OrchestrationAppEntry(
+                confirmation.OrchId,
+                "close NOT executed — the request could not be read just now",
+                "The owner's tap arrived, but your request file could not be read at that moment, so nothing was closed. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
-            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "unreadable");
             return;
         }
 
