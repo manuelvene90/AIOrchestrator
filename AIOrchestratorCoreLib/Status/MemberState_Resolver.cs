@@ -31,15 +31,49 @@ public static class MemberState_Resolver
         if (lastEntry == null)
             return MemberStates.ImplementerWorking;
 
-        if (ChannelAuthor_Kinds.Is_Member(lastEntry.Author))
-        {
-            if (Contains_Marker(lastEntry, BLOCKED_ON_OWNER_MARKER))
-                return MemberStates.BlockedOnOwner;
+        // BLOCKED ON OWNER stands on its own and is deliberately NOT routed through the
+        // awaiting-verdict test below: a member waiting on the owner is blocked whether or not it
+        // has ever been briefed, and it is waiting on someone else either way.
+        if (ChannelAuthor_Kinds.Is_Member(lastEntry.Author) && Contains_Marker(lastEntry, BLOCKED_ON_OWNER_MARKER))
+            return MemberStates.BlockedOnOwner;
 
+        if (Is_AwaitingVerdict(entries))
             return MemberStates.AwaitingSupervisorReview;
-        }
 
         return MemberStates.ImplementerWorking;
+    }
+
+    /// <summary>
+    /// Has this member FILED WORK and is now waiting on a verdict?
+    ///
+    /// Not "did it speak last", which is what this used to ask and is not the same question. The
+    /// boot protocol makes a member speak FIRST: implementer.md and reviewer.md both mandate an
+    /// "&lt;id&gt; online" entry as its opening act, so every channel begins
+    /// `[1] imp-1 online` → `[2] BRIEF`. Under "spoke last" that made a BRIEF look like a verdict —
+    /// the ledger armed on briefing, which is the exact regression it was meant to kill — and it
+    /// published a member that had only said "online" as awaiting review, which let the
+    /// awaiting-answer hook permit BRIEFING it during an open question. Both consumers inherited one
+    /// wrong answer.
+    ///
+    /// Two conditions, and the first is what "online" fails: the member must have been BRIEFED at
+    /// least once (there is a supervisor entry in the channel), and it must have spoken since the
+    /// conversation last passed to it. A member that has only said hello is waiting for WORK, not
+    /// for a verdict.
+    /// </summary>
+    public static bool Is_AwaitingVerdict(IReadOnlyList<IChannelEntry> entries)
+    {
+        var lastEntry = Find_LastConversationEntry_OrNull(entries);
+
+        if (lastEntry == null || !ChannelAuthor_Kinds.Is_Member(lastEntry.Author))
+            return false;
+
+        foreach (var entry in entries)
+        {
+            if (entry.Author == ChannelAuthors.Supervisor)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

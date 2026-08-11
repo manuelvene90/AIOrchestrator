@@ -24,9 +24,21 @@ public class MemberStateAppEntryTests
         Assert.Equal(
             MemberStates.AwaitingSupervisorReview,
             Resolve(
-                "## [1] FROM supervisor — x — brief",
-                "## [2] FROM implementer — x — report filed",
-                "## [3] FROM app — x — unread traffic, you have not answered"));
+                "## [1] FROM implementer — x — imp-1 online",
+                "## [2] FROM supervisor — x — brief",
+                "## [3] FROM implementer — x — report filed",
+                "## [4] FROM app — x — unread traffic, you have not answered"));
+    }
+
+    /// <summary>
+    /// A member whose only entry is its boot line is waiting for WORK, not for a verdict — and
+    /// publishing it as awaiting review let the awaiting-answer hook permit BRIEFING it while the
+    /// owner was deciding, which is the one thing that exemption forbids.
+    /// </summary>
+    [Fact]
+    public void AMemberThatHasOnlySaidOnline_IsNotAwaitingAVerdict()
+    {
+        Assert.Equal(MemberStates.ImplementerWorking, Resolve("## [1] FROM implementer — x — imp-1 online"));
     }
 
     /// <summary>Skipping the app must not resurrect a member that never spoke — a brief stays a brief.</summary>
@@ -58,9 +70,10 @@ public class MemberStateAppEntryTests
         Assert.Equal(
             MemberStates.AwaitingSupervisorReview,
             Resolve(
-                "## [1] FROM implementer — x — report filed",
-                "## [2] FROM app — x — unread traffic",
-                "## [3] FROM app — x — unread traffic again"));
+                "## [1] FROM supervisor — x — brief",
+                "## [2] FROM implementer — x — report filed",
+                "## [3] FROM app — x — unread traffic",
+                "## [4] FROM app — x — unread traffic again"));
     }
 
     /// <summary>A channel of nothing but app entries has no conversation in it yet.</summary>

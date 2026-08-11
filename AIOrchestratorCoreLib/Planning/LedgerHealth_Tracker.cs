@@ -29,21 +29,18 @@ public static class LedgerHealth_Tracker
     /// done: five false nudges on 2026-08-11, two of them inside two minutes, each one threatening a
     /// turn-end block.
     ///
-    /// It asks WHO SPOKE LAST through <see cref="MemberState_Resolver.Find_LastConversationEntry_OrNull"/>
-    /// rather than deciding for itself, so the app-entry rule lives in one place: a nudge landing
-    /// between a report and its verdict must not make the verdict stop being one, and the app nudges
-    /// exactly there.
+    /// It asks <see cref="MemberState_Resolver.Is_AwaitingVerdict"/> about the channel as it stood
+    /// BEFORE this entry: a verdict is what a supervisor writes to a member that was waiting on one.
+    /// Asking merely "did a member speak last" was wrong in the sequence every channel actually
+    /// produces — the boot protocol makes a member speak first ("imp-1 online"), so a BRIEF followed
+    /// a member entry and armed the ledger, which is the regression this exists to kill.
     /// </summary>
     public static bool Is_VerdictOnMemberWork(IReadOnlyList<IChannelEntry> spokeEntries)
     {
         if (spokeEntries.Count == 0 || spokeEntries[^1].Author != ChannelAuthors.Supervisor)
             return false;
 
-        // Everything before this supervisor entry — whoever spoke last there is who it answers.
-        var precedingEntry = MemberState_Resolver.Find_LastConversationEntry_OrNull(
-            [.. spokeEntries.Take(spokeEntries.Count - 1)]);
-
-        return precedingEntry != null && ChannelAuthor_Kinds.Is_Member(precedingEntry.Author);
+        return MemberState_Resolver.Is_AwaitingVerdict([.. spokeEntries.Take(spokeEntries.Count - 1)]);
     }
 
     /// <summary>The flag the turn-end hook reads. Present = this supervisor owes a ledger update.</summary>
