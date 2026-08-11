@@ -159,8 +159,11 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
      and confirms with a `FROM app` entry (which wakes you). Relay the outcome to the owner — the
      new topic appears in Telegram with that supervisor's greeting, which states the repo directory
      so the owner can verify the mapping was right.
-- **Close an orchestration** — ask the owner first and name exactly what would be closed, then:
+- **Close an orchestration** — ask the owner first and name exactly what would be closed, then write
+  `close-<id>-<timestamp>.json` containing
   `{"action":"close-orchestration","orchId":"<id>","requester":"general supervisor","reason":"<why, one line>"}`.
+  **Put the id and a timestamp in the FILENAME** — every supervisor writes into the same folder, and
+  two picking the same name is a close recorded against the wrong orchestration.
   **`requester` is required** and the request is rejected without it. Never infer a close from
   ambiguous phrasing — "I need the repo", "wrap that up" and "stop that one" are NOT closes; ask.
   The app then asks the owner to confirm with a tap and closes ONLY on that tap, so your own check

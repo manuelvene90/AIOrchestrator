@@ -168,4 +168,35 @@ public class CloseConfirmationParkingTests : IDisposable
 
         return path;
     }
+
+    /// <summary>
+    /// The agent chooses the request's filename and the role commands say only "any unique
+    /// filename", so two orchestrations can collide. The loser used to be deleted silently, which
+    /// meant a tap could close orchestration A while recording B's reason and requester.
+    /// </summary>
+    [Fact]
+    public void TwoRequestsWithTheSameFilename_BothSurviveParking()
+    {
+        var first = CloseConfirmation_Parking.Park(_paths, Write_Request("close.json", CLOSE_REQUEST));
+        var second = CloseConfirmation_Parking.Park(_paths, Write_Request("close.json", CLOSE_REQUEST.Replace("crm-2", "crm-3")));
+
+        Assert.NotEqual(first, second);
+        Assert.Equal(2, CloseConfirmation_Parking.Find_Parked(_paths).Count);
+
+        Assert.Equal("crm-2", OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(first)?.OrchId);
+        Assert.Equal("crm-3", OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(second)?.OrchId);
+    }
+
+    /// <summary>The archive keeps them apart too, or the audit trail loses one of the two.</summary>
+    [Fact]
+    public void TwoResolvedRequestsWithTheSameFilename_AreBothKept()
+    {
+        var first = CloseConfirmation_Parking.Park(_paths, Write_Request("close.json", CLOSE_REQUEST));
+        var second = CloseConfirmation_Parking.Park(_paths, Write_Request("close.json", CLOSE_REQUEST.Replace("crm-2", "crm-3")));
+
+        CloseConfirmation_Parking.Archive(_paths, first, "declined");
+        CloseConfirmation_Parking.Archive(_paths, second, "closed");
+
+        Assert.Equal(2, Directory.GetFiles(CloseConfirmation_Parking.Get_ResolvedFolder(_paths)).Length);
+    }
 }

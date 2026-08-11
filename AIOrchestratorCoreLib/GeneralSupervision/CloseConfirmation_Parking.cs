@@ -47,12 +47,14 @@ public static class CloseConfirmation_Parking
         var awaitingFolder = Get_AwaitingFolder(paths);
         Directory.CreateDirectory(awaitingFolder);
 
-        var parkedPath = Path.Combine(awaitingFolder, Path.GetFileName(requestFilePath));
-
-        // A same-named leftover would make the move throw and the request would then be executed
-        // unconfirmed on the next tick, so the older copy loses rather than the guard.
-        if (File.Exists(parkedPath))
-            File.Delete(parkedPath);
+        // UNIQUE, because the agent chooses the request's filename and the role commands say only
+        // "any unique filename". Two orchestrations whose supervisors picked the same name would
+        // collide here, and the loser was silently deleted below — so a tap could close orchestration
+        // A while recording B's reason and requester. The original name is kept as a prefix so the
+        // archive still reads like the file the agent wrote.
+        var parkedPath = Path.Combine(
+            awaitingFolder,
+            $"{Path.GetFileNameWithoutExtension(requestFilePath)}-{Guid.NewGuid():N}{Path.GetExtension(requestFilePath)}");
 
         File.Move(requestFilePath, parkedPath);
 

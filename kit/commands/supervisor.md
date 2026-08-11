@@ -385,7 +385,10 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   its context, and the owner's trust in the whole system.
 
   When it genuinely is unambiguous, post any last one-liner, then drop
+  `~/.claude/supervision/.requests/close-$ARGUMENTS-<timestamp>.json` containing
   `{"action":"close-orchestration","orchId":"$ARGUMENTS","reason":"<why, one line>","requester":"supervisor of $ARGUMENTS"}`.
+  **Put your orchestration id and a timestamp in the FILENAME** — every supervisor writes into the
+  same folder, and two picking the same name is a close recorded against the wrong orchestration.
   **`requester` is required** and the request is rejected without it — when this went wrong, nothing
   on disk could answer "who asked".
 

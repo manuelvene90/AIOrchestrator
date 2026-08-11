@@ -2378,6 +2378,22 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// Drops the live confirmation prompts for one orchestration, WITHOUT touching their parked
+    /// files. The request stays exactly where it was; only the app's belief that a prompt is
+    /// currently out is discarded, so the next sweep asks again. Used when the message carrying the
+    /// prompt is destroyed — a `/clear` recreates the whole topic — because a registration pointing
+    /// at a message nobody can see is indistinguishable from an unanswered owner.
+    /// </summary>
+    void Forget_CloseConfirmations_For(string orchId)
+    {
+        lock (_closeConfirmationLock)
+        {
+            foreach (var key in _closeConfirmations.Where(pair => pair.Value.OrchId == orchId).Select(pair => pair.Key).ToList())
+                _closeConfirmations.Remove(key);
+        }
+    }
+
     bool Is_BeingResolved(string parkedPath)
     {
         lock (_closeConfirmationLock)
@@ -2636,7 +2652,25 @@ internal sealed class BridgeEngineModel(
             $"You asked to close this orchestration ({request?.Reason ?? "no reason recorded"}) and the owner said no. Nothing was closed and every session is still running.\n\n"
             + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
 
+        Report_CloseOutcome_ToGeneral(confirmation.OrchId, "declined by the owner", request);
         Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "declined");
+    }
+
+    /// <summary>
+    /// Every close OUTCOME reaches the general channel, not just the successful ones.
+    ///
+    /// A close can be asked for by the general supervisor, and the held/declined/lapsed notices go to
+    /// the ORCHESTRATION's channel — so when it was the general supervisor that asked, it heard
+    /// nothing back and sat waiting on a request that had been refused, or had lapsed twelve hours
+    /// earlier. Reporting the outcome here fixes that without having to work out who asked from a
+    /// free-text field: a close that the owner refused is orchestration-level news the general
+    /// supervisor already tracks, exactly as a completed close is.
+    /// </summary>
+    void Report_CloseOutcome_ToGeneral(string orchId, string outcome, GeneralSupervision.CloseOrchestrationRequest.ICloseOrchestrationRequest? request)
+    {
+        Append_GeneralAppEntry(
+            $"close of '{orchId}' {outcome} — nothing was closed",
+            $"Asked by: {request?.Requester ?? "unrecorded"}. Reason given: {request?.Reason ?? "none recorded"}. Its sessions are all still running.");
     }
 
     void Expire_CloseConfirmation(string parkedPath)
@@ -2658,6 +2692,8 @@ internal sealed class BridgeEngineModel(
                 "close request LAPSED — the owner never answered",
                 $"Your close request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and nothing was closed. "
                 + "It is not carried over: a close must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
+
+            Report_CloseOutcome_ToGeneral(request.OrchId, $"lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h", request);
         }
 
         Archive_ResolvedRequest_BestEffort(parkedPath, "expired");
@@ -3682,6 +3718,13 @@ internal sealed class BridgeEngineModel(
 
             return;
         }
+
+        // A live close confirmation dies with the topic it was posted in. Its registrations would
+        // otherwise survive, keeping "already asked" true for a prompt that no longer exists
+        // anywhere, so the request sat parked until it lapsed twelve hours later — while the
+        // requester had been told the owner was asked. Dropping them here makes the sweep re-ask in
+        // the new topic on the next tick, which is the same recovery a restart already relies on.
+        Forget_CloseConfirmations_For(session.OrchId);
 
         try
         {
