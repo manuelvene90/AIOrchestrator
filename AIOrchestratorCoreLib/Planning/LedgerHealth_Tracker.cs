@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Planning;
@@ -16,6 +18,42 @@ public static class LedgerHealth_Tracker
 {
     /// <summary>Grace after a verdict before the ledger counts as behind (the supervisor is mid-turn).</summary>
     public const int LEDGER_GRACE_SECONDS = 90;
+
+    /// <summary>
+    /// Whether the supervisor's latest entry in a spoke is a VERDICT — an answer to work a member
+    /// filed — rather than a BRIEF, which assigns work that has not happened yet.
+    ///
+    /// Only a verdict owes the ledger an update. Arming on any supervisor entry meant that briefing
+    /// someone started a 90-second countdown to being nudged for not having recorded work nobody had
+    /// done: five false nudges on 2026-08-11, two of them inside two minutes, each one threatening a
+    /// turn-end block.
+    ///
+    /// App entries are skipped rather than counted: a nudge or a resume landing between the report
+    /// and the verdict does not make the verdict stop being one.
+    /// </summary>
+    public static bool Is_VerdictOnMemberWork(IReadOnlyList<IChannelEntry> spokeEntries)
+    {
+        if (spokeEntries.Count == 0 || spokeEntries[^1].Author != ChannelAuthors.Supervisor)
+            return false;
+
+        for (var index = spokeEntries.Count - 2; index >= 0; index--)
+        {
+            var author = spokeEntries[index].Author;
+
+            if (author == ChannelAuthors.App)
+                continue;
+
+            // A member spoke before this: the supervisor is answering filed work.
+            if (ChannelAuthor_Kinds.Is_Member(author))
+                return true;
+
+            // The supervisor spoke before this: it is briefing, or adding to its own brief.
+            return false;
+        }
+
+        // Nothing but app entries behind it — the supervisor is opening the conversation.
+        return false;
+    }
 
     /// <summary>The flag the turn-end hook reads. Present = this supervisor owes a ledger update.</summary>
     public static string Build_FlagFilePath(ISupervisionPaths paths, string orchId)

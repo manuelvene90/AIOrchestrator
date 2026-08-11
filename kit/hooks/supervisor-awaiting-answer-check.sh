@@ -34,6 +34,71 @@ if [ ! -f "$FLAG_FILE" ]; then
   exit 0
 fi
 
-cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"YOU ASKED THE OWNER A QUESTION — STOP AND WAIT. Do not run anything, do not brief anyone, do not keep working: whatever you change now makes their answer arrive against a different world, which is exactly what made previous conversations incoherent. END YOUR TURN. Your monitor wakes you the moment they reply, and this block clears automatically then. If you truly cannot wait, the thing to do is not to work around this — it is to not have asked yet."}}
-JSON
+# WHAT THIS BLOCKS, AND WHY IT IS NOT EVERYTHING ANY MORE.
+#
+# The rule is that the WORLD must not change under an owner who is deciding — not that the session
+# must be paralysed. Denying literally every call was measured as harmful on 2026-08-11: it blocked
+# reads, it blocked the PLAN.md write that the Stop hook simultaneously demanded (a true deadlock,
+# ~20 minutes of a live supervisor producing nothing), and it held a written answer away from an
+# implementer that had been idle for eight minutes waiting on it.
+#
+# So: anything that cannot change the world is allowed, and everything that can is still denied.
+
+INPUT=$(cat 2>/dev/null) || exit 0
+
+# Same extraction as the reviewer hook — python3 when present, and a failed read ALLOWS the call,
+# because an enforcement bug must never wedge a session.
+TOOL=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_name",""))' 2>/dev/null)
+
+if [ -z "$TOOL" ]; then
+  exit 0
+fi
+
+# READS change nothing. This was pure collateral damage.
+case "$TOOL" in
+  Read|Grep|Glob|NotebookRead|WebFetch|WebSearch|TodoWrite|Monitor|BashOutput|TaskOutput|TaskList|TaskGet)
+    exit 0 ;;
+esac
+
+TARGET=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("tool_input",{}); print(" ".join(str(d.get(k,"")) for k in ("file_path","path","command","notebook_path")))' 2>/dev/null)
+
+deny() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"YOU ASKED THE OWNER A QUESTION — STOP AND WAIT. %s Whatever you change now makes their answer arrive against a different world, which is exactly what made previous conversations incoherent. END YOUR TURN: your monitor wakes you the moment they reply and this clears automatically. Reading, updating PLAN.md, and answering a member that is already waiting on you all remain allowed — everything else waits."}}\n' "$1"
+  exit 0
+}
+
+SUPERVISION="$HOME/.claude/supervision/$AIORCH_ID"
+
+# THE LEDGER is a record of work that already happened, not a change to what the owner is deciding —
+# and the Stop hook can demand it, so it must never be unreachable.
+case "$TARGET" in
+  *"$AIORCH_ID/PLAN.md"*|*"$AIORCH_ID"/PLAN.md*) exit 0 ;;
+esac
+case "$TARGET" in
+  *PLAN.md*)
+    if printf '%s' "$TARGET" | grep -q "supervision/$AIORCH_ID"; then
+      exit 0
+    fi ;;
+esac
+
+# A MEMBER CHANNEL is allowed only when that member SPOKE LAST — i.e. it filed something and is
+# sitting idle waiting on you. Unblocking someone who is already waiting does not start new work;
+# briefing does, and briefing while the owner decides is the precise behaviour the owner objected to
+# ("this means that the sup is moving in the background. This should not happen.").
+MEMBER=$(printf '%s' "$TARGET" | grep -oE "supervision/$AIORCH_ID/(imp|rev)-[0-9]+/channel\.md" | head -1)
+
+if [ -n "$MEMBER" ]; then
+  CHANNEL="$HOME/.claude/${MEMBER}"
+
+  if [ -f "$CHANNEL" ]; then
+    LAST_AUTHOR=$(grep -oE '^## \[[0-9]+\] FROM [a-zA-Z-]+' "$CHANNEL" 2>/dev/null | tail -1 | sed 's/.* FROM //')
+
+    case "$LAST_AUTHOR" in
+      implementer|reviewer|solo) exit 0 ;;
+    esac
+  fi
+
+  deny "That member is not waiting on you — writing to it now is briefing new work, not unblocking someone."
+fi
+
+deny "Do not run anything, do not brief anyone, do not keep working."

@@ -1435,14 +1435,24 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task<bool> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
+        var sawSupervisorEntryInSpoke = false;
+
         foreach (var entry in append.Entries)
         {
             _log.Log_Info(append.Channel.OrchId, $"[{append.Channel.SpokeName}] entry #{entry.Index} FROM {entry.Author}: {entry.Subject}");
 
-            // A supervisor entry in a SPOKE is a brief or a verdict — either way the ledger owes
-            // an update from this moment, and the flag below is what makes skipping it visible.
             if (!append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor)
-                _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
+                sawSupervisorEntryInSpoke = true;
+        }
+
+        // Only a VERDICT puts the ledger in debt — an answer to work a member filed. This used to
+        // arm on ANY supervisor entry in any spoke, so briefing someone started a 90-second
+        // countdown to being nudged for not having recorded work that had not happened yet.
+        if (sawSupervisorEntryInSpoke
+            && Planning.LedgerHealth_Tracker.Is_VerdictOnMemberWork(
+                ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(append.Channel.FilePath))))
+        {
+            _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
         }
 
         // File-only mode: there is no phone to reach, so the entries are as delivered as they will
