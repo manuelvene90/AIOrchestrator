@@ -68,7 +68,8 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
   searches, independent suites) freely; parallel WRITERS only on DISJOINT file sets, with every
   agent's editable files named in its prompt. Git and ambient files (`.csproj`, DI registrations,
   shared constants) stay yours. A sub-agent's report is not evidence — read the diff and run the
-  suite yourself before you report. Full rules: the "Fan out" section of `/implementer`.
+  suite yourself before you report. Full rules: read `~/.claude/commands/implementer.md`, section
+  "Fan out" — read the file, never invoke the command.
 
 ## When a basic orchestration outgrows itself
 

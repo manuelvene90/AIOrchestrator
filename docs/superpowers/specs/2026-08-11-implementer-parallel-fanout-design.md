@@ -142,7 +142,10 @@ implementers fan out, supervisors do not, and writing agents require disjoint fi
 
 No unit tests: these are prompts, and nothing in C# reads them (`kit/install.ps1` only copies them).
 
-1. Run `kit/install.ps1`; confirm all five role commands land in `~/.claude/commands/`.
+1. The delivery path is the app, not `kit/install.ps1` (CLAUDE.md decision #17): run
+   `dotnet build AIOrchestrator.slnx`, restart the orchestrator app, and only THEN confirm all five
+   role commands landed in `~/.claude/commands/` — a check taken before the restart reads identical
+   for reasons that mean nothing.
 2. Exercise once in a real orchestration: a supervisor briefs a task carrying `PARALLEL UNITS`, the
    implementer fans out, and its boundary report shows planned-vs-actual agent counts and a
    `WRITING WINDOW` spanning every unit's files.

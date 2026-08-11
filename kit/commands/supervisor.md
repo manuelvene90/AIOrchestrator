@@ -342,7 +342,9 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
 
 - **Add an implementer:** write `~/.claude/supervision/.requests/add-imp-$ARGUMENTS-<timestamp>.json`
   containing `{"action":"add-implementer","orchId":"$ARGUMENTS","reason":"<why, one line>"}`. When
-  the confirmation names the new member (e.g. `imp-2`), brief it in `imp-2/channel.md`.
+  the confirmation names the new member (e.g. `imp-2`), brief it in `imp-2/channel.md`. (First run
+  the deliverable test below — "A second SESSION, or fan-out inside one?" — a new session is not
+  always the right call.)
 - **Add a REVIEWER:** same shape, `{"action":"add-reviewer","orchId":"$ARGUMENTS","reason":"<why, one line>"}`.
   You get back `rev-1`, `rev-2`, … — reviewers number separately from implementers. Brief it in
   `rev-<n>/channel.md`. See "Reviewers" below for what to put in that brief.

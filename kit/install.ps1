@@ -32,10 +32,11 @@ New-Item -ItemType Directory -Force $commandsFolder | Out-Null
 New-Item -ItemType Directory -Force $supervisionFolder | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $supervisionFolder '.requests') | Out-Null
 
-# Every .md in kit\commands is a role command — copy them all, so a new role can never be
-# added to the kit and silently never installed (reviewer.md and solo.md were missing here
-# from the day they were written).
-$roleCommands = Get-ChildItem (Join-Path $kitFolder 'commands') -Filter *.md
+# Every .md in kit\commands is a role command — copy them all, so this bootstrap path cannot
+# disagree with the app's own installer (KitAssets_Installer), which has always globbed the
+# folder. This script named three by hand, so reviewer.md and solo.md were never installed
+# by it.
+$roleCommands = Get-ChildItem (Join-Path $kitFolder 'commands') -Filter *.md -File
 Copy-Item $roleCommands.FullName $commandsFolder -Force
 $installedNames = ($roleCommands | ForEach-Object { '/' + $_.BaseName }) -join ', '
 Write-Host "Installed $($roleCommands.Count) role commands: $installedNames" -ForegroundColor Green

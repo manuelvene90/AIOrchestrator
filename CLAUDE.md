@@ -68,18 +68,27 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     PLAN.md ledger-shape complaint ("lines that lump several tasks together") now goes only to the
     supervisor's channel and the log — splitting a task line is the supervisor's job, so texting
     the owner about it was pure noise. Apply the same test to any new alert.
-16. **Parallel agents: implementers fan out, supervisors do not, writers need disjoint files.** An
-    implementer's turn is MEANT to block — it is the one doing the work — so the supervisor's "never
-    use a sub-agent" rule covers the SUPERVISOR's turn only (that turn is the owner's phone line) and
-    is never relayed to a member. Read-only fan-out is an implementer's default; parallel WRITERS are
-    allowed only on disjoint file sets, with git and ambient files (`.csproj`, DI registrations,
-    shared constants, PLAN.md) kept to the implementer itself. The supervisor PROPOSES the split in
-    the brief (`PARALLEL UNITS`) and the implementer verifies it — a supervisor briefs lean and has
-    not read the code. A sub-agent's report is NOT evidence: the implementer reads the diff and runs
-    the suite before reporting. A new implementer SESSION is for a separately reviewable deliverable
-    (own review cycle, worktree, or ledger line); one deliverable going faster is fan-out, and ledger
-    lines never shatter into units. Spec:
+16. **Parallel agents: implementers (and solo) fan out, supervisors do not, writers need disjoint
+    files.** An implementer's turn is MEANT to block — it is the one doing the work — so the
+    supervisor's "never use a sub-agent" rule covers the SUPERVISOR's turn only (that turn is the
+    owner's phone line) and is never relayed to a member. Solo gets the same fan-out contract, by
+    reference, since it does the work itself with nobody else to hand parallelism to. Read-only
+    fan-out is an implementer's default; parallel WRITERS are allowed only on disjoint file sets, with
+    git and ambient files (`.csproj`, DI registrations, shared constants) kept to the implementer
+    itself — PLAN.md is the supervisor's, never an implementer's to touch. The supervisor PROPOSES
+    the split in the brief (`PARALLEL UNITS`) and the implementer verifies it — a supervisor briefs
+    lean and has not read the code. A sub-agent's report is NOT evidence: the implementer reads the
+    diff and runs the suite before reporting. A new implementer SESSION is for a separately reviewable
+    deliverable (own review cycle, worktree, or ledger line); one deliverable going faster is fan-out,
+    and ledger lines never shatter into units. Spec:
     `docs/superpowers/specs/2026-08-11-implementer-parallel-fanout-design.md`.
+17. **The APP is the delivery path for the kit — `install.ps1` is bootstrap only.**
+    `AIOrchestrator.csproj` copies `kit/commands/*.md` and the statusline into the app's output
+    folder, and `KitAssets_Installer` overwrites `~/.claude/commands` from THAT folder at every
+    startup. So editing `kit/commands/` is not delivery: without `dotnet build AIOrchestrator.slnx`
+    the next app launch silently reverts every change back to the stale build output. Verify a kit
+    change AFTER an app restart, never just after a copy — a `diff` taken between the two reads
+    IDENTICAL and means nothing. `kit/install.ps1` is for a fresh machine that has not built yet.
 
 ## Resolved Decisions (2026-08-06, owner)
 

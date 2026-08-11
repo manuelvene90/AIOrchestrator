@@ -105,9 +105,19 @@ for nothing.
   files it may edit ("you may edit exactly these files: …; touch nothing else"). If two units want
   the same file, they are ONE unit — do it yourself, sequentially. Two agents editing one file
   overwrite each other, and the loser's work disappears with no error to tell you.
-- **Ambient files are never disjoint.** A `.csproj`, a DI registration, a shared constants file, a
-  test list, PLAN.md, this channel — anything the whole task touches is YOURS, edited by you once
-  the agents return. Handing an ambient file to a unit is how a "disjoint" split stops being one.
+- **Ambient files are never a unit's.** A `.csproj`, a DI registration, a shared constants file, a
+  test list — anything the whole task touches is YOURS, edited by you once the agents return.
+  Handing an ambient file to a unit is how a "disjoint" split stops being one. PLAN.md and this
+  channel are not yours to hand out either, for the opposite reason: they belong to your
+  SUPERVISOR, not to you or to any unit.
+- **Readers and writers never run in the same batch.** Dispatch read-only agents first, or after
+  the writing window has closed — a reader dispatched alongside writers observes half-written state
+  and reports it as fact, and that false report then feeds your own verification. "Running
+  independent test suites or builds" above is NOT write-free either: a build writes `obj/` and
+  `bin/`, so never run two on the same project at once.
+- **Never dispatch an agent with worktree isolation.** Worktrees are your supervisor's, and merging
+  N of them is work you would then have to do carefully — which is exactly what disjoint file sets
+  exist to avoid. The app's `WORKTREE:` marker would not show them either.
 - **No sub-agent EVER runs git** — not `add`, not `commit`, not a branch operation. Staging stays
   yours, by explicit path (see Git discipline above). A sub-agent running `git add -A` is that
   hazard multiplied by the number of agents you dispatched.

@@ -421,10 +421,16 @@ git commit -m "docs: locked decision 16 - implementers fan out, supervisors do n
 - Modify: `kit/install.ps1:35-38`
 
 **Context the implementer needs:** `install.ps1` currently copies only three of the five role
-commands. `reviewer.md` and `solo.md` are in the kit but have never been installed by the installer,
-so **the first four tasks would not reach a single running session without this fix.** Verified on
-2026-08-11: the installed copies of all five commands were also stale, missing the fresh-read rule for
-`[n]` and the timestamp (locked decision #12).
+commands by name, while the orchestrator app's own installer (`KitAssets_Installer`) globs the
+whole `kit/commands/` folder and has always installed all five. `reviewer.md` and `solo.md` ARE
+installed today — by the app, via that glob, at every app startup — so the claim that they were
+never installed is false; only this script disagreed with the app's own delivery path. The fix is
+still worth having: it makes the two paths agree, so a role added to the kit in future can never be
+installed by one and silently skipped by the other, and it matters on a fresh machine that has not
+built the app yet. Verified on 2026-08-11: the installed copies of all five commands were also
+stale, missing the fresh-read rule for `[n]` and the timestamp (locked decision #12) — the app's
+installer reads from its OWN BUILD OUTPUT, not from `kit/commands/` directly, so that staleness is
+fixed by rebuilding, not by this script (see CLAUDE.md decision #17).
 
 - [ ] **Step 1: Install every role command instead of three**
 
@@ -459,24 +465,31 @@ $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 
 
 Expected: no output (no parse errors).
 
-- [ ] **Step 3: ASK THE OWNER before running the installer**
+- [ ] **Step 3: ASK THE OWNER before rebuilding and restarting the app**
 
-Do NOT run `kit/install.ps1` unprompted. It overwrites the live role commands in
-`~/.claude/commands/`, and any orchestration currently running picks up the new text only when its
-sessions next boot (respawn or app restart). Ask the owner for a quiet moment, and tell them that
-this install also delivers the decision #12 fresh-read rule that has been sitting uninstalled.
+Do NOT rebuild or restart the app unprompted. Per CLAUDE.md decision #17, the ORCHESTRATOR APP is
+the kit's delivery path, not `kit/install.ps1`: `AIOrchestrator.csproj` copies `kit/commands/*.md`
+into the app's build output, and `KitAssets_Installer` overwrites `~/.claude/commands` from THAT
+output at every app startup. Restarting the app affects every orchestration currently running —
+sessions pick up the new role-command text only on their next boot (respawn or the restart itself).
+Ask the owner for a quiet moment, and tell them this delivery also carries the decision #12
+fresh-read rule that has been sitting uninstalled.
 
-- [ ] **Step 4: Once approved, install**
+- [ ] **Step 4: Once approved, rebuild and restart the app**
 
 ```powershell
-& 'C:\Users\Gianpiero\source\repos\AIOrchestrator\kit\install.ps1'
+dotnet build AIOrchestrator.slnx
 ```
 
-Expected: `Installed 5 role commands: /general-supervisor, /implementer, /reviewer, /solo, /supervisor`.
+Then close and relaunch the orchestrator app so `Ensure_KitAssetsInstalled` runs against the fresh
+build output. (`kit/install.ps1` is the separate bootstrap path for a machine that has not built the
+app yet — it is not what delivers an edit on a machine that already has.)
 
-- [ ] **Step 5: Verify kit and installed copies are now identical**
+- [ ] **Step 5: AFTER the restart, verify kit and installed copies are now identical**
 
-Run:
+A `diff` taken before the app restart reads IDENTICAL for reasons that mean nothing — the installed
+copies were never touched by the rebuild, only by the restart that follows it. Run this only after
+the app has restarted:
 
 ```bash
 cd "C:/Users/Gianpiero/source/repos/AIOrchestrator/kit/commands"
@@ -486,7 +499,8 @@ for f in supervisor implementer reviewer solo general-supervisor; do
 done
 ```
 
-Expected: `IDENTICAL` on all five lines. Anything else means the install did not take.
+Expected: `IDENTICAL` on all five lines. Anything else means the app has not yet restarted with the
+new build, not that the fix failed.
 
 - [ ] **Step 6: Commit**
 
