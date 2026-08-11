@@ -4,18 +4,26 @@
 
 **Goal:** Let implementers dispatch parallel sub-agents, and give supervisors the vocabulary to brief work that can go wide.
 
-**Architecture:** Pure prompt/documentation change. Five role commands in `kit/commands/` define agent
-behaviour; nothing in C# reads them (`kit/install.ps1` only copies them to `~/.claude/commands/`).
-The change adds a fan-out contract to `implementer.md`, a `PARALLEL UNITS` brief shape and a
-session-vs-fan-out test to `supervisor.md`, repairs two now-false cross-references, and fixes the
-installer so the edits actually reach a running machine.
+**Architecture:** Primarily a prompt/documentation change. Five role commands in `kit/commands/`
+define agent behaviour. Two things install them: the orchestrator app itself, which globs the kit
+shipped in its output folder and refreshes `~/.claude/commands` at every startup — this is the real
+delivery path, so a repo edit reaches nothing until `dotnet build` — and `kit/install.ps1`, the
+bootstrap path for a machine that has not built yet. The change adds a fan-out contract to
+`implementer.md`, a `PARALLEL UNITS` brief shape and a session-vs-fan-out test to `supervisor.md`,
+repairs two now-false cross-references, and makes the bootstrap installer stop disagreeing with the
+app's.
 
-**Tech Stack:** Markdown role commands, PowerShell installer. No build, no test project involved.
+**Tech Stack:** Markdown role commands, PowerShell installer. Tasks 1-5 involve no build and no test
+project. (One C# fix was added after the final review — see Global Constraints.)
 
 ## Global Constraints
 
 - **Spec:** `docs/superpowers/specs/2026-08-11-implementer-parallel-fanout-design.md`. Read it first.
-- **Scope:** `kit/commands/*.md`, `kit/install.ps1`, `CLAUDE.md`. **No C# change, no test change, no UI change.**
+- **Scope for Tasks 1-5:** `kit/commands/*.md`, `kit/install.ps1`, `CLAUDE.md`. **No C# change, no
+  test change, no UI change** — this constraint bound the five tasks and was honoured by all of them.
+  It was lifted once, deliberately and with the owner's approval, AFTER the final whole-branch review:
+  `KitAssets_Installer.Copy_IfChanged` now copies bytes rather than text, with two covering tests.
+  See the spec's "Scope added after approval".
 - **Voice:** match the existing kit — bold lead-in phrase, imperative, reasons given. Never invent an
   incident ("this really happened on <date>") that did not occur; only Task 4 may cite dated history,
   and only history already recorded in `CLAUDE.md`.
@@ -38,7 +46,7 @@ installer so the edits actually reach a running machine.
 | `kit/commands/reviewer.md` | Repair the now-false claim about implementers | 3 |
 | `kit/commands/solo.md` | Same contract by reference, no second copy | 3 |
 | `CLAUDE.md` | Locked decision #16 so the asymmetry is not re-litigated | 4 |
-| `kit/install.ps1` | Install ALL five role commands (currently installs three) | 5 |
+| `kit/install.ps1` | Glob the kit folder instead of naming three commands by hand, so this bootstrap path stops disagreeing with the app's own installer | 5 |
 
 ---
 

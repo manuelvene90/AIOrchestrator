@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-11
 **Status:** approved
-**Scope:** `kit/commands/*.md` only. No C# change, no UI change, no test change.
+**Scope:** `kit/commands/*.md`, `kit/install.ps1`, `CLAUDE.md`. No UI change. (Scope was `kit/commands`
+only as approved; the installer and two C# fixes were added later — see "Scope added after approval".)
 
 ## Problem
 
@@ -140,7 +141,9 @@ implementers fan out, supervisors do not, and writing agents require disjoint fi
 
 ## 6. Verification
 
-No unit tests: these are prompts, and nothing in C# reads them (`kit/install.ps1` only copies them).
+No unit tests for the prompts themselves — they are prompts. But they are not inert to the app:
+`KitAssets_Installer` reads the shipped kit folder and installs it at every startup, which is why
+the delivery step below is a rebuild and a restart rather than a copy.
 
 1. The delivery path is the app, not `kit/install.ps1` (CLAUDE.md decision #17): run
    `dotnet build AIOrchestrator.slnx`, restart the orchestrator app, and only THEN confirm all five
@@ -149,6 +152,22 @@ No unit tests: these are prompts, and nothing in C# reads them (`kit/install.ps1
 2. Exercise once in a real orchestration: a supervisor briefs a task carrying `PARALLEL UNITS`, the
    implementer fans out, and its boundary report shows planned-vs-actual agent counts and a
    `WRITING WINDOW` spanning every unit's files.
+
+## Scope added after approval
+
+The approved scope was `kit/commands/*.md` only. Three things were added during implementation, each
+because the review found the approved scope could not deliver on its own. Recorded here so the spec
+matches what shipped:
+
+1. **`kit/install.ps1` — glob the kit folder, and add a UTF-8 BOM.** The script named three role
+   commands by hand while the app's installer globbed all five, so the two delivery paths disagreed.
+   It also could not run at all: BOM-less UTF-8 plus em-dashes, which Windows PowerShell 5.1 reads as
+   Windows-1252, where `0x94` becomes a smart quote the parser treats as a string delimiter.
+2. **`CLAUDE.md` decisions 16 and 17.** 16 records the fan-out asymmetry; 17 records that the app —
+   not `install.ps1` — is the kit's delivery path.
+3. **`KitAssets_Installer.Copy_IfChanged` — copy bytes, not text** (owner-approved, 2026-08-11).
+   `ReadAllText`/`WriteAllText` stripped the BOM on install and, being BOM-blind, could never see
+   that a target needed repairing. Two tests cover it: a BOM survives, and a shebang gains none.
 
 ## Risks
 

@@ -96,9 +96,10 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Launching the app must be enough: the role commands (/supervisor, /implementer,
-    /// /general-supervisor) and the status line script self-install/refresh from the kit shipped
-    /// in the app's output folder — no install.ps1 prerequisite for them.
+    /// Launching the app must be enough: every role command in the shipped kit, plus the status
+    /// line script and the hooks, self-install/refresh from the app's output folder — no
+    /// install.ps1 prerequisite for them. This is THE delivery path: editing kit/commands in the
+    /// repo changes nothing until a rebuild refreshes that output folder.
     /// </summary>
     static void Ensure_KitAssetsInstalled(ISupervisionPaths paths, AIOrchestratorCoreLib.Logging.OrchestrationLog.IOrchestrationLog log)
     {

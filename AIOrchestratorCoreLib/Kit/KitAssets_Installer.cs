@@ -2,7 +2,8 @@ namespace AIOrchestratorCoreLib.Kit;
 
 /// <summary>
 /// Self-installs the kit assets the agents depend on, so launching the app is enough:
-/// - the role commands (/supervisor, /implementer, /general-supervisor) into ~/.claude/commands
+/// - EVERY role command in the shipped kit folder into ~/.claude/commands (the folder is globbed,
+///   never a hard-coded list, so a role added to the kit cannot be silently left uninstalled)
 /// - the status line script into the supervision root
 /// Runs at every app startup; files are overwritten when their content changed (the shipped kit
 /// is the source of truth). The one thing left to install.ps1 is wiring the status line into
@@ -61,14 +62,22 @@ public static class KitAssets_Installer
         return installedFiles;
     }
 
+    /// <summary>
+    /// Copies BYTES, never text. Text would corrupt two things at once: ReadAllText strips a BOM
+    /// and WriteAllText writes none back, so a BOM-carrying source (statusline.ps1 needs one —
+    /// Windows PowerShell 5.1 reads a BOM-less UTF-8 script as the machine's ANSI codepage and
+    /// mis-parses every em-dash) arrives without it; and because the comparison is BOM-blind, an
+    /// already-stripped target reads as identical and is never repaired. Bytes also keep the
+    /// hooks' shebang first, where a BOM would stop them executing.
+    /// </summary>
     static bool Copy_IfChanged(string sourceFile, string targetFile)
     {
-        var sourceContent = File.ReadAllText(sourceFile);
+        var sourceBytes = File.ReadAllBytes(sourceFile);
 
-        if (File.Exists(targetFile) && File.ReadAllText(targetFile) == sourceContent)
+        if (File.Exists(targetFile) && File.ReadAllBytes(targetFile).AsSpan().SequenceEqual(sourceBytes))
             return false;
 
-        File.WriteAllText(targetFile, sourceContent);
+        File.WriteAllBytes(targetFile, sourceBytes);
         return true;
     }
 }

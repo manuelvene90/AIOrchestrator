@@ -1,3 +1,4 @@
+using System.Text;
 using AIOrchestratorCoreLib.Kit;
 using Xunit;
 
@@ -82,6 +83,50 @@ public class KitAssetsInstallerTests : IDisposable
             Path.Combine(_tempRoot, "claude", "hooks"));
 
         Assert.Empty(installer);
+    }
+
+    [Fact]
+    public void Ensure_Installed_SourceHasBom_TargetKeepsIt()
+    {
+        // Windows PowerShell 5.1 reads a BOM-less UTF-8 .ps1 as the machine's ANSI codepage. On a
+        // Windows-1252 box the em-dash (E2 80 94) decodes to three characters whose last is 0x94 —
+        // a smart quote, which the parser honours as a string delimiter, so every quoted string
+        // containing one breaks. The kit ships statusline.ps1 WITH a BOM for exactly that reason,
+        // so installing must not drop it.
+        // GetBytes never emits the preamble — encoderShouldEmitUTF8Identifier only governs
+        // GetPreamble — so the BOM has to be prepended explicitly or the test passes vacuously.
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+        var sourceBytes = utf8.GetPreamble()
+            .Concat(utf8.GetBytes("Write-Output \"model — folder\"\n"))
+            .ToArray();
+        File.WriteAllBytes(_kitStatuslineFile, sourceBytes);
+
+        Run_Installer();
+
+        Assert.Equal(sourceBytes, File.ReadAllBytes(_statuslineTargetFile));
+    }
+
+    [Fact]
+    public void Ensure_Installed_SourceHasNoBom_TargetGainsNone()
+    {
+        // The same copy path carries the *.sh hooks, where a BOM before the shebang stops the
+        // script being executable. Preserving bytes must mean preserving their absence too.
+        var kitHooksFolder = Path.Combine(_tempRoot, "kit", "hooks");
+        var hooksTargetFolder = Path.Combine(_tempRoot, "claude", "hooks");
+        var sourceBytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
+            .GetBytes("#!/usr/bin/env bash\nexit 0\n");
+        Assert.NotEqual(0xEF, sourceBytes[0]);
+
+        Directory.CreateDirectory(kitHooksFolder);
+        File.WriteAllBytes(Path.Combine(kitHooksFolder, "supervisor-ledger-check.sh"), sourceBytes);
+
+        KitAssets_Installer.Ensure_Installed(
+            _kitCommandsFolder, _kitStatuslineFile, _commandsTargetFolder, _statuslineTargetFile,
+            kitHooksFolder, hooksTargetFolder);
+
+        Assert.Equal(
+            sourceBytes,
+            File.ReadAllBytes(Path.Combine(hooksTargetFolder, "supervisor-ledger-check.sh")));
     }
 
     [Fact]
