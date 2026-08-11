@@ -1274,21 +1274,32 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            Dictionary<string, double> maxPercents = [];
+            Dictionary<string, (double Percent, double? WindowIdentity)> maxPercents = [];
 
             // Only probe files with a window that has not already reset. Probe files are never
-            // deleted, and the tolerant parser below cannot date a reading, so without this the
-            // alert scan folded five-day-old closed orchestrations into "the account right now" —
-            // which is how .limit-alerts.json latched at 100% and stopped alerting entirely.
+            // deleted, so without this the alert scan folded five-day-old closed orchestrations into
+            // "the account right now" — which is how .limit-alerts.json latched at 100% and stopped
+            // alerting entirely.
             // Read_Text_Safe rather than File.ReadAllText: a live session rewriting its probe file
             // used to throw a sharing violation out of this loop and abort the whole check.
             foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, DateTime.Now))
             {
-                var percents = Limits.LimitData_Parser.Extract_LimitPercents(UsageTotals_Reader.Read_Text_Safe(usageFile));
+                var windows = Limits.LimitData_Parser.Extract_LimitWindows(UsageTotals_Reader.Read_Text_Safe(usageFile));
 
-                foreach (var pair in percents)
+                foreach (var pair in windows)
                 {
-                    if (!maxPercents.TryGetValue(pair.Key, out var existing) || pair.Value > existing)
+                    if (!maxPercents.TryGetValue(pair.Key, out var known))
+                    {
+                        maxPercents[pair.Key] = pair.Value;
+                        continue;
+                    }
+
+                    // The same rule /limits uses, through the same comparison: a newer window
+                    // replaces an older one outright, and only readings of the SAME window compete
+                    // on percentage.
+                    var instance = Limits.WindowInstance_Order.Compare_Instance(pair.Value.WindowIdentity, known.WindowIdentity);
+
+                    if (instance > 0 || (instance == 0 && pair.Value.Percent > known.Percent))
                         maxPercents[pair.Key] = pair.Value;
                 }
             }
@@ -1300,22 +1311,28 @@ internal sealed class BridgeEngineModel(
 
             foreach (var pair in maxPercents)
             {
-                state.TryGetValue(pair.Key, out var lastAlerted);
+                state.TryGetValue(pair.Key, out var stored);
 
-                if (Limits.LimitAlert_Tracker.Should_ResetWindow(pair.Value, lastAlerted))
+                var lastAlerted = Limits.LimitAlert_Tracker.Resolve_LastAlertedThreshold_ForCurrentWindow(
+                    stored.Threshold,
+                    stored.WindowIdentity,
+                    pair.Value.WindowIdentity,
+                    pair.Value.Percent);
+
+                var newlyCrossed = Limits.LimitAlert_Tracker.Get_NewlyCrossedThreshold_OrNull(pair.Value.Percent, lastAlerted);
+
+                // Record the identity even with nothing to say: a re-armed latch that is never
+                // written back would be re-derived from an unknown window on every single check,
+                // leaving the file permanently mid-migration.
+                if (newlyCrossed == null)
                 {
-                    state[pair.Key] = 0;
-                    lastAlerted = 0;
+                    state[pair.Key] = (lastAlerted, pair.Value.WindowIdentity);
+                    continue;
                 }
 
-                var newlyCrossed = Limits.LimitAlert_Tracker.Get_NewlyCrossedThreshold_OrNull(pair.Value, lastAlerted);
+                state[pair.Key] = (newlyCrossed.Value, pair.Value.WindowIdentity);
 
-                if (newlyCrossed == null)
-                    continue;
-
-                state[pair.Key] = newlyCrossed.Value;
-
-                var alertText = $"⚠️ LIMIT: {Limits.LimitData_Parser.Build_ShortLabel(pair.Key)} {pair.Value:F0}%";
+                var alertText = $"⚠️ LIMIT: {Limits.LimitData_Parser.Build_ShortLabel(pair.Key)} {pair.Value.Percent:F0}%";
                 _log.Log_Warning(GLOBAL_ORCH_ID, $"{alertText} (key '{pair.Key}')");
                 await _telegramClient.Send_Message_Async(null, alertText, cancellationToken);
             }
@@ -1332,40 +1349,27 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    Dictionary<string, double> Load_LimitAlertState()
+    /// <summary>Shape and migration live in <see cref="Limits.LimitAlertState_Store"/>, where they are testable.</summary>
+    Dictionary<string, (double Threshold, double? WindowIdentity)> Load_LimitAlertState()
     {
-        Dictionary<string, double> state = [];
-
         if (!File.Exists(_paths.LimitAlertStateFile))
-            return state;
+            return [];
 
         try
         {
-            if (System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(_paths.LimitAlertStateFile)) is System.Text.Json.Nodes.JsonObject root)
-            {
-                foreach (var pair in root)
-                {
-                    if (pair.Value != null)
-                        state[pair.Key] = pair.Value.GetValue<double>();
-                }
-            }
+            return new Dictionary<string, (double Threshold, double? WindowIdentity)>(
+                Limits.LimitAlertState_Store.Parse(File.ReadAllText(_paths.LimitAlertStateFile)));
         }
         catch
         {
-            // Corrupt state file → re-alert once; harmless.
+            // Unreadable state file → re-alert once; harmless.
+            return [];
         }
-
-        return state;
     }
 
-    void Save_LimitAlertState(Dictionary<string, double> state)
+    void Save_LimitAlertState(Dictionary<string, (double Threshold, double? WindowIdentity)> state)
     {
-        var root = new System.Text.Json.Nodes.JsonObject();
-
-        foreach (var pair in state)
-            root[pair.Key] = pair.Value;
-
-        File.WriteAllText(_paths.LimitAlertStateFile, root.ToJsonString());
+        File.WriteAllText(_paths.LimitAlertStateFile, Limits.LimitAlertState_Store.To_Json(state));
     }
 
     IReadOnlyList<IDiscoveredChannel> Find_ActiveChannels()

@@ -144,7 +144,7 @@ public static class RateLimits_Reader
                     continue;
                 }
 
-                var instance = Compare_WindowInstance(window.ResetsAtLocal, known.ResetsAtLocal);
+                var instance = WindowInstance_Order.Compare_Instance(window.ResetsAtLocal, known.ResetsAtLocal);
 
                 // A LATER reset stamp is a DIFFERENT, newer window. The percentage being held
                 // describes a window that has since rolled over, so it is not evidence about this
@@ -221,27 +221,6 @@ public static class RateLimits_Reader
     static bool Is_ExpiredWindow(DateTime? resetsAtLocal, DateTime nowLocal)
     {
         return resetsAtLocal != null && resetsAtLocal.Value <= nowLocal;
-    }
-
-    /// <summary>
-    /// Orders two readings of the same window NAME by which window INSTANCE they describe:
-    /// positive when the candidate is newer than the one held, negative when older, zero when they
-    /// are the same instance (or neither can be dated, in which case they are treated as comparable
-    /// so the old highest-wins behaviour still applies). An undated reading never displaces a dated
-    /// one — it cannot be shown to be current.
-    /// </summary>
-    static int Compare_WindowInstance(DateTime? candidateResetsAtLocal, DateTime? knownResetsAtLocal)
-    {
-        if (candidateResetsAtLocal == null && knownResetsAtLocal == null)
-            return 0;
-
-        if (candidateResetsAtLocal == null)
-            return -1;
-
-        if (knownResetsAtLocal == null)
-            return 1;
-
-        return candidateResetsAtLocal.Value.CompareTo(knownResetsAtLocal.Value);
     }
 
     static DateTime? Read_ResetsAt_OrNull(JsonObject window)
