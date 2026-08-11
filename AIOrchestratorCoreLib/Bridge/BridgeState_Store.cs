@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Bridge;
@@ -7,22 +9,118 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// <summary>
 /// Persists bridge progress (.bridge-state.json): per-file mirror offsets and the last processed
 /// Telegram update id, so an app restart neither re-mirrors old entries nor re-routes old messages.
+/// <para>
+/// Losing this file is survivable; corrupting it must never be fatal. A fresh cursor means Telegram
+/// re-serves the updates it still has queued and the tailers re-mirror a little recent traffic —
+/// duplicate lines in a topic, i.e. noise the owner can read past. A load that THROWS is a different
+/// order of harm: its only caller runs on the app's startup path, so an exception there means the
+/// bridge is never constructed at all and the app comes up permanently Telegram-blind, with no way
+/// back until a human finds and deletes the file. Noise beats losing the owner's remote control.
+/// </para>
 /// </summary>
 public static class BridgeState_Store
 {
+    /// <summary>
+    /// Orch id used for app-global log entries. This is the same empty-string id
+    /// <c>BridgeEngineModel.GLOBAL_ORCH_ID</c> holds; that one is private to its own class, and
+    /// <c>IOrchestrationLogEntry</c> documents "OrchId is empty for app-global events" as the contract.
+    /// </summary>
+    const string GLOBAL_ORCH_ID = "";
+
+    const string CORRUPT_FILE_MARKER = "corrupt";
+    const string QUARANTINE_STAMP_FORMAT = "yyyyMMdd-HHmmss";
+
+    /// <summary>
+    /// Reads the persisted cursor, or an empty one when there is nothing usable on disk.
+    /// Corruption is handled but not reported anywhere — prefer the overload taking a log.
+    /// </summary>
     public static (IReadOnlyDictionary<string, long> FileOffsets, long LastUpdateId) Load_OrEmpty(ISupervisionPaths paths)
     {
-        Dictionary<string, long> offsets = [];
+        return Load_OrEmpty(paths, log: null);
+    }
+
+    /// <summary>
+    /// Reads the persisted cursor, or an empty one when there is nothing usable on disk. A damaged
+    /// file is moved aside to a <c>.corrupt-yyyyMMdd-HHmmss.json</c> sibling (so it can be inspected
+    /// and so the next save starts clean) and reported through <paramref name="log"/>. Never throws
+    /// for the state of the file itself.
+    /// </summary>
+    public static (IReadOnlyDictionary<string, long> FileOffsets, long LastUpdateId) Load_OrEmpty(ISupervisionPaths paths, IOrchestrationLog? log)
+    {
+        Dictionary<string, long> emptyOffsets = [];
 
         if (!File.Exists(paths.BridgeStateFile))
-            return (offsets, 0L);
+            return (emptyOffsets, 0L);
 
-        var text = File.ReadAllText(paths.BridgeStateFile);
+        string text;
+
+        try
+        {
+            text = File.ReadAllText(paths.BridgeStateFile);
+        }
+        catch (Exception readException)
+        {
+            // Broad by intent: locked, denied, unreadable sector — the cause changes nothing here.
+            // The file may well be intact, so it is NOT quarantined; this run just starts blind.
+            log?.Log_Warning(GLOBAL_ORCH_ID, $"Bridge cursor file '{paths.BridgeStateFile}' could not be read ({readException.Message}) — starting from an empty cursor, so recent traffic may be mirrored twice");
+            return (emptyOffsets, 0L);
+        }
+
+        // An empty file is the ordinary shape of "saved but never filled", not damage: no quarantine.
         if (string.IsNullOrWhiteSpace(text))
-            return (offsets, 0L);
+            return (emptyOffsets, 0L);
 
+        try
+        {
+            var parsedState = Parse_State_OrNull(text);
+
+            if (parsedState != null)
+                return parsedState.Value;
+        }
+        catch (Exception parseException)
+        {
+            // Broad by intent: every way a half-written file fails to parse (truncated JSON, a value
+            // of the wrong type) is the same recoverable situation, and it is reported below.
+            Quarantine_And_Report(paths, log, "is not valid bridge state — half-written or damaged", parseException);
+            return (emptyOffsets, 0L);
+        }
+
+        Quarantine_And_Report(paths, log, "parsed as JSON but its root is not an object", null);
+        return (emptyOffsets, 0L);
+    }
+
+    /// <summary>
+    /// Writes the cursor atomically. The folder is created by the writer, so the old explicit
+    /// <c>Directory.CreateDirectory</c> would only repeat work already done one call deeper.
+    /// </summary>
+    public static void Save(ISupervisionPaths paths, IReadOnlyDictionary<string, long> fileOffsets, long lastUpdateId)
+    {
+        var offsetsObject = new JsonObject();
+
+        foreach (var pair in fileOffsets)
+            offsetsObject[pair.Key] = pair.Value;
+
+        var root = new JsonObject
+        {
+            ["fileOffsets"] = offsetsObject,
+            ["lastUpdateId"] = lastUpdateId,
+        };
+
+        // Rewritten ~30 times a minute: a plain truncate-then-write is one full disk away from
+        // leaving a zero-length or half-written cursor behind. The rename cannot do that.
+        Atomic_FileWriter.Write_AllText(paths.BridgeStateFile, root.ToJsonString(JsonWriting.INDENTED));
+    }
+
+    /// <summary>
+    /// Returns the parsed cursor, or null when the text is well-formed JSON of the wrong shape.
+    /// Throws for malformed JSON — the caller treats both outcomes as corruption.
+    /// </summary>
+    static (IReadOnlyDictionary<string, long> FileOffsets, long LastUpdateId)? Parse_State_OrNull(string text)
+    {
         if (JsonNode.Parse(text) is not JsonObject root)
-            return (offsets, 0L);
+            return null;
+
+        Dictionary<string, long> offsets = [];
 
         if (root["fileOffsets"] is JsonObject offsetsObject)
         {
@@ -36,23 +134,49 @@ public static class BridgeState_Store
         var lastUpdateIdNode = root["lastUpdateId"];
         var lastUpdateId = lastUpdateIdNode == null ? 0L : lastUpdateIdNode.GetValue<long>();
 
-        return (offsets, lastUpdateId);
+        // Named local so the tuple is built at the exact element types before it is lifted to nullable.
+        (IReadOnlyDictionary<string, long> FileOffsets, long LastUpdateId) parsedState = (offsets, lastUpdateId);
+        return parsedState;
     }
 
-    public static void Save(ISupervisionPaths paths, IReadOnlyDictionary<string, long> fileOffsets, long lastUpdateId)
+    static void Quarantine_And_Report(ISupervisionPaths paths, IOrchestrationLog? log, string reason, Exception? cause)
     {
-        Directory.CreateDirectory(paths.Root);
+        var quarantinePath = Move_Aside_OrNull(paths.BridgeStateFile);
 
-        var offsetsObject = new JsonObject();
-        foreach (var pair in fileOffsets)
-            offsetsObject[pair.Key] = pair.Value;
+        var evidence = quarantinePath == null
+            ? "it could NOT be moved aside, so the next save overwrites it"
+            : $"it was moved aside to '{quarantinePath}' for inspection";
 
-        var root = new JsonObject
+        log?.Log_Error(
+            GLOBAL_ORCH_ID,
+            $"Bridge cursor file '{paths.BridgeStateFile}' {reason} — starting from an EMPTY cursor, so queued Telegram updates and recent channel entries may arrive a second time; {evidence}",
+            cause);
+    }
+
+    /// <summary>Renames the damaged file to a timestamped sibling; returns null if that failed.</summary>
+    static string? Move_Aside_OrNull(string filePath)
+    {
+        var folder = Path.GetDirectoryName(filePath);
+        var stem = Path.GetFileNameWithoutExtension(filePath);
+        var extension = Path.GetExtension(filePath);
+        var quarantineName = $"{stem}.{CORRUPT_FILE_MARKER}-{DateTime.Now.ToString(QUARANTINE_STAMP_FORMAT)}{extension}";
+
+        var quarantinePath = string.IsNullOrEmpty(folder)
+            ? quarantineName
+            : Path.Combine(folder, quarantineName);
+
+        try
         {
-            ["fileOffsets"] = offsetsObject,
-            ["lastUpdateId"] = lastUpdateId,
-        };
-
-        File.WriteAllText(paths.BridgeStateFile, root.ToJsonString(JsonWriting.INDENTED));
+            // Overwrite so a second corruption inside the same second still clears the live path;
+            // keeping the older copy is worth less than getting the bridge back to a clean cursor.
+            File.Move(filePath, quarantinePath, overwrite: true);
+            return quarantinePath;
+        }
+        catch
+        {
+            // Broad by intent: quarantine is a diagnostic courtesy, not the recovery itself. Failing
+            // to preserve the evidence must not fail the load — the caller reports the miss instead.
+            return null;
+        }
     }
 }

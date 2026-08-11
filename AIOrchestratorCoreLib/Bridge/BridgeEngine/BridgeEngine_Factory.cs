@@ -24,7 +24,8 @@ public static class BridgeEngine_Factory
         IOrchestrationLauncher launcher,
         IOrchestrationLog log)
     {
-        var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths);
+        // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
+        var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
         var tailer = ChannelTailer_Factory.Create(fileOffsets);
 
         var startupConfig = configProvider.Get_Current();
