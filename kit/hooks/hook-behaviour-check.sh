@@ -92,6 +92,17 @@ check "an unknown tool is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" '{"t
 check "Edit into the repo" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Edit","tool_input":{"file_path":"C:/repo/Foo.cs"}}')")"
 
 # Unblocking is not moving in the background; briefing is. The app publishes who is waiting.
+#
+# READ THIS BEFORE TRUSTING THE TWO CASES BELOW. The list is HAND-WRITTEN here, so they prove only
+# that the hook reads it correctly — they can say nothing about whether the app publishes the right
+# members into it, and a bug in the PUBLISHER would leave this check green. That half has already
+# been wrong once: the publisher answered "spoke last" instead of "has filed work and is waiting on a
+# verdict", so a member whose only entry was "imp-1 online" was published as waiting and the hook
+# then permitted BRIEFING it — the exact thing this exemption exists to forbid.
+#
+# The publisher is covered in C#, by MemberStateAppEntryTests. Nothing joins the two halves; that
+# needs a harness that can run the app's tick, which does not exist yet. Do not read a green run here
+# as end-to-end.
 printf 'imp-2\n' > "$SUPERVISION/.awaiting-verdict"
 check "Edit a member that IS waiting" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SUPERVISION/imp-2/channel.md\"}}")")"
 check "same, backslash path" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WIN_SUPERVISION\\\\imp-2\\\\channel.md\"}}")")"
