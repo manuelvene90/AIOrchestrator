@@ -32,10 +32,13 @@ New-Item -ItemType Directory -Force $commandsFolder | Out-Null
 New-Item -ItemType Directory -Force $supervisionFolder | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $supervisionFolder '.requests') | Out-Null
 
-Copy-Item (Join-Path $kitFolder 'commands\supervisor.md') $commandsFolder -Force
-Copy-Item (Join-Path $kitFolder 'commands\implementer.md') $commandsFolder -Force
-Copy-Item (Join-Path $kitFolder 'commands\general-supervisor.md') $commandsFolder -Force
-Write-Host 'Installed /supervisor, /implementer, /general-supervisor commands.' -ForegroundColor Green
+# Every .md in kit\commands is a role command — copy them all, so a new role can never be
+# added to the kit and silently never installed (reviewer.md and solo.md were missing here
+# from the day they were written).
+$roleCommands = Get-ChildItem (Join-Path $kitFolder 'commands') -Filter *.md
+Copy-Item $roleCommands.FullName $commandsFolder -Force
+$installedNames = ($roleCommands | ForEach-Object { '/' + $_.BaseName }) -join ', '
+Write-Host "Installed $($roleCommands.Count) role commands: $installedNames" -ForegroundColor Green
 
 Copy-Item (Join-Path $kitFolder 'statusline\statusline.ps1') $statusLineTarget -Force
 Write-Host 'Installed status line script.' -ForegroundColor Green
