@@ -2443,10 +2443,19 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient == null || session.TelegramTopicId == null)
             return;
 
+        // What is being ended mid-flight, named at the moment they decide. It does NOT block the
+        // close: a ledger that can refuse to let an orchestration end is the tail wagging the dog,
+        // and it is the same shape as every deadlock removed tonight — an enforcement demanding an
+        // action some other state forbids. The owner is already tapping; give them the fact.
+        var unresolved = Planning.PlanProgress_Formatter.Describe_UnresolvedAtClose_OrNull(
+            Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(request.OrchId))));
+
+        var unresolvedPart = unresolved == null ? "" : $"\n\n⚠️ {unresolved}";
+
         var text =
             $"⚠️ Close orchestration '{request.OrchId}'?\n\n"
             + $"Asked by: {request.Requester}\n"
-            + $"Reason: {request.Reason}\n\n"
+            + $"Reason: {request.Reason}{unresolvedPart}\n\n"
             + "This ends every session in it and deletes this topic. It cannot be undone — the folder stays on disk as audit trail. Nothing happens unless you tap.";
 
         if (_configProvider.Get_Current().TelegramItalianLayer)
@@ -2837,7 +2846,10 @@ internal sealed class BridgeEngineModel(
                     {
                         routableMessages.Add(Build_GeneralCommandMessage(message, "List every pending question that awaits me, and which topic to answer each in."));
                     }
-                    else if (command == "progress")
+                    // "left" is an ALIAS, not a second implementation: it is the word the owner used
+                    // ("a slash command that lets me know what's left"), and two commands reading one
+                    // ledger would drift apart — the second-copy hazard applied to features.
+                    else if (command == "progress" || command == "left")
                     {
                         // Answered by the APP straight from PLAN.md — instant, and it works even
                         // while the supervisor is mid-turn (which is exactly when it gets asked).
@@ -2965,7 +2977,8 @@ internal sealed class BridgeEngineModel(
             await client.Set_MyCommands_Async(
                 [
                     ("status", "What every session of this orchestration is doing"),
-                    ("progress", "Task ledger of this orchestration (all of them in General)"),
+                    ("progress", "What's LEFT to do here (all orchestrations in General)"),
+                    ("left", "What's left to do — same as /progress"),
                     ("cost", "What this has cost, per session, and the burn rate"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
@@ -3062,30 +3075,20 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>Full ledger for one orchestration — the raw '- [x]' lines are the point of the command.</summary>
+    /// <summary>
+    /// WHAT IS LEFT first, then the counts — the owner asked for "a slash command that lets me know
+    /// what's left to do", and this used to answer with up to forty raw ledger lines including
+    /// everything already finished. On a 207-line ledger that is a message nobody reads, and their
+    /// rule all evening has been that a long message is a useless one.
+    /// </summary>
     string Build_OrchestrationLedgerText(string orchId, string displayName)
     {
-        const int MAX_LEDGER_LINES = 40;
-
-        var planText = Read_FileText_Safe(_paths.Get_PlanFile(orchId));
-        var progress = Planning.PlanLedger_Parser.Parse_OrNull(planText);
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
 
         if (progress == null)
             return $"{displayName}: no task ledger yet — the supervisor writes PLAN.md once you approve a direction";
 
-        List<string> taskLines = [];
-
-        foreach (var rawLine in planText.Split('\n'))
-        {
-            var line = rawLine.TrimEnd('\r').Trim();
-
-            if (line.StartsWith("- [", StringComparison.Ordinal))
-                taskLines.Add(line);
-        }
-
-        var shown = taskLines.Count <= MAX_LEDGER_LINES ? taskLines : [.. taskLines.Take(MAX_LEDGER_LINES)];
-        var truncationNote = taskLines.Count > MAX_LEDGER_LINES ? $"\n… and {taskLines.Count - MAX_LEDGER_LINES} more" : "";
-
-        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n\n{string.Join('\n', shown)}{truncationNote}";
+        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n\nLEFT:\n{Planning.PlanProgress_Formatter.Describe_Remaining(progress)}";
     }
 
     string Build_OrchestrationCountsLine(string orchId, string displayName)

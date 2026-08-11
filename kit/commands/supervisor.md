@@ -560,11 +560,27 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
 
 - **Create it the moment the owner approves a direction** (same moment you set the orchestration
   name). One task per line, this exact convention:
-  `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked`
+  `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked` · `- [-] not doing`
   Short imperative task texts; headers/notes are ignored by the parser.
+- **A ledger line is a DELIVERABLE, not an EVENT.** It must be something that can be FINISHED:
+  "fix the limits staleness bug" is a line, "imp-1: audit, 22 findings" is a diary entry. An event
+  can never be marked done, so it sits in the denominator forever and drags the percentage down for
+  the rest of the session — that is precisely why the owner has never seen an orchestration reach
+  100%. **A review's findings are not lines; the FIXES are.**
+- **`- [-] not doing` is for work decided AGAINST** — superseded, made irrelevant, or parked for
+  good. Say why on the line: `- [-] rewrite the mirror loop — superseded by the tap guard`. It
+  leaves the total entirely, which is what lets a finished session actually read 100%.
+  **Use it deliberately, never to tidy up.** The count is shown to the owner beside the percentage
+  (`57/57 done (100%) · 3 not doing`), so dropping work is visible by design — you cannot reach 100%
+  by dropping the remainder, you can only make it obvious that you did. Work you have merely stopped
+  doing without deciding stays `[ ]` or `[!]`.
+- **Blocked lines should say what they are blocked ON**: `- [!] migrate the state file — blocked on:
+  owner decision on the schema`. The owner reads these verbatim in `/left`, and "blocked" without a
+  reason tells them nothing they can act on.
 - **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
   the owner → `[!]`. A stale ledger is worse than none — the owner can pull it up at any moment
-  from their phone with `/progress`, which the APP answers straight from this file.
+  from their phone with `/progress` (or `/left`), which the APP answers straight from this file — it
+  leads with what is LEFT, so a ledger full of finished lines still gives them a short answer.
 - Re-read it as your fast resume point after a respawn — it beats replaying the whole channel
   narrative.
 - **One line = one reviewable deliverable — parallel units NEVER become their own lines.** When you

@@ -43,8 +43,8 @@ public class PlanProgressFormatterTests
         Assert.Equal("0/0 done", PlanProgress_Formatter.Describe_Counts(Build(done: 0, total: 0)));
     }
 
-    static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0)
+    static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0, int notDoing = 0)
     {
-        return PlanProgress_Factory.Create(done, inProgress, blocked, total, null);
+        return PlanProgress_Factory.Create(done, inProgress, blocked, notDoing, total, null, [], [], []);
     }
 }
