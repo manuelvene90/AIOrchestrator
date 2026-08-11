@@ -9,4 +9,11 @@ public interface ITailerPollResult
 
     /// <summary>Files whose length shrank since the last poll — an append-only protocol anomaly.</summary>
     IReadOnlyList<string> TruncatedFiles { get; }
+
+    /// <summary>
+    /// "&lt;path&gt; — &lt;error&gt;" for each channel this poll could not read. The tailer has no logger,
+    /// and a channel that fails silently is a session the owner stops hearing from, so the failure
+    /// travels back to the bridge to be logged.
+    /// </summary>
+    IReadOnlyList<string> UnreadableFiles { get; }
 }

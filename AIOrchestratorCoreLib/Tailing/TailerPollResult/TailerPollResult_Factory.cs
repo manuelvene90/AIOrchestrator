@@ -8,6 +8,14 @@ public static class TailerPollResult_Factory
         IReadOnlyList<ICompletedChannelAppend> completedAppends,
         IReadOnlyList<string> truncatedFiles)
     {
-        return new TailerPollResultModel(completedAppends, truncatedFiles);
+        return Create(completedAppends, truncatedFiles, []);
+    }
+
+    public static ITailerPollResult Create(
+        IReadOnlyList<ICompletedChannelAppend> completedAppends,
+        IReadOnlyList<string> truncatedFiles,
+        IReadOnlyList<string> unreadableFiles)
+    {
+        return new TailerPollResultModel(completedAppends, truncatedFiles, unreadableFiles);
     }
 }

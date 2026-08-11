@@ -78,6 +78,23 @@ internal sealed class BridgeEngineModel(
     const int ORPHAN_CONFIRM_MINUTES = 6;
 
     const int MIRROR_TICK_MILLISECONDS = 2000;
+
+    /// <summary>
+    /// Pause before re-sending a channel whose mirror send failed. The tailer re-emits an
+    /// unconfirmed append on EVERY poll — that is what makes the retry possible — so without this
+    /// the retry would be a 2-second hammer against an endpoint that is already failing, which is
+    /// precisely the shape that earns a bot a server-side throttle.
+    /// </summary>
+    const int MIRROR_RETRY_BACKOFF_SECONDS = 30;
+
+    /// <summary>
+    /// How long a failing channel keeps being retried before its entries are declared undeliverable
+    /// and dropped, loudly. Generous ON PURPOSE: a Telegram outage must not cost the owner their
+    /// supervisors' messages, and this one lasted ~2.5 hours on 2026-08-11. It is bounded only
+    /// because the alternative — retrying forever — lets one permanently-rejected entry block a
+    /// channel's mirror for the rest of the app's life.
+    /// </summary>
+    const int MIRROR_RETRY_WINDOW_MINUTES = 30;
     const int INBOUND_LONG_POLL_SECONDS = 20;
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
     const int INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS = 60000;
@@ -131,6 +148,10 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>"&lt;file&gt;|&lt;line&gt;" of every malformed header already reported — say it once, not every tick.</summary>
     readonly HashSet<string> _reportedMalformedHeaders = [];
+
+    /// <summary>When a channel's mirror first failed, and when it was last attempted — the retry window.</summary>
+    readonly Dictionary<string, DateTime> _mirrorRetryFirstFailureUtc = [];
+    readonly Dictionary<string, DateTime> _mirrorRetryLastAttemptUtc = [];
 
     /// <summary>Channels whose pre-existing malformed headers have been absorbed as history.</summary>
     readonly HashSet<string> _channelsShapeBaselined = [];
@@ -541,10 +562,19 @@ internal sealed class BridgeEngineModel(
         foreach (var truncatedFile in pollResult.TruncatedFiles)
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Channel file shrank (append-only protocol anomaly), offset reset: {truncatedFile}");
 
+        // The tailer has no logger of its own. A channel it cannot read is a session the owner
+        // silently stops hearing from, so the failure is surfaced here and the next poll retries it.
+        foreach (var unreadableFile in pollResult.UnreadableFiles)
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Channel file could not be read this tick (the other channels are unaffected, this one retries): {unreadableFile}");
+
         foreach (var append in pollResult.CompletedAppends)
         {
-            await Mirror_Append_Async(append, cancellationToken);
+            if (!Is_MirrorAttemptDue(append.Channel.FilePath))
+                continue;
+
+            var delivered = await Mirror_Append_Async(append, cancellationToken);
             Raise_OrchestrationActivity(append.Channel.OrchId);
+            Settle_MirrorAttempt(append, delivered);
         }
 
         await Check_UsageLimits_Async(cancellationToken);
@@ -566,6 +596,61 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// Whether this channel may be sent NOW. Only channels whose last send failed are ever held
+    /// back: they are re-emitted by the tailer on every poll, and re-sending every 2 s to an
+    /// endpoint that is already failing is how a bot earns a server-side throttle.
+    /// </summary>
+    bool Is_MirrorAttemptDue(string channelFilePath)
+    {
+        if (!_mirrorRetryLastAttemptUtc.TryGetValue(channelFilePath, out var lastAttemptUtc))
+            return true;
+
+        return DateTime.UtcNow - lastAttemptUtc >= TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS);
+    }
+
+    /// <summary>
+    /// Decides what happens to the entries just attempted. Confirming is what lets the persisted
+    /// cursor move past them, so NOT confirming is the retry: the tailer re-emits them next poll.
+    /// Before this, the cursor advanced during the read and a failed send dropped the owner's
+    /// messages permanently — the outage of 2026-08-11 lost every entry that met a 502.
+    /// </summary>
+    void Settle_MirrorAttempt(ICompletedChannelAppend append, bool delivered)
+    {
+        var channelFilePath = append.Channel.FilePath;
+
+        if (delivered)
+        {
+            _mirrorRetryFirstFailureUtc.Remove(channelFilePath);
+            _mirrorRetryLastAttemptUtc.Remove(channelFilePath);
+            _tailer.Confirm_Append(channelFilePath);
+            return;
+        }
+
+        _mirrorRetryLastAttemptUtc[channelFilePath] = DateTime.UtcNow;
+
+        if (!_mirrorRetryFirstFailureUtc.TryGetValue(channelFilePath, out var firstFailureUtc))
+        {
+            firstFailureUtc = DateTime.UtcNow;
+            _mirrorRetryFirstFailureUtc[channelFilePath] = firstFailureUtc;
+        }
+
+        if (DateTime.UtcNow - firstFailureUtc < TimeSpan.FromMinutes(MIRROR_RETRY_WINDOW_MINUTES))
+            return;
+
+        // The window is spent, so this confirm DROPS the entries. Said at Error and naming the
+        // channel, because the alternative — a channel that quietly never mirrors again — is the
+        // exact failure the owner reported: cut off, with no way to know.
+        _log.Log_Error(
+            append.Channel.OrchId,
+            $"Telegram mirror gave up after {MIRROR_RETRY_WINDOW_MINUTES} minutes of retries — entries from '{Path.GetFileName(channelFilePath)}' never reached the phone",
+            null);
+
+        _mirrorRetryFirstFailureUtc.Remove(channelFilePath);
+        _mirrorRetryLastAttemptUtc.Remove(channelFilePath);
+        _tailer.Confirm_Append(channelFilePath);
+    }
+
+    /// <summary>
     /// Archives the old tail of long channels so respawned sessions boot cheaply. Runs AFTER the
     /// mirror poll and re-anchors the tailer's offset to the rewritten file — otherwise the
     /// shrink reads as a protocol anomaly and the whole file is re-mirrored to Telegram.
@@ -574,6 +659,12 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
         {
+            // A channel that still owes Telegram a delivery must not be rewritten underneath the
+            // tailer: compaction re-anchors the offset to the new file, and the entries waiting to
+            // be retried would go with it. It compacts on a later tick, once the send lands.
+            if (_tailer.Has_UnconfirmedEntries(channel.FilePath))
+                continue;
+
             var newLength = Channel_Compactor.Compact_IfNeeded(channel.FilePath);
 
             if (newLength == null)
@@ -1326,7 +1417,13 @@ internal sealed class BridgeEngineModel(
         return false;
     }
 
-    async Task Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
+    /// <summary>
+    /// Mirrors one append to Telegram. Returns whether the caller may confirm it — TRUE when every
+    /// entry reached the phone AND when there was deliberately nothing to send (no client, a
+    /// silenced topic, nothing mirrorable); FALSE only when a send actually failed, which leaves
+    /// the append unconfirmed so the tailer re-emits it and the retry can happen.
+    /// </summary>
+    async Task<bool> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
         foreach (var entry in append.Entries)
         {
@@ -1338,19 +1435,21 @@ internal sealed class BridgeEngineModel(
                 _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
         }
 
+        // File-only mode: there is no phone to reach, so the entries are as delivered as they will
+        // ever be. Returning false here would freeze the cursor forever on a machine with no bot.
         if (_telegramClient == null)
-            return;
+            return true;
 
         var mirrorableEntries = Select_MirrorableEntries(append);
 
         if (mirrorableEntries.Count == 0)
-            return;
+            return true;
 
         // TOPIC SILENCE ("I'm at the PC, talking to this supervisor in its terminal"): drop this
         // orchestration's outbound traffic entirely. Unlike DND, nothing is queued for later —
         // the owner is already reading it live in the terminal, and offsets keep advancing.
         if (Is_TopicSilenced(append.Channel.OrchId))
-            return;
+            return true;
 
         var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
 
@@ -1462,9 +1561,17 @@ internal sealed class BridgeEngineModel(
             catch (Exception ex)
             {
                 _log.Log_Error(append.Channel.OrchId, $"Telegram mirror send failed for entry #{entry.Index}", ex);
-                return;
+
+                // FALSE, not "consumed": the caller leaves this append unconfirmed and the tailer
+                // re-emits it, so the entry is retried instead of vanishing. Stopping at the first
+                // failure keeps the channel in ORDER, at the price of re-sending any entry of this
+                // same append that already landed. A duplicate on the phone is a nuisance; a
+                // supervisor's message that never arrives is what the owner reported today.
+                return false;
             }
         }
+
+        return true;
     }
 
     /// <summary>

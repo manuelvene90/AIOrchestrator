@@ -16,6 +16,13 @@ internal sealed class ChannelTailerModel : IChannelTailer
     {
         public long Offset;
         public readonly StringBuilder Pending = new();
+
+        /// <summary>
+        /// Text of entries already emitted to the bridge but not yet acknowledged as delivered.
+        /// It is subtracted from the persisted offset and re-emitted on the next poll, so a send
+        /// that failed is retried instead of being silently skipped.
+        /// </summary>
+        public readonly StringBuilder Unconfirmed = new();
         public int QuietPolls;
     }
 
@@ -34,47 +41,106 @@ internal sealed class ChannelTailerModel : IChannelTailer
     {
         List<ICompletedChannelAppend> completedAppends = [];
         List<string> truncatedFiles = [];
+        List<string> unreadableFiles = [];
 
         foreach (var channel in channels)
         {
-            var fileLength = Get_FileLength_OrNull(channel.FilePath);
-            if (fileLength == null)
-                continue;
-
-            if (!_states.TryGetValue(channel.FilePath, out var state))
+            try
             {
-                state = new FileTailState { Offset = fileLength.Value };
-                _states[channel.FilePath] = state;
-                continue;
-            }
+                var entries = Poll_OneChannel(channel, truncatedFiles);
 
-            if (fileLength.Value < state.Offset)
-            {
-                state.Offset = fileLength.Value;
-                state.Pending.Clear();
-                state.QuietPolls = 0;
-                truncatedFiles.Add(channel.FilePath);
-                continue;
+                if (entries.Count > 0)
+                    completedAppends.Add(CompletedChannelAppend_Factory.Create(channel, entries));
             }
-
-            if (fileLength.Value > state.Offset)
+            catch (Exception ex)
             {
-                var delta = Read_From(channel.FilePath, state.Offset, fileLength.Value);
-                state.Pending.Append(delta);
-                state.Offset = fileLength.Value;
-                state.QuietPolls = 0;
+                // One unreadable channel must never stop the others. Before this, an IOException on
+                // any file threw out of Poll and DISCARDED the appends already built for earlier
+                // channels — whose offsets had advanced, so those entries were never mirrored and
+                // never came back. Reported to the caller, which owns the log; the next poll retries
+                // this file from the same offset, so nothing here is lost either.
+                unreadableFiles.Add($"{channel.FilePath} — {ex.GetType().Name}: {ex.Message}");
             }
-            else
-            {
-                state.QuietPolls++;
-            }
-
-            var entries = Extract_CompleteEntries(state);
-            if (entries.Count > 0)
-                completedAppends.Add(CompletedChannelAppend_Factory.Create(channel, entries));
         }
 
-        return TailerPollResult_Factory.Create(completedAppends, truncatedFiles);
+        return TailerPollResult_Factory.Create(completedAppends, truncatedFiles, unreadableFiles);
+    }
+
+    IReadOnlyList<IChannelEntry> Poll_OneChannel(IDiscoveredChannel channel, List<string> truncatedFiles)
+    {
+        var fileLength = Get_FileLength_OrNull(channel.FilePath);
+        if (fileLength == null)
+            return [];
+
+        if (!_states.TryGetValue(channel.FilePath, out var state))
+        {
+            state = new FileTailState { Offset = fileLength.Value };
+            _states[channel.FilePath] = state;
+            return [];
+        }
+
+        // Anything still unconfirmed was emitted on an earlier poll and never acknowledged — a
+        // Telegram send that failed, or a tick that died before it could confirm. It goes back to
+        // the FRONT of the pending text and is re-emitted, in order, ahead of anything new. This is
+        // what makes the mirror at-least-once: entries leave only when the bridge says they were
+        // delivered, never as a side effect of an offset that ran ahead of the send.
+        Rewind_Unconfirmed(state);
+
+        if (fileLength.Value < state.Offset)
+        {
+            state.Offset = fileLength.Value;
+            state.Pending.Clear();
+            state.QuietPolls = 0;
+            truncatedFiles.Add(channel.FilePath);
+            return [];
+        }
+
+        if (fileLength.Value > state.Offset)
+        {
+            var delta = Read_From(channel.FilePath, state.Offset, fileLength.Value);
+            state.Pending.Append(delta);
+            state.Offset = fileLength.Value;
+            state.QuietPolls = 0;
+        }
+        else
+        {
+            state.QuietPolls++;
+        }
+
+        return Extract_CompleteEntries(state);
+    }
+
+    /// <summary>
+    /// The bridge delivered (or deliberately dropped) the entries last emitted for this file, so the
+    /// persisted cursor may finally move past them.
+    /// </summary>
+    public void Confirm_Append(string channelFilePath)
+    {
+        if (!_states.TryGetValue(channelFilePath, out var state))
+            return;
+
+        state.Unconfirmed.Clear();
+    }
+
+    public bool Has_UnconfirmedEntries(string channelFilePath)
+    {
+        if (!_states.TryGetValue(channelFilePath, out var state))
+            return false;
+
+        return state.Unconfirmed.Length > 0;
+    }
+
+    static void Rewind_Unconfirmed(FileTailState state)
+    {
+        if (state.Unconfirmed.Length == 0)
+            return;
+
+        state.Pending.Insert(0, state.Unconfirmed.ToString());
+        state.Unconfirmed.Clear();
+
+        // Those entries were already judged COMPLETE once; making them serve the quiet-poll window
+        // a second time would delay every retry by two more polls for no new information.
+        state.QuietPolls = QUIET_POLLS_TO_FLUSH;
     }
 
     public void Set_Offset(string channelFilePath, long offset)
@@ -86,9 +152,12 @@ internal sealed class ChannelTailerModel : IChannelTailer
         }
 
         // Pending bytes belong to the pre-rewrite file — dropping them is the point: everything
-        // up to the new length has already been mirrored.
+        // up to the new length has already been mirrored. Unconfirmed bytes go with them: they
+        // point into a file that no longer exists in that shape. The bridge does not compact a
+        // channel that still owes a delivery, so this discards nothing in practice.
         state.Offset = offset;
         state.Pending.Clear();
+        state.Unconfirmed.Clear();
         state.QuietPolls = 0;
     }
 
@@ -98,8 +167,13 @@ internal sealed class ChannelTailerModel : IChannelTailer
 
         foreach (var pair in _states)
         {
-            // Un-emitted pending bytes stay "unread" in the snapshot so a restart re-reads them.
-            snapshot[pair.Key] = pair.Value.Offset - Encoding.UTF8.GetByteCount(pair.Value.Pending.ToString());
+            // Un-emitted pending bytes stay "unread" in the snapshot so a restart re-reads them —
+            // and so do UNCONFIRMED ones, which is what carries at-least-once across a restart: a
+            // send that never landed is re-read and re-sent by the next process rather than lost
+            // with the memory of the one that failed.
+            snapshot[pair.Key] = pair.Value.Offset
+                - Encoding.UTF8.GetByteCount(pair.Value.Pending.ToString())
+                - Encoding.UTF8.GetByteCount(pair.Value.Unconfirmed.ToString());
         }
 
         return snapshot;
@@ -142,8 +216,19 @@ internal sealed class ChannelTailerModel : IChannelTailer
             return [];
 
         var remainingText = string.Join('\n', lines.Skip(consumedUpToLine));
+
+        // The exact bytes these entries occupy — remainingText is a suffix of pendingText, so the
+        // difference is the consumed prefix with no re-joining guesswork about line breaks.
+        var consumedText = pendingText[..(pendingText.Length - remainingText.Length)];
+
         state.Pending.Clear();
         state.Pending.Append(remainingText);
+
+        // Only text that produced ENTRIES is held for confirmation. Consumed noise (a preamble, a
+        // header-less block) has nothing to deliver, so holding it would freeze the cursor waiting
+        // for an acknowledgement that can never come.
+        if (entries.Count > 0)
+            state.Unconfirmed.Append(consumedText);
 
         return entries;
     }
