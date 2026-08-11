@@ -110,6 +110,11 @@ check "Write PLAN.md" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Writ
 check "Write PLAN.md, backslash path" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path "$WIN_SUPERVISION\\PLAN.md")")")"
 check "Edit owner-channel.md" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$SUPERVISION/owner-channel.md")")")"
 
+# The ANCHORING of the ledger exemption, which is the fix for a CRITICAL: any file merely NAMED
+# PLAN.md used to satisfy it. Only the one inside this orchestration's own folder may.
+check "a PLAN.md outside supervision is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/PLAN.md')")")"
+check "another orchestration's PLAN.md is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path "$TEMP_HOME/.claude/supervision/other-orch/PLAN.md")")")"
+
 # A command line cannot be scoped, so it gets nothing — not even for the ledger. This is the
 # compound command supervisor.md prescribes at a boundary, which used to be allowed in full.
 check "Bash mentioning PLAN.md is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Bash command "cat >> $SUPERVISION/imp-1/channel.md && echo x >> $SUPERVISION/PLAN.md")")")"
@@ -146,6 +151,15 @@ printf 'imp-2\n' > "$SUPERVISION/.awaiting-verdict"
 check "Edit a member that IS waiting" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$SUPERVISION/imp-2/channel.md")")")"
 check "same, backslash path" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$WIN_SUPERVISION\\imp-2\\channel.md")")")"
 check "Edit a member that is NOT waiting" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$SUPERVISION/imp-1/channel.md")")")"
+
+# TWO-DIGIT IDS. `imp-1` must not satisfy `imp-10`, and `imp-10` must work at all. The whole-line
+# match is already correct in both directions — which is exactly why it needs a case: a correct
+# behaviour with nothing pinning it is one refactor away from being an incorrect one.
+check "imp-1 waiting does NOT unlock imp-10" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$SUPERVISION/imp-10/channel.md")")")"
+printf 'imp-10\n' > "$SUPERVISION/.awaiting-verdict"
+check "a two-digit member id works" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$SUPERVISION/imp-10/channel.md")")")"
+check "imp-10 waiting does NOT unlock imp-1" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$SUPERVISION/imp-1/channel.md")")")"
+printf 'imp-2\n' > "$SUPERVISION/.awaiting-verdict"
 
 # A channel is append-only and Write REPLACES it. A supervisor's Write on imp-3/channel.md once
 # destroyed that member's own boot entry, and it waited 35 minutes for a brief already in its file.
