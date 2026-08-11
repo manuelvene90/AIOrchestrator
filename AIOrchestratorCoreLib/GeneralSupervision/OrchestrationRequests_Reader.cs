@@ -112,7 +112,11 @@ public static class OrchestrationRequests_Reader
         return closeOrchestrationRequests.Count == 1 ? closeOrchestrationRequests[0] : null;
     }
 
-    static string? Peek_OrchId_OrNull(string filePath)
+    /// <summary>
+    /// Best-effort orch id from a file the strict parse has REJECTED, so a bad request can still be
+    /// reported to the session that wrote it instead of vanishing silently.
+    /// </summary>
+    public static string? Peek_OrchId_OrNull(string filePath)
     {
         try
         {

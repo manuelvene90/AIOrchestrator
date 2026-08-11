@@ -2230,8 +2230,18 @@ internal sealed class BridgeEngineModel(
                 // Parking failed, so the guard cannot be honoured — the one thing not to do here is
                 // fall through and close it anyway.
                 _log.Log_Error(request.OrchId, "close-orchestration could not be held for confirmation — NOT closed", ex);
-                Append_GeneralAppEntry($"close-orchestration FAILED: '{request.OrchId}'", $"Nothing was closed. Error: {ex.Message}");
-                Delete_RequestFile(request.SourceFilePath);
+
+                // The REQUESTER is told, in its own channel, not the general one: it is the session
+                // waiting on this and it would otherwise sit there believing the owner had been
+                // asked. And the file is archived rather than deleted, because "nothing on disk says
+                // who asked" is the hole this whole unit exists to close — a failure path is exactly
+                // where it would have reopened.
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    "close request NOT held — nothing was closed",
+                    $"Your close request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and nothing was closed. Everything is still running. Ask again if the close is still wanted.");
+
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
             }
         }
     }
@@ -2246,6 +2256,12 @@ internal sealed class BridgeEngineModel(
     /// The ONE close execution. Both authorised routes end here — the owner's click in the app and
     /// the owner's tap on a held agent request — so a close cannot come to mean two different things
     /// depending on which door it walked through.
+    ///
+    /// It reports a failure and then RETHROWS, because the two callers need opposite things. The tap
+    /// arrives on a background loop with nobody watching, so it swallows; the owner's click has a
+    /// person in front of it who has just answered a modal, and swallowing there told them the
+    /// orchestration was closed while its card sat open in front of them. Catching everything here
+    /// made the UI's own error handling unreachable — dead code that could never run.
     /// </summary>
     void Execute_Close(string orchId, string reason, string requester, string authorisation)
     {
@@ -2267,7 +2283,31 @@ internal sealed class BridgeEngineModel(
         {
             _log.Log_Error(orchId, "close-orchestration failed", ex);
             Append_GeneralAppEntry($"close-orchestration FAILED: '{orchId}'", $"Error: {ex.Message}");
+
+            // Reported, but NOT absorbed — whoever asked has to be able to find out.
+            throw;
         }
+    }
+
+    /// <summary>
+    /// Tells the REQUESTER that its close was not honoured. A request that vanishes without a word
+    /// leaves the session that asked believing the owner is still deciding — which is the same
+    /// silence the whole guard is meant to remove, arriving through the failure path instead.
+    ///
+    /// The orch id is recovered with <see cref="OrchestrationRequests_Reader.Peek_OrchId_OrNull"/>,
+    /// which reads it best-effort from a file the strict parse has already rejected.
+    /// </summary>
+    void Report_UnhonouredCloseRequest(string parkedPath, string what, string advice)
+    {
+        var orchId = OrchestrationRequests_Reader.Peek_OrchId_OrNull(parkedPath);
+
+        if (orchId == null || _store.Get_Session_OrNull(orchId) == null)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"A close request {what} and no orchestration could be named to tell: {parkedPath}");
+            return;
+        }
+
+        Append_OrchestrationAppEntry(orchId, $"close request {what} — nothing was closed", advice);
     }
 
     void Archive_ResolvedRequest_BestEffort(string requestFilePath, string outcome)
@@ -2351,7 +2391,8 @@ internal sealed class BridgeEngineModel(
         if (request == null)
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Parked close request is unreadable — archived unexecuted: {parkedPath}");
-            CloseConfirmation_Parking.Archive(_paths, parkedPath, "unreadable");
+            Archive_ResolvedRequest_BestEffort(parkedPath, "unreadable");
+            Report_UnhonouredCloseRequest(parkedPath, "could not be read", "It was archived unexecuted and nothing was closed. Drop a fresh, valid request if the close is still wanted.");
             return;
         }
 
@@ -2362,7 +2403,7 @@ internal sealed class BridgeEngineModel(
         if (session == null || session.ClosedUtc != null)
         {
             _log.Log_Info(request.OrchId, "Parked close request is moot — the orchestration is already closed");
-            CloseConfirmation_Parking.Archive(_paths, parkedPath, "moot");
+            Archive_ResolvedRequest_BestEffort(parkedPath, "moot");
             return;
         }
 
@@ -2522,6 +2563,16 @@ internal sealed class BridgeEngineModel(
             }
         }
 
+        // A TAP IS THE OWNER SPEAKING, and this path returns before the generic routing that would
+        // otherwise say so. Without it, declining a close woke the supervisor into a session where
+        // the awaiting-answer hook denied every tool call until the flag expired — the owner would
+        // have said "keep it open" and got a deadlocked supervisor for the answer.
+        if (Note_OwnerSpoke_AndWasAway())
+            await Exit_AwayMode_Async(cancellationToken);
+
+        Clear_OpenQuestions(confirmation.OrchId);
+        Clear_AwaitingAnswerFlag(confirmation.OrchId);
+
         if (confirmation.Confirms)
             Execute_ConfirmedClose(confirmation);
         else
@@ -2557,9 +2608,15 @@ internal sealed class BridgeEngineModel(
         {
             Execute_Close(
                 confirmation.OrchId,
-                request?.Reason ?? "no reason recorded",
-                request?.Requester ?? "unrecorded",
+                request.Reason,
+                request.Requester,
                 "The owner confirmed it with a tap.");
+        }
+        catch (Exception)
+        {
+            // Already logged and reported to the general channel by Execute_Close. Swallowed HERE
+            // because this runs on the inbound loop with nobody watching, and a throw would take the
+            // loop down; the owner's own close does the opposite and surfaces it.
         }
         finally
         {
