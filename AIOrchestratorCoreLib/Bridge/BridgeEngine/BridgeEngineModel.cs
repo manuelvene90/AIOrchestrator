@@ -1276,9 +1276,15 @@ internal sealed class BridgeEngineModel(
         {
             Dictionary<string, double> maxPercents = [];
 
-            foreach (var usageFile in Directory.EnumerateFiles(_paths.Root, "*.usage.json", SearchOption.AllDirectories))
+            // Only probe files with a window that has not already reset. Probe files are never
+            // deleted, and the tolerant parser below cannot date a reading, so without this the
+            // alert scan folded five-day-old closed orchestrations into "the account right now" —
+            // which is how .limit-alerts.json latched at 100% and stopped alerting entirely.
+            // Read_Text_Safe rather than File.ReadAllText: a live session rewriting its probe file
+            // used to throw a sharing violation out of this loop and abort the whole check.
+            foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, DateTime.Now))
             {
-                var percents = Limits.LimitData_Parser.Extract_LimitPercents(File.ReadAllText(usageFile));
+                var percents = Limits.LimitData_Parser.Extract_LimitPercents(UsageTotals_Reader.Read_Text_Safe(usageFile));
 
                 foreach (var pair in percents)
                 {
@@ -2783,7 +2789,10 @@ internal sealed class BridgeEngineModel(
 
     string Build_LimitsReportText()
     {
-        var windows = RateLimits_Reader.Read_WorstAcrossSessions(UsageTotals_Reader.Find_AllUsageFiles(_paths));
+        // The live-window filter is what keeps the "seen from" model list honest too: a five-day-old
+        // closed orchestration was still contributing its model name to a report about right now.
+        var now = DateTime.Now;
+        var windows = RateLimits_Reader.Read_WorstAcrossSessions(RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, now), now);
 
         if (windows.Count == 0)
             return "no limit data in the status line of this Claude Code version — nothing to report (the automatic limit alerts idle for the same reason)";
@@ -4590,14 +4599,27 @@ internal sealed class BridgeEngineModel(
             ? Build_FirstNarration(activity)
             : $"🔴 Sup: still at it{(activity == null ? "" : $" — {activity}")} · your message has been waiting {waitedFor}";
 
+        // ONE canvas per delivery. The receipt is ALREADY the owner-facing message for this exchange
+        // (✓ → ✓✓ → ✓✓ · handoff), and the handoff line has usually just written "Sup: busy" onto
+        // it — so sending here stacked a SECOND notification saying what the receipt already said
+        // (owner, 2026-08-11). Adopting the receipt makes every later repeat edit that same line,
+        // which is the contract; sending survives only as the fallback for a delivery whose receipt
+        // never published.
+        var canvasMessageId = pending.NarrationMessageId ?? pending.ReceiptMessageId;
+        var isReceiptCanvas = canvasMessageId != null && canvasMessageId == pending.ReceiptMessageId;
+
         try
         {
             // Repeats EDIT the first narration instead of sending another message — one line that
             // keeps counting up, not a column of notifications. Same reasoning as the turn-ended
             // receipt below, which has always worked this way.
-            if (pending.NarrationMessageId != null)
+            if (canvasMessageId != null)
             {
-                await _telegramClient.Edit_MessageText_Async(pending.NarrationMessageId.Value, text, cancellationToken);
+                // The ✓✓ has to survive the edit: the owner still needs to see their message landed.
+                var canvasText = isReceiptCanvas ? $"✓✓  ·  {text}" : text;
+
+                await _telegramClient.Edit_MessageText_Async(canvasMessageId.Value, canvasText, cancellationToken);
+                pending.NarrationMessageId = canvasMessageId;
             }
             else
             {
@@ -4613,7 +4635,12 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             // A failed EDIT must not freeze the narration forever on a dead message id: drop it so
-            // the next repeat sends a fresh line and starts editing that one instead.
+            // the next repeat sends a fresh line and starts editing that one instead. A receipt we
+            // cannot edit is dead for the turn-ended announcement too, so it goes with it —
+            // otherwise the same dead id would be re-adopted as the canvas on every later repeat.
+            if (isReceiptCanvas)
+                pending.ReceiptMessageId = null;
+
             pending.NarrationMessageId = null;
             _log.Log_Warning(orchId, $"Busy-supervisor narration failed: {ex.Message}");
         }
