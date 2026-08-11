@@ -173,6 +173,13 @@ internal sealed class BridgeEngineModel(
     /// and a parked request with no live prompt is simply asked again.
     /// </summary>
     readonly Dictionary<string, CloseConfirmation> _closeConfirmations = [];
+
+    /// <summary>
+    /// Parked paths whose tap is mid-flight. A decision takes two awaited Telegram calls before its
+    /// file is archived, and for that whole span the request has no registrations and is still on
+    /// disk — which the sweep read as "never asked" and answered with a second prompt.
+    /// </summary>
+    readonly HashSet<string> _closeConfirmationsResolving = [];
     readonly Lock _closeConfirmationLock = new();
 
     sealed class CloseConfirmation
@@ -571,15 +578,19 @@ internal sealed class BridgeEngineModel(
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
+        // Lapsing a stale close sends the owner nothing and closes nothing, so it runs even while
+        // muted. Behind the gate, DND froze the only thing that disarms a live confirmation button.
+        Expire_StaleCloseConfirmations();
+
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
         // Crash-loop alerts stay queued in the watchdog until unmute for the same reason.
         if (_telegramMuted && _telegramClient != null)
             return;
 
-        // Deliberately AFTER the DND return: nothing closes while the owner is not being disturbed,
-        // and a parked close simply keeps waiting. Failing in the direction of "still running" is
-        // the only acceptable way for this particular guard to fail.
+        // PROMPTING stays after the DND return — nothing is asked, and so nothing closes, while the
+        // owner is not being disturbed. Expiry ran above, before the gate, because lapsing is not a
+        // disturbance and leaving it here let a mute keep a stale button alive indefinitely.
         await Resolve_CloseConfirmations_Async(cancellationToken);
 
         await Send_CrashLoopAlerts_Async(cancellationToken);
@@ -2280,15 +2291,40 @@ internal sealed class BridgeEngineModel(
     /// prompts are gone but the parked files are not, so the owner is simply asked again instead of
     /// the request either vanishing or executing unconfirmed.
     /// </summary>
+    /// <summary>
+    /// EXPIRY ONLY, and it runs regardless of Do-Not-Disturb.
+    ///
+    /// Lapsing a request closes nothing and sends the owner nothing, so it does not belong behind the
+    /// mute gate that prompting does. Leaving it there meant DND froze the only thing that disarms a
+    /// live button: a request could be asked at 21:00, muted, and still be tappable — and closing —
+    /// thirteen hours later, while its requester waited on an answer that had expired silently.
+    /// </summary>
+    void Expire_StaleCloseConfirmations()
+    {
+        foreach (var parkedPath in CloseConfirmation_Parking.Find_Parked(_paths))
+        {
+            if (Is_BeingResolved(parkedPath))
+                continue;
+
+            if (CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow))
+                Expire_CloseConfirmation(parkedPath);
+        }
+    }
+
     async Task Resolve_CloseConfirmations_Async(CancellationToken cancellationToken)
     {
         foreach (var parkedPath in CloseConfirmation_Parking.Find_Parked(_paths))
         {
-            if (CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow))
-            {
-                Expire_CloseConfirmation(parkedPath);
+            // A request the tap handler is part-way through resolving is NOT unasked. Its
+            // registrations are already gone (dropped under the lock the moment the owner tapped)
+            // but its file is not archived until two awaited Telegram calls later, and "already
+            // asked" keys on registrations alone — so this tick used to post a SECOND prompt with
+            // fresh buttons for a decision the owner had just made. Those duplicate registrations
+            // then pointed at an archived path that only the file scan can clear, so nothing ever
+            // cleared them, and a tap on that immortal button closed an orchestration the owner had
+            // explicitly refused to close.
+            if (Is_BeingResolved(parkedPath))
                 continue;
-            }
 
             bool alreadyAsked;
 
@@ -2300,6 +2336,12 @@ internal sealed class BridgeEngineModel(
 
             await Ask_OwnerToConfirmClose_Async(parkedPath, cancellationToken);
         }
+    }
+
+    bool Is_BeingResolved(string parkedPath)
+    {
+        lock (_closeConfirmationLock)
+            return _closeConfirmationsResolving.Contains(parkedPath);
     }
 
     async Task Ask_OwnerToConfirmClose_Async(string parkedPath, CancellationToken cancellationToken)
@@ -2387,6 +2429,62 @@ internal sealed class BridgeEngineModel(
             // second tap can neither close what was just declined nor decline what is closing.
             foreach (var key in _closeConfirmations.Where(pair => pair.Value.ParkedPath == confirmation.ParkedPath).Select(pair => pair.Key).ToList())
                 _closeConfirmations.Remove(key);
+
+            // Held across the awaits below so the 2 s sweep cannot see this request as unasked and
+            // post a duplicate prompt while the owner's decision is still being carried out.
+            _closeConfirmationsResolving.Add(confirmation.ParkedPath);
+        }
+
+        try
+        {
+            return await Resolve_CloseConfirmationTap_Async(client, tap, confirmation, cancellationToken);
+        }
+        finally
+        {
+            lock (_closeConfirmationLock)
+                _closeConfirmationsResolving.Remove(confirmation.ParkedPath);
+        }
+    }
+
+    async Task<bool> Resolve_CloseConfirmationTap_Async(
+        ITelegramApiClient client,
+        ITelegramCallbackTap tap,
+        CloseConfirmation confirmation,
+        CancellationToken cancellationToken)
+    {
+        // A tap is only as good as the request it refers to. Both checks are refusals to close, and
+        // both matter because the button outlives everything around it: Telegram keeps it on the
+        // owner's phone forever, while the file it points at can be archived, lapsed or expired
+        // meanwhile — and under Do-Not-Disturb the sweep that would have lapsed it never ran.
+        var stillParked = File.Exists(confirmation.ParkedPath);
+        var expired = CloseConfirmation_Parking.Is_Expired(confirmation.ParkedPath, DateTime.UtcNow);
+
+        if (!stillParked || expired)
+        {
+            try
+            {
+                await client.Answer_CallbackQuery_Async(
+                    tap.CallbackQueryId,
+                    stillParked ? "expired — nothing closed" : "already resolved — nothing closed",
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(confirmation.OrchId, $"answerCallbackQuery failed on a stale close button: {ex.Message}");
+            }
+
+            _log.Log_Warning(
+                confirmation.OrchId,
+                $"A close confirmation was tapped after it {(stillParked ? "expired" : "was already resolved")} — NOTHING was closed ({confirmation.ParkedPath})");
+
+            if (expired && stillParked)
+                Expire_CloseConfirmation(confirmation.ParkedPath);
+
+            return true;
         }
 
         try
@@ -2435,6 +2533,25 @@ internal sealed class BridgeEngineModel(
     void Execute_ConfirmedClose(CloseConfirmation confirmation)
     {
         var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(confirmation.ParkedPath);
+
+        // NON-NEGOTIABLE: a request we cannot read is not authority to end an orchestration. This
+        // used to close anyway and record it as "Asked by: unrecorded" — killing every session of an
+        // orchestration whose close nobody could produce, which is the precise failure this entire
+        // guard exists to prevent, reached through the guard itself.
+        if (request == null)
+        {
+            _log.Log_Error(
+                confirmation.OrchId,
+                $"A confirmed close had no readable request — NOTHING was closed ({confirmation.ParkedPath})",
+                new Exception("close-orchestration request unreadable at confirmation time"));
+
+            Append_GeneralAppEntry(
+                $"close-orchestration ABANDONED: '{confirmation.OrchId}'",
+                "The owner's tap arrived but the request behind it could not be read, so nothing was closed. If the close is still wanted, ask again.");
+
+            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "unreadable");
+            return;
+        }
 
         try
         {
