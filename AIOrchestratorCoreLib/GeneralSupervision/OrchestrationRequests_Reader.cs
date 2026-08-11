@@ -26,8 +26,9 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 ///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor; also closes rev-n)
 ///   {"action":"close-orchestration","orchId":"...","requester":"...","reason":"..."}
 ///                                       (general supervisor OR that orchestration's supervisor —
-///                                        the owner is asked to confirm it either way, so the
-///                                        'requester' is what they are shown, not a gate)
+///                                        HELD until the owner confirms with a tap, whoever asked,
+///                                        so 'requester' is what they are shown, not a gate. The
+///                                        owner's own closes do not come through here at all.)
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
 ///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
 ///   {"action":"set-model","orchId":"...","role":"supervisor|implementer","model":"..."}  (per-orchestration override)
@@ -211,16 +212,10 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(requester))
                         return MISSING_REQUESTER_MESSAGE;
 
-                    // Written only by the app's own UI, where the modal dialog already IS the
-                    // owner's confirmation. Absent (the agent case) it stays false and the request
-                    // is held until they tap.
-                    var ownerConfirmed = root["ownerConfirmed"]?.GetValue<bool>() ?? false;
-
                     closeOrchestrationRequests.Add(CloseOrchestrationRequest_Factory.Create(
                         orchId,
                         string.IsNullOrWhiteSpace(reason) ? "work concluded" : reason.Trim(),
                         requester.Trim(),
-                        ownerConfirmed,
                         filePath));
 
                     return null;

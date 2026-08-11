@@ -2195,14 +2195,9 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var request in pending.CloseOrchestrationRequests)
         {
-            // The app's own UI already asked, with a modal the owner had to answer. Asking a second
-            // time in Telegram would be two prompts for one decision.
-            if (request.OwnerConfirmed)
-            {
-                Execute_ConfirmedClose_FromUi(request);
-                continue;
-            }
-
+            // EVERY request parks. There is deliberately no field that can wave one through: the
+            // owner's own closes do not arrive here at all, they call Close_Orchestration_ByOwner
+            // directly, so nothing in this JSON can claim a confirmation that did not happen.
             try
             {
                 var parkedPath = CloseConfirmation_Parking.Park(_paths, request.SourceFilePath);
@@ -2230,34 +2225,37 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>The owner's own close, straight from the app — see <see cref="IBridgeEngine"/>.</summary>
+    public void Close_Orchestration_ByOwner(string orchId, string reason)
+    {
+        Execute_Close(orchId, reason, "the owner, from the app", "Closed by the owner from the app.");
+    }
+
     /// <summary>
-    /// The owner closed it from the app, having already answered the modal. Same execution as the
-    /// confirmed-by-tap path; the request file is archived rather than deleted so that every close,
-    /// however it was authorised, leaves the same audit record.
+    /// The ONE close execution. Both authorised routes end here — the owner's click in the app and
+    /// the owner's tap on a held agent request — so a close cannot come to mean two different things
+    /// depending on which door it walked through.
     /// </summary>
-    void Execute_ConfirmedClose_FromUi(GeneralSupervision.CloseOrchestrationRequest.ICloseOrchestrationRequest request)
+    void Execute_Close(string orchId, string reason, string requester, string authorisation)
     {
         try
         {
-            var session = _store.Get_Session(request.OrchId);
-            _store.Close_Orchestration(request.OrchId);
-            SessionTerminator.Kill_OrchestrationSessions(_paths, request.OrchId);
+            // Snapshot BEFORE closing: the topic id is needed after, to delete the topic.
+            var session = _store.Get_Session(orchId);
+            _store.Close_Orchestration(orchId);
+            SessionTerminator.Kill_OrchestrationSessions(_paths, orchId);
 
             if (_telegramClient != null && session.TelegramTopicId != null)
-                Delete_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value);
+                Delete_TelegramTopic_FireAndForget(orchId, session.TelegramTopicId.Value);
 
             Append_GeneralAppEntry(
-                $"orchestration '{request.OrchId}' closed — {request.Reason}",
-                $"Closed by the owner from the app. Asked by: {request.Requester}. Sessions ended; folder kept as audit trail; Telegram topic deleted.");
+                $"orchestration '{orchId}' closed — {reason}",
+                $"{authorisation} Asked by: {requester}. Sessions ended; folder kept as audit trail; Telegram topic deleted.");
         }
         catch (Exception ex)
         {
-            _log.Log_Error(request.OrchId, "close-orchestration failed", ex);
-            Append_GeneralAppEntry($"close-orchestration FAILED: '{request.OrchId}'", $"Error: {ex.Message}");
-        }
-        finally
-        {
-            Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "closed");
+            _log.Log_Error(orchId, "close-orchestration failed", ex);
+            Append_GeneralAppEntry($"close-orchestration FAILED: '{orchId}'", $"Error: {ex.Message}");
         }
     }
 
@@ -2440,21 +2438,11 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var session = _store.Get_Session(confirmation.OrchId);
-            _store.Close_Orchestration(confirmation.OrchId);
-            SessionTerminator.Kill_OrchestrationSessions(_paths, confirmation.OrchId);
-
-            if (_telegramClient != null && session.TelegramTopicId != null)
-                Delete_TelegramTopic_FireAndForget(confirmation.OrchId, session.TelegramTopicId.Value);
-
-            Append_GeneralAppEntry(
-                $"orchestration '{confirmation.OrchId}' closed — {request?.Reason ?? "no reason recorded"}",
-                $"The owner confirmed it with a tap. Asked by: {request?.Requester ?? "unrecorded"}. Sessions ended; folder kept as audit trail; Telegram topic deleted.");
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Error(confirmation.OrchId, "close-orchestration failed after the owner confirmed it", ex);
-            Append_GeneralAppEntry($"close-orchestration FAILED: '{confirmation.OrchId}'", $"The owner confirmed, but the close failed. Error: {ex.Message}");
+            Execute_Close(
+                confirmation.OrchId,
+                request?.Reason ?? "no reason recorded",
+                request?.Requester ?? "unrecorded",
+                "The owner confirmed it with a tap.");
         }
         finally
         {

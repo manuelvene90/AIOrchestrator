@@ -1,6 +1,13 @@
 namespace AIOrchestratorCoreLib.GeneralSupervision.CloseOrchestrationRequest;
 
-/// <summary>A request to close a whole orchestration session — the only irreversible action here.</summary>
+/// <summary>
+/// An AGENT's request to close a whole orchestration session — the only irreversible action here,
+/// and never executed on arrival: it is held until the owner confirms it with a tap.
+///
+/// The owner's own closes never take this route. They come from the app's UI, where a modal has
+/// already been answered, and call <c>IBridgeEngine.Close_Orchestration_ByOwner</c> directly — so
+/// there is nothing in this shape that can assert a confirmation which did not happen.
+/// </summary>
 public interface ICloseOrchestrationRequest
 {
     string OrchId { get; }
@@ -15,16 +22,6 @@ public interface ICloseOrchestrationRequest
     /// confirm — "who wants this closed" is most of the judgement.
     /// </summary>
     string Requester { get; }
-
-    /// <summary>
-    /// Set ONLY by the app's own UI, whose modal Yes/No dialog already IS the owner's confirmation —
-    /// asking again in Telegram would be a second prompt for one decision.
-    ///
-    /// It is a guard against a fallible agent, NOT a security boundary: nothing stops an agent
-    /// writing it, and it is deliberately absent from the role commands so none has reason to. What
-    /// makes that acceptable is the archived request file, which now records who claimed what.
-    /// </summary>
-    bool OwnerConfirmed { get; }
 
     string SourceFilePath { get; }
 }

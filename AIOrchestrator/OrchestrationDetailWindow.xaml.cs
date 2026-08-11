@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AIOrchestrator.Views;
+using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Planning;
@@ -30,15 +31,17 @@ public partial class OrchestrationDetailWindow : Window
 
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
+    readonly IBridgeEngine _engine;
     readonly string _orchId;
     readonly DispatcherTimer _refreshTimer;
 
     DateTime _lastGitRefreshUtc = DateTime.MinValue;
 
-    public OrchestrationDetailWindow(ISupervisionPaths paths, IOrchestrationSessionStore store, string orchId)
+    public OrchestrationDetailWindow(ISupervisionPaths paths, IOrchestrationSessionStore store, IBridgeEngine engine, string orchId)
     {
         _paths = paths;
         _store = store;
+        _engine = engine;
         _orchId = orchId;
 
         InitializeComponent();
@@ -316,14 +319,23 @@ public partial class OrchestrationDetailWindow : Window
         if (answer != MessageBoxResult.Yes)
             return;
 
-        // ownerConfirmed: the modal above IS the owner's confirmation, so the engine must not ask a
-        // second time in Telegram. requester: every close now names who asked.
-        Drop_Request(
-            $$"""{"action":"close-orchestration","orchId":"{{_orchId}}","reason":"closed by the owner","requester":"the owner, from the app","ownerConfirmed":true}""",
-            "close requested");
+        // Straight to the engine, NOT through a request file — see MainWindow for why.
+        try
+        {
+            _engine.Close_Orchestration_ByOwner(_orchId, "closed by the owner");
+            RefreshedText.Text = "closed by the owner";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Close failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
-    /// <summary>Actions go through the SAME request-file protocol the agents use — one code path.</summary>
+    /// <summary>
+    /// Spawning actions go through the SAME request-file protocol the agents use. Closing does NOT:
+    /// that one is held for the owner's tap when an agent asks, so the owner's own close calls the
+    /// engine directly rather than writing a file that would have to claim it was already approved.
+    /// </summary>
     void Drop_Request(string json, string confirmation)
     {
         try

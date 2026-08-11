@@ -30,6 +30,19 @@ public interface IBridgeEngine
     /// </summary>
     void Set_ItalianLayer(bool enabled);
 
+    /// <summary>
+    /// Closes an orchestration on the OWNER's own instruction, from the app, where they have already
+    /// answered a modal. It is a direct call and not a request file on purpose: the request protocol
+    /// is the AGENT path, where every close parks until the owner taps, and the app does not need a
+    /// file protocol to talk to itself.
+    ///
+    /// The alternative — a "the owner already agreed" flag in the request JSON — was written and
+    /// removed. Nobody would have had to forge it: a role command written from that JSON, or an
+    /// agent copying a request shape out of an archived file, and "no tap, no close" quietly stops
+    /// being true while everyone behaves reasonably.
+    /// </summary>
+    void Close_Orchestration_ByOwner(string orchId, string reason);
+
     /// <summary>Raised (from background threads) whenever an orchestration's channels changed.</summary>
     event Action<string>? OrchestrationActivity;
 

@@ -518,12 +518,12 @@ public partial class MainWindow : Window
 
         try
         {
-            Directory.CreateDirectory(_paths.RequestsFolder);
-            var requestFile = Path.Combine(_paths.RequestsFolder, $"ui-close-{card.OrchId}-{DateTime.UtcNow.Ticks}.json");
-            // ownerConfirmed: the modal above IS the owner's confirmation, so the engine must not
-            // ask a second time in Telegram. requester: every close now names who asked.
-            File.WriteAllText(requestFile, $$"""{"action":"close-orchestration","orchId":"{{card.OrchId}}","requester":"the owner, from the app","ownerConfirmed":true}""");
-            Add_LogRow(LogLevels.Info, $"[{card.OrchId}] close requested from the UI");
+            // Straight to the engine, NOT through a request file. The request protocol is the AGENT
+            // path, where every close is held for the owner's tap; the modal above already IS their
+            // confirmation, and a flag in a JSON file claiming so is a lie waiting to be told by
+            // accident.
+            _engine.Close_Orchestration_ByOwner(card.OrchId, "closed by the owner from the app");
+            Add_LogRow(LogLevels.Info, $"[{card.OrchId}] closed by the owner from the UI");
         }
         catch (Exception ex)
         {
@@ -706,7 +706,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var detailWindow = new OrchestrationDetailWindow(_paths, _store, card.OrchId) { Owner = this };
+            var detailWindow = new OrchestrationDetailWindow(_paths, _store, _engine, card.OrchId) { Owner = this };
             detailWindow.Show();
         }
         catch (Exception ex)

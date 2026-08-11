@@ -70,7 +70,6 @@ public class CloseConfirmationParkingTests : IDisposable
         Assert.Equal("crm-2", request.OrchId);
         Assert.Equal("work is done", request.Reason);
         Assert.Equal("supervisor of crm-2", request.Requester);
-        Assert.False(request.OwnerConfirmed);
     }
 
     /// <summary>
@@ -133,15 +132,33 @@ public class CloseConfirmationParkingTests : IDisposable
         Assert.Empty(OrchestrationRequests_Reader.Read_Pending(_paths).CloseOrchestrationRequests);
     }
 
-    /// <summary>The owner's own UI close carries its confirmation with it and is executed on arrival.</summary>
+    /// <summary>
+    /// NOTHING in a request can claim the owner already agreed. An earlier version of this guard
+    /// had an `ownerConfirmed` flag so the app's own UI closes would not be prompted twice, and it
+    /// was removed: nobody would have had to forge it in bad faith — a role command written from
+    /// this JSON, or an agent copying a shape out of an archived request, and "no tap, no close"
+    /// stops being true while everyone behaves reasonably.
+    ///
+    /// The owner's own closes now bypass this protocol entirely (IBridgeEngine.Close_Orchestration_ByOwner),
+    /// so a request that still carries the old field is just an ordinary agent request that will be
+    /// held like any other.
+    /// </summary>
     [Fact]
-    public void TheUiClose_IsMarkedOwnerConfirmed_SoItIsNotHeldForASecondPrompt()
+    public void ARequestClaimingTheOwnerAlreadyAgreed_IsTreatedNoDifferentlyFromAnyOther()
     {
-        Write_Request("ui.json", """{"action":"close-orchestration","orchId":"crm-2","requester":"the owner, from the app","ownerConfirmed":true}""");
+        Write_Request("claims.json", """{"action":"close-orchestration","orchId":"crm-2","reason":"work is done","requester":"supervisor of crm-2","ownerConfirmed":true}""");
+        Write_Request("plain.json", CLOSE_REQUEST.Replace("crm-2", "crm-3"));
 
-        var request = Assert.Single(OrchestrationRequests_Reader.Read_Pending(_paths).CloseOrchestrationRequests);
+        var requests = OrchestrationRequests_Reader.Read_Pending(_paths).CloseOrchestrationRequests;
 
-        Assert.True(request.OwnerConfirmed);
+        Assert.Equal(2, requests.Count);
+
+        // Same shape, same fields, no trace of the claim — there is nowhere for it to be honoured.
+        foreach (var request in requests)
+        {
+            Assert.Equal("work is done", request.Reason);
+            Assert.StartsWith("supervisor of ", request.Requester);
+        }
     }
 
     string Write_Request(string fileName, string json)
