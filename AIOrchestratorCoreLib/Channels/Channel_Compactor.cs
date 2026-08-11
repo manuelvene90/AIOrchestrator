@@ -1,4 +1,6 @@
+using System.Text;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Storage;
 
 namespace AIOrchestratorCoreLib.Channels;
 
@@ -27,7 +29,8 @@ public static class Channel_Compactor
 
     /// <summary>
     /// Returns the compacted file's new length when compaction happened, else null (nothing to do
-    /// or something went wrong — in which case the channel is left exactly as it was).
+    /// or something went wrong — in which case the live channel file is byte-for-byte unchanged and
+    /// a later pass retries).
     /// </summary>
     public static long? Compact_IfNeeded(string channelFilePath)
     {
@@ -48,21 +51,55 @@ public static class Channel_Compactor
             var keptEntries = entries.Skip(archivedCount).ToList();
 
             var archiveFile = Build_ArchiveFilePath(channelFilePath);
-            File.AppendAllText(archiveFile, $"{Build_Block(archivedEntries)}\n");
+
+            // Order is the whole point: the entries about to leave the live file must be PROVEN to
+            // exist elsewhere before the live file is rewritten. A half-written archive plus a
+            // rewritten live file is permanent data loss; channel files are the audit trail and the
+            // agents' memory, and nothing regenerates them.
+            if (!Try_Append_ToArchive_Verified(archiveFile, $"{Build_Block(archivedEntries)}\n"))
+                return null;
 
             var header =
                 $"> Entries 1–{archivedEntries[^1].Index} are archived in '{Path.GetFileName(archiveFile)}' "
                 + $"(read it only if you need older context). This file keeps the most recent {keptEntries.Count}.\n\n";
 
-            File.WriteAllText(channelFilePath, $"{header}{Build_Block(keptEntries)}\n");
+            // Rename-over, never truncate-then-write: the live file is either the old one or the
+            // new one. If this throws, the archive already holds a copy of the entries that are
+            // still in the live file, and the next pass appends that same block again — a duplicate
+            // block in the append-only history a human reads is survivable; a lost entry is not.
+            Atomic_FileWriter.Write_AllText(channelFilePath, $"{header}{Build_Block(keptEntries)}\n");
 
             return new FileInfo(channelFilePath).Length;
         }
         catch
         {
-            // A channel being written right now simply gets compacted on a later pass.
+            // Broad by design: a channel being written right now, a locked file, a full disk — all
+            // mean the same thing here, "not this pass". Safe to swallow only because of the order
+            // above: the archive is verified before the live file is touched, and the live rewrite
+            // is a rename, so it either happened completely or not at all. The live file therefore
+            // still holds every entry, and returning null tells the caller its offset is unchanged.
             return null;
         }
+    }
+
+    /// <summary>
+    /// Appends <paramref name="block"/> to the archive and returns whether the file actually grew by
+    /// at least the bytes appended. "The call did not throw" is not evidence the bytes landed — a
+    /// disk that fills mid-append can leave a short write — and this is the only check standing
+    /// between a truncating rewrite and losing history.
+    /// </summary>
+    static bool Try_Append_ToArchive_Verified(string archiveFilePath, string block)
+    {
+        var lengthBefore = File.Exists(archiveFilePath) ? new FileInfo(archiveFilePath).Length : 0L;
+        var appendedByteCount = Encoding.UTF8.GetByteCount(block);
+
+        File.AppendAllText(archiveFilePath, block);
+
+        if (!File.Exists(archiveFilePath))
+            return false;
+
+        // "At least", not "exactly": creating the file may add a preamble the append itself did not.
+        return new FileInfo(archiveFilePath).Length - lengthBefore >= appendedByteCount;
     }
 
     static string Build_Block(IReadOnlyList<IChannelEntry> entries)

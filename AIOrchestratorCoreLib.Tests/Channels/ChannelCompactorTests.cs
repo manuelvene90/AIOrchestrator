@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Storage;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Channels;
@@ -72,6 +73,45 @@ public class ChannelCompactorTests : IDisposable
 
         Assert.Equal(210, archived.Count + live.Count);
         Assert.Equal(1, archived[0].Index);
+    }
+
+    [Fact]
+    public void Compact_WhenTheLiveFileCannotBeRewritten_ReturnsNull_AndLosesNoEntries()
+    {
+        const int TOTAL = 120;
+        var channelFile = Write_Channel(TOTAL);
+        var before = File.ReadAllText(channelFile);
+
+        // FileShare.Read rather than None: None would deny the compactor's own READ, and the run
+        // would end long before the rewrite this test is about. Read lets it reach the rename and
+        // then denies the replace, because this handle withholds Delete on the target.
+        using (var liveFileLock = new FileStream(channelFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.Null(Channel_Compactor.Compact_IfNeeded(channelFile));
+        }
+
+        // The guarantee that matters most: a failed compaction costs an update, never an entry.
+        Assert.Equal(before, File.ReadAllText(channelFile));
+        Assert.Equal(TOTAL, ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile)).Count);
+
+        // Archive-first ordering: the old entries were already proven safe elsewhere at the moment
+        // the live rewrite was attempted, which is why attempting it at all is acceptable.
+        Assert.True(File.Exists(Channel_Compactor.Build_ArchiveFilePath(channelFile)));
+    }
+
+    [Fact]
+    public void Compact_WhenTheLiveFileCannotBeRewritten_LeavesNoTempFileBehind()
+    {
+        var channelFile = Write_Channel(120);
+
+        using (var liveFileLock = new FileStream(channelFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.Null(Channel_Compactor.Compact_IfNeeded(channelFile));
+        }
+
+        // The atomic write's temp file is an implementation detail. Every retry leaving one behind
+        // would litter the folder a human opens to read the channel.
+        Assert.Empty(Directory.GetFiles(_tempFolder, $"*{Atomic_FileWriter.TEMP_FILE_SUFFIX}"));
     }
 
     string Write_Channel(int entryCount)
