@@ -1,4 +1,4 @@
-# AI Orchestrator — machine setup.
+﻿# AI Orchestrator — machine setup.
 # Installs the Claude Code role commands, the status line, and the supervision home with its
 # config. Safe to re-run: existing config values are kept unless you type new ones.
 # Run from the repo root:  powershell -ExecutionPolicy Bypass -File kit\install.ps1
