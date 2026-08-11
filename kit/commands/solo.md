@@ -64,12 +64,18 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
   system — those are the owner's call, and being the only session does not make them yours.
 - **Git:** stage by explicit path, never `git add -A`/`.`/`commit -a` (other sessions may share the
   tree). Multi-line commit messages via `git commit -F <tempfile>` on Windows PowerShell.
+- **Fan out to parallel agents, exactly as an implementer does.** Read-only agents (exploration,
+  searches, independent suites) freely; parallel WRITERS only on DISJOINT file sets, with every
+  agent's editable files named in its prompt. Git and ambient files (`.csproj`, DI registrations,
+  shared constants) stay yours. A sub-agent's report is not evidence — read the diff and run the
+  suite yourself before you report. Full rules: the "Fan out" section of `/implementer`.
 
 ## When a basic orchestration outgrows itself
 
-If the work turns out to need parallel streams, a real review, or more coordination than one session
-can hold — **say so in one line and let the owner decide.** Do not quietly start behaving like an
-orchestration; they chose this mode deliberately, and switching is theirs to choose too.
+Work that merely needs to go WIDE you can now absorb yourself, by fanning out (above). But if it
+needs a genuinely independent review, or more coordination than one session can hold — **say so in
+one line and let the owner decide.** Do not quietly start behaving like an orchestration; they chose
+this mode deliberately, and switching is theirs to choose too.
 
 ## The monitor — ONE persistent Monitor, armed at boot
 

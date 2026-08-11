@@ -62,10 +62,10 @@ Rules that make the ladder real:
   is `max` on a config default — `quick` covers it, saving ~14 agents" is exactly as useful as
   "this brief says `quick` but it rewrites the order-sizing path; recommend `deep`". Say it before
   you start, not after you have spent the tokens.
-- **Fan out with subagents / the Workflow tool.** You are read-only, so parallel agents are safe
-  here in a way they are not for an implementer. Give each finder a DIFFERENT lens (correctness,
-  boundary/edge cases, concurrency, error paths, security, performance, test coverage, docs-vs-code
-  truth) — N identical agents find one thing N times.
+- **Fan out with subagents / the Workflow tool.** You are read-only, so parallel agents are safe here
+  WITHOUT the disjoint-file discipline an implementer needs — nothing you dispatch can collide. Give
+  each finder a DIFFERENT lens (correctness, boundary/edge cases, concurrency, error paths, security,
+  performance, test coverage, docs-vs-code truth) — N identical agents find one thing N times.
 
 ## How you review — refute by default
 
