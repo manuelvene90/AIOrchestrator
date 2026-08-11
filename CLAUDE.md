@@ -68,6 +68,18 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     PLAN.md ledger-shape complaint ("lines that lump several tasks together") now goes only to the
     supervisor's channel and the log — splitting a task line is the supervisor's job, so texting
     the owner about it was pure noise. Apply the same test to any new alert.
+16. **Parallel agents: implementers fan out, supervisors do not, writers need disjoint files.** An
+    implementer's turn is MEANT to block — it is the one doing the work — so the supervisor's "never
+    use a sub-agent" rule covers the SUPERVISOR's turn only (that turn is the owner's phone line) and
+    is never relayed to a member. Read-only fan-out is an implementer's default; parallel WRITERS are
+    allowed only on disjoint file sets, with git and ambient files (`.csproj`, DI registrations,
+    shared constants, PLAN.md) kept to the implementer itself. The supervisor PROPOSES the split in
+    the brief (`PARALLEL UNITS`) and the implementer verifies it — a supervisor briefs lean and has
+    not read the code. A sub-agent's report is NOT evidence: the implementer reads the diff and runs
+    the suite before reporting. A new implementer SESSION is for a separately reviewable deliverable
+    (own review cycle, worktree, or ledger line); one deliverable going faster is fan-out, and ledger
+    lines never shatter into units. Spec:
+    `docs/superpowers/specs/2026-08-11-implementer-parallel-fanout-design.md`.
 
 ## Resolved Decisions (2026-08-06, owner)
 
