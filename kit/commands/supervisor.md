@@ -307,7 +307,9 @@ coordination: read, decide, brief, verify at the boundary, report.
 - **NEVER use a sub-agent (the Task tool) for long work.** A sub-agent runs INSIDE your turn: it
   blocks you for its whole duration, which is precisely the failure this rule exists to prevent.
   An implementer is a separate session — it works while you stay free. Sub-agents are acceptable
-  only for something genuinely brief.
+  only for something genuinely brief. **This rule is about YOUR turn ONLY.** An implementer fanning
+  out to parallel agents is the intended shape, not a violation — its turn is supposed to be busy.
+  Never relay this ban to a member.
 - Reading a diff, checking a test result, deciding, writing a verdict: yours, and quick.
   Producing the diff, running the suite, hunting the bug: an implementer's.
 - If you find yourself about to start something long, stop and ask: *"why is this not a brief?"*
@@ -399,6 +401,39 @@ assign a worktree — a line of exactly `WORKTREE: <full path>` (the orchestrato
 this marker to show which worktree each implementer is on). If the repo
 has hooks that fire at turn end (style checks), tell the implementer explicitly that satisfying the
 hook is NOT the deliverable and it must CONTINUE to the remaining numbered items afterwards.
+
+### Brief for parallelism — organise the work so it CAN go wide
+
+An implementer can fan out to parallel agents, but it can only parallelise what you handed it as
+parallelisable. When you can see a task's independent units, say so in the brief:
+
+```
+PARALLEL UNITS (proposal — verify before you dispatch):
+- unit A: <what> — files: <paths>
+- unit B: <what> — files: <paths>
+shared/after: <files only the implementer touches, once the units return>
+```
+
+- **It is a PROPOSAL, and say so in those words.** You brief lean and have not read the code, so your
+  file sets will sometimes be wrong. The implementer verifies them, collapses the split to sequential
+  when the units actually overlap, and tells you why. Being refuted there is the system working.
+- **Two units that share a file are ONE unit.** If you cannot name a disjoint file set, do not invent
+  one — write the brief sequentially and let the implementer find the split from the code.
+- **No `PARALLEL UNITS` block is perfectly fine.** Most tasks are one unit. An invented split is
+  worse than none: it costs the implementer a verification pass just to reject it.
+
+### A second SESSION, or fan-out inside one? — the deliverable test
+
+Before you request `imp-N`, ask: **is this a second deliverable, or the same one going faster?**
+
+- **A separately reviewable deliverable → a new implementer session.** It needs its own review cycle,
+  its own worktree/branch, or its own PLAN.md line.
+- **One deliverable spanning several files or units → fan-out inside ONE implementer**, briefed with
+  `PARALLEL UNITS`. A session costs a terminal, a channel, a watchdog entry, Telegram noise and a
+  `reason` on the owner's phone; parallel agents inside an implementer cost none of that.
+
+"Go faster on the task `imp-1` already has" was never a `reason` worth relaying to the owner — and it
+is now the wrong mechanism as well.
 
 ## CROSS-REVIEW IS MANDATORY — nobody reviews their own work (HARD RULE, owner directive)
 
@@ -513,6 +548,11 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   from their phone with `/progress`, which the APP answers straight from this file.
 - Re-read it as your fast resume point after a respawn — it beats replaying the whole channel
   narrative.
+- **One line = one reviewable deliverable — parallel units NEVER become their own lines.** When you
+  brief a task with `PARALLEL UNITS`, the ledger still carries ONE line for it; the units are the
+  implementer's internal business. Shattering a line into its units inflates the progress bar with
+  work the owner never asked to track, and `[>]` on five sub-lines tells them less than `[>]` on the
+  deliverable.
 
 **You do NOT write periodic STATUS entries any more — the APP does.** While work is in flight it
 sends the owner a status every ~30 min, built from this ledger plus live member states, and it
