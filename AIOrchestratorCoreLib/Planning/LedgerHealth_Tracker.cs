@@ -43,6 +43,28 @@ public static class LedgerHealth_Tracker
         return MemberState_Resolver.Is_AwaitingVerdict([.. spokeEntries.Take(spokeEntries.Count - 1)]);
     }
 
+    /// <summary>
+    /// The same question about a SPECIFIC entry rather than about the tail, because the tail moves.
+    ///
+    /// The mirror pass runs after the write, and anything appended in between — a DND catch-up burst,
+    /// a `/resume` app entry, the tailer's ordinary batching — leaves the supervisor's entry no longer
+    /// last, and the verdict was silently missed. Judging the entry where it actually sits is immune
+    /// to whatever arrives after it.
+    /// </summary>
+    public static bool Is_VerdictAt(IReadOnlyList<IChannelEntry> spokeEntries, int channelEntryIndex)
+    {
+        for (var position = 0; position < spokeEntries.Count; position++)
+        {
+            if (spokeEntries[position].Index != channelEntryIndex || spokeEntries[position].Author != ChannelAuthors.Supervisor)
+                continue;
+
+            if (MemberState_Resolver.Is_AwaitingVerdict([.. spokeEntries.Take(position)]))
+                return true;
+        }
+
+        return false;
+    }
+
     /// <summary>The flag the turn-end hook reads. Present = this supervisor owes a ledger update.</summary>
     public static string Build_FlagFilePath(ISupervisionPaths paths, string orchId)
     {

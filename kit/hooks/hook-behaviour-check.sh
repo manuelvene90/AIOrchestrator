@@ -77,15 +77,28 @@ check "Grep" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Grep","to
 check "Write into the repo" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Write","tool_input":{"file_path":"C:/repo/Foo.cs"}}')")"
 check "Bash: dotnet build" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Bash","tool_input":{"command":"dotnet build"}}')")"
 check "Write PLAN.md" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$SUPERVISION/PLAN.md\"}}")")"
-check "append to owner-channel.md" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat >> $SUPERVISION/owner-channel.md\"}}")")"
+check "Edit owner-channel.md" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SUPERVISION/owner-channel.md\"}}")")"
+
+# The NATIVE spelling on this platform. Matching only forward slashes denied the ledger write and
+# re-created the deadlock this branch exists to remove.
+WIN_SUPERVISION=$(printf '%s' "$SUPERVISION" | tr '/' '\\')
+check "Write PLAN.md, backslash path" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WIN_SUPERVISION\\\\PLAN.md\"}}")")"
+
+# A command line cannot be scoped, so it gets nothing — not even for the ledger. This is the
+# compound command our own supervisor.md prescribes at a boundary, which used to be allowed in full.
+check "Bash mentioning PLAN.md is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat >> $SUPERVISION/imp-1/channel.md && echo x >> $SUPERVISION/PLAN.md\"}}")")"
+check "Monitor executes, so it is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Monitor\",\"tool_input\":{\"command\":\"rm -f $SUPERVISION/.awaiting-answer\"}}")")"
+check "an unknown tool is denied" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"SomeFutureTool","tool_input":{"command":"anything"}}')")"
+check "Edit into the repo" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Edit","tool_input":{"file_path":"C:/repo/Foo.cs"}}')")"
 
 # Unblocking is not moving in the background; briefing is. The app publishes who is waiting.
 printf 'imp-2\n' > "$SUPERVISION/.awaiting-verdict"
-check "reply to a member that IS waiting" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat >> $SUPERVISION/imp-2/channel.md\"}}")")"
-check "brief a member that is NOT waiting" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat >> $SUPERVISION/imp-1/channel.md\"}}")")"
+check "Edit a member that IS waiting" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SUPERVISION/imp-2/channel.md\"}}")")"
+check "same, backslash path" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WIN_SUPERVISION\\\\imp-2\\\\channel.md\"}}")")"
+check "Edit a member that is NOT waiting" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SUPERVISION/imp-1/channel.md\"}}")")"
 
 rm -f "$SUPERVISION/.awaiting-verdict"
-check "no awaiting-verdict file (fail closed)" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat >> $SUPERVISION/imp-2/channel.md\"}}")")"
+check "no awaiting-verdict file (fail closed)" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SUPERVISION/imp-2/channel.md\"}}")")"
 
 check "a non-supervisor role is untouched" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Write","tool_input":{"file_path":"C:/repo/Foo.cs"}}' implementer)")"
 

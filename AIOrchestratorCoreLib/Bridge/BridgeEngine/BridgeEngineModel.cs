@@ -1204,6 +1204,18 @@ internal sealed class BridgeEngineModel(
 
             _lastSupervisorVerdictUtc.TryGetValue(session.OrchId, out var lastVerdictUtc);
 
+            // The obligation is DURABLE, and the flag file is what carries it. This dictionary is
+            // in-memory and BridgeState_Store persists only offsets and the last update id, so an
+            // app restart used to empty it — after which Is_LedgerBehind returned false and
+            // Sync_Flag DELETED the flag. In a system whose own lifecycle tree-kills and respawns
+            // everything, that made the ledger debt droppable by restarting, and the comment on the
+            // Stop hook claiming the enforcement was "delayed, never skipped" was simply false.
+            //
+            // The flag's own write time is when the debt was incurred, so re-seeding from it costs
+            // no new persistence and lets the ordinary comparison clear it once PLAN.md is newer.
+            if (lastVerdictUtc == default)
+                lastVerdictUtc = Read_LedgerDebtStamp_OrDefault(session.OrchId);
+
             var isBehind = LedgerHealth_Tracker.Is_LedgerBehind(_paths, session.OrchId, lastVerdictUtc == default ? null : lastVerdictUtc);
             LedgerHealth_Tracker.Sync_Flag(_paths, session.OrchId, isBehind);
 
@@ -1224,6 +1236,25 @@ internal sealed class BridgeEngineModel(
             }
 
             Report_LedgerShape(session);
+        }
+    }
+
+    /// <summary>
+    /// When the ledger debt was incurred, recovered from the flag file the previous run left behind.
+    /// Default when there is no flag, which is the honest answer: no debt is recorded.
+    /// </summary>
+    DateTime Read_LedgerDebtStamp_OrDefault(string orchId)
+    {
+        try
+        {
+            var flagFile = LedgerHealth_Tracker.Build_FlagFilePath(_paths, orchId);
+
+            return File.Exists(flagFile) ? File.GetLastWriteTimeUtc(flagFile) : default;
+        }
+        catch
+        {
+            // A flag we cannot stat must not invent a debt, and must not clear one either.
+            return default;
         }
     }
 
@@ -1481,24 +1512,35 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task<bool> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
-        var sawSupervisorEntryInSpoke = false;
+        List<int> supervisorEntryIndexes = [];
 
         foreach (var entry in append.Entries)
         {
             _log.Log_Info(append.Channel.OrchId, $"[{append.Channel.SpokeName}] entry #{entry.Index} FROM {entry.Author}: {entry.Subject}");
 
             if (!append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor)
-                sawSupervisorEntryInSpoke = true;
+                supervisorEntryIndexes.Add(entry.Index);
         }
 
         // Only a VERDICT puts the ledger in debt — an answer to work a member filed. This used to
         // arm on ANY supervisor entry in any spoke, so briefing someone started a 90-second
         // countdown to being nudged for not having recorded work that had not happened yet.
-        if (sawSupervisorEntryInSpoke
-            && Planning.LedgerHealth_Tracker.Is_VerdictOnMemberWork(
-                ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(append.Channel.FilePath))))
+        //
+        // Judged at each appended entry's own INDEX rather than at the file's tail: the mirror pass
+        // runs after the write, so a catch-up burst or an app entry arriving in between left the
+        // supervisor's entry no longer last and the verdict was missed entirely.
+        if (supervisorEntryIndexes.Count > 0)
         {
-            _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(append.Channel.FilePath));
+
+            foreach (var index in supervisorEntryIndexes)
+            {
+                if (!Planning.LedgerHealth_Tracker.Is_VerdictAt(entries, index))
+                    continue;
+
+                _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
+                break;
+            }
         }
 
         // File-only mode: there is no phone to reach, so the entries are as delivered as they will

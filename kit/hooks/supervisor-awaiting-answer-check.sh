@@ -54,13 +54,47 @@ if [ -z "$TOOL" ]; then
   exit 0
 fi
 
-# READS change nothing. This was pure collateral damage.
+# The split is by DECIDABILITY, not by trust, and not by tool name.
+#
+# A tool that carries an exact file_path can be judged: one target, one decision. A COMMAND LINE
+# cannot — it is compound, and every exemption written against it is a substring test that a longer
+# command satisfies incidentally. That is not a matching bug to be tightened; it is the category.
+# One boundary command that appends a brief to a member and then edits the ledger satisfied the
+# ledger exemption and was allowed in full, and our own supervisor.md prescribes writing exactly
+# that.
+#
+# So: readers pass, exactly-scoped writers are judged on their path, and everything that can EXECUTE
+# is denied — Bash and Monitor alike. Monitor is denied for what it can do rather than for its name,
+# which is also what catches the next execution-capable tool nobody has told this hook about. It ran
+# arbitrary shell for the life of a session and sat in the read-only list.
+
+# Pure readers: nothing they do can change the world the owner is deciding about.
 case "$TOOL" in
-  Read|Grep|Glob|NotebookRead|WebFetch|WebSearch|TodoWrite|Monitor|BashOutput|TaskOutput|TaskList|TaskGet)
+  Read|Grep|Glob|NotebookRead|WebFetch|WebSearch|TodoWrite|BashOutput|TaskOutput|TaskList|TaskGet)
     exit 0 ;;
 esac
 
-TARGET=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("tool_input",{}); print(" ".join(str(d.get(k,"")) for k in ("file_path","path","command","notebook_path")))' 2>/dev/null)
+deny() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"YOU ASKED THE OWNER A QUESTION — STOP AND WAIT. %s Whatever you change now makes their answer arrive against a different world, which is exactly what made previous conversations incoherent. END YOUR TURN: your monitor wakes you the moment they reply and this clears automatically. Reading is allowed; so is updating PLAN.md, or answering a member already waiting on you, with Write or Edit."}}\n' "$1"
+  exit 0
+}
+
+# Anything not a pure reader and not an exactly-scoped write is refused, whatever it is called.
+case "$TOOL" in
+  Write|Edit|NotebookEdit) ;;
+  Bash) deny "A shell command cannot be scoped to one target, so none is allowed here — use Edit for the ledger or for a member that is waiting." ;;
+  *) deny "Only reading, and writing to the ledger or to a member already waiting on you, are allowed while the owner is deciding." ;;
+esac
+
+# ONE target, and it is normalised before anything is compared to it. Backslashes are the NATIVE
+# spelling on this platform, and matching only forward slashes meant every exemption below failed on
+# the path a Windows session actually passes: the ledger write was denied, which re-created the very
+# deadlock this branch exists to remove — masked only by the Stop hook's defer added beside it.
+TARGET=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("tool_input",{}); print(str(d.get("file_path") or d.get("notebook_path") or d.get("path") or "").replace(chr(92), "/"))' 2>/dev/null)
+
+if [ -z "$TARGET" ]; then
+  deny "That write names no file this hook can check."
+fi
 
 deny() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"YOU ASKED THE OWNER A QUESTION — STOP AND WAIT. %s Whatever you change now makes their answer arrive against a different world, which is exactly what made previous conversations incoherent. END YOUR TURN: your monitor wakes you the moment they reply and this clears automatically. Reading, updating PLAN.md, and answering a member that is already waiting on you all remain allowed — everything else waits."}}\n' "$1"
@@ -70,15 +104,10 @@ deny() {
 SUPERVISION="$HOME/.claude/supervision/$AIORCH_ID"
 
 # THE LEDGER is a record of work that already happened, not a change to what the owner is deciding —
-# and the Stop hook can demand it, so it must never be unreachable.
+# and the Stop hook can demand it, so it must never be unreachable. Matched as a whole path ending,
+# not as a substring anywhere in the value.
 case "$TARGET" in
-  *"$AIORCH_ID/PLAN.md"*|*"$AIORCH_ID"/PLAN.md*) exit 0 ;;
-esac
-case "$TARGET" in
-  *PLAN.md*)
-    if printf '%s' "$TARGET" | grep -q "supervision/$AIORCH_ID"; then
-      exit 0
-    fi ;;
+  */supervision/"$AIORCH_ID"/PLAN.md) exit 0 ;;
 esac
 
 # A MEMBER CHANNEL is allowed only when that member is ALREADY WAITING on a verdict.
@@ -94,7 +123,15 @@ esac
 # and that copy drifted from the app's within the hour: an app NUDGE lands between a member's report
 # and the supervisor's reply, so the last line read "app" and the hook denied exactly the reply it
 # exists to allow. One rule, one place, and this is not the place.
-MEMBER_ID=$(printf '%s' "$TARGET" | grep -oE "supervision/$AIORCH_ID/(imp|rev)-[0-9]+/channel\.md" | head -1 | grep -oE '(imp|rev)-[0-9]+')
+#
+# ADVISORY, NOT A BOUNDARY. This file lives where the restrained session can write it, and so does
+# this script, and so does the settings.json that decides whether this script runs at all — every
+# session runs as the same OS user as the app, so no path is out of reach. A supervisor that wanted
+# to could enter itself here. That is accepted deliberately: this guard exists to keep an honest
+# session on protocol, and the enforcement that must actually HOLD lives in the app, at the point of
+# effect, where a session can only ask. Do not build anything on the assumption that this file is
+# trustworthy.
+MEMBER_ID=$(printf '%s' "$TARGET" | grep -oE "/supervision/$AIORCH_ID/(imp|rev)-[0-9]+/channel\.md$" | grep -oE '(imp|rev)-[0-9]+')
 
 if [ -n "$MEMBER_ID" ]; then
   AWAITING_FILE="$SUPERVISION/.awaiting-verdict"
@@ -106,4 +143,4 @@ if [ -n "$MEMBER_ID" ]; then
   deny "$MEMBER_ID is not waiting on a verdict — writing to it now is briefing new work, not unblocking someone."
 fi
 
-deny "Do not run anything, do not brief anyone, do not keep working."
+deny "That file is neither the ledger nor a member waiting on you."
