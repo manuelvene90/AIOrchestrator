@@ -23,7 +23,8 @@ before writing any code.
 
 Boot is NOT the time to study the repo: **do NOT read the repo's `CLAUDE.md`/docs, run exploration
 commands, or spawn agents at boot.** Repo study happens when you HAVE a task — then read the
-repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
+repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code, and fan out to
+parallel agents as "Fan out" below describes. **That ban is about BOOT, not about the job.**
 
 1. Read your channel top to bottom. **You may be resuming a previous session** — the channel is
    the full history. An unanswered trailing `FROM supervisor` brief is your task; an entry that
@@ -87,6 +88,42 @@ repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code.
 - If a turn-end hook (e.g. a style check) fires while you still have deliverables: satisfy the
   hook, then CONTINUE with your remaining numbered contract items — the hook is never the
   deliverable, and stopping after it is the known failure mode.
+
+## Fan out — parallel agents are YOURS to use
+
+**The supervisor's "never use a sub-agent" rule is THEIRS, not yours.** It exists because a
+sub-agent runs inside the caller's turn, and the supervisor's turn is the owner's phone line —
+blocking it leaves the owner talking to a wall. Your turn is MEANT to be blocked: you are the one
+doing the work. Working sequentially when the task has independent parts costs the owner wall-clock
+for nothing.
+
+- **Read-only fan-out is your DEFAULT, not an exception.** Exploring an unfamiliar subsystem,
+  hunting call sites, reading docs, running independent test suites or builds, gathering the
+  evidence your report needs — dispatch these in parallel as a matter of course. Give each agent a
+  DIFFERENT lens or target: N identical agents find one thing N times.
+- **Parallel WRITERS are allowed only on DISJOINT file sets.** Name in each agent's prompt the exact
+  files it may edit ("you may edit exactly these files: …; touch nothing else"). If two units want
+  the same file, they are ONE unit — do it yourself, sequentially. Two agents editing one file
+  overwrite each other, and the loser's work disappears with no error to tell you.
+- **Ambient files are never disjoint.** A `.csproj`, a DI registration, a shared constants file, a
+  test list, PLAN.md, this channel — anything the whole task touches is YOURS, edited by you once
+  the agents return. Handing an ambient file to a unit is how a "disjoint" split stops being one.
+- **No sub-agent EVER runs git** — not `add`, not `commit`, not a branch operation. Staging stays
+  yours, by explicit path (see Git discipline above). A sub-agent running `git add -A` is that
+  hazard multiplied by the number of agents you dispatched.
+- **`WRITING WINDOW OPEN` before you dispatch writers**, naming every file across every unit; close
+  it only after you have verified the results. A parallel write batch IS a multi-file write batch,
+  so the existing rule already covers it — and without the window your supervisor may audit
+  half-written state and report it as defects.
+- **A sub-agent's report is NOT evidence.** Your own rule — claims without evidence are worthless —
+  applies one level down. Before you report: read the actual diff, run the suite yourself, count the
+  tests yourself. Never forward an agent's summary as your result; you did not see what it saw.
+- **Your cap is your own verification, not a number.** Read-only agents: as many as the work has
+  distinct angles. Writers: few — every line they produce must be personally verified, and your
+  verification is serial. When verifying costs more than the parallel writing saved, you fanned out
+  too wide.
+- **Report planned vs ACTUAL agent count**, and what each unit produced, in your boundary report.
+  Depth the owner is paying for must be auditable after the fact.
 
 ## `GO AHEAD — resume` entries
 
