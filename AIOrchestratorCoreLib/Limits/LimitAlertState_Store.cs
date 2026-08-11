@@ -19,9 +19,9 @@ public static class LimitAlertState_Store
     public const string THRESHOLD_FIELD = "threshold";
     public const string WINDOW_FIELD = "window";
 
-    public static IReadOnlyDictionary<string, (double Threshold, double? WindowIdentity)> Parse(string rawJson)
+    public static IReadOnlyDictionary<string, (double Threshold, DateTime? WindowResetsAtUtc)> Parse(string rawJson)
     {
-        Dictionary<string, (double Threshold, double? WindowIdentity)> state = [];
+        Dictionary<string, (double Threshold, DateTime? WindowResetsAtUtc)> state = [];
 
         try
         {
@@ -34,7 +34,7 @@ public static class LimitAlertState_Store
                     continue;
 
                 if (pair.Value is JsonObject entry)
-                    state[pair.Key] = (Read_Number_OrNull(entry[THRESHOLD_FIELD]) ?? 0, Read_Number_OrNull(entry[WINDOW_FIELD]));
+                    state[pair.Key] = (Read_Number_OrNull(entry[THRESHOLD_FIELD]) ?? 0, Read_Instant_OrNull(entry[WINDOW_FIELD]));
                 else
                     state[pair.Key] = (Read_Number_OrNull(pair.Value) ?? 0, null);
             }
@@ -47,7 +47,7 @@ public static class LimitAlertState_Store
         return state;
     }
 
-    public static string To_Json(IReadOnlyDictionary<string, (double Threshold, double? WindowIdentity)> state)
+    public static string To_Json(IReadOnlyDictionary<string, (double Threshold, DateTime? WindowResetsAtUtc)> state)
     {
         var root = new JsonObject();
 
@@ -58,15 +58,34 @@ public static class LimitAlertState_Store
                 [THRESHOLD_FIELD] = pair.Value.Threshold,
             };
 
+            // Stored as unix seconds, the same units the status line reports, so the file stays
+            // readable against the payload it came from.
             // Omitted rather than written as null: an absent window and an unreadable one mean the
             // same thing when read back, and one representation cannot drift from the other.
-            if (pair.Value.WindowIdentity != null)
-                entry[WINDOW_FIELD] = pair.Value.WindowIdentity.Value;
+            if (pair.Value.WindowResetsAtUtc != null)
+                entry[WINDOW_FIELD] = new DateTimeOffset(pair.Value.WindowResetsAtUtc.Value, TimeSpan.Zero).ToUnixTimeSeconds();
 
             root[pair.Key] = entry;
         }
 
         return root.ToJsonString();
+    }
+
+    static DateTime? Read_Instant_OrNull(JsonNode? node)
+    {
+        var unixSeconds = Read_Number_OrNull(node);
+
+        if (unixSeconds == null)
+            return null;
+
+        try
+        {
+            return DateTimeOffset.FromUnixTimeSeconds((long)unixSeconds.Value).UtcDateTime;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     static double? Read_Number_OrNull(JsonNode? node)

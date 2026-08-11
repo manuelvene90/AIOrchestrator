@@ -61,8 +61,8 @@ public static class LimitAlert_Tracker
     /// </summary>
     public static double Resolve_LastAlertedThreshold_ForCurrentWindow(
         double storedThreshold,
-        double? storedWindowIdentity,
-        double? currentWindowIdentity,
+        DateTime? storedWindowIdentity,
+        DateTime? currentWindowIdentity,
         double currentPercent)
     {
         // Identified window: identity is the ONLY re-arm signal. A dip inside one window is noise —

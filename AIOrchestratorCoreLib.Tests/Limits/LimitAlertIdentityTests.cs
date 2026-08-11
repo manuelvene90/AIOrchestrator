@@ -14,8 +14,8 @@ namespace AIOrchestratorCoreLib.Tests.Limits;
 /// </summary>
 public class LimitAlertIdentityTests
 {
-    const double WEEKLY_WINDOW = 1786953600;
-    const double NEXT_WEEKLY_WINDOW = 1787558400;
+    static readonly DateTime WEEKLY_WINDOW = DateTimeOffset.FromUnixTimeSeconds(1786953600).UtcDateTime;
+    static readonly DateTime NEXT_WEEKLY_WINDOW = DateTimeOffset.FromUnixTimeSeconds(1787558400).UtcDateTime;
 
     /// <summary>
     /// THE MIGRATION CASE, and the failure it has to rule out: the old file's 100 must NOT carry

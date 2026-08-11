@@ -22,12 +22,12 @@ public class LimitDataParserWindowsTests
         var windows = LimitData_Parser.Extract_LimitWindows(REAL_PAYLOAD);
 
         Assert.Equal(40, windows["rate_limits.five_hour.used_percentage"].Percent);
-        Assert.Equal(1786493400, windows["rate_limits.five_hour.used_percentage"].WindowIdentity);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1786493400).UtcDateTime, windows["rate_limits.five_hour.used_percentage"].WindowResetsAtUtc);
 
         // The neighbouring window must not leak its stamp across — that would make two different
         // windows look like one and re-introduce exactly the de-duplication bug being fixed.
         Assert.Equal(89, windows["rate_limits.seven_day.used_percentage"].Percent);
-        Assert.Equal(1786953600, windows["rate_limits.seven_day.used_percentage"].WindowIdentity);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1786953600).UtcDateTime, windows["rate_limits.seven_day.used_percentage"].WindowResetsAtUtc);
     }
 
     /// <summary>The percentages must survive a payload with no reset field at all — degrade, never drop.</summary>
@@ -38,12 +38,13 @@ public class LimitDataParserWindowsTests
 
         var window = Assert.Single(windows);
         Assert.Equal(91, window.Value.Percent);
-        Assert.Null(window.Value.WindowIdentity);
+        Assert.Null(window.Value.WindowResetsAtUtc);
     }
 
     /// <summary>
-    /// A future schema could write the instant as text. It still identifies the window, so it is
-    /// read as ticks — an identity we can ORDER, which is the only kind worth having.
+    /// A future schema could write the instant as text. It still places the window in time, which is
+    /// the only kind of identity worth having — both "is this newer" and "has this already reset"
+    /// have to be answerable from it.
     /// </summary>
     [Fact]
     public void Extract_LimitWindows_ATimestampWrittenAsText_StillIdentifiesTheWindow()
@@ -51,13 +52,15 @@ public class LimitDataParserWindowsTests
         var windows = LimitData_Parser.Extract_LimitWindows(
             """{"rate_limits":{"five_hour":{"used_percentage":91,"resets_at":"2026-08-17T10:00:00Z"}}}""");
 
-        var identity = Assert.Single(windows).Value.WindowIdentity;
-
-        Assert.NotNull(identity);
-        Assert.Equal(new DateTime(2026, 8, 17, 10, 0, 0, DateTimeKind.Utc).Ticks, identity.Value);
+        Assert.Equal(
+            new DateTime(2026, 8, 17, 10, 0, 0, DateTimeKind.Utc),
+            Assert.Single(windows).Value.WindowResetsAtUtc);
     }
 
-    /// <summary>An identity we cannot order is worse than none: "is this newer" must never become unanswerable.</summary>
+    /// <summary>
+    /// An identity we cannot place in time is worse than none: it would make both "is this newer"
+    /// and "has this window already reset" silently unanswerable.
+    /// </summary>
     [Fact]
     public void Extract_LimitWindows_AnUnorderableResetValue_IsTreatedAsNoIdentity()
     {
@@ -66,7 +69,7 @@ public class LimitDataParserWindowsTests
 
         var window = Assert.Single(windows);
         Assert.Equal(91, window.Value.Percent);
-        Assert.Null(window.Value.WindowIdentity);
+        Assert.Null(window.Value.WindowResetsAtUtc);
     }
 
     /// <summary>Renamed fields are what the hint list is for — the reading and its identity both survive.</summary>
@@ -83,7 +86,7 @@ public class LimitDataParserWindowsTests
 
         var windows = LimitData_Parser.Extract_LimitWindows(payload);
 
-        Assert.Equal(1786493400, Assert.Single(windows).Value.WindowIdentity);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1786493400).UtcDateTime, Assert.Single(windows).Value.WindowResetsAtUtc);
     }
 
     /// <summary>The pre-existing percent-only contract is unchanged — everything reading it is untouched.</summary>

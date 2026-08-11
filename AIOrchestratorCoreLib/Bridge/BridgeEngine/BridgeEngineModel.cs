@@ -1306,7 +1306,8 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            Dictionary<string, (double Percent, double? WindowIdentity)> maxPercents = [];
+            Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> maxPercents = [];
+            var nowUtc = DateTime.UtcNow;
 
             // Only probe files with a window that has not already reset. Probe files are never
             // deleted, so without this the alert scan folded five-day-old closed orchestrations into
@@ -1320,6 +1321,13 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var pair in windows)
                 {
+                    // PER WINDOW, not per file. The file-level gate above keeps a file when ANY of
+                    // its windows is live, so a spent five_hour was riding in on a live weekly's
+                    // stamp and could still fire an alert about an allowance already handed back.
+                    // Same predicate /limits uses, not a second copy of it.
+                    if (RateLimits_Reader.Is_ExpiredWindow(pair.Value.WindowResetsAtUtc, nowUtc))
+                        continue;
+
                     if (!maxPercents.TryGetValue(pair.Key, out var known))
                     {
                         maxPercents[pair.Key] = pair.Value;
@@ -1329,7 +1337,7 @@ internal sealed class BridgeEngineModel(
                     // The same rule /limits uses, through the same comparison: a newer window
                     // replaces an older one outright, and only readings of the SAME window compete
                     // on percentage.
-                    var instance = Limits.WindowInstance_Order.Compare_Instance(pair.Value.WindowIdentity, known.WindowIdentity);
+                    var instance = Limits.WindowInstance_Order.Compare_Instance(pair.Value.WindowResetsAtUtc, known.WindowResetsAtUtc);
 
                     if (instance > 0 || (instance == 0 && pair.Value.Percent > known.Percent))
                         maxPercents[pair.Key] = pair.Value;
@@ -1347,8 +1355,8 @@ internal sealed class BridgeEngineModel(
 
                 var lastAlerted = Limits.LimitAlert_Tracker.Resolve_LastAlertedThreshold_ForCurrentWindow(
                     stored.Threshold,
-                    stored.WindowIdentity,
-                    pair.Value.WindowIdentity,
+                    stored.WindowResetsAtUtc,
+                    pair.Value.WindowResetsAtUtc,
                     pair.Value.Percent);
 
                 var newlyCrossed = Limits.LimitAlert_Tracker.Get_NewlyCrossedThreshold_OrNull(pair.Value.Percent, lastAlerted);
@@ -1358,11 +1366,11 @@ internal sealed class BridgeEngineModel(
                 // leaving the file permanently mid-migration.
                 if (newlyCrossed == null)
                 {
-                    state[pair.Key] = (lastAlerted, pair.Value.WindowIdentity);
+                    state[pair.Key] = (lastAlerted, pair.Value.WindowResetsAtUtc);
                     continue;
                 }
 
-                state[pair.Key] = (newlyCrossed.Value, pair.Value.WindowIdentity);
+                state[pair.Key] = (newlyCrossed.Value, pair.Value.WindowResetsAtUtc);
 
                 var alertText = $"⚠️ LIMIT: {Limits.LimitData_Parser.Build_ShortLabel(pair.Key)} {pair.Value.Percent:F0}%";
                 _log.Log_Warning(GLOBAL_ORCH_ID, $"{alertText} (key '{pair.Key}')");
@@ -1382,14 +1390,14 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>Shape and migration live in <see cref="Limits.LimitAlertState_Store"/>, where they are testable.</summary>
-    Dictionary<string, (double Threshold, double? WindowIdentity)> Load_LimitAlertState()
+    Dictionary<string, (double Threshold, DateTime? WindowResetsAtUtc)> Load_LimitAlertState()
     {
         if (!File.Exists(_paths.LimitAlertStateFile))
             return [];
 
         try
         {
-            return new Dictionary<string, (double Threshold, double? WindowIdentity)>(
+            return new Dictionary<string, (double Threshold, DateTime? WindowResetsAtUtc)>(
                 Limits.LimitAlertState_Store.Parse(File.ReadAllText(_paths.LimitAlertStateFile)));
         }
         catch
@@ -1399,7 +1407,7 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    void Save_LimitAlertState(Dictionary<string, (double Threshold, double? WindowIdentity)> state)
+    void Save_LimitAlertState(Dictionary<string, (double Threshold, DateTime? WindowResetsAtUtc)> state)
     {
         File.WriteAllText(_paths.LimitAlertStateFile, Limits.LimitAlertState_Store.To_Json(state));
     }
@@ -3121,7 +3129,7 @@ internal sealed class BridgeEngineModel(
         var windows = RateLimits_Reader.Read_WorstAcrossSessions(RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, now), now);
 
         if (windows.Count == 0)
-            return "no limit data in the status line of this Claude Code version — nothing to report (the automatic limit alerts idle for the same reason)";
+            return "no CURRENT limit windows to report — either every window on disk has already reset, or this Claude Code version's status line carries no limit data at all (the automatic alerts read the same probe files, so they are idle for whichever reason applies)";
 
         List<string> lines = [];
 
@@ -4988,18 +4996,27 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Announce_SupervisorFree_Async(string orchId, PendingOwnerReply pending, CancellationToken cancellationToken)
     {
-        if (_telegramClient == null || pending.ReceiptMessageId == null)
+        if (_telegramClient == null)
             return;
 
         if (Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
             return;
 
+        const string TURN_ENDED_TEXT = "✓✓  ·  🔴 Sup: turn ended — free now, he is reading this";
+
+        // No receipt to edit — one failed narration edit is enough to drop the id — so SEND it.
+        // The owner's complaint that created this announcement was being left watching a "busy"
+        // line that never changed, and a transient Telegram error silently reproducing that exact
+        // silence is the same defect wearing a different hat.
+        if (pending.ReceiptMessageId == null)
+        {
+            await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
+            return;
+        }
+
         try
         {
-            await _telegramClient.Edit_MessageText_Async(
-                pending.ReceiptMessageId.Value,
-                "✓✓  ·  🔴 Sup: turn ended — free now, he is reading this",
-                cancellationToken);
+            await _telegramClient.Edit_MessageText_Async(pending.ReceiptMessageId.Value, TURN_ENDED_TEXT, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -5007,7 +5024,10 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Warning(orchId, $"Turn-ended announcement failed: {ex.Message}");
+            _log.Log_Warning(orchId, $"Turn-ended announcement edit failed, sending it instead: {ex.Message}");
+
+            // Same reasoning as above: the signal matters more than which message carries it.
+            await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
         }
     }
 

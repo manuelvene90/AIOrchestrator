@@ -78,13 +78,17 @@ public static class LimitData_Parser
     ///
     /// Identity is null whenever it cannot be established, which is a supported outcome and not a
     /// failure: an older status line carries no reset field at all, and the caller falls back to
-    /// its percentage rule rather than going quiet. It is deliberately only read when NUMERIC (a
-    /// unix instant) or a parseable timestamp — an identity we cannot order is worse than none,
-    /// because "is this window newer" would silently become unanswerable.
+    /// its percentage rule rather than going quiet. It is only read when NUMERIC (a unix instant)
+    /// or a parseable timestamp — an identity we cannot place in time is worse than none, because
+    /// both "is this window newer" and "has this window already reset" become unanswerable.
+    ///
+    /// It is an INSTANT rather than an opaque token precisely because of that second question: the
+    /// alert path has to drop a spent window inside an otherwise-live file, and it was keeping one
+    /// alive on its neighbour's reset stamp.
     /// </summary>
-    public static IReadOnlyDictionary<string, (double Percent, double? WindowIdentity)> Extract_LimitWindows(string rawStatuslineJson)
+    public static IReadOnlyDictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> Extract_LimitWindows(string rawStatuslineJson)
     {
-        Dictionary<string, (double Percent, double? WindowIdentity)> results = [];
+        Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> results = [];
 
         JsonNode? root;
         try
@@ -102,7 +106,7 @@ public static class LimitData_Parser
         return results;
     }
 
-    static void Scan_Node(JsonNode node, string path, Dictionary<string, (double Percent, double? WindowIdentity)> results)
+    static void Scan_Node(JsonNode node, string path, Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> results)
     {
         if (node is JsonObject jsonObject)
         {
@@ -134,7 +138,7 @@ public static class LimitData_Parser
         }
     }
 
-    static double? Find_WindowIdentity_OrNull(JsonObject container)
+    static DateTime? Find_WindowIdentity_OrNull(JsonObject container)
     {
         foreach (var pair in container)
         {
@@ -146,16 +150,29 @@ public static class LimitData_Parser
             if (!RESET_FIELD_HINTS.Any(hint => nameLower.Contains(hint, StringComparison.Ordinal)))
                 continue;
 
+            // The shape in evidence: unix seconds.
             if (value.TryGetValue<double>(out var numeric))
-                return numeric;
+                return To_Instant_OrNull(numeric);
 
-            // A timestamp written as text still identifies the window; ticks keep it orderable.
-            // Mixing scales across a schema change costs exactly one spurious re-arm, never silence.
+            // A timestamp written as text still places the window in time.
             if (value.TryGetValue<string>(out var text) && DateTime.TryParse(text, out var parsed))
-                return parsed.ToUniversalTime().Ticks;
+                return parsed.ToUniversalTime();
         }
 
         return null;
+    }
+
+    static DateTime? To_Instant_OrNull(double unixSeconds)
+    {
+        try
+        {
+            return DateTimeOffset.FromUnixTimeSeconds((long)unixSeconds).UtcDateTime;
+        }
+        catch
+        {
+            // Out of range for an instant, so it is not one — better no identity than a wrong one.
+            return null;
+        }
     }
 
     static bool Try_GetPercent(string fieldName, string fullPath, JsonValue value, out double percent)

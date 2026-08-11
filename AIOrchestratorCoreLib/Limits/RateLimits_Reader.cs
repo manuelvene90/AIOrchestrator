@@ -8,8 +8,12 @@ namespace AIOrchestratorCoreLib.Limits;
 /// Reads the KNOWN status-line rate-limit shape (verified against Claude Code 2.1.223):
 ///   "rate_limits": { "five_hour": { "used_percentage": 46, "resets_at": &lt;unix&gt; },
 ///                    "seven_day": { "used_percentage": 49, "resets_at": &lt;unix&gt; } }
-/// plus the context window's own usage. Payloads without these keys simply yield nothing — the
-/// tolerant LimitData_Parser stays the fallback that drives the automatic alerts.
+/// plus the context window's own usage. Payloads without these keys simply yield nothing.
+///
+/// The automatic alerts read through the tolerant <see cref="LimitData_Parser"/> instead — not as a
+/// fallback for this reader, but as their own path, because they must keep working through a
+/// status-line schema change nobody warned us about. Measured 2026-08-11 across all 54 probe files
+/// and four Claude Code versions, the two paths currently find exactly the same two windows.
 /// </summary>
 public static class RateLimits_Reader
 {
@@ -103,16 +107,10 @@ public static class RateLimits_Reader
         }
     }
 
-    /// <summary>Highest reading per window across every session's probe file — the number that constrains you.</summary>
-    public static IReadOnlyList<(string Window, double Percent, DateTime? ResetsAtLocal, string Models)> Read_WorstAcrossSessions(
-        IReadOnlyList<string> usageFilePaths)
-    {
-        return Read_WorstAcrossSessions(usageFilePaths, DateTime.Now);
-    }
-
     /// <summary>
-    /// Clock-injectable overload. The expiry and window-instance rules below ARE this reader, and
-    /// they cannot be tested against a hidden <see cref="DateTime.Now"/>.
+    /// Highest reading per window across every session's probe file — the number that constrains
+    /// you. The clock is a parameter because the expiry and window-instance rules below ARE this
+    /// reader, and they cannot be tested against a hidden <see cref="DateTime.Now"/>.
     ///
     /// Probe files are never deleted, so this set spans days of history and therefore several
     /// distinct limit WINDOWS. Comparing readings across them is what made /limits lie: on
@@ -183,10 +181,16 @@ public static class RateLimits_Reader
     /// window that has not already reset. Probe files are never deleted, so without this the alert
     /// path folded five-day-old closed orchestrations into "the account's usage right now".
     ///
-    /// It exists beside <see cref="UsageTotals_Reader.Find_AllUsageFiles"/> rather than replacing
-    /// it: lifetime cost and token totals MUST keep reading every file, closed sessions included.
+    /// It filters <see cref="UsageTotals_Reader.Find_AllUsageFiles"/> rather than replacing it, and
+    /// that finder still promises EVERY file — lifetime cost and token totals depend on reading
+    /// closed and respawned sessions too. (They do not reach their files through the finder: they
+    /// compose paths from the session roster, so this filter could never have shrunk the money
+    /// figures. The reason to leave the finder alone is that its name is a promise to the next
+    /// reader, not that anything currently relies on it.)
+    ///
     /// A file with no readable window at all is dropped here — it contributes nothing to a limits
-    /// reading either way.
+    /// reading either way. Note this gate is per FILE: a file kept for one live window may still
+    /// carry a spent one, so the per-WINDOW check belongs to each consumer.
     /// </summary>
     public static IReadOnlyList<string> Find_UsageFiles_WithLiveWindow(ISupervisionPaths paths, DateTime nowLocal)
     {
@@ -217,10 +221,18 @@ public static class RateLimits_Reader
     /// A window whose reset stamp has passed is spent. An ABSENT stamp is never treated as expired:
     /// older status-line versions omit it, and guessing "stale" there would silence the reading
     /// entirely rather than merely misdate it.
+    ///
+    /// Public because the ALERT path needs the identical rule per window — the file-level gate keeps
+    /// a file when any one of its windows is live, so a spent window can still ride in on a live
+    /// neighbour's stamp. Two copies of this comparison is exactly how the two readers would drift.
+    ///
+    /// Both arguments must be on the SAME clock. This reader works in local time (the status line's
+    /// instants are converted for display); the alert path works in UTC. Either is fine; mixing them
+    /// is not.
     /// </summary>
-    static bool Is_ExpiredWindow(DateTime? resetsAtLocal, DateTime nowLocal)
+    public static bool Is_ExpiredWindow(DateTime? resetsAt, DateTime now)
     {
-        return resetsAtLocal != null && resetsAtLocal.Value <= nowLocal;
+        return resetsAt != null && resetsAt.Value <= now;
     }
 
     static DateTime? Read_ResetsAt_OrNull(JsonObject window)

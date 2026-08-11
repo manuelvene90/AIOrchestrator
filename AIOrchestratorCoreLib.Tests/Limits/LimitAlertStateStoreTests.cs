@@ -27,7 +27,7 @@ public class LimitAlertStateStoreTests
 
         var weekly = state["rate_limits.seven_day.used_percentage"];
         Assert.Equal(100, weekly.Threshold);
-        Assert.Null(weekly.WindowIdentity);
+        Assert.Null(weekly.WindowResetsAtUtc);
     }
 
     /// <summary>End to end on the real content: the owner's weekly is un-latched the moment this lands.</summary>
@@ -39,8 +39,8 @@ public class LimitAlertStateStoreTests
 
         var lastAlerted = LimitAlert_Tracker.Resolve_LastAlertedThreshold_ForCurrentWindow(
             stored.Threshold,
-            stored.WindowIdentity,
-            currentWindowIdentity: 1786953600,
+            stored.WindowResetsAtUtc,
+            currentWindowIdentity: DateTimeOffset.FromUnixTimeSeconds(1786953600).UtcDateTime,
             currentPercent: 89);
 
         Assert.Equal(0, lastAlerted);
@@ -53,24 +53,24 @@ public class LimitAlertStateStoreTests
 
         var weekly = state["rate_limits.seven_day.used_percentage"];
         Assert.Equal(95, weekly.Threshold);
-        Assert.Equal(1786953600, weekly.WindowIdentity);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1786953600).UtcDateTime, weekly.WindowResetsAtUtc);
     }
 
     [Fact]
     public void ToJson_ThenParse_RoundTripsBothWithAndWithoutAWindow()
     {
-        Dictionary<string, (double Threshold, double? WindowIdentity)> written = new()
+        Dictionary<string, (double Threshold, DateTime? WindowResetsAtUtc)> written = new()
         {
-            ["rate_limits.five_hour.used_percentage"] = (97, 1786493400),
+            ["rate_limits.five_hour.used_percentage"] = (97, DateTimeOffset.FromUnixTimeSeconds(1786493400).UtcDateTime),
             ["some.undated.percent"] = (90, null),
         };
 
         var readBack = LimitAlertState_Store.Parse(LimitAlertState_Store.To_Json(written));
 
         Assert.Equal(97, readBack["rate_limits.five_hour.used_percentage"].Threshold);
-        Assert.Equal(1786493400, readBack["rate_limits.five_hour.used_percentage"].WindowIdentity);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1786493400).UtcDateTime, readBack["rate_limits.five_hour.used_percentage"].WindowResetsAtUtc);
         Assert.Equal(90, readBack["some.undated.percent"].Threshold);
-        Assert.Null(readBack["some.undated.percent"].WindowIdentity);
+        Assert.Null(readBack["some.undated.percent"].WindowResetsAtUtc);
     }
 
     /// <summary>An unreadable file re-alerts once rather than throwing out of the whole check.</summary>
