@@ -20,7 +20,9 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 /// alongside processed ones, so a bad file can never wedge the loop.
 ///
 /// Supported actions (retries REUSE the same action string — never invent variants):
-///   {"action":"start-orchestration","repo":"..."}                     (general supervisor; id auto-allocated)
+///   {"action":"start-orchestration","repo":"...","mode":"full|basic"}
+///                                       (general supervisor; id auto-allocated. mode is optional
+///                                        and defaults to full — basic is one solo session)
 ///   {"action":"add-implementer","orchId":"..."}                       (orchestration supervisor)
 ///   {"action":"add-reviewer","orchId":"..."}                          (orchestration supervisor; read-only member)
 ///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor; also closes rev-n)
@@ -49,6 +51,12 @@ public static class OrchestrationRequests_Reader
     /// the reason to them. Rejecting is deliberate — a silent spawn left the owner in the dark.
     /// </summary>
     public const string MISSING_REASON_MESSAGE = "missing 'reason' — every autonomous action must state WHY in one short line (it is relayed to the owner)";
+
+    /// <summary>A full crew: supervisor plus imp-1. The default when no mode is given.</summary>
+    public const string FULL_MODE = "full";
+
+    /// <summary>One solo session, no supervisor — the shape the owner asks the concierge for.</summary>
+    public const string BASIC_MODE = "basic";
 
     public const string MISSING_REQUESTER_MESSAGE = "missing 'requester' — closing an orchestration is irreversible, so the audit trail and the owner's confirmation must both be able to name WHO asked (e.g. \"supervisor of crm-2\")";
 
@@ -79,7 +87,6 @@ public static class OrchestrationRequests_Reader
             startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests, malformedRequests);
     }
 
-    /// <summary>Best-effort orchId of a REJECTED file, so the rejection can be reported in its channel.</summary>
     /// <summary>
     /// Re-reads ONE close-orchestration request by path, for files parked outside the scanned
     /// folder while they await the owner's confirmation. It goes through the same parse as every
@@ -167,7 +174,16 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(repoQuery))
                         return "missing 'repo'";
 
-                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, filePath));
+                    // Absent means FULL, so every request written before this field existed keeps
+                    // working. A value we do not recognise is REJECTED rather than defaulted: a
+                    // typo must never quietly hand the owner the expensive shape when they asked
+                    // for the cheap one.
+                    var mode = root["mode"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+
+                    if (mode != null && mode != FULL_MODE && mode != BASIC_MODE)
+                        return $"mode must be '{FULL_MODE}' or '{BASIC_MODE}', got '{mode}'";
+
+                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, mode == BASIC_MODE, filePath));
                     return null;
                 }
                 case ADD_IMPLEMENTER_ACTION:

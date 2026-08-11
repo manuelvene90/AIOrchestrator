@@ -155,6 +155,14 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
   2. Tell the owner what you are about to start, then write
      `{"action":"start-orchestration","repo":"<exact repo name>"}` — the app allocates the
      orchestration id automatically (repo-slug-n, incremental); you never pick ids.
+
+     **A BASIC session — one solo agent, no supervisor, no implementers — is
+     `{"action":"start-orchestration","repo":"<exact repo name>","mode":"basic"}`.** Use it when the
+     owner asks for something small, quick, or "just one session": a full crew costs a supervisor
+     and an implementer for work that may need neither. `mode` is optional and defaults to `full`,
+     and an unrecognised value is REJECTED rather than quietly treated as full — so a typo cannot
+     silently spend their tokens on the expensive shape. Say which shape you are starting when you
+     confirm, so they can correct you before it spawns.
   3. The app creates the orchestration, spawns its supervisor terminal, creates its Telegram topic,
      and confirms with a `FROM app` entry (which wakes you). Relay the outcome to the owner — the
      new topic appears in Telegram with that supervisor's greeting, which states the repo directory

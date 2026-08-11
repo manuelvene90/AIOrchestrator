@@ -2114,11 +2114,17 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                var session = _launcher.Start_Orchestration(repo.Name, repo.Path);
+                var session = request.IsBasic
+                    ? _launcher.Start_BasicOrchestration(repo.Name, repo.Path)
+                    : _launcher.Start_Orchestration(repo.Name, repo.Path);
+
+                var crew = request.IsBasic
+                    ? "One solo session spawned — no supervisor, no implementers; you talk to it directly."
+                    : "Supervisor and implementer imp-1 spawned;";
 
                 Append_GeneralAppEntry(
                     $"orchestration '{session.OrchId}' started",
-                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). Supervisor and implementer imp-1 spawned; its Telegram topic appears on its first channel entry.");
+                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). {crew} its Telegram topic appears on its first channel entry.");
             }
             catch (Exception ex)
             {
