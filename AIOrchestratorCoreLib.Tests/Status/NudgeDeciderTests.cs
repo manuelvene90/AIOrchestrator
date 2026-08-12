@@ -264,6 +264,71 @@ public class NudgeDeciderTests
     /// Entries with an EXPLICIT subject. The plain Build derives one, which cannot express the
     /// difference between a report and a declaration — and that difference is the subject.
     /// </summary>
+    /// <summary>
+    /// AN OPEN WINDOW IS NOT FILED WORK. "I am about to write code" publishes the supervisor as owing
+    /// that member a verdict on nothing at all.
+    ///
+    /// The fixture opens with a supervisor brief on purpose: without one, Is_AwaitingVerdict returns
+    /// false at its first guard — nothing has been asked of this member — and the case would pass for
+    /// a reason that has nothing to do with windows. That is the two-routes shape three sessions hit
+    /// on the previous feature, so it is designed out here rather than found later.
+    ///
+    /// BOTH FAMILIES, because a mutation window is the same marker with a different word in it.
+    /// </summary>
+    [Theory]
+    [InlineData("WRITING WINDOW OPEN — Parser.cs, Model.cs")]
+    [InlineData("MUTATION WINDOW OPEN — the three gates")]
+    public void AnAnnouncedWindowOwesTheSupervisorNothing(string subject)
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"),
+            (ChannelAuthors.Implementer, subject, "starting now"));
+
+        Assert.False(Nudge_Decider.Owes_MemberAVerdict(entries));
+    }
+
+    /// <summary>
+    /// THE CONTRADICTION THAT PROVED IT, and the reason no wake is lost by the exclusion.
+    ///
+    /// A quiet window-open member used to be published as BOTH "the supervisor owes it a verdict" AND
+    /// "it stopped mid-task" at the same instant. Those cannot both be true of one session. The
+    /// dormancy nudge is the correct one — it is aimed at the MEMBER, which is who has the work — and
+    /// it is unweakened here.
+    ///
+    /// Asserted together in one case deliberately: apart, a later change could silence the dormancy
+    /// nudge for window-open members and both halves would still pass separately.
+    /// </summary>
+    [Fact]
+    public void AWindowOpenMemberIsNudgedItselfAndNeverOnTheSupervisorsBehalf()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"),
+            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs", "starting now"));
+
+        Assert.True(Nudge_Decider.Is_DormantMidWork(entries, true));
+        Assert.False(Nudge_Decider.Owes_MemberAVerdict(entries));
+    }
+
+    /// <summary>
+    /// AND A CLOSE IS THE OPPOSITE CASE, which is why only openers are excluded. The member is saying
+    /// the files are settled and the work is filed — a verdict IS owed, and both consumers already
+    /// agreed on that before this fix.
+    ///
+    /// It is the case an over-broad exclusion would silently take with it: skipping every window
+    /// marker would leave a finished batch waiting with nothing anywhere saying so, which is the
+    /// defect this whole area exists to prevent.
+    /// </summary>
+    [Fact]
+    public void AClosedWindowStillOwesAVerdict()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"),
+            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs", "starting now"),
+            (ChannelAuthors.Implementer, "WRITING WINDOW CLOSED — Parser.cs, 12 tests", "done, commit 8b58b2e"));
+
+        Assert.True(Nudge_Decider.Owes_MemberAVerdict(entries));
+    }
+
     static IReadOnlyList<IChannelEntry> BuildTitled(params (ChannelAuthors Author, string Subject, string Body)[] entries)
     {
         List<IChannelEntry> built = [];
