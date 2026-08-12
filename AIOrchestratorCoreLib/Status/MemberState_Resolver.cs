@@ -170,6 +170,23 @@ public static class MemberState_Resolver
     /// This is the ONE place the question is answered. The turn-end ledger trigger and the published
     /// awaiting-verdict list both come through here rather than each deciding for themselves.
     /// </summary>
+    /// <summary>
+    /// The member's CURRENT BRIEF — the last thing the supervisor said to it. THE one place this is
+    /// answered: it had three implementations, in the card builder, the status line and here, all
+    /// agreeing today and none joined to the others. The duration beside it already went through a
+    /// single formatter; the question of WHICH ENTRY did not.
+    /// </summary>
+    public static IChannelEntry? Find_LastBrief_OrNull(IReadOnlyList<IChannelEntry> entries)
+    {
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            if (entries[index].Author == ChannelAuthors.Supervisor)
+                return entries[index];
+        }
+
+        return null;
+    }
+
     public static IChannelEntry? Find_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
     {
         for (var index = entries.Count - 1; index >= 0; index--)

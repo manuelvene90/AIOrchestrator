@@ -62,12 +62,28 @@ public class TopicStatusLineDeciderTests
     }
 
     /// <summary>
-    /// Whitespace-only is not "unchanged" by accident: an empty line and a remembered empty line
-    /// must both be silent for the SAME reason, not because they happen to compare equal.
+    /// REPLACED, because the case that stood here pinned nothing and its docstring claimed the
+    /// opposite. It asserted that empty text with an identical remembered value is silent "for the
+    /// SAME reason, not because they happen to compare equal" — which is precisely what it could not
+    /// distinguish: remove the whitespace guard and it passed, remove the identical-text guard and it
+    /// passed. Item 20, and my own sentence — never assert on a state with two routes to it.
+    ///
+    /// The discriminating case is whitespace against a DIFFERENT remembered value: only the
+    /// whitespace guard can produce None there, because the texts do not compare equal.
     /// </summary>
     [Fact]
-    public void AnEmptyLineIsSilentEvenWhenItMatchesWhatWasWritten()
+    public void WhitespaceIsSilentEvenWhenItIsAChange()
     {
-        Assert.Equal(TopicStatusActions.None, TopicStatusLine_Decider.Decide("", "", EXISTING));
+        Assert.Equal(TopicStatusActions.None, TopicStatusLine_Decider.Decide("   ", "a real line", EXISTING));
+    }
+
+    /// <summary>
+    /// And the mirror of it: identical NON-empty text, where only the identical-text guard can
+    /// produce None. Between them the two guards are pinned separately rather than together.
+    /// </summary>
+    [Fact]
+    public void IdenticalNonEmptyTextIsSilentThroughTheOtherGuard()
+    {
+        Assert.Equal(TopicStatusActions.None, TopicStatusLine_Decider.Decide("a real line", "a real line", EXISTING));
     }
 }

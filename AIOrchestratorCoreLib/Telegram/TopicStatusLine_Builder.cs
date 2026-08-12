@@ -95,7 +95,7 @@ public static class TopicStatusLine_Builder
         if (Is_Idle(state))
             return $"{member.MemberId}   idle";
 
-        var brief = Find_LastSupervisorEntry_OrNull(member.Entries);
+        var brief = MemberState_Resolver.Find_LastBrief_OrNull(member.Entries);
 
         if (brief == null)
             return $"{member.MemberId}   idle";
@@ -122,14 +122,4 @@ public static class TopicStatusLine_Builder
         return state == MemberStates.StandingBy || state == MemberStates.NewNoTraffic;
     }
 
-    static IChannelEntry? Find_LastSupervisorEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
-    {
-        for (var index = entries.Count - 1; index >= 0; index--)
-        {
-            if (entries[index].Author == ChannelAuthors.Supervisor)
-                return entries[index];
-        }
-
-        return null;
-    }
 }

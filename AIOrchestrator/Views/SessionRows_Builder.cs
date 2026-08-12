@@ -131,7 +131,7 @@ public static class SessionRows_Builder
     {
         List<string> parts = [];
 
-        var lastBrief = entries.LastOrDefault(e => e.Author == ChannelAuthors.Supervisor);
+        var lastBrief = MemberState_Resolver.Find_LastBrief_OrNull(entries);
 
         if (lastBrief != null)
         {

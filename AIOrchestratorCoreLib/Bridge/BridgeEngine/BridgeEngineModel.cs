@@ -3784,6 +3784,14 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
 
+            // PER-TOPIC DND AND SILENCE, the same gate nine other outbound sites in this file use.
+            // Only the app-wide mute stopped this one. The POST branch is an ordinary sendMessage
+            // with no disable_notification, so a topic the owner had explicitly silenced could put
+            // a push on their phone the first time it needed a status line. Silenced means
+            // DISCARDED, not quiet, and this code drew no distinction.
+            if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+                continue;
+
             var text = Build_TopicStatusLineText(session);
 
             _statusLineTextByOrchId.TryGetValue(session.OrchId, out var lastText);
@@ -3818,6 +3826,13 @@ internal sealed class BridgeEngineModel(
 
                 _statusLineTextByOrchId[session.OrchId] = text;
                 _statusLineAttemptUtcByOrchId.Remove(session.OrchId);
+            }
+            catch (OperationCanceledException)
+            {
+                // Shutdown, not a failure. Sync_TopicNames rethrows it first 130 lines above for
+                // the same reason: swallowing it left the loop issuing HTTP calls on a cancelled
+                // token for every remaining orchestration.
+                throw;
             }
             catch (Exception exception) when (Is_MessageAlreadyCurrent(exception))
             {

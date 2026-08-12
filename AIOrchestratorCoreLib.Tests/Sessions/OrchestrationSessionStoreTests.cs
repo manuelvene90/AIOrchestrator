@@ -23,6 +23,16 @@ public class OrchestrationSessionStoreTests : IDisposable
         Directory.Delete(_tempRoot, recursive: true);
     }
 
+    /// <summary>
+    /// A SECOND store over the same folder — the app after a restart. Asserting on `_store` alone
+    /// would pass on an in-memory copy and prove nothing about what reached session.json, which is
+    /// the only thing that survives the restart these fields exist for.
+    /// </summary>
+    IOrchestrationSessionStore Reload()
+    {
+        return OrchestrationSessionStore_Factory.Create(SupervisionPaths_Factory.Create(_tempRoot));
+    }
+
     [Fact]
     public void Create_Orchestration_SeedsOwnerChannelAndPersists()
     {
@@ -111,6 +121,61 @@ public class OrchestrationSessionStoreTests : IDisposable
             ?? throw new Exception("Session with topic 77 should be findable");
         Assert.Equal("arb-fix", found.OrchId);
         Assert.Null(_store.Find_ByTelegramTopicId_OrNull(999));
+    }
+
+    /// <summary>
+    /// The status message id had NO test at all — a grep across the test project returned zero files
+    /// — while being the one thing that must survive a restart. If the serializer stopped writing
+    /// that line the suite stayed green while the feature's whole premise was dead: every restart
+    /// would post a second status message into every topic, which is the defect it exists to prevent.
+    /// </summary>
+    [Fact]
+    public void Set_StatusLineMessageId_SurvivesAReload()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
+
+        _store.Set_StatusLineMessageId("arb-fix", 4242);
+
+        Assert.Equal(4242, _store.Get_Session("arb-fix").StatusLineMessageId);
+        Assert.Equal(4242, Reload().Get_Session("arb-fix").StatusLineMessageId);
+    }
+
+    /// <summary>
+    /// And it must be CLEARABLE, which `?? existing` silently prevented: /clear tears the topic down
+    /// and recreates it, so a stale id points at a message that no longer exists and the
+    /// orchestration would never get a status line again. Null cannot mean both "unchanged" and
+    /// "cleared" — the factory's own docstring says so, and the compiler accepted the wrong one.
+    /// </summary>
+    [Fact]
+    public void Clear_StatusLineMessageId_ActuallyClearsIt()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
+        _store.Set_StatusLineMessageId("arb-fix", 4242);
+
+        _store.Clear_StatusLineMessageId("arb-fix");
+
+        Assert.Null(_store.Get_Session("arb-fix").StatusLineMessageId);
+        Assert.Null(Reload().Get_Session("arb-fix").StatusLineMessageId);
+    }
+
+    /// <summary>
+    /// Setting an UNRELATED field must not disturb it. The id goes in as the fifteenth positional
+    /// argument to a call with an optional-defaulted parameter — the exact shape the copy-with-
+    /// overrides docstring was written about, where "a newly added field silently got dropped".
+    /// </summary>
+    [Fact]
+    public void AnUnrelatedMutationDoesNotDropTheStatusLineMessageId()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
+        _store.Set_StatusLineMessageId("arb-fix", 4242);
+
+        _store.Set_TelegramTopicId("arb-fix", 77);
+        _store.Add_Implementer("arb-fix");
+
+        Assert.Equal(4242, Reload().Get_Session("arb-fix").StatusLineMessageId);
     }
 
     [Fact]
