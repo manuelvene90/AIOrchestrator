@@ -235,11 +235,48 @@ public class MemberStateResolverTests
     /// <summary>
     /// The subject lost its quotation protection when it moved to a token match: the exact string the
     /// body rule FORBIDS was declaring from a subject. Same exclusion, both fields.
+    ///
+    /// EVERY CASE HERE MUST REACH THE QUOTATION REFUSAL, and one of them did not. `on 'STANDING BY'
+    /// and why it is needed` begins with a letter, so once the marker was required to LEAD the subject
+    /// it was refused for that reason and returned before the quotation check ran — it passed with the
+    /// check deleted outright, in the very test written to answer a quotation finding. It has moved to
+    /// the leading Theory below, where it pins what it actually pins.
+    ///
+    /// So each subject here opens with the quotation mark: the marker leads, the tail carries no
+    /// clause break, and the ONLY thing standing between it and a declaration is the refusal. A
+    /// reviewer verified by mutation that this is a live decision and not a belief — deleting the two
+    /// lines flips six subjects to declaring, and the block quote below is the one case where nothing
+    /// else in the resolver catches it.
     /// </summary>
     [Theory]
     [InlineData("\"STANDING BY\" is the new marker")]
-    [InlineData("on 'STANDING BY' and why it is needed")]
+    [InlineData("'STANDING BY' and why it is needed")]
+    [InlineData("> STANDING BY")]
+    [InlineData("> STANDING BY, quoting the member I am reviewing")]
     public void AQuotedMarkerInASubjectIsNotADeclaration(string subject)
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, subject, "the report"),
+        };
+
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// WHERE THE MOVED CASE LIVES NOW, saying what it pins: a subject that talks its way up to the
+    /// marker is discussion, and the marker has to LEAD. It was sitting in the quotation Theory above,
+    /// passing on this rule instead of on the one that Theory exists for.
+    ///
+    /// Kept rather than deleted because the property is real and was otherwise pinned only by a corpus
+    /// subject: two different sentences can reach a state, and a case that names which one it means is
+    /// worth more than the assertion count suggests.
+    /// </summary>
+    [Theory]
+    [InlineData("on 'STANDING BY' and why it is needed")]
+    [InlineData("a note about STANDING BY for the next member")]
+    public void AMarkerThatDoesNotLeadTheSubjectIsNotADeclaration(string subject)
     {
         var entries = new[]
         {
