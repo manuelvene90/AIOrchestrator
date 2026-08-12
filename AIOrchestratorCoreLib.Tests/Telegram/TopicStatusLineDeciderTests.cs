@@ -42,20 +42,34 @@ public class TopicStatusLineDeciderTests
     }
 
     /// <summary>
-    /// N2: NOTHING TO SAY, WITH A MESSAGE ALREADY UP, IS NOT NOTHING TO DO. Closing the last live
-    /// member left the line's last words standing — a member's row, with a duration that keeps
-    /// reading, for a member that no longer exists. Silence freezes it; an edit takes it down.
+    /// THE SECOND TICK OF AN EMPTIED ORCHESTRATION — the case that was missing, and the whole loop.
+    ///
+    /// Tick 1 emptied the line and the builder emitted the bare title, which the cache now holds.
+    /// Tick 2 builds the same title, so the identical-text rule stops it. The earlier version
+    /// short-circuited on emptiness ABOVE that check and compared an empty string against the cached
+    /// title forever: same title, same message, a rejected edit every two seconds for as long as the
+    /// app ran — and the not-modified branch advanced the cache without setting the backoff, so
+    /// nothing gated it.
+    ///
+    /// The state is STABLE, unlike the original spin, which self-cleared the moment a duration
+    /// changed. This one would never have cleared.
     /// </summary>
     [Fact]
-    public void AnEmptiedLineWithAMessageUpIsEditedDownRatherThanLeftFrozen()
+    public void ASettledEmptiedOrchestrationStopsAfterOneEdit()
     {
-        Assert.Equal(TopicStatusActions.Edit, TopicStatusLine_Decider.Decide("", "imp-1  fix the parser  12 min", EXISTING));
-        Assert.Equal(TopicStatusActions.Edit, TopicStatusLine_Decider.Decide("   ", "imp-1  fix the parser  12 min", EXISTING));
+        const string bareTitle = "CRM invoice crash";
+
+        Assert.Equal(TopicStatusActions.Edit, TopicStatusLine_Decider.Decide(bareTitle, "imp-1  fix the parser  12 min", EXISTING));
+        Assert.Equal(TopicStatusActions.None, TopicStatusLine_Decider.Decide(bareTitle, bareTitle, EXISTING));
     }
 
-    /// <summary>But with NO message posted, an empty line is still silence.</summary>
+    /// <summary>
+    /// Emptiness reaching the decider means there is nothing to say AND nothing posted — the builder
+    /// emits the title instead when a message is up, so "empty with a message" is not a producible
+    /// state and is deliberately not special-cased here. Special-casing it is what caused the spin.
+    /// </summary>
     [Fact]
-    public void AnEmptiedLineWithNoMessageStaysSilent()
+    public void EmptinessIsSilenceBecauseTheBuilderNeverEmitsItWithAMessageUp()
     {
         Assert.Equal(TopicStatusActions.None, TopicStatusLine_Decider.Decide("", null, null));
         Assert.Equal(TopicStatusActions.None, TopicStatusLine_Decider.Decide("   ", "anything", null));

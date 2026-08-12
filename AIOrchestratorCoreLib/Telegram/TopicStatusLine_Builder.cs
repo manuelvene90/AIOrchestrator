@@ -29,12 +29,24 @@ public static class TopicStatusLine_Builder
 
     const string SEPARATOR = "────────────────────────────";
 
+    /// <summary>
+    /// <paramref name="aMessageIsAlreadyPosted"/> decides what NOTHING TO SAY means. With no
+    /// message up it means silence; with one up it means the BARE TITLE, because saying nothing
+    /// would leave the last row standing — a running duration for a member that has been closed.
+    ///
+    /// The fallback lives HERE, not at the call site, because the decider must see the text that
+    /// is actually sent. Substituting it after the decision made the decider compare an empty
+    /// string against a cached title forever: same title, same message, a rejected edit every two
+    /// seconds for as long as the app ran. A decider that does not see what goes out cannot be
+    /// trusted about anything.
+    /// </summary>
     public static string Build(
         string title,
         IPlanProgress? progress,
         IReadOnlyList<ITopicStatusMember> members,
         string? lastSubject,
-        DateTime now)
+        DateTime now,
+        bool aMessageIsAlreadyPosted = false)
     {
         List<string> lines = [];
 
@@ -56,7 +68,7 @@ public static class TopicStatusLine_Builder
         var hasSubstance = lines.Count > 0 || (progress != null && progress.Total > 0) || !string.IsNullOrWhiteSpace(lastSubject);
 
         if (!hasSubstance)
-            return "";
+            return aMessageIsAlreadyPosted ? title : "";
 
         lines.Insert(0, Build_TitleLine(title, progress));
 

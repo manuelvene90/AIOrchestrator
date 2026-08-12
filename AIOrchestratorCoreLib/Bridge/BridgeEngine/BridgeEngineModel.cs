@@ -3842,11 +3842,6 @@ internal sealed class BridgeEngineModel(
             // particular the restart case, which has an id and no remembered text and must EDIT.
             var action = Telegram.TopicStatusLine_Decider.Decide(text, lastText, session.StatusLineMessageId);
 
-            // An emptied line is edited DOWN to the bare title rather than left showing a member that
-            // has been closed. Silence would freeze the last row it printed.
-            if (string.IsNullOrWhiteSpace(text) && action == Telegram.TopicStatusActions.Edit)
-                text = session.DisplayName ?? session.OrchId;
-
             if (action == Telegram.TopicStatusActions.None)
                 continue;
 
@@ -4107,7 +4102,8 @@ internal sealed class BridgeEngineModel(
             progress,
             members,
             lastEntry?.Subject,
-            DateTime.Now);
+            DateTime.Now,
+            session.StatusLineMessageId != null);
     }
 
     /// <summary>

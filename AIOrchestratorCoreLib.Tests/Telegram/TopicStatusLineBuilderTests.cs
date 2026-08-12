@@ -72,6 +72,26 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("", TopicStatusLine_Builder.Build("orch", Progress(0, 0), [], null, NOW));
     }
 
+    /// <summary>
+    /// The FALLBACK lives in the builder, so the decider sees the text that is actually sent. With a
+    /// message already up, nothing-to-say is the bare title — leaving silence would freeze the last
+    /// row it printed, with a running duration for a member that has been closed.
+    /// </summary>
+    [Fact]
+    public void WithAMessageAlreadyPostedNothingToSayIsTheBareTitle()
+    {
+        Assert.Equal(
+            "CRM invoice crash",
+            TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW, aMessageIsAlreadyPosted: true));
+    }
+
+    /// <summary>And with nothing posted it is still silence — the two are decided in one place.</summary>
+    [Fact]
+    public void WithNoMessagePostedNothingToSayIsStillSilence()
+    {
+        Assert.Equal("", TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW, aMessageIsAlreadyPosted: false));
+    }
+
     [Fact]
     public void AMemberRowIsWhoWhatAndHowLong()
     {

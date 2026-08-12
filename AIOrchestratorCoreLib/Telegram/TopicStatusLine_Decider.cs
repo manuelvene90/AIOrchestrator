@@ -52,15 +52,15 @@ public static class TopicStatusLine_Decider
 
     public static TopicStatusActions Decide(string statusText, string? lastWrittenText, long? existingMessageId)
     {
-        // NOTHING TO SAY, WITH A MESSAGE ALREADY UP, IS NOT NOTHING TO DO. Closing the last live
-        // member leaves the line's last words standing — "imp-1  fix the parser  12 min", with a
-        // duration that keeps reading, for a member that no longer exists. That is the wrong state
-        // sitting in front of the owner, which is the exact thing they refused pinning to avoid.
+        // ONE RULE, no empty special case. Emptiness reaching here means there is genuinely nothing
+        // to say AND no message up — the builder emits the bare title instead when one is posted, so
+        // the case "empty with a message" is not producible and is not special-cased.
         //
-        // So an empty line with an existing message EDITS, and the caller writes the bare title. Only
-        // an empty line with NO message is silence.
+        // An earlier version handled it here and short-circuited ABOVE the identical-text check, so a
+        // stable emptied orchestration compared empty against a cached title forever and rejected an
+        // edit every two seconds. The decision must be made on the text that is actually sent.
         if (string.IsNullOrWhiteSpace(statusText))
-            return existingMessageId == null ? TopicStatusActions.None : TopicStatusActions.Edit;
+            return TopicStatusActions.None;
 
         // An edit that writes the same text is a wasted API call, and against the 429 limit already
         // on the ledger it is a real cost rather than a tidiness point.
