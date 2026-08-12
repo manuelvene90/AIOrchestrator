@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -350,12 +350,11 @@ public partial class OrchestrationDetailWindow : Window
         }
     }
 
+    // ONE resolver, and it cannot raise. See Brush_Resolver: FindResource THROWS on a missing key,
+    // so the Gray fallback never covered the case it appeared to.
     Brush Find_Brush(string resourceKey)
     {
-        if (FindResource(resourceKey) is Brush brush)
-            return brush;
-
-        return Brushes.Gray;
+        return Views.Brush_Resolver.Find_OrFallback(this, resourceKey);
     }
 
     void ShowSessionButton_Click(object sender, RoutedEventArgs e)
