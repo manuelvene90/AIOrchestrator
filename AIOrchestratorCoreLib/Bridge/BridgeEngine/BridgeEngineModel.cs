@@ -1082,18 +1082,29 @@ internal sealed class BridgeEngineModel(
         bool dormantMidWork,
         CancellationToken cancellationToken)
     {
-        // NO CLAIM ABOUT THE MONITOR. The old subject said "nothing was going to wake you" and the
-        // body asserted the same thing; the app cannot see a session's monitor, and it was told to a
-        // reviewer whose monitor was alive and had fired on every write for the previous half hour.
+        // TWO RULES THIS MESSAGE HAS ALREADY BROKEN, both by asserting things nobody checked.
+        //
+        // It claimed "nothing was going to wake you". The app cannot see a session's monitor, and it
+        // said this to a reviewer whose monitor was alive and had fired on every write for the
+        // previous half hour.
+        //
+        // Then it offered three remedies, none of which could work. This branch is reached if and
+        // only if the member spoke last, has been briefed, and has an OPEN WINDOW — the window test
+        // in MemberState_Resolver precedes the blocked and standing-by tests, so declaring either of
+        // those cannot change the state while a window is open. The only escape is closing the
+        // window, which the message never mentioned. It told a stuck session to do three things that
+        // would leave it exactly as stuck, which is worse than saying nothing.
+        //
         // An alert that asserts an unchecked fact teaches the reader to discount the ones that are
-        // checked — and this one is load-bearing for a genuinely stalled session.
-        var subject = dormantMidWork
-            ? "you went quiet mid-task — resume or say what you are waiting for"
-            : "unread traffic — you have not answered";
+        // checked, and this nudge is load-bearing for a genuinely stalled session.
+        var subject = Nudge_Wording.Subject_For(dormantMidWork);
 
         var body = dormantMidWork
-            ? $"Your own entry [{lastEntry.Index}] is the last thing on this channel and nothing has moved for {SessionDuration_Formatter.Describe(quietFor)}, with work still announced. A monitor only fires when someone ELSE writes, so if nobody owes you a reply this cannot continue on its own — this entry is the app waking you in case that is what happened. Resume what you announced. If you are in fact waiting, say which: file your report, write BLOCKED ON OWNER with the question, or write STANDING BY if you have nothing owed and nothing running. Any of the three stops these nudges; silence does not, because silence is indistinguishable from a dead session."
-            : $"Entry [{lastEntry.Index}] FROM {lastEntry.Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If it asked you for nothing — a hold, an acknowledgement — reply STANDING BY once and these stop. If your monitor is no longer running, arm a fresh one.";
+            ? Nudge_Wording.Body_ForOpenWindow(lastEntry.Index, SessionDuration_Formatter.Describe(quietFor))
+            : Nudge_Wording.Body_ForUnansweredTraffic(
+                lastEntry.Index,
+                lastEntry.Author.ToString().ToLowerInvariant(),
+                SessionDuration_Formatter.Describe(quietFor));
 
         ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
 
