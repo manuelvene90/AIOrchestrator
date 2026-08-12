@@ -618,6 +618,7 @@ internal sealed class BridgeEngineModel(
         await Resolve_PendingOwnerReplies_Async(cancellationToken);
         await Refresh_TopicStatusLines_Async(cancellationToken);
         Flag_IdleMembers();
+        Report_GuardsNotInForce();
 
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
@@ -3838,6 +3839,62 @@ internal sealed class BridgeEngineModel(
     /// It never closes anything. Retiring a live member on an inference is the failure this protocol
     /// warns about twice; the decision stays the supervisor's.
     /// </summary>
+    /// <summary>
+    /// Picks up the marker a hook drops when it cannot evaluate its predicate, records it through the
+    /// app's OWN writer, and deletes it.
+    ///
+    /// The app writes rather than the hook because the log panel is fed by an in-process event a
+    /// separate process can never raise — so a hook-written line is invisible until somebody goes
+    /// looking, which preserves the very property this exists to remove. Writing it here also means
+    /// one rotation threshold and one low-disk rule rather than a copy in the shell that could not
+    /// honour the disk half at all.
+    ///
+    /// DELETED once recorded, so the next inability is a new fact rather than a stale one. If the
+    /// record cannot be written the marker STAYS, and the next tick tries again.
+    /// </summary>
+    void Report_GuardsNotInForce()
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            var markerFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), Status.GuardNotInForce_Marker.FILE_NAME);
+
+            if (!File.Exists(markerFile))
+                continue;
+
+            var description = Status.GuardNotInForce_Marker.Describe_OrNull(Read_FileText_Safe(markerFile));
+
+            if (description == null)
+            {
+                File.Delete(markerFile);
+                continue;
+            }
+
+            try
+            {
+                // Warning rather than Info: this is a guard the session believes is protecting it and
+                // is not. It goes through _log, so rotation and the low-disk drop apply and the UI
+                // panel shows it live — which is the whole reason the app writes this and not the hook.
+                _log.Log_Warning(session.OrchId, description);
+
+                ChannelAppender.Append_AppEntry(
+                    _paths.Get_OwnerChannelFile(session.OrchId),
+                    Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
+                    $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now.",
+                    DateTime.Now);
+
+                File.Delete(markerFile);
+            }
+            catch (Exception exception)
+            {
+                // The marker deliberately survives: a report that could not be made has not been made.
+                _log.Log_Warning(session.OrchId, $"Guard-not-in-force marker could not be reported — {exception.Message}");
+            }
+        }
+    }
+
     void Flag_IdleMembers()
     {
         foreach (var session in _store.Load_All())
