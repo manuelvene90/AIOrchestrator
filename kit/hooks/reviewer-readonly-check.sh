@@ -18,13 +18,34 @@ if [ "${AIORCH_ROLE:-}" != "reviewer" ]; then
   exit 0
 fi
 
-INPUT=$(cat 2>/dev/null) || exit 0
+# A HOOK THAT CANNOT EVALUATE ITS PREDICATE SAYS SO, AND ALLOWS — see hook-log.sh for both halves.
+# DEFINED FIRST, UNCONDITIONALLY, then overridden by the real one. The stub used to live in an
+# `else`, so it covered a MISSING helper only — a helper that EXISTS but is truncated or empty left
+# the function undefined and the call failed to stderr, the stream this feature's own header says
+# nobody reads. That window is real rather than theoretical: KitAssets_Installer overwrites
+# ~/.claude/hooks at every app start, so a hook firing during that copy sees a partial file.
+aiorch_log_undecidable() { return 0; }
 
-# The command text, extracted without a JSON parser being a hard dependency: python3 when present,
-# otherwise a best-effort grep. A failed extraction allows the command.
+if [ -f "$(dirname "$0")/hook-log.sh" ]; then
+  . "$(dirname "$0")/hook-log.sh" 2>/dev/null || true
+fi
+
+if ! INPUT=$(cat 2>/dev/null); then
+  aiorch_log_undecidable "any rule" "the payload could not be read from stdin"
+  exit 0
+fi
+
+# THE COMMENT HERE USED TO PROMISE A GREP FALLBACK, and there was none: python3 or nothing, and
+# nothing meant a silent allow. So on a machine without python3 this guard was not degraded, it was
+# absent — and the comment was the reason nobody checked.
+#
+# The fallback is NOT being built. A grep-based reader of JSON is the bare-substring class this
+# branch has spent the night removing, and it would be a second extraction implementation competing
+# with this one. The honest shape is one extractor that either works or says it did not.
 COMMAND=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null)
 
 if [ -z "$COMMAND" ]; then
+  aiorch_log_undecidable "what command is being run" "no command could be extracted from the payload"
   exit 0
 fi
 

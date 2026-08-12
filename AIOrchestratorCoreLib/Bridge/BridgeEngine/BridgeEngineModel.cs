@@ -266,6 +266,9 @@ internal sealed class BridgeEngineModel(
     /// <summary>Presence of this file in an orchestration folder stops its supervisor dead.</summary>
     public const string AWAITING_ANSWER_FLAG_FILE = ".awaiting-answer";
 
+    /// <summary>Members waiting on a verdict, one id per line — read by the awaiting-answer hook.</summary>
+    public const string AWAITING_VERDICT_FILE = ".awaiting-verdict";
+
     /// <summary>How long EVERYTHING must be idle before a suppressed last word is released.</summary>
     const int SILENT_DEADLOCK_MINUTES = 5;
 
@@ -865,6 +868,8 @@ internal sealed class BridgeEngineModel(
 
             Nudge_IdleSupervisor(session);
 
+            List<string> awaitingVerdict = [];
+
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc != null)
@@ -887,6 +892,21 @@ internal sealed class BridgeEngineModel(
                 // Both nudge rules live in Nudge_Decider, together — see the class comment for why
                 // splitting them across two files is what made them exhaustive.
                 var dormantMidWork = Nudge_Decider.Is_DormantMidWork(entries, Nudge_Decider.Has_BeenBriefed(channelFile));
+
+                // KEPT FROM MASTER, and it is the hunk that would have silently deleted a guard.
+                // The awaiting-answer hook must let a supervisor answer someone already waiting while
+                // refusing to let it brief someone new, and this list is how it knows. The question is
+                // answered HERE, by the resolver, and merely read by the hook — a bash re-derivation
+                // of the same rule drifted from this one within the hour it was written.
+                //
+                // A STANDING BY member is deliberately NOT published, and that is a real consequence
+                // worth stating rather than discovering: it resolves to StandingBy, not
+                // AwaitingSupervisorReview, so the hook will refuse a write to it while a question is
+                // with the owner. That is the hook's own rule working — writing to an idle member is
+                // briefing new work, which is exactly what it exists to prevent, and answering a
+                // member who filed something is what it exists to allow.
+                if (MemberState_Resolver.Resolve(entries) == MemberStates.AwaitingSupervisorReview)
+                    awaitingVerdict.Add(member.MemberId);
 
                 if (!dormantMidWork && !Nudge_Decider.Has_UnansweredInboundTraffic(entries))
                 {
@@ -935,6 +955,40 @@ internal sealed class BridgeEngineModel(
                 _nudgedMemberUtc.Remove(memberKey);
                 await Recover_OrphanedImplementer_Async(session, member.MemberId, cancellationToken);
             }
+
+            Publish_AwaitingVerdict(session.OrchId, awaitingVerdict);
+        }
+    }
+
+    /// <summary>
+    /// Writes the members currently waiting on a verdict, one id per line, for the awaiting-answer
+    /// hook to read. The hook is bash and cannot call the resolver, so the app answers the question
+    /// and the hook only looks it up — the alternative, re-deriving "who spoke last" in shell, was
+    /// written and drifted from the C# within the hour (it counted an app nudge as the last speaker
+    /// and denied exactly the reply it was meant to allow).
+    ///
+    /// Best effort throughout: a file we cannot write costs the supervisor one allowed reply, never
+    /// a wedged session.
+    /// </summary>
+    void Publish_AwaitingVerdict(string orchId, IReadOnlyList<string> memberIds)
+    {
+        try
+        {
+            var file = Path.Combine(_paths.Get_OrchestrationFolder(orchId), AWAITING_VERDICT_FILE);
+
+            if (memberIds.Count == 0)
+            {
+                if (File.Exists(file))
+                    File.Delete(file);
+
+                return;
+            }
+
+            Storage.Atomic_FileWriter.Write_AllText(file, string.Join('\n', memberIds));
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Could not publish the awaiting-verdict list: {ex.Message}");
         }
     }
 
@@ -1188,6 +1242,18 @@ internal sealed class BridgeEngineModel(
 
             _lastSupervisorVerdictUtc.TryGetValue(session.OrchId, out var lastVerdictUtc);
 
+            // The obligation is DURABLE, and the flag file is what carries it. This dictionary is
+            // in-memory and BridgeState_Store persists only offsets and the last update id, so an
+            // app restart used to empty it — after which Is_LedgerBehind returned false and
+            // Sync_Flag DELETED the flag. In a system whose own lifecycle tree-kills and respawns
+            // everything, that made the ledger debt droppable by restarting, and the comment on the
+            // Stop hook claiming the enforcement was "delayed, never skipped" was simply false.
+            //
+            // The flag's own write time is when the debt was incurred, so re-seeding from it costs
+            // no new persistence and lets the ordinary comparison clear it once PLAN.md is newer.
+            if (lastVerdictUtc == default)
+                lastVerdictUtc = Read_LedgerDebtStamp_OrDefault(session.OrchId);
+
             var isBehind = LedgerHealth_Tracker.Is_LedgerBehind(_paths, session.OrchId, lastVerdictUtc == default ? null : lastVerdictUtc);
             LedgerHealth_Tracker.Sync_Flag(_paths, session.OrchId, isBehind);
 
@@ -1208,6 +1274,25 @@ internal sealed class BridgeEngineModel(
             }
 
             Report_LedgerShape(session);
+        }
+    }
+
+    /// <summary>
+    /// When the ledger debt was incurred, recovered from the flag file the previous run left behind.
+    /// Default when there is no flag, which is the honest answer: no debt is recorded.
+    /// </summary>
+    DateTime Read_LedgerDebtStamp_OrDefault(string orchId)
+    {
+        try
+        {
+            var flagFile = LedgerHealth_Tracker.Build_FlagFilePath(_paths, orchId);
+
+            return File.Exists(flagFile) ? File.GetLastWriteTimeUtc(flagFile) : default;
+        }
+        catch
+        {
+            // A flag we cannot stat must not invent a debt, and must not clear one either.
+            return default;
         }
     }
 
@@ -1473,14 +1558,35 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task<bool> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
+        List<int> supervisorEntryIndexes = [];
+
         foreach (var entry in append.Entries)
         {
             _log.Log_Info(append.Channel.OrchId, $"[{append.Channel.SpokeName}] entry #{entry.Index} FROM {entry.Author}: {entry.Subject}");
 
-            // A supervisor entry in a SPOKE is a brief or a verdict — either way the ledger owes
-            // an update from this moment, and the flag below is what makes skipping it visible.
             if (!append.Channel.IsOwnerChannel && entry.Author == ChannelAuthors.Supervisor)
+                supervisorEntryIndexes.Add(entry.Index);
+        }
+
+        // Only a VERDICT puts the ledger in debt — an answer to work a member filed. This used to
+        // arm on ANY supervisor entry in any spoke, so briefing someone started a 90-second
+        // countdown to being nudged for not having recorded work that had not happened yet.
+        //
+        // Judged at each appended entry's own INDEX rather than at the file's tail: the mirror pass
+        // runs after the write, so a catch-up burst or an app entry arriving in between left the
+        // supervisor's entry no longer last and the verdict was missed entirely.
+        if (supervisorEntryIndexes.Count > 0)
+        {
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(append.Channel.FilePath));
+
+            foreach (var index in supervisorEntryIndexes)
+            {
+                if (!Planning.LedgerHealth_Tracker.Is_VerdictAt(entries, index))
+                    continue;
+
                 _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
+                break;
+            }
         }
 
         // File-only mode: there is no phone to reach, so the entries are as delivered as they will
