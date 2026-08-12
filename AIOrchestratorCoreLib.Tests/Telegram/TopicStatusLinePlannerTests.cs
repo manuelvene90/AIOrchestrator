@@ -106,14 +106,56 @@ public class TopicStatusLinePlannerTests
     public void TheMessageIdDecidesWhatNothingToSayMeans()
     {
         // Nothing to report at all: silence with no message, the bare title with one.
-        Assert.Equal("", Plan(members: [], progress: null, lastSubject: null).Text);
-        Assert.Equal("orch", Plan(members: [], progress: null, lastSubject: null, existingMessageId: 4242, lastWrittenText: "old row").Text);
+        Assert.Equal("", Plan(members: []).Text);
+        Assert.Equal("orch", Plan(members: [], existingMessageId: 4242, lastWrittenText: "old row").Text);
+    }
+
+    /// <summary>
+    /// GATE C — the trusted reading of an agent-written stamp, which never left the engine and so
+    /// could be reverted to a raw parse with 630 tests staying green. A FUTURE-dated entry must not
+    /// win `last` and hold it until real time catches up.
+    /// </summary>
+    [Fact]
+    public void AFutureDatedEntryDoesNotWinTheLastLine()
+    {
+        var members = new[]
+        {
+            Member("imp-1", "the real latest", "2026-08-12 14:50"),
+            Member("imp-2", "stamped in the future", "2026-08-13 23:00"),
+        };
+
+        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
+    }
+
+    /// <summary>An unparseable stamp loses rather than winning by accident.</summary>
+    [Fact]
+    public void AnUnparseableStampDoesNotWinTheLastLine()
+    {
+        var members = new[]
+        {
+            Member("imp-1", "the real latest", "2026-08-12 14:50"),
+            Member("imp-2", "no date at all", "not a date"),
+        };
+
+        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
+    }
+
+    /// <summary>And the ordinary case still picks the genuinely most recent.</summary>
+    [Fact]
+    public void TheLatestTrustworthyStampWins()
+    {
+        var members = new[]
+        {
+            Member("imp-1", "older", "2026-08-12 10:00"),
+            Member("imp-2", "newer", "2026-08-12 14:55"),
+        };
+
+        Assert.Equal("newer", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
     }
 
     static TopicStatusLine_Planner.TopicStatusPlan Plan(
         IReadOnlyList<ITopicStatusMember>? members = null,
         IPlanProgress? progress = null,
-        string? lastSubject = "gate cleared",
         long? existingMessageId = null,
         string? lastWrittenText = null,
         TelegramDeliveryModes mode = TelegramDeliveryModes.Normal,
@@ -123,7 +165,6 @@ public class TopicStatusLinePlannerTests
             "orch",
             progress,
             members ?? [Member("imp-1", "fix the parser", "2026-08-12 14:50")],
-            lastSubject,
             NOW,
             existingMessageId,
             lastWrittenText,

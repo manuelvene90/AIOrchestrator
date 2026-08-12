@@ -3850,7 +3850,6 @@ internal sealed class BridgeEngineModel(
                 session.DisplayName ?? session.OrchId,
                 Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId))),
                 Build_TopicStatusMembers(session),
-                Find_LastConversationSubject_OrNull(session),
                 DateTime.Now,
                 session.StatusLineMessageId,
                 lastText,
@@ -4081,52 +4080,6 @@ internal sealed class BridgeEngineModel(
         return members;
     }
 
-    /// <summary>
-    /// The most recent real entry across the live members, by the stamp the AGENT wrote. App entries
-    /// are not conversation — without that, /resume appends to every member channel in every
-    /// orchestration and every topic simultaneously reads `last GO AHEAD`.
-    /// </summary>
-    string? Find_LastConversationSubject_OrNull(IOrchestrationSession session)
-    {
-        Channels.ChannelEntry.IChannelEntry? lastEntry = null;
-
-        foreach (var member in session.Members)
-        {
-            if (member.ClosedUtc != null)
-                continue;
-
-            var entries = ChannelEntry_Parser.Parse_All(
-                UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));
-
-            var candidate = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
-
-            if (candidate != null && (lastEntry == null || Is_LaterStamp(candidate, lastEntry)))
-                lastEntry = candidate;
-        }
-
-        return lastEntry?.Subject;
-    }
-
-    /// <summary>
-    /// Which of two entries happened later, by the stamp the AGENT wrote — read through the ONE
-    /// trusted-stamp reader rather than a second DateTime.TryParse.
-    ///
-    /// This was that second reading, and the two disagreed inside a single message: the builder
-    /// correctly printed no duration for a future-stamped entry while this promoted it to `last` and
-    /// held it there until real time caught up. Item 12, and the very incident item 12 records.
-    /// </summary>
-    static bool Is_LaterStamp(Channels.ChannelEntry.IChannelEntry candidate, Channels.ChannelEntry.IChannelEntry incumbent)
-    {
-        var now = DateTime.Now;
-
-        if (!SessionDuration_Formatter.Try_ReadTrustedStamp(candidate.DateText, now, out var candidateStamp))
-            return false;
-
-        if (!SessionDuration_Formatter.Try_ReadTrustedStamp(incumbent.DateText, now, out var incumbentStamp))
-            return true;
-
-        return candidateStamp > incumbentStamp;
-    }
 
     string Build_MemberStatusText_ForSession(IOrchestrationSession session)
     {

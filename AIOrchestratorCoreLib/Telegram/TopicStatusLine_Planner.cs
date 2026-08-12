@@ -1,4 +1,7 @@
+using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Planning.PlanProgress;
+using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 
 namespace AIOrchestratorCoreLib.Telegram;
@@ -31,7 +34,6 @@ public static class TopicStatusLine_Planner
         string title,
         IPlanProgress? progress,
         IReadOnlyList<ITopicStatusMember> members,
-        string? lastSubject,
         DateTime now,
         long? existingMessageId,
         string? lastWrittenText,
@@ -41,7 +43,10 @@ public static class TopicStatusLine_Planner
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
-        var text = TopicStatusLine_Builder.Build(title, progress, members, lastSubject, now, existingMessageId != null);
+        // The `last` line is chosen HERE, not handed in. Gate C — the trusted reading of an
+        // agent-written stamp — was the one gate that never left the engine, so it could be reverted
+        // to a raw parse with 630 tests staying green.
+        var text = TopicStatusLine_Builder.Build(title, progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null);
 
         var action = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 
@@ -62,6 +67,53 @@ public static class TopicStatusLine_Planner
         return new TopicStatusPlan(action, text);
     }
 
+
+    /// <summary>
+    /// The most recent real entry across the LIVE members, by the stamp the agent wrote. A closed
+    /// member does not feed this: one message must not disagree with itself about whether a member
+    /// exists.
+    ///
+    /// App entries are not conversation — without that, /resume appends to every member channel in
+    /// every orchestration and every topic simultaneously reads `last GO AHEAD`.
+    /// </summary>
+    public static string? Pick_LastSubject_OrNull(IReadOnlyList<ITopicStatusMember> members, DateTime now)
+    {
+        IChannelEntry? latest = null;
+
+        foreach (var member in members)
+        {
+            if (member.IsClosed)
+                continue;
+
+            var candidate = MemberState_Resolver.Find_LastConversationEntry_OrNull(member.Entries);
+
+            if (candidate != null && (latest == null || Is_LaterStamp(candidate, latest, now)))
+                latest = candidate;
+        }
+
+        return latest?.Subject;
+    }
+
+    /// <summary>
+    /// GATE C. Which of two entries happened later, by the stamp the AGENT wrote — read through the
+    /// one trusted-stamp reader rather than a raw parse, so an entry dated in the future cannot win
+    /// `last` and hold it until real time catches up.
+    ///
+    /// It lived in the engine, which is unreachable from the suite, so it could be reverted to
+    /// DateTime.TryParse without a single test noticing. An unparseable or future stamp LOSES rather
+    /// than winning by accident.
+    /// </summary>
+    public static bool Is_LaterStamp(IChannelEntry candidate, IChannelEntry incumbent, DateTime now)
+    {
+        if (!SessionDuration_Formatter.Try_ReadTrustedStamp(candidate.DateText, now, out var candidateStamp))
+            return false;
+
+        if (!SessionDuration_Formatter.Try_ReadTrustedStamp(incumbent.DateText, now, out var incumbentStamp))
+            return true;
+
+        return candidateStamp > incumbentStamp;
+    }
+
     /// <summary>
     /// Has the backoff elapsed since the last FAILED attempt? No recorded failure means due — the
     /// common case, and it must not cost a wait.
@@ -74,6 +126,18 @@ public static class TopicStatusLine_Planner
     ///
     /// The seam moved the DECISION and left the CLOCK at the call site. That is the same shape as the
     /// derived bool removed for M-G3, one parameter to the left.
+    ///
+    /// TWO JUSTIFICATIONS NOW RIDE ON ONE `now`, AND ONLY ONE IS LOAD-BEARING. The durations need
+    /// LOCAL because they compare against agent-written local stamps in channel headers. The
+    /// backoff has no such requirement — it inherited local purely by being handed the same clock.
+    /// Anyone "fixing" this back to UTC for correctness will reintroduce the inert backoff, because
+    /// the stored stamp would then disagree with the durations' clock again.
+    ///
+    /// LOCAL TIME IS NOT MONOTONIC, which is the residual this choice carries. At the autumn
+    /// transition the clock steps back an hour, so a failure stamped at 03:00 yields a NEGATIVE
+    /// elapsed and this holds the line off for up to an hour — once a year, silently. Spring clears
+    /// a backoff early and is harmless. The proper answer for an INTERVAL is a monotonic source
+    /// rather than either wall clock; it is on the ledger and is not a tonight problem.
     /// </summary>
     public static bool Is_AttemptDue(DateTime? lastFailedAttemptAt, DateTime now, int backoffSeconds)
     {
