@@ -22,9 +22,12 @@ public class NudgeDeciderTests
     [Fact]
     public void ADeclaredIdleMemberIsQuietOnBothPaths()
     {
-        var entries = Build(
-            (ChannelAuthors.Supervisor, "hold — nothing to build, nothing to commit"),
-            (ChannelAuthors.Implementer, "STANDING BY — waiting on rev-2's review"));
+        // TITLED, because a real declaration puts the marker in its SUBJECT — that is what separates
+        // it from a report that merely closes by going quiet, and the derived subject the plain
+        // helper produces cannot express the difference.
+        var entries = BuildTitled(
+            (ChannelAuthors.Supervisor, "hold", "nothing to build, nothing to commit"),
+            (ChannelAuthors.Implementer, "STANDING BY — waiting on rev-2's review", "Nothing owed."));
 
         Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
         Assert.False(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
@@ -92,6 +95,44 @@ public class NudgeDeciderTests
         Assert.False(Nudge_Decider.Owes_MemberAVerdict(entries));
     }
 
+    /// <summary>
+    /// THE CASE THAT FAILED TODAY, five times. A filed report that ENDS with a standing-by
+    /// declaration — the exact shape the role commands tell members to write — still owes a verdict.
+    ///
+    /// The old rule returned false for anything resolving to StandingBy, so the reminder was silenced
+    /// for a member idle BECAUSE it was waiting on the supervisor. A spurious nudge costs a wake; a
+    /// missing one costs filed work sitting unread with nothing anywhere saying so.
+    ///
+    /// The SUBJECT is what separates the two, which is why these build entries with explicit
+    /// subjects: a report is titled by its result and closes by going quiet, a declaration is
+    /// titled by the marker itself.
+    /// </summary>
+    [Fact]
+    public void AReportThatEndsWithADeclarationStillOwesAVerdict()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Supervisor, "brief", "fix the ledger denominator"),
+            (ChannelAuthors.Implementer, "call pinned: d899c7e, 635 tests", "Evidence.\n\nSTANDING BY for your verdict."));
+
+        Assert.True(Nudge_Decider.Owes_MemberAVerdict(entries));
+        Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
+    }
+
+    /// <summary>
+    /// And the state the feature exists for is UNWEAKENED: a declaration with no filed work behind
+    /// it owes nobody anything. Asserted separately so neither case can pass for the other's reason.
+    /// </summary>
+    [Fact]
+    public void ADeclarationWithNothingFiledBehindItOwesNoVerdict()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Supervisor, "hold", "nothing to build, nothing to commit"),
+            (ChannelAuthors.Implementer, "STANDING BY — waiting on rev-4", "Nothing owed, nothing running."));
+
+        Assert.False(Nudge_Decider.Owes_MemberAVerdict(entries));
+        Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
+    }
+
     /// <summary>A filed report still owes the supervisor a verdict — that nudge is not weakened.</summary>
     [Fact]
     public void AFiledReportStillPutsTheSupervisorOnTheHook()
@@ -139,9 +180,9 @@ public class NudgeDeciderTests
     [Fact]
     public void AReviewerDeclarationCountsTheSameAsAnImplementers()
     {
-        var entries = Build(
-            (ChannelAuthors.Supervisor, "review 40dacff"),
-            (ChannelAuthors.Reviewer, "STANDING BY — review filed, nothing else queued"));
+        var entries = BuildTitled(
+            (ChannelAuthors.Supervisor, "review 40dacff", "depth standard"),
+            (ChannelAuthors.Reviewer, "STANDING BY — review filed, nothing else queued", "Nothing else queued."));
 
         Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
         Assert.False(Nudge_Decider.Owes_MemberAVerdict(entries));
@@ -219,6 +260,26 @@ public class NudgeDeciderTests
     /// A declaration is anchored to the start of a line, so a fixture that flattens the entry into
     /// one string cannot tell a declaration from a mention of one.
     /// </summary>
+    /// <summary>
+    /// Entries with an EXPLICIT subject. The plain Build derives one, which cannot express the
+    /// difference between a report and a declaration — and that difference is the subject.
+    /// </summary>
+    static IReadOnlyList<IChannelEntry> BuildTitled(params (ChannelAuthors Author, string Subject, string Body)[] entries)
+    {
+        List<IChannelEntry> built = [];
+
+        for (var index = 0; index < entries.Length; index++)
+        {
+            var (author, subject, body) = entries[index];
+
+            built.Add(ChannelEntry_Factory.Create(
+                index + 1, author, "2026-08-12", subject, body,
+                $"## [{index + 1}] FROM {author} — 2026-08-12 15:00 — {subject}\n{body}"));
+        }
+
+        return built;
+    }
+
     static IReadOnlyList<IChannelEntry> Build(params (ChannelAuthors Author, string Body)[] entries)
     {
         List<IChannelEntry> built = [];

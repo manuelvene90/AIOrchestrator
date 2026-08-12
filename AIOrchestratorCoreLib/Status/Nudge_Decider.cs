@@ -85,7 +85,15 @@ public static class Nudge_Decider
         if (!ChannelAuthor_Kinds.Is_Member(entries[entries.Count - 1].Author))
             return false;
 
-        return MemberState_Resolver.Resolve(entries) != MemberStates.StandingBy;
+        // ASKS WHETHER WORK WAS FILED, not whether the member looks idle. Those are different
+        // questions and this line collapsed them: it returned false for any member resolving to
+        // StandingBy, so a filed report that ENDED with the declaration — the shape the role commands
+        // tell members to write — left the supervisor with no reminder that it owed a verdict.
+        //
+        // The docstring three lines above named both states while the code recognised one. A spurious
+        // nudge costs a wake; a missing one costs filed work sitting unread with nothing anywhere
+        // saying so.
+        return MemberState_Resolver.Is_AwaitingVerdict(entries);
     }
 
     /// <summary>

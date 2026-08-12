@@ -132,8 +132,17 @@ public static class MemberState_Resolver
 
         for (var position = lastSupervisorPosition + 1; position < entries.Count; position++)
         {
-            if (ChannelAuthor_Kinds.Is_Member(entries[position].Author) && !Is_BootAnnouncement(entries[position]))
-                return true;
+            if (!ChannelAuthor_Kinds.Is_Member(entries[position].Author))
+                continue;
+
+            // A boot announcement is a hello and a PURE DECLARATION is an acknowledgement —
+            // neither is filed work, and neither can put a supervisor on the hook for a verdict.
+            // A report that merely ENDS with the marker is still a report: the subject decides,
+            // which is how members actually distinguish the two.
+            if (Is_BootAnnouncement(entries[position]) || Is_PureDeclaration(entries[position]))
+                continue;
+
+            return true;
         }
 
         return false;
@@ -157,6 +166,22 @@ public static class MemberState_Resolver
         var words = entry.Subject.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
         return words.Length == 2 && words[1].Equals(BOOT_ANNOUNCEMENT_WORD, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// An entry whose SUBJECT is the standing-by declaration — an acknowledgement rather than filed
+    /// work.
+    ///
+    /// The distinction is the subject, because that is where members put the thing they are actually
+    /// saying: `STANDING BY — waiting for a brief` is a declaration, while
+    /// `call pinned: d899c7e, 635 tests` with the marker in its closing line is a REPORT that happens
+    /// to end by going quiet. Collapsing the two is what silenced the supervisor's reminder for a
+    /// member idle BECAUSE it was waiting on a verdict — five times in one day, caught only because
+    /// the running build predates the marker.
+    /// </summary>
+    static bool Is_PureDeclaration(IChannelEntry entry)
+    {
+        return Contains_MarkerToken(entry.Subject, STANDING_BY_MARKER);
     }
 
     /// <summary>
