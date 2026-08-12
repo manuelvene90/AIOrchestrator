@@ -40,22 +40,30 @@ public static class MemberState_Resolver
     ];
 
     /// <summary>The two that END a window, which the close-scan treats differently on purpose.</summary>
-    public static readonly IReadOnlyList<string> CLOSING_MARKERS =
+    /// <summary>
+    /// The window vocabulary as PAIRS, which is the only form in which it is true: an opener means
+    /// nothing without the closer that ends it. Three places now need to know which markers open a
+    /// window and which close one, and a second list is how one of them comes to know a marker the
+    /// others do not.
+    /// </summary>
+    public static readonly IReadOnlyList<(string Open, string Closed)> WINDOW_MARKER_PAIRS =
     [
-        WRITING_WINDOW_CLOSED_MARKER,
-        MUTATION_WINDOW_CLOSED_MARKER,
+        (WRITING_WINDOW_OPEN_MARKER, WRITING_WINDOW_CLOSED_MARKER),
+        (MUTATION_WINDOW_OPEN_MARKER, MUTATION_WINDOW_CLOSED_MARKER),
     ];
+
+    public static readonly IReadOnlyList<string> CLOSING_MARKERS = [.. WINDOW_MARKER_PAIRS.Select(pair => pair.Closed)];
 
     public static MemberStates Resolve(IReadOnlyList<IChannelEntry> entries)
     {
         if (entries.Count == 0)
             return MemberStates.NewNoTraffic;
 
-        if (Has_OpenWindow(entries, WRITING_WINDOW_OPEN_MARKER, WRITING_WINDOW_CLOSED_MARKER))
-            return MemberStates.WritingWindowOpen;
-
-        if (Has_OpenWindow(entries, MUTATION_WINDOW_OPEN_MARKER, MUTATION_WINDOW_CLOSED_MARKER))
-            return MemberStates.WritingWindowOpen;
+        foreach (var (open, closed) in WINDOW_MARKER_PAIRS)
+        {
+            if (Has_OpenWindow(entries, open, closed))
+                return MemberStates.WritingWindowOpen;
+        }
 
         var lastEntry = Find_LastConversationEntry_OrNull(entries);
 
@@ -148,11 +156,25 @@ public static class MemberState_Resolver
             if (!ChannelAuthor_Kinds.Is_Member(entries[position].Author))
                 continue;
 
-            // A boot announcement is a hello and a PURE DECLARATION is an acknowledgement —
-            // neither is filed work, and neither can put a supervisor on the hook for a verdict.
-            // A report that merely ENDS with the marker is still a report: the subject decides,
-            // which is how members actually distinguish the two.
-            if (Is_BootAnnouncement(entries[position]) || Is_PureDeclaration(entries[position]))
+            // A boot announcement is a hello, a PURE DECLARATION is an acknowledgement, and an OPEN
+            // WINDOW is "I am about to write code" — none of the three is filed work, and none can
+            // put a supervisor on the hook for a verdict. A report that merely ENDS with a
+            // declaration is still a report: the subject decides, which is how members actually
+            // distinguish the two.
+            //
+            // THE WINDOW CASE IS WHY THIS EXCLUSION LIST IS THE RIGHT PLACE FOR IT. Resolve()
+            // short-circuits on an open window before it ever reaches here, so the member's state
+            // and the owner's card were always right; the nudge asks this predicate DIRECTLY, on
+            // purpose — that bypass is what stopped a standing-by member silencing a verdict it was
+            // owed — and so it inherited none of those guards. Two consumers, one question, and the
+            // guard sat on only one path. Excluding it here is what makes them agree again.
+            //
+            // OPENERS ONLY. A CLOSE is the member saying the files are settled and the work is
+            // filed: after one, Has_OpenWindow is false, Resolve falls through to
+            // AwaitingSupervisorReview, and both consumers already agree that a verdict is owed.
+            if (Is_BootAnnouncement(entries[position])
+                || Is_PureDeclaration(entries[position])
+                || Announces_AnOpenWindow(entries[position]))
                 continue;
 
             return true;
@@ -214,6 +236,30 @@ public static class MemberState_Resolver
     /// old convention while this matcher judges it. A matcher that assumed every agent had already
     /// been given the instruction would be fragile in exactly the place where it is silent.
     /// </summary>
+    /// <summary>
+    /// An entry announcing that the member is ABOUT to write — a statement of intent, not a filed
+    /// deliverable. There is nothing in it to judge.
+    ///
+    /// Both families, from the one pair list: excluding only the writing window would leave the
+    /// identical false verdict-claim behind a mutation window, which is the same marker with a
+    /// different word in it.
+    ///
+    /// No wake is lost by this, and it was checked rather than assumed: a window-open member that
+    /// then goes silent is still nudged by Is_DormantMidWork at 8 minutes, aimed at the MEMBER. Both
+    /// alarms used to fire for such a member at once — "the supervisor owes it a verdict" AND "it
+    /// stopped mid-task" — and those cannot both be true of the same session.
+    /// </summary>
+    static bool Announces_AnOpenWindow(IChannelEntry entry)
+    {
+        foreach (var (open, _) in WINDOW_MARKER_PAIRS)
+        {
+            if (Contains_Marker(entry, open))
+                return true;
+        }
+
+        return false;
+    }
+
     static bool Is_PureDeclaration(IChannelEntry entry)
     {
         var afterMarker = Read_AfterLeadingMarker_OrNull(entry.Subject, STANDING_BY_MARKER);
