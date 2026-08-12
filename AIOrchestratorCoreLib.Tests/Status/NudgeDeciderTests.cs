@@ -329,6 +329,91 @@ public class NudgeDeciderTests
         Assert.True(Nudge_Decider.Owes_MemberAVerdict(entries));
     }
 
+    /// <summary>
+    /// THE PROPERTY THAT MAKES THE LOOP IMPOSSIBLE: the app writing cannot change what the member is
+    /// being nudged about, so nothing the app says can ever qualify a member for another nudge.
+    ///
+    /// The old repetition needed no one — the nudge woke the member, the waking proved it alive, that
+    /// proof cleared the escalation map, and the quiet clock its own write had restarted elapsed.
+    /// Every 8 minutes, aimed exclusively at members behaving correctly.
+    /// </summary>
+    [Fact]
+    public void AnAppEntryDoesNotChangeWhatTheMemberIsNudgedAbout()
+    {
+        var beforeTheNudge = BuildTitled(
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"),
+            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs", "starting now"));
+
+        var afterTheNudge = BuildTitled(
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"),
+            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs", "starting now"),
+            (ChannelAuthors.App, "you stopped mid-task", "nothing was going to wake you"));
+
+        Assert.Equal(
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(beforeTheNudge),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(afterTheNudge));
+    }
+
+    /// <summary>
+    /// And it is not a mute switch: a genuinely new member entry is a new unanswered thing. Asserted
+    /// apart, because "always equal" would satisfy the case above and silence the alarm for good —
+    /// the silent failure this whole area keeps producing.
+    /// </summary>
+    [Fact]
+    public void ANewMemberEntryIsADifferentThingToBeNudgedAbout()
+    {
+        var before = BuildTitled(
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"),
+            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs", "starting now"));
+
+        var after = BuildTitled(
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"),
+            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs", "starting now"),
+            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Model.cs", "still going"));
+
+        Assert.NotEqual(
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(before),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(after));
+    }
+
+    /// <summary>
+    /// THE IDENTITY IS THE RAW TEXT, NOT THE INDEX AND NOT THE STAMP — the condition the ruling turned
+    /// on, pinned rather than promised.
+    ///
+    /// Both of those are agent-written and neither is unique: one channel carried two `[80]`s and two
+    /// `[81]`s, and a header stamp has MINUTE resolution, so two entries a few seconds apart share
+    /// one. Under either, a genuinely new entry would compare equal to the remembered one and lose the
+    /// nudge it earned — silently, which is the defect this gate replaces wearing the other mask.
+    ///
+    /// This fixture is the trap: same index, same stamp, different content.
+    /// </summary>
+    [Fact]
+    public void TwoEntriesSharingAnIndexAndAMinuteAreStillDifferentThings()
+    {
+        var first = Stamped((ChannelAuthors.Implementer, "first thing", "2026-08-12 19:30"));
+        var second = Stamped((ChannelAuthors.Implementer, "a completely different thing", "2026-08-12 19:30"));
+
+        Assert.NotEqual(
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(first),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(second));
+    }
+
+    static IReadOnlyList<IChannelEntry> Stamped(params (ChannelAuthors Author, string Subject, string DateText)[] entries)
+    {
+        List<IChannelEntry> built = [];
+
+        foreach (var (author, subject, dateText) in entries)
+        {
+            // INDEX 7 for every entry, deliberately: duplicate indices are real and this fixture must
+            // not be able to tell the entries apart by one.
+            built.Add(ChannelEntry_Factory.Create(
+                7, author, dateText, subject, "body",
+                $"## [7] FROM {author} — {dateText} — {subject}\nbody"));
+        }
+
+        return built;
+    }
+
     static IReadOnlyList<IChannelEntry> BuildTitled(params (ChannelAuthors Author, string Subject, string Body)[] entries)
     {
         List<IChannelEntry> built = [];
