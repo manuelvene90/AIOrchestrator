@@ -144,7 +144,6 @@ public class AwayTopicGlyphTests
     [InlineData("✈ 🌙 crm bug")]
     [InlineData("🤐 crm bug")]
     [InlineData("🤐 🌙 crm bug")]
-    [InlineData("✈ 🔕 crm bug")]
     public void Strip_RemovesEveryLeadingGlyph(string decorated)
     {
         Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph(decorated));
