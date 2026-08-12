@@ -283,6 +283,33 @@ check "no awaiting-verdict file (fail closed)" DENY "$(verdict "$(run_hook "$AWA
 
 check "a non-supervisor role is untouched" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')" implementer)")"
 
+# ── A HOOK THAT CANNOT EVALUATE ITS PREDICATE SAYS SO, AND ALLOWS ───────────────────────────────
+#
+# Both halves need a case, and the SECOND one is the whole point. Allowing was never the defect —
+# allowing SILENTLY was. Fifteen guards looked armed and were not while this machine was at its
+# commit limit, and nothing anywhere recorded that they had stopped working.
+#
+# A payload with no file_path is the undecidable case that used to DENY, which made this file the odd
+# one out: three places face the same inability and one of them invented a refusal.
+LOG_FILE="$SUPERVISION/orchestrator.log.jsonl"
+rm -f "$LOG_FILE"
+
+check "an undecidable write is ALLOWED" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')")")"
+check "…and it is RECORDED, not silent" PRESENT "$(flag_state "$LOG_FILE")"
+
+# The line has to be usable by whoever reads it: the app parses this file, and a reader needs to know
+# WHICH guard stopped working rather than that something went wrong.
+check "the record names the hook" FOUND "$(grep -q 'supervisor-awaiting-answer-check' "$LOG_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
+check "the record names the predicate" FOUND "$(grep -q 'which file is being written' "$LOG_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
+check "the record says the guard is not in force" FOUND "$(grep -q 'this guard is not in force' "$LOG_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
+check "the record is one JSON line" 1 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
+check "the record parses as JSON" OK "$(python3 -c 'import json,sys; json.loads(sys.stdin.readline()); print("OK")' < "$LOG_FILE" 2>/dev/null || printf BROKEN)"
+
+# A DECIDABLE call must stay silent. Without this, "log everything" would pass every case above while
+# filling the file the app tails with a line per tool call.
+rm -f "$LOG_FILE"
+check "a decidable call records NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Read file_path 'C:/repo/Foo.cs')")" >/dev/null; flag_state "$LOG_FILE")"
+
 # The same probe again, and it has to be AFTER: a fork limit reached mid-run leaves everything above
 # it green and everything below it unverifiable, and only a second reading can tell those apart.
 assert_environment_can_evaluate "after"

@@ -44,13 +44,28 @@ fi
 #
 # So: anything that cannot change the world is allowed, and everything that can is still denied.
 
-INPUT=$(cat 2>/dev/null) || exit 0
+# A HOOK THAT CANNOT EVALUATE ITS PREDICATE SAYS SO, AND ALLOWS — see hook-log.sh for both halves.
+# Sourced defensively: a missing helper must not be the thing that breaks a session, so the calls
+# below degrade to no-ops rather than to failures.
+if [ -f "$(dirname "$0")/hook-log.sh" ]; then
+  . "$(dirname "$0")/hook-log.sh"
+else
+  aiorch_log_undecidable() { return 0; }
+fi
 
-# Same extraction as the reviewer hook — python3 when present, and a failed read ALLOWS the call,
-# because an enforcement bug must never wedge a session.
+if ! INPUT=$(cat 2>/dev/null); then
+  aiorch_log_undecidable "any rule" "the payload could not be read from stdin"
+  exit 0
+fi
+
+# python3 when present. A failed extraction ALLOWS the call — an enforcement bug must never wedge a
+# session — but it no longer does so silently: on 2026-08-11 this exact branch was taken for hours
+# while the machine was at its commit limit and python3 could not fork, and nothing recorded that
+# every guard had stopped working.
 TOOL=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_name",""))' 2>/dev/null)
 
 if [ -z "$TOOL" ]; then
+  aiorch_log_undecidable "which tool is being called" "no tool name could be extracted from the payload"
   exit 0
 fi
 
@@ -109,8 +124,18 @@ esac
 # deadlock this branch exists to remove — masked only by the Stop hook's defer added beside it.
 TARGET=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("tool_input",{}); print(str(d.get("file_path") or d.get("notebook_path") or d.get("path") or "").replace(chr(92), "/"))' 2>/dev/null)
 
+# THIS ONE USED TO DENY, and it was the odd one out. Three places in this file face the same
+# inability — stdin unreadable at the top, no tool name above, no target here — and this one invented
+# a refusal while the other two granted silent consent. Same interpreter, same failure, opposite
+# conduct, and I wrote all three without noticing they disagreed.
+#
+# It comes into line rather than the others coming into line with it, because a hook that cannot read
+# its input cannot know that denying is safe either. Refusing a call it never understood is a denial
+# it cannot justify, and this guard is advisory: the enforcement that must actually hold lives in the
+# app, at the point of effect.
 if [ -z "$TARGET" ]; then
-  deny "That write names no file this hook can check."
+  aiorch_log_undecidable "which file is being written" "the payload named no file path this hook could read"
+  exit 0
 fi
 
 SUPERVISION="$HOME/.claude/supervision/$AIORCH_ID"
