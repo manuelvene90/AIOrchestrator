@@ -2969,6 +2969,12 @@ internal sealed class BridgeEngineModel(
                         // while the supervisor is mid-turn (which is exactly when it gets asked).
                         await Send_ProgressReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    // NOT an alias of /progress: the owner asked to KEEP the full detail when the
+                    // short form was built, so this is the second RENDERING of the same parse.
+                    else if (command == "tasks")
+                    {
+                        await Send_TaskListReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "tokens")
                     {
                         await Send_TokensReport_Async(client, message.MessageThreadId, cancellationToken);
@@ -3093,6 +3099,7 @@ internal sealed class BridgeEngineModel(
                     ("status", "What every session of this orchestration is doing"),
                     ("progress", "What's LEFT to do here (all orchestrations in General)"),
                     ("left", "What's left to do — same as /progress"),
+                    ("tasks", "The FULL ledger of this orchestration, done lines included"),
                     ("cost", "What this has cost, per session, and the burn rate"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
@@ -3158,6 +3165,44 @@ internal sealed class BridgeEngineModel(
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    /// <summary>
+    /// /tasks — the FULL ledger, done lines included. The owner asked to keep this level of detail
+    /// when /progress was shortened: "keep the current level of detail in a NEW command." Shortening
+    /// the one command they had would have removed the view rather than moved it.
+    /// </summary>
+    async Task Send_TaskListReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_TaskListText(messageThreadId);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_TaskListText(long? messageThreadId)
+    {
+        if (messageThreadId == null)
+            return "ask for /tasks inside an orchestration's topic — the full ledger is per-orchestration";
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+            return "no orchestration is bound to this topic";
+
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
+
+        if (progress == null)
+            return $"{session.DisplayName ?? session.OrchId}: no task ledger yet";
+
+        // The SAME parse the short form reads — two renderings, one reading. Two commands parsing the
+        // ledger their own way is how two answers to one question start disagreeing.
+        var counts = Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId);
+
+        return $"{counts}\n\n{Planning.PlanProgress_Formatter.Describe_EveryLine(progress)}";
     }
 
     string Build_ProgressReportText(long? messageThreadId)

@@ -9,7 +9,8 @@ internal sealed class PlanProgressModel(
     string? currentTaskText,
     IReadOnlyList<string> inProgressTasks,
     IReadOnlyList<string> blockedTasks,
-    IReadOnlyList<string> openTasks) : IPlanProgress
+    IReadOnlyList<string> openTasks,
+    IReadOnlyList<string> doneTasks) : IPlanProgress
 {
     public int Done { get; } = done;
     public int InProgress { get; } = inProgress;
@@ -20,4 +21,6 @@ internal sealed class PlanProgressModel(
     public IReadOnlyList<string> InProgressTasks { get; } = inProgressTasks;
     public IReadOnlyList<string> BlockedTasks { get; } = blockedTasks;
     public IReadOnlyList<string> OpenTasks { get; } = openTasks;
+
+    public IReadOnlyList<string> DoneTasks { get; } = doneTasks;
 }

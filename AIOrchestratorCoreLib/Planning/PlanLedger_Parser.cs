@@ -26,9 +26,9 @@ public static partial class PlanLedger_Parser
         if (string.IsNullOrWhiteSpace(planText))
             return null;
 
-        var done = 0;
         var notDoing = 0;
 
+        List<string> doneTasks = [];
         List<string> inProgressTasks = [];
         List<string> blockedTasks = [];
         List<string> openTasks = [];
@@ -48,7 +48,7 @@ public static partial class PlanLedger_Parser
                 case "x":
                 case "X":
                 {
-                    done++;
+                    doneTasks.Add(taskText);
                     break;
                 }
                 case ">":
@@ -79,14 +79,14 @@ public static partial class PlanLedger_Parser
             }
         }
 
-        var total = done + inProgressTasks.Count + blockedTasks.Count + openTasks.Count;
+        var total = doneTasks.Count + inProgressTasks.Count + blockedTasks.Count + openTasks.Count;
 
         // A ledger of nothing but dropped lines still has nothing to report progress ON.
         if (total == 0 && notDoing == 0)
             return null;
 
         return PlanProgress_Factory.Create(
-            done,
+            doneTasks.Count,
             inProgressTasks.Count,
             blockedTasks.Count,
             notDoing,
@@ -94,6 +94,7 @@ public static partial class PlanLedger_Parser
             inProgressTasks.FirstOrDefault() ?? openTasks.FirstOrDefault(),
             inProgressTasks,
             blockedTasks,
-            openTasks);
+            openTasks,
+            doneTasks);
     }
 }

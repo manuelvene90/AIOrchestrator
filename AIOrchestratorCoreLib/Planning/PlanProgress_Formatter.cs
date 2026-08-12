@@ -92,6 +92,40 @@ public static class PlanProgress_Formatter
     }
 
     /// <summary>
+    /// THE WHOLE LEDGER, line by line, done included — what /progress printed before it was made to
+    /// fit a phone. The owner asked to KEEP this level of detail, not to lose it: "keep the current
+    /// level of detail in a NEW command."
+    ///
+    /// Both shapes come off ONE parse. A second command reading the ledger its own way is how two
+    /// answers to one question start disagreeing, which is the hazard this repo has paid for
+    /// repeatedly — the renderings differ, the reading does not.
+    ///
+    /// Deliberately NOT capped. It exists because somebody asked for everything, and a "full" view
+    /// that silently truncates is worse than either shape on its own.
+    /// </summary>
+    public static string Describe_EveryLine(IPlanProgress progress)
+    {
+        List<string> lines = [];
+
+        foreach (var task in progress.InProgressTasks)
+            lines.Add($"  > {task}");
+
+        foreach (var task in progress.BlockedTasks)
+            lines.Add($"  ! {task}");
+
+        foreach (var task in progress.OpenTasks)
+            lines.Add($"  · {task}");
+
+        foreach (var task in progress.DoneTasks)
+            lines.Add($"  x {task}");
+
+        if (lines.Count == 0)
+            return "the ledger is empty";
+
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
     /// The lines that are neither delivered nor decided against, for the close confirmation. The
     /// owner is told what they are ending mid-flight — it does not block the close, because a ledger
     /// that can refuse to let an orchestration end is the tail wagging the dog.

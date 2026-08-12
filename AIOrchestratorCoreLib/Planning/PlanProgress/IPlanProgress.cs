@@ -37,4 +37,11 @@ public interface IPlanProgress
     IReadOnlyList<string> BlockedTasks { get; }
 
     IReadOnlyList<string> OpenTasks { get; }
+
+    /// <summary>
+    /// Delivered, in ledger order. Collected only because /tasks renders the full ledger — the
+    /// short /progress must never print one, and until this existed that was guaranteed by the
+    /// parser discarding the words rather than by anything choosing not to show them.
+    /// </summary>
+    IReadOnlyList<string> DoneTasks { get; }
 }
