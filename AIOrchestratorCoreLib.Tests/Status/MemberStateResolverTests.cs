@@ -68,10 +68,14 @@ public class MemberStateResolverTests
     [Fact]
     public void Resolve_WritingWindowOpenedThenClosed_FallsBackToLastEntryRule()
     {
+        // The brief is part of the fixture because it is part of every real channel: a member is
+        // only ever "awaiting review" on work it was asked to do. Without it this reads as a member
+        // that has never been briefed, which is waiting for WORK, not for a verdict.
         var entries = new[]
         {
-            Build_Entry(1, ChannelAuthors.Implementer, "WRITING WINDOW OPEN", "starting"),
-            Build_Entry(2, ChannelAuthors.Implementer, "WRITING WINDOW CLOSED", "five fixes landed"),
+            Build_Entry(1, ChannelAuthors.Supervisor, "BRIEF", "fix the five defects"),
+            Build_Entry(2, ChannelAuthors.Implementer, "WRITING WINDOW OPEN", "starting"),
+            Build_Entry(3, ChannelAuthors.Implementer, "WRITING WINDOW CLOSED", "five fixes landed"),
         };
 
         Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));

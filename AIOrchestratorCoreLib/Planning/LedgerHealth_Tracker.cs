@@ -1,3 +1,6 @@
+using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Planning;
@@ -16,6 +19,51 @@ public static class LedgerHealth_Tracker
 {
     /// <summary>Grace after a verdict before the ledger counts as behind (the supervisor is mid-turn).</summary>
     public const int LEDGER_GRACE_SECONDS = 90;
+
+    /// <summary>
+    /// Whether the supervisor's latest entry in a spoke is a VERDICT — an answer to work a member
+    /// filed — rather than a BRIEF, which assigns work that has not happened yet.
+    ///
+    /// Only a verdict owes the ledger an update. Arming on any supervisor entry meant that briefing
+    /// someone started a 90-second countdown to being nudged for not having recorded work nobody had
+    /// done: five false nudges on 2026-08-11, two of them inside two minutes, each one threatening a
+    /// turn-end block.
+    ///
+    /// It asks <see cref="MemberState_Resolver.Is_AwaitingVerdict"/> about the channel as it stood
+    /// BEFORE this entry: a verdict is what a supervisor writes to a member that was waiting on one.
+    /// Asking merely "did a member speak last" was wrong in the sequence every channel actually
+    /// produces — the boot protocol makes a member speak first ("imp-1 online"), so a BRIEF followed
+    /// a member entry and armed the ledger, which is the regression this exists to kill.
+    /// </summary>
+    public static bool Is_VerdictOnMemberWork(IReadOnlyList<IChannelEntry> spokeEntries)
+    {
+        if (spokeEntries.Count == 0 || spokeEntries[^1].Author != ChannelAuthors.Supervisor)
+            return false;
+
+        return MemberState_Resolver.Is_AwaitingVerdict([.. spokeEntries.Take(spokeEntries.Count - 1)]);
+    }
+
+    /// <summary>
+    /// The same question about a SPECIFIC entry rather than about the tail, because the tail moves.
+    ///
+    /// The mirror pass runs after the write, and anything appended in between — a DND catch-up burst,
+    /// a `/resume` app entry, the tailer's ordinary batching — leaves the supervisor's entry no longer
+    /// last, and the verdict was silently missed. Judging the entry where it actually sits is immune
+    /// to whatever arrives after it.
+    /// </summary>
+    public static bool Is_VerdictAt(IReadOnlyList<IChannelEntry> spokeEntries, int channelEntryIndex)
+    {
+        for (var position = 0; position < spokeEntries.Count; position++)
+        {
+            if (spokeEntries[position].Index != channelEntryIndex || spokeEntries[position].Author != ChannelAuthors.Supervisor)
+                continue;
+
+            if (MemberState_Resolver.Is_AwaitingVerdict([.. spokeEntries.Take(position)]))
+                return true;
+        }
+
+        return false;
+    }
 
     /// <summary>The flag the turn-end hook reads. Present = this supervisor owes a ledger update.</summary>
     public static string Build_FlagFilePath(ISupervisionPaths paths, string orchId)

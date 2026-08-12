@@ -29,6 +29,20 @@ if [ ! -f "$FLAG_FILE" ]; then
   exit 0
 fi
 
+# DEADLOCK GUARD. A stop hook must never demand an action that another hook currently forbids.
+#
+# The awaiting-answer PreToolUse hook denies tool calls while a question is with the owner, and this
+# hook refuses to end the turn until PLAN.md is written — so with both flags up, the write this hook
+# demands is the write that one forbids, and the session spins until the flag expires. Measured on a
+# live supervisor on 2026-08-11: ~20 minutes and six attempts across two tools, producing nothing
+# but identical refusals.
+#
+# Deferring costs nothing: the flag stays raised, and the ledger is enforced at the next turn end,
+# once compliance is possible again. The enforcement is delayed, never skipped.
+if [ -f "$HOME/.claude/supervision/$AIORCH_ID/.awaiting-answer" ]; then
+  exit 0
+fi
+
 PLAN_FILE="$HOME/.claude/supervision/$AIORCH_ID/PLAN.md"
 
 cat <<JSON
