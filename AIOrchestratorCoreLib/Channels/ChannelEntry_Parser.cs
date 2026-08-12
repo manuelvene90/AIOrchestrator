@@ -85,14 +85,20 @@ public static partial class ChannelEntry_Parser
     /// The author word, with surrounding punctuation and markdown stripped before it is matched.
     ///
     /// The header regex captures a bare token, so `FROM **implementer**`, `FROM implementer:` and
-    /// `FROM _supervisor_` all used to fall through to <see cref="ChannelAuthors.Unknown"/> — and
-    /// agents really do write those: the shape validator records three malformed headers observed
-    /// live on 2026-08-07.
+    /// `FROM _supervisor_` all fall through to <see cref="ChannelAuthors.Unknown"/> without this.
     ///
-    /// Unknown is not a neutral outcome any more. Window markers are only read from member-authored
-    /// entries, so an entry that OPENS a window under a clean header and CLOSES it under a drifted
-    /// one leaves the close invisible — and a missing close reads as still-open, forever, with the
-    /// app then telling the member to append the close it already appended.
+    /// SPECULATIVE, AND SAYING SO IS THE POINT. An earlier version of this comment claimed the shape
+    /// was observed live. It was not: 3,406 headers on this machine carry five distinct author words
+    /// and ZERO decorated ones, and the incidents that were cited turned out to be header SHAPE
+    /// defects — a missing index, two non-numeric ones — not author drift. The guard stays because it
+    /// is near-harmless and the failure it prevents is severe, but it is a defence against a shape
+    /// nobody has seen. A defence labelled speculative is fine; one labelled measured is how the next
+    /// reader stops checking.
+    ///
+    /// The severity is what earns it. Window markers are read only from member-authored entries, so
+    /// an entry that OPENS a window under a clean header and CLOSES it under a drifted one leaves the
+    /// close invisible — and a missing close reads as still-open, forever, with the app then telling
+    /// the member to append the close it already appended.
     ///
     /// Normalised HERE, where the author word is interpreted, rather than in the resolver that
     /// happened to notice: a second normaliser would be one more rule with two copies.

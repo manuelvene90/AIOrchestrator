@@ -272,6 +272,69 @@ public class MemberStateResolverTests
         Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
     }
 
+    /// <summary>
+    /// THE ASYMMETRY, and it is the reason normalising the author word was not enough on its own.
+    /// Normalisation handles decoration; a genuinely unrecognised author word still parses to
+    /// Unknown, and its close was still skipped.
+    ///
+    /// A missed close pins the member FOREVER — the app then tells it to append the close it already
+    /// appended — while a spurious close merely ends a window early, which the member undoes by
+    /// declaring again. So ambiguity resolves toward NOT-open on both scans: strict for the open,
+    /// lenient for the close.
+    /// </summary>
+    [Fact]
+    public void AnUnknownAuthorStillClosesAWindow()
+    {
+        var entries = ChannelEntry_Parser.Parse_All(string.Join('\n',
+        [
+            "## [1] FROM supervisor — 2026-08-12 09:00 — brief",
+            "do the work",
+            "",
+            "## [2] FROM implementer — 2026-08-12 09:10 — WRITING WINDOW OPEN — Parser.cs",
+            "starting the batch",
+            "",
+            "## [3] FROM imp-1 — 2026-08-12 09:40 — WRITING WINDOW CLOSED — done",
+            "batch landed",
+        ]));
+
+        Assert.Equal(ChannelAuthors.Unknown, entries[2].Author);
+        Assert.NotEqual(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// But an uncertain author still cannot OPEN one. The leniency is one-directional by design — if
+    /// it ran both ways, an unparseable header would create the very state this is meant to prevent.
+    /// </summary>
+    [Fact]
+    public void AnUnknownAuthorCannotOpenAWindow()
+    {
+        var entries = ChannelEntry_Parser.Parse_All(string.Join('\n',
+        [
+            "## [1] FROM supervisor — 2026-08-12 09:00 — brief",
+            "do the work",
+            "",
+            "## [2] FROM imp-1 — 2026-08-12 09:10 — WRITING WINDOW OPEN — Parser.cs",
+            "starting the batch",
+        ]));
+
+        Assert.Equal(ChannelAuthors.Unknown, entries[1].Author);
+        Assert.NotEqual(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>A SUPERVISOR close is still ignored — it is known not to be the member.</summary>
+    [Fact]
+    public void ASupervisorCannotCloseAMembersWindow()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs", "starting"),
+            Build_Entry(3, ChannelAuthors.Supervisor, "WRITING WINDOW CLOSED — closing this for you", "done"),
+        };
+
+        Assert.Equal(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
     /// <summary>A longer word merely containing the marker is still not the marker.</summary>
     [Fact]
     public void ASubjectTokenMustHaveWordBoundariesOnBothSides()

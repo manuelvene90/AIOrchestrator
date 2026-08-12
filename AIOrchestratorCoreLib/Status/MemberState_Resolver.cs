@@ -21,6 +21,28 @@ public static class MemberState_Resolver
     /// </summary>
     public const string STANDING_BY_MARKER = "STANDING BY";
 
+    /// <summary>
+    /// Every phrase this resolver acts on. Exists so a test can walk the vocabulary instead of a
+    /// list someone must remember to extend — the role commands and this file live apart, and three
+    /// of one night's findings were the docs teaching something the matcher does not do.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ALL_MARKERS =
+    [
+        WRITING_WINDOW_OPEN_MARKER,
+        WRITING_WINDOW_CLOSED_MARKER,
+        MUTATION_WINDOW_OPEN_MARKER,
+        MUTATION_WINDOW_CLOSED_MARKER,
+        BLOCKED_ON_OWNER_MARKER,
+        STANDING_BY_MARKER,
+    ];
+
+    /// <summary>The two that END a window, which the close-scan treats differently on purpose.</summary>
+    public static readonly IReadOnlyList<string> CLOSING_MARKERS =
+    [
+        WRITING_WINDOW_CLOSED_MARKER,
+        MUTATION_WINDOW_CLOSED_MARKER,
+    ];
+
     public static MemberStates Resolve(IReadOnlyList<IChannelEntry> entries)
     {
         if (entries.Count == 0)
@@ -59,7 +81,16 @@ public static class MemberState_Resolver
         if (lastOpen < 0)
             return false;
 
-        var lastClosed = Find_LastEntryIndex_WithMarker(entries, closedMarker);
+        // THE CLOSE SCAN ACCEPTS AN UNCERTAIN AUTHOR, and the asymmetry is the whole point.
+        //
+        // A missed close pins a member in this state FOREVER — the app then tells it to append the
+        // close it already appended — while a spurious close merely ends a window early, which is
+        // noise the member undoes by declaring again. So ambiguity resolves toward NOT-open on both
+        // scans: strictly for the open, leniently for the close.
+        //
+        // Only UNKNOWN is accepted, never a supervisor: an unrecognised author word may well BE the
+        // member (a drifted header), whereas a supervisor is known not to be.
+        var lastClosed = Find_LastEntryIndex_WithMarker(entries, closedMarker, acceptUncertainAuthor: true);
 
         return lastClosed < lastOpen;
     }
@@ -76,11 +107,11 @@ public static class MemberState_Resolver
     ///
     /// This kills the entire supervisor-discussion class on its own, independently of any anchoring.
     /// </summary>
-    static int Find_LastEntryIndex_WithMarker(IReadOnlyList<IChannelEntry> entries, string marker)
+    static int Find_LastEntryIndex_WithMarker(IReadOnlyList<IChannelEntry> entries, string marker, bool acceptUncertainAuthor = false)
     {
         for (var i = entries.Count - 1; i >= 0; i--)
         {
-            if (!Can_AnnounceAWindow(entries[i].Author))
+            if (!Can_AnnounceAWindow(entries[i].Author, acceptUncertainAuthor))
                 continue;
 
             if (Contains_Marker(entries[i], marker))
@@ -105,8 +136,11 @@ public static class MemberState_Resolver
     /// Making the state UNREACHABLE for them closes it by construction, which no wording in a doc
     /// can do.
     /// </summary>
-    static bool Can_AnnounceAWindow(ChannelAuthors author)
+    static bool Can_AnnounceAWindow(ChannelAuthors author, bool acceptUncertainAuthor)
     {
+        if (acceptUncertainAuthor && author == ChannelAuthors.Unknown)
+            return true;
+
         return author == ChannelAuthors.Implementer || author == ChannelAuthors.Solo;
     }
 
