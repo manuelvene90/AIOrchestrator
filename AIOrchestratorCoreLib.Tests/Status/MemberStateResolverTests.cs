@@ -376,7 +376,11 @@ public class MemberStateResolverTests
 
     /// <summary>
     /// And the declarations that must still work, including the markdown a member actually writes.
-    /// Without these the anchoring could be "fixed" by never matching anything.
+    /// Without these the matcher could be "fixed" by never matching anything.
+    ///
+    /// THE VARIANTS MOVED FROM THE BODY TO THE SUBJECT, because that is where a declaration now lives
+    /// — see the reclassified case at the bottom of this file. What is under test did not change, and
+    /// is why this is a Theory: the formatting members really write must not defeat the match.
     /// </summary>
     [Theory]
     [InlineData("STANDING BY")]
@@ -385,36 +389,54 @@ public class MemberStateResolverTests
     [InlineData("standing by. Nothing in flight.")]
     [InlineData("- STANDING BY")]
     [InlineData("🚩 STANDING BY")]
-    public void ADeclarationAtTheStartOfALineStillCounts(string body)
+    public void ADeclarationSurvivesTheMarkdownMembersWrite(string subject)
     {
         var entries = new[]
         {
-            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
-            Build_Entry(2, ChannelAuthors.Implementer, "a report", body),
+            Build_Entry(1, ChannelAuthors.Supervisor, "hold", "nothing queued for you"),
+            Build_Entry(2, ChannelAuthors.Implementer, subject, "Nothing owed, nothing running."),
         };
 
         Assert.Equal(MemberStates.StandingBy, MemberState_Resolver.Resolve(entries));
     }
 
-    /// <summary>A longer token that merely starts the same way is a different word.</summary>
+    /// <summary>
+    /// A longer token that merely starts the same way is a different word.
+    ///
+    /// ALSO MOVED TO THE SUBJECT, and not cosmetically: left in the body this would still have
+    /// expected AwaitingSupervisorReview and passed no matter what the matcher did, because a body is
+    /// no longer where a declaration is read from. A test that cannot fail is worse than no test.
+    /// </summary>
     [Fact]
     public void ALongerTokenStartingWithTheMarkerIsNotTheMarker()
     {
         var entries = new[]
         {
             Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
-            Build_Entry(2, ChannelAuthors.Implementer, "a report", "STANDING BYSTANDER, still working"),
+            Build_Entry(2, ChannelAuthors.Implementer, "STANDING BYSTANDER, still working", "in flight"),
         };
 
         Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
     }
 
     /// <summary>
-    /// A declaration further down the body counts — members write a line of context first, and the
-    /// rule is "begins a line", not "begins the entry".
+    /// RECLASSIFIED, and this assertion is now the inverse of what it used to make. It said a report
+    /// whose BODY ends with the marker is standing by — that is the entry shape members file every
+    /// single time, and reading it as idle is what silenced the verdict reminder and printed `idle` in
+    /// the owner's topic for a member whose work was sitting unread.
+    ///
+    /// PLACEMENT is what separates the two states, because nothing else in the entry can: a
+    /// declaration is titled by the marker, a report is titled by its result and may close with the
+    /// marker. The role commands already say a declaration is a ONE-LINE entry; they now say where the
+    /// marker goes, so the docs and the matcher teach one thing.
+    ///
+    /// The failure directions are not symmetric, which is why placement is read this way round. A
+    /// member that puts the marker only in the body of a genuinely-nothing-owed entry costs its
+    /// supervisor one spurious wake. The reverse — titling filed work with the marker — costs that
+    /// work its reader, silently, which is the defect this whole branch exists to remove.
     /// </summary>
     [Fact]
-    public void ADeclarationOnALaterLineCounts()
+    public void AReportThatOnlyClosesWithTheMarkerIsStillAwaitingAVerdict()
     {
         var entries = new[]
         {
@@ -422,6 +444,6 @@ public class MemberStateResolverTests
             Build_Entry(2, ChannelAuthors.Implementer, "a report", "Commit abc1234, 489 tests pass.\n\nSTANDING BY — waiting for the next brief."),
         };
 
-        Assert.Equal(MemberStates.StandingBy, MemberState_Resolver.Resolve(entries));
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
     }
 }

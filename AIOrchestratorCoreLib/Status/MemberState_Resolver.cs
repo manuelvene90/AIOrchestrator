@@ -76,7 +76,20 @@ public static class MemberState_Resolver
         //
         // Order matters and is not cosmetic: a declaration IS a member-last entry, so the fallback
         // would swallow it if it ran first.
-        if (ChannelAuthor_Kinds.Is_Member(lastEntry.Author) && Contains_Marker(lastEntry, STANDING_BY_MARKER))
+        //
+        // AND THE DECLARATION MUST HAVE NOTHING BEHIND IT. "standing by, nothing filed" and "filed,
+        // standing by, awaiting a verdict" were one value, and every consumer inherited the collapse:
+        // the nudge went silent on a member waiting for a verdict, and the owner's topic read that
+        // member as `idle` — which the builder's own docstring forbids three lines above the code
+        // that produced it. Split HERE, once, rather than in each consumer: two surfaces answering
+        // the same question apart is how they start disagreeing about the same member.
+        //
+        // Both halves of this are load-bearing. Without Is_PureDeclaration inside the predicate the
+        // gate is self-defeating — a declaration is itself a member entry after the supervisor's, so
+        // the predicate would be true for every declaration and this branch would be dead code.
+        if (ChannelAuthor_Kinds.Is_Member(lastEntry.Author)
+            && Contains_Marker(lastEntry, STANDING_BY_MARKER)
+            && !Is_AwaitingVerdict(entries))
             return MemberStates.StandingBy;
 
         if (Is_AwaitingVerdict(entries))

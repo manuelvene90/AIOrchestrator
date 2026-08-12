@@ -112,20 +112,53 @@ public class TopicStatusLineBuilderTests
     /// <summary>
     /// A DECLARED-idle member reads "idle" — that is the whole point of the marker existing, and the
     /// owner should not be shown a stale task for somebody who has said they have nothing running.
+    ///
+    /// THE FIXTURE CHANGED AND THE SUPERVISOR OVERRULED THE OLD ONE. It used to answer a review brief
+    /// with the subject "STANDING BY — review filed", which is a FILED REVIEW asserting that it reads
+    /// idle — the exact collapse this pair of tests now separates. The declaration that belongs here
+    /// is one with nothing behind it: the supervisor asked for nothing and the member confirms it has
+    /// nothing running.
     /// </summary>
     [Fact]
     public void ADeclaredIdleMemberReadsIdle()
     {
         var entries = new[]
         {
-            Entry(1, ChannelAuthors.Supervisor, "review the marker fix", "2026-08-12 11:00"),
-            Entry(2, ChannelAuthors.Reviewer, "STANDING BY — review filed", "2026-08-12 12:00"),
+            Entry(1, ChannelAuthors.Supervisor, "hold — nothing queued for you", "2026-08-12 11:00"),
+            Entry(2, ChannelAuthors.Reviewer, "STANDING BY — nothing owed, nothing running", "2026-08-12 12:00"),
         };
 
         var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
         Assert.Contains("rev-3   idle", line);
-        Assert.DoesNotContain("review the marker fix", line);
+        Assert.DoesNotContain("hold — nothing queued", line);
+    }
+
+    /// <summary>
+    /// AND THE OTHER HALF OF THE SPLIT: a member that FILED and then declared is waiting on the
+    /// SUPERVISOR, so it must not read idle and must still show what is pending.
+    ///
+    /// This is the case the overruled fixture asserted backwards. It costs the owner the one queue
+    /// they can actually unblock: a topic reading `rev-3 idle` for a reviewer whose review has been
+    /// sitting unread says there is nothing to look at, which is the opposite of true.
+    ///
+    /// Asserted apart from the case above so neither can pass for the other's reason — the two differ
+    /// only in whether work was filed behind the marker.
+    /// </summary>
+    [Fact]
+    public void AMemberThatFiledAndThenDeclaredIsNotIdle()
+    {
+        var entries = new[]
+        {
+            Entry(1, ChannelAuthors.Supervisor, "review the marker fix", "2026-08-12 11:00"),
+            Entry(2, ChannelAuthors.Reviewer, "review filed — 3 findings, one blocking", "2026-08-12 12:00"),
+            Entry(3, ChannelAuthors.Reviewer, "STANDING BY", "2026-08-12 12:01"),
+        };
+
+        var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
+
+        Assert.DoesNotContain("rev-3   idle", line);
+        Assert.Contains("review the marker fix", line);
     }
 
     /// <summary>

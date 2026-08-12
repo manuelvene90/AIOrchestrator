@@ -154,6 +154,10 @@ As soon as the goal is clear from the owner's first instruction, drop
   running, waiting to be spoken to. It asks you for no verdict and you owe it no reply; the app
   reads the marker and stops nudging both of you. Expect it whenever you tell a member to hold, and
   do not read it as a member being idle by mistake.
+- **But only when the marker is the entry's SUBJECT.** A report titled by its result that merely
+  CLOSES with the marker is filed work and you still owe it a verdict — the app reads it that way and
+  will remind you. Those two entries look alike and are opposite states, so read the title, not the
+  last line: the second one is a member waiting on YOU, and it is the queue only you can clear.
 - **Without the marker, the nudge comes to YOU, not to them.** A member that goes quiet after its own
   entry, with no open window, reads as a filed report awaiting your verdict — so the app nudges the
   supervisor about an entry that may have asked for nothing. That is the loop the marker exists to

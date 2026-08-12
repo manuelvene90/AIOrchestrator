@@ -64,9 +64,16 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   LINE in the body. **Mid-sentence in the body is DISCUSSION and deliberately does not count**:
   members talk about this vocabulary constantly, and a brief that merely mentioned a marker once
   pinned a session's state for four hours. Markers are read only from YOUR OWN entries.
+- **`STANDING BY` is read from the SUBJECT ONLY, and that is the whole rule.** It is the one marker
+  whose placement carries meaning, because placement is the only thing that separates the two states
+  it used to collapse: an entry TITLED with the marker is a declaration, and an entry titled by a
+  result that merely closes with the marker is a REPORT — which is still waiting for a verdict. Both
+  read identically as text; only the title says which one you meant. Get this backwards toward the
+  body and your supervisor gets one spurious wake; get it backwards toward the subject and your
+  filed work waits in silence with nothing anywhere saying so.
 - **`STANDING BY` — the ONE exception, and it is required.** When you go quiet on purpose with
   nothing owed and nothing running — you finished and are waiting for a brief, or you were told to
-  hold — append a one-line entry whose subject or first line is `STANDING BY`. It is the only way the
+  hold — append a one-line entry whose SUBJECT is `STANDING BY`. It is the only way the
   app can tell "idle on purpose" from "stalled mid-task": those two look identical from outside, so without
   it the app nudged idle members every 8 minutes forever and nudged the supervisor about the very
   entry that had asked it for nothing. **Write it once per quiet spell**, not per turn — any inbound
@@ -89,8 +96,10 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   files; without one, your half-written state may be reported as defects.
   **Closing it matters more than opening it** — an unclosed window is read as still open forever, so
   it masks your filed report as "still writing" and keeps the app nudging you.
-- **When your deliverable is accepted and you have no next task, DECLARE IT.** `STANDING BY` with
-  what you are waiting for, in the same line. An idle session is not free — it holds a window, a
+- **When your deliverable is accepted and you have no next task, DECLARE IT.** A one-line entry
+  SUBJECTED `STANDING BY — <what you are waiting for>`. **Accepted is the word that matters:** while
+  your report is still waiting on a verdict you are not idle, you are waiting on your supervisor, and
+  closing that report with the marker in its subject is how it stops being read by anybody. An idle session is not free — it holds a window, a
   watcher and a context and bills for all three — and your declaration is the only thing that
   tells the app FINISHED from BUSY. Being closed afterwards is the normal ending of a job done,
   not a verdict on your work.
