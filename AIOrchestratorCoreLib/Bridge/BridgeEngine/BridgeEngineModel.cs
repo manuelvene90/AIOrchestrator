@@ -3834,9 +3834,6 @@ internal sealed class BridgeEngineModel(
             // with no disable_notification, so a topic the owner had explicitly silenced could put
             // a push on their phone the first time it needed a status line. Silenced means
             // DISCARDED, not quiet, and this code drew no distinction.
-            if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
-                continue;
-
             var text = Build_TopicStatusLineText(session);
 
             _statusLineTextByOrchId.TryGetValue(session.OrchId, out var lastText);
@@ -3844,6 +3841,11 @@ internal sealed class BridgeEngineModel(
             // The decision lives in Telegram.TopicStatusLine_Decider so it can be tested — in
             // particular the restart case, which has an id and no remembered text and must EDIT.
             var action = Telegram.TopicStatusLine_Decider.Decide(text, lastText, session.StatusLineMessageId);
+
+            // An emptied line is edited DOWN to the bare title rather than left showing a member that
+            // has been closed. Silence would freeze the last row it printed.
+            if (string.IsNullOrWhiteSpace(text) && action == Telegram.TopicStatusActions.Edit)
+                text = session.DisplayName ?? session.OrchId;
 
             if (action == Telegram.TopicStatusActions.None)
                 continue;
@@ -3861,6 +3863,13 @@ internal sealed class BridgeEngineModel(
                 }
                 else
                 {
+                    // THE GATE IS ON THE POST ONLY. An edit produces no notification, so silencing it
+                    // buys nothing and costs a line frozen at pre-DND content for the whole period —
+                    // the same stale-state failure as a closed member's row. A POST does notify, and a
+                    // topic the owner silenced must not be the thing that pushes to their phone.
+                    if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+                        continue;
+
                     var messageId = await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
 
                     if (messageId == null)
@@ -3886,7 +3895,7 @@ internal sealed class BridgeEngineModel(
                 // on, which is the behaviour this restores for everything except a real shutdown.
                 throw;
             }
-            catch (Exception exception) when (Is_MessageAlreadyCurrent(exception))
+            catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_MessageAlreadyCurrent(exception.Message))
             {
                 // "message is not modified" means the desired state ALREADY HOLDS — success, not
                 // failure. Advancing the cache is the whole point: static text is the NORMAL state of
@@ -3896,7 +3905,7 @@ internal sealed class BridgeEngineModel(
                 // inverted its conclusion.
                 _statusLineTextByOrchId[session.OrchId] = text;
             }
-            catch (Exception exception) when (Is_MessageGone(exception))
+            catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_MessageGone(exception.Message))
             {
                 // TERMINAL for this message id: the message it names no longer exists, which is what
                 // /clear leaves behind — the topic is torn down and recreated while the id survives in
@@ -4044,27 +4053,6 @@ internal sealed class BridgeEngineModel(
 
 
     /// <summary>
-    /// Telegram's answer when an edit would change nothing. The desired state already holds, so it is
-    /// a SUCCESS — the same reading <see cref="Is_TopicAlreadyNamed"/> applies to editForumTopic, and
-    /// the predicate that was not carried across to editMessageText.
-    /// </summary>
-    static bool Is_MessageAlreadyCurrent(Exception exception)
-    {
-        return exception.Message.Contains("message is not modified", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// The message this id names is gone — the topic was torn down and recreated by /clear while the
-    /// id survived in session.json. Terminal for that id: no number of retries brings it back.
-    /// </summary>
-    static bool Is_MessageGone(Exception exception)
-    {
-        return exception.Message.Contains("message to edit not found", StringComparison.OrdinalIgnoreCase)
-            || exception.Message.Contains("MESSAGE_ID_INVALID", StringComparison.OrdinalIgnoreCase)
-            || exception.Message.Contains("message can't be edited", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
     /// Same backoff the mirror uses, for the same reason: answering a 429 at the tick rate is how a
     /// throttle sustains itself.
     /// </summary>
@@ -4085,12 +4073,19 @@ internal sealed class BridgeEngineModel(
 
         foreach (var member in session.Members)
         {
-            // CLOSED MEMBERS ARE NOT READ AT ALL. They were parsed and then discarded at render — 64%
-            // of 3.65 MB per tick, thirty times a minute, to produce three strings that change once a
-            // minute. And a closed member must not feed the `last` line either: one message cannot
-            // disagree with itself about whether a member exists.
+            // A CLOSED MEMBER'S CHANNEL IS NEVER READ — 64% of 3.65 MB per tick, thirty times a
+            // minute, parsed and then discarded at render — but it IS still handed to the builder,
+            // marked closed and carrying no entries.
+            //
+            // Hard-coding isClosed:false here made the builder's own guard unreachable in production
+            // while two tests constructed `isClosed: true` themselves and pinned the dead branch.
+            // Passing the real flag costs nothing and makes those tests describe a state the app can
+            // actually produce.
             if (member.ClosedUtc != null)
+            {
+                members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, [], isClosed: true));
                 continue;
+            }
 
             var entries = ChannelEntry_Parser.Parse_All(
                 UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));

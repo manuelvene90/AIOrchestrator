@@ -50,6 +50,9 @@ public static class TopicStatusLine_Builder
         // would have been the topic's own title repeated back at the owner — a message whose entire
         // content is what they are already looking at. Item 15: if they cannot act on it and it tells
         // them nothing, it does not get written.
+        // Total > 0 rather than progress != null: a PLAN.md of nothing but struck-out `- [-]`
+        // lines parses to a NON-NULL progress with Total 0, and printing "0/0" beside a topic
+        // title is the say-nothing message again.
         var hasSubstance = lines.Count > 0 || (progress != null && progress.Total > 0) || !string.IsNullOrWhiteSpace(lastSubject);
 
         if (!hasSubstance)

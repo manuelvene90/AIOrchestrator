@@ -61,6 +61,17 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("", line);
     }
 
+    /// <summary>
+    /// N8: a PLAN.md of nothing but struck-out `- [-]` lines parses to a NON-NULL progress with
+    /// Total 0. Weakening the check to `progress != null` left 610 green, because no case covered a
+    /// ledger that exists and owes nothing.
+    /// </summary>
+    [Fact]
+    public void ALedgerOfNothingButDroppedLinesHasNothingToSay()
+    {
+        Assert.Equal("", TopicStatusLine_Builder.Build("orch", Progress(0, 0), [], null, NOW));
+    }
+
     [Fact]
     public void AMemberRowIsWhoWhatAndHowLong()
     {
