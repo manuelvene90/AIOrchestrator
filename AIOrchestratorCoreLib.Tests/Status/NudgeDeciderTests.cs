@@ -398,6 +398,96 @@ public class NudgeDeciderTests
             Nudge_Decider.Identify_LastConversationEntry_OrNull(second));
     }
 
+    /// <summary>
+    /// THE OTHER HALF OF THE SELF-FEED, at its source. The app's own nudge moved the channel file, so
+    /// the nudge restarted the very clock that schedules the next nudge.
+    ///
+    /// The marker gate above now stops the repetition on its own, so what this pins is the smaller
+    /// defect the marker does not reach: the FIRST nudge for each new unanswered thing was scheduled
+    /// from the file stamp, so any app write landing after that entry delayed a legitimate nudge by
+    /// up to the full 8 minutes.
+    ///
+    /// THE FILE STAMP IS SET TO NOW ON PURPOSE, and it is what makes this case unable to pass for
+    /// another reason. The fallback path returns "quiet for ~0" from that stamp, so a result near 30
+    /// minutes can only have come from reading the last CONVERSATION entry. Without that, a test
+    /// asserting "quiet" would pass under a mutation that broke the fallback instead.
+    /// </summary>
+    [Fact]
+    public void AnAppEntryDoesNotResetTheQuietClock()
+    {
+        var now = new DateTime(2026, 8, 12, 19, 0, 0);
+        var file = Write_TempChannel();
+
+        var entries = Stamped(
+            (ChannelAuthors.Implementer, "STANDING BY", "2026-08-12 18:30"),
+            (ChannelAuthors.App, "you stopped mid-task", "2026-08-12 18:58"));
+
+        Assert.Equal(30, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+    }
+
+    /// <summary>
+    /// And a MEMBER's entry does reset it — asserted apart, because the two directions are what the
+    /// clock is for. A change that ignored every entry would satisfy the case above and leave a
+    /// working member permanently "quiet for hours", nudged on the first tick after it spoke.
+    /// </summary>
+    [Fact]
+    public void AMemberEntryResetsTheQuietClock()
+    {
+        var now = new DateTime(2026, 8, 12, 19, 0, 0);
+        var file = Write_TempChannel();
+
+        var entries = Stamped(
+            (ChannelAuthors.Supervisor, "brief", "2026-08-12 18:00"),
+            (ChannelAuthors.Implementer, "done, commit 8b58b2e", "2026-08-12 18:58"));
+
+        Assert.Equal(2, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+    }
+
+    /// <summary>
+    /// An unreadable stamp falls back to the file, which is the OLD behaviour — noisy rather than
+    /// silent. A quiet clock that cannot be computed must never make a member look busy: that would
+    /// suppress the nudge for a session that really had stopped, which is the expensive direction.
+    ///
+    /// The file is stamped in the past here (the inverse of the case above) so the number can only
+    /// have come from the fallback.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableStampFallsBackToTheFileRatherThanLookingBusy()
+    {
+        var now = DateTime.Now;
+        var file = Write_TempChannel();
+        File.SetLastWriteTime(file, now.AddMinutes(-45));
+
+        var entries = Stamped((ChannelAuthors.Implementer, "STANDING BY", "not a date at all"));
+
+        Assert.Equal(45, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+    }
+
+    /// <summary>
+    /// A FUTURE stamp is refused by the trusted reader and falls back too. An agent that stamps
+    /// tomorrow would otherwise be measured as negatively quiet and never nudged again — the silent
+    /// direction, and the same class of bug as the future-dated entry that once held the status
+    /// line's `last` row until real time caught up.
+    /// </summary>
+    [Fact]
+    public void AFutureStampCannotSilenceTheNudgeForever()
+    {
+        var now = DateTime.Now;
+        var file = Write_TempChannel();
+        File.SetLastWriteTime(file, now.AddMinutes(-45));
+
+        var entries = Stamped((ChannelAuthors.Implementer, "STANDING BY", now.AddHours(6).ToString("yyyy-MM-dd HH:mm")));
+
+        Assert.Equal(45, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+    }
+
+    static string Write_TempChannel()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"aiorch-quietclock-{Guid.NewGuid():N}.md");
+        File.WriteAllText(path, "seed");
+        return path;
+    }
+
     static IReadOnlyList<IChannelEntry> Stamped(params (ChannelAuthors Author, string Subject, string DateText)[] entries)
     {
         List<IChannelEntry> built = [];
@@ -405,7 +495,9 @@ public class NudgeDeciderTests
         foreach (var (author, subject, dateText) in entries)
         {
             // INDEX 7 for every entry, deliberately: duplicate indices are real and this fixture must
-            // not be able to tell the entries apart by one.
+            // not be able to tell the entries apart by one. KEPT OVER THE BRANCH'S RUNNING INDEX —
+            // the quiet-clock cases read only the author and the stamp, so a distinguishing index
+            // buys them nothing and would quietly weaken the identity cases that share this helper.
             built.Add(ChannelEntry_Factory.Create(
                 7, author, dateText, subject, "body",
                 $"## [7] FROM {author} — {dateText} — {subject}\nbody"));

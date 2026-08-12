@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Formatting;
 
 namespace AIOrchestratorCoreLib.Status;
 
@@ -90,15 +91,80 @@ public static class Nudge_Decider
     }
 
     /// <summary>
+    /// How long the channel has been quiet — counting the CONVERSATION only.
+    ///
+    /// THE APP IS NOT A PARTICIPANT IN THE CONVERSATION, AND THE QUIET CLOCK WAS THE LAST PLACE THAT
+    /// STILL COUNTED IT AS ONE. Measured from the file's write stamp, the app's own nudge moved the
+    /// channel, so the nudge reset the very clock that schedules the next nudge:
+    ///
+    ///   app nudges -> the member's watcher fires -> the member wakes, has nothing to say and
+    ///   correctly appends NOTHING -> the transcript probe reads it as alive and clears the nudged
+    ///   map -> the quiet clock, restarted by the app's own write, elapses -> nudge again
+    ///
+    /// Every 8 minutes, for as long as the member behaved correctly. It could not reach a session
+    /// that was genuinely dead — that one produces no transcript activity, so the map is never
+    /// cleared and escalation runs as designed. The false alarm was aimed exclusively at healthy
+    /// members, and the more obediently one followed "silence is acknowledgment", the longer it was
+    /// nudged for it.
+    ///
+    /// THAT LOOP IS NO LONGER WHAT THIS PREVENTS, and the distinction is load-bearing rather than
+    /// historical. <see cref="Identify_LastConversationEntry_OrNull"/> landed separately and closes
+    /// the loop on its own: the app remembers WHICH entry it nudged about, that memory is never
+    /// cleared, and the app's own writes never change the last conversation entry — so no second
+    /// nudge can be issued for the same unanswered thing whatever this clock returns. **Do not read
+    /// the two as redundant and delete either.** The marker ends the repetition; this ends a
+    /// different, smaller defect that the marker does not touch — the FIRST nudge for each new
+    /// unanswered thing was scheduled from the file's write stamp, so any app write landing after
+    /// that entry (a `/resume` broadcast, a request confirmation) restarted the clock and delayed a
+    /// legitimate nudge by up to the full 8 minutes, for a member that was genuinely stalled.
+    ///
+    /// The stamp is AGENT-WRITTEN and therefore not trusted: it goes through the one trusted reader,
+    /// which refuses a future date. When it cannot be read the file stamp is used exactly as before —
+    /// the old behaviour, which is noisy rather than silent, and that is the right direction to fall
+    /// back in. A quiet clock that cannot be computed must never make a member look busy: that would
+    /// suppress the nudge for a session that really had stopped.
+    ///
+    /// ONE CLOCK, and `now` must be LOCAL because both sources are: agent stamps are local wall time
+    /// and so is the file stamp read here. It is the same mismatch that once made a 30-second backoff
+    /// clear instantly at every value it could be given.
+    ///
+    /// WHICH WAY IT FAILS DEPENDS ON THE SIGN OF THE OFFSET, and on THIS machine it fails silently.
+    /// At UTC+2 a UTC `now` is BEHIND every local stamp, so `now - spokenAt` is NEGATIVE: nothing
+    /// ever reaches the threshold and every nudge in the system stops, with a green suite, because
+    /// the thing that would complain is the thing that stopped. (The trusted reader refuses those
+    /// stamps as future-dated, and the file-stamp fallback is local too, so BOTH routes go negative —
+    /// there is no path back to noisy.) Only WEST of UTC does the mismatch read as hours of quiet and
+    /// nudge everything on the first tick. An earlier draft of this paragraph named UTC+2 and then
+    /// described the westward behaviour; the loud failure is the one that gets noticed, and it is not
+    /// the one we have here.
+    /// </summary>
+    public static TimeSpan Measure_QuietFor(IReadOnlyList<IChannelEntry> entries, string channelFilePath, DateTime now)
+    {
+        var lastConversationEntry = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
+
+        if (lastConversationEntry != null
+            && SessionDuration_Formatter.Try_ReadTrustedStamp(lastConversationEntry.DateText, now, out var spokenAt))
+            return now - spokenAt;
+
+        return now - File.GetLastWriteTime(channelFilePath);
+    }
+
+    /// <summary>
     /// Somebody else wrote last and the member has not replied. Note this counts the APP's own
     /// entries: that is deliberate, because the escalation to orphan-recovery is what proves a
     /// member's monitor is dead, and it can only run on a member that has already been nudged.
     ///
     /// UNCHANGED ON PURPOSE. Two fixes that reinterpreted this predicate were tried and withdrawn:
     /// skipping app entries here makes it and <see cref="Is_DormantMidWork"/> false at the same
-    /// instant, the settled-reset fires, and a genuinely dead session can never escalate. The
-    /// repetition was never in this predicate — it was in what the app remembered about the nudge it
-    /// had already sent, which was nothing.
+    /// instant, the settled-reset fires, and a genuinely dead session can never escalate. The app's
+    /// own entry is the ONLY thing holding a nudged member in the eligible set through the
+    /// escalation window.
+    ///
+    /// THE REPETITION WAS NEVER IN THIS PREDICATE. It was in two other places, fixed separately and
+    /// both still needed: what the app remembered about the nudge it had already sent, which was
+    /// nothing (<see cref="Identify_LastConversationEntry_OrNull"/>), and the clock that scheduled
+    /// the next one (<see cref="Measure_QuietFor"/>). Those two commits were written independently,
+    /// each believing itself the whole cure; the merge of both is what this comment records.
     /// </summary>
     public static bool Has_UnansweredInboundTraffic(IReadOnlyList<IChannelEntry> entries)
     {
