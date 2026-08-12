@@ -3681,15 +3681,10 @@ internal sealed class BridgeEngineModel(
 
     static string Describe_DeclaredState(MemberStates declared, bool workingNow)
     {
-        var declaredText = declared switch
-        {
-            MemberStates.NewNoTraffic => "new — no traffic",
-            MemberStates.ImplementerWorking => "briefed — not started yet",
-            MemberStates.AwaitingSupervisorReview => "awaiting review",
-            MemberStates.WritingWindowOpen => "idle — writing window left open",
-            MemberStates.BlockedOnOwner => "BLOCKED ON OWNER",
-            _ => throw new Exception($"Unhandled MemberStates: {declared}"),
-        };
+        // ONE copy, in a project the test suite compiles. This switch used to be a duplicate of the
+        // card builder's — item 12 — and the pair is why adding a state left three consumers
+        // throwing on the happy path with 484 tests green.
+        var declaredText = MemberState_Descriptor.Describe(declared);
 
         return workingNow ? $"working now (channel says: {declaredText})" : declaredText;
     }

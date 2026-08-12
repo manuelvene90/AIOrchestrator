@@ -115,7 +115,7 @@ public static class SessionRows_Builder
             MemberLabel = memberId,
             RoleBrush = findBrush(kind == MemberKinds.Reviewer ? "AccentReviewer" : "AccentImplementer"),
             StateText = isClosed ? "closed" : Describe_MemberState(state, isWorkingNow),
-            StateBrush = isClosed ? findBrush("StateClosed") : findBrush(isWorkingNow ? "StateWorking" : Brush_KeyFor(state)),
+            StateBrush = isClosed ? findBrush("StateClosed") : findBrush(isWorkingNow ? "StateWorking" : MemberState_Descriptor.Brush_Key(state)),
             LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",
             DetailText = Build_MemberDetailText(entries, usageFile),
             FocusTitleFragment = $"{memberId.ToUpperInvariant()} · {session.OrchId}",
@@ -220,7 +220,7 @@ public static class SessionRows_Builder
     public static string Describe_MemberState(MemberStates state, bool isWorkingNow)
     {
         if (!isWorkingNow)
-            return Describe_State(state);
+            return MemberState_Descriptor.Describe(state);
 
         return state switch
         {
@@ -228,32 +228,6 @@ public static class SessionRows_Builder
             MemberStates.BlockedOnOwner => "working now (was blocked on you)",
             MemberStates.AwaitingSupervisorReview => "working now (report filed)",
             _ => "working now",
-        };
-    }
-
-    public static string Describe_State(MemberStates state)
-    {
-        return state switch
-        {
-            MemberStates.NewNoTraffic => "new — no traffic",
-            MemberStates.ImplementerWorking => "briefed — not started yet",
-            MemberStates.AwaitingSupervisorReview => "awaiting review",
-            MemberStates.WritingWindowOpen => "idle — writing window left open",
-            MemberStates.BlockedOnOwner => "BLOCKED ON OWNER",
-            _ => throw new Exception($"Unhandled MemberStates: {state}"),
-        };
-    }
-
-    public static string Brush_KeyFor(MemberStates state)
-    {
-        return state switch
-        {
-            MemberStates.NewNoTraffic => "StateNew",
-            MemberStates.ImplementerWorking => "StateWorking",
-            MemberStates.AwaitingSupervisorReview => "StateAwaitingReview",
-            MemberStates.WritingWindowOpen => "StateWindowOpen",
-            MemberStates.BlockedOnOwner => "StateBlocked",
-            _ => throw new Exception($"Unhandled MemberStates: {state}"),
         };
     }
 
