@@ -9,9 +9,6 @@ namespace AIOrchestratorCoreLib.Planning;
 /// </summary>
 public static class PlanProgress_Formatter
 {
-    /// <summary>Lines of "what is left" shown in full before the rest are summarised.</summary>
-    public const int OPEN_TASKS_SHOWN = 5;
-
     public static string Describe_Counts(IPlanProgress progress)
     {
         var blockedPart = progress.Blocked > 0 ? $" · {progress.Blocked} BLOCKED" : "";
@@ -26,34 +23,72 @@ public static class PlanProgress_Formatter
         return $"{progress.Done}/{progress.Total} done{Describe_Percent(progress)}{runningPart}{blockedPart}{notDoingPart}";
     }
 
+    /// <summary>Open lines shown by name before the rest become a count.</summary>
+    public const int NEXT_TASKS_SHOWN = 3;
+
     /// <summary>
-    /// What is LEFT, which is the question the owner actually asks ("a slash command that lets me
-    /// know what's left to do would be useful"). Running and blocked lines are shown in full — they
-    /// are few and they are the actionable ones — and open lines are capped, because their ledger
-    /// ran to 207 tasks and a message that does not fit a phone is a message they will not read.
+    /// How many lines of one KIND are worth naming individually. Beyond this the kind becomes a
+    /// number, because a list that long stops being a list and becomes a wall.
+    /// </summary>
+    public const int DETAIL_CAP = 6;
+
+    /// <summary>
+    /// What is LEFT, on a phone. The owner: "the progress command is way too detailed" — shown 593
+    /// of 683 lines and then the finished ones, one after another.
+    ///
+    /// DETAIL IS A FUNCTION OF COUNT, NOT OF CATEGORY, and that is the correction. The previous
+    /// version printed every running and blocked line in full "because they are few and they are the
+    /// actionable ones" — an assumption written against a ledger with two of them. Their real ledger
+    /// has 53 running, where naming each one is 53 lines of noise; four blocked, where each line is
+    /// the thing they can act on. So a kind is named while it is small enough to read and collapses
+    /// to a count when it is not, which is one rule rather than a special case per category.
+    ///
+    /// A DONE line is never printed under any circumstance. That was the whole complaint.
     /// </summary>
     public static string Describe_Remaining(IPlanProgress progress)
     {
         List<string> lines = [];
 
-        foreach (var task in progress.InProgressTasks)
-            lines.Add($"  > {task}");
+        Add_Kind(lines, "in progress", progress.InProgressTasks);
+        Add_Kind(lines, "blocked", progress.BlockedTasks);
 
-        foreach (var task in progress.BlockedTasks)
-            lines.Add($"  ! {task}");
-
-        foreach (var task in progress.OpenTasks.Take(OPEN_TASKS_SHOWN))
-            lines.Add($"  · {task}");
-
-        var hidden = progress.OpenTasks.Count - OPEN_TASKS_SHOWN;
-
-        if (hidden > 0)
-            lines.Add($"  +{hidden} more open");
+        if (progress.OpenTasks.Count > 0)
+            lines.Add($"next          {Describe_Next(progress.OpenTasks)}");
 
         if (lines.Count == 0)
             return "nothing left — every line is done or dropped";
 
         return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// Named while few, counted while many. The count is ALWAYS shown — it is the part the owner
+    /// asked for — and the names follow only when there are few enough to read on a phone.
+    /// </summary>
+    static void Add_Kind(List<string> lines, string label, IReadOnlyList<string> tasks)
+    {
+        if (tasks.Count == 0)
+            return;
+
+        if (tasks.Count > DETAIL_CAP)
+        {
+            lines.Add($"{label,-13} {tasks.Count}");
+            return;
+        }
+
+        lines.Add($"{label,-13} {tasks.Count} — {string.Join(" · ", tasks)}");
+    }
+
+    /// <summary>
+    /// The next few by name, then a count. Their ledger had 33 open behind the three shown; naming
+    /// all of them is the message they said they would not read.
+    /// </summary>
+    static string Describe_Next(IReadOnlyList<string> openTasks)
+    {
+        var shown = string.Join(" · ", openTasks.Take(NEXT_TASKS_SHOWN));
+        var hidden = openTasks.Count - NEXT_TASKS_SHOWN;
+
+        return hidden > 0 ? $"{shown} · +{hidden} more" : shown;
     }
 
     /// <summary>

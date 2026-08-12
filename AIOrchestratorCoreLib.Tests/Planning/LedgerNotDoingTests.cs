@@ -95,21 +95,86 @@ public class LedgerNotDoingTests
         Assert.Equal("178/178 done (100%) · 29 not doing", PlanProgress_Formatter.Describe_Counts(progress));
     }
 
-    /// <summary>What is LEFT, and it has to fit a phone: 207 lines must not become 207 lines of text.</summary>
+    /// <summary>
+    /// THE OWNER'S COMPLAINT, in numbers from their own ledger: 53 running, 4 blocked, 36 open.
+    /// Naming all 53 is the wall they said they would not read; naming the 4 is the thing they can
+    /// act on. Detail is a function of COUNT, not of category.
+    /// </summary>
     [Fact]
-    public void TheRemainingBlockIsCapped_AndSaysHowManyItHid()
+    public void ALargeKindBecomesACountAndASmallOneKeepsItsNames()
     {
-        List<string> lines = ["- [>] the running one", "- [!] the blocked one — blocked on: a decision"];
+        List<string> lines = [];
 
-        for (var index = 0; index < 12; index++)
+        for (var index = 0; index < 53; index++)
+            lines.Add($"- [>] running {index}");
+
+        lines.Add("- [!] migrate the state file — blocked on: your call about the 125% scaling");
+        lines.Add("- [!] the second blocker — blocked on: a decision");
+
+        for (var index = 0; index < 36; index++)
             lines.Add($"- [ ] open {index}");
 
         var remaining = PlanProgress_Formatter.Describe_Remaining(Parse([.. lines])!);
 
-        Assert.Contains("> the running one", remaining);
-        Assert.Contains("! the blocked one — blocked on: a decision", remaining);
-        Assert.Contains("+7 more open", remaining);
-        Assert.Equal(PlanProgress_Formatter.OPEN_TASKS_SHOWN + 3, remaining.Split('\n').Length);
+        // The big kind is a number and names nothing.
+        Assert.Contains("in progress   53", remaining);
+        Assert.DoesNotContain("running 0", remaining);
+
+        // The small kind keeps every name, because each one is what they can act on.
+        Assert.Contains("125% scaling", remaining);
+        Assert.Contains("the second blocker", remaining);
+
+        // The open ones are a handful and then a count. The FOURTH must be absent: "+33 more" alone
+        // survives the cap being removed, because the hidden count is computed either way — it was
+        // asserted that way first and the mutation stayed green.
+        Assert.Contains("open 0", remaining);
+        Assert.Contains("open 2", remaining);
+        Assert.DoesNotContain("open 3", remaining);
+        Assert.Contains("+33 more", remaining);
+
+        // AND IT FITS A PHONE — the actual defect. Three kinds, three lines.
+        Assert.Equal(3, remaining.Split('\n').Length);
+    }
+
+    /// <summary>
+    /// A DONE line is never printed — and this is STRUCTURAL rather than guarded, which is worth
+    /// stating plainly because it makes the test unfalsifiable by design.
+    ///
+    /// PlanLedger_Parser never collects the TEXT of a done line: it counts them and discards the
+    /// words. So the formatter cannot print one however it is written, and no mutation of the
+    /// formatter can make this fail. That is the strongest form of the rule — impossible rather than
+    /// checked — but a reader deserves to know the test is a statement of the shape and not a guard,
+    /// or they will trust it to catch something it never could.
+    /// </summary>
+    [Fact]
+    public void NoDoneLineIsEverPrinted()
+    {
+        var remaining = PlanProgress_Formatter.Describe_Remaining(Parse(
+            "- [x] the finished thing nobody asked about",
+            "- [>] the running one",
+            "- [ ] the open one")!);
+
+        Assert.DoesNotContain("the finished thing", remaining);
+        Assert.Contains("the running one", remaining);
+    }
+
+    /// <summary>
+    /// A kind exactly at the cap still keeps its names — the boundary is asserted rather than
+    /// assumed, because "more than a handful" is the whole rule.
+    /// </summary>
+    [Fact]
+    public void TheDetailCapIsInclusive()
+    {
+        List<string> atCap = [];
+
+        for (var index = 0; index < PlanProgress_Formatter.DETAIL_CAP; index++)
+            atCap.Add($"- [>] running {index}");
+
+        Assert.Contains("running 0", PlanProgress_Formatter.Describe_Remaining(Parse([.. atCap])!));
+
+        atCap.Add("- [>] one too many");
+
+        Assert.DoesNotContain("running 0", PlanProgress_Formatter.Describe_Remaining(Parse([.. atCap])!));
     }
 
     [Fact]
