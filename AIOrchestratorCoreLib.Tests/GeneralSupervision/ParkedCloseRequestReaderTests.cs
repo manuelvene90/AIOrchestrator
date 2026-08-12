@@ -88,22 +88,40 @@ public class ParkedCloseRequestReaderTests : IDisposable
     /// scanner, and must not become acceptable merely by having been parked.
     ///
     /// Without this, the guard would be a way to LAUNDER a request the front door refused.
+    ///
+    /// THE POSITIVE COUNTERPART IS WHAT MAKES THE NULL MEAN THAT. Asserted alone, this passed for a
+    /// reader that cannot see member closes AT ALL — the null would then be about the kind rather
+    /// than the missing field, and the property in the paragraph above would be untested while
+    /// looking tested. The two JSONs differ in exactly one thing, so the null is attributable to it.
     /// </summary>
     [Fact]
     public void AMemberCloseWithNoReasonIsRejectedEvenAfterParking()
     {
-        var path = Write_Request("""{"action":"close-implementer","orchId":"crm-2","memberId":"imp-2"}""");
+        Assert.Null(ParkedCloseRequest_Reader.Read_OrNull(
+            Write_Request("""{"action":"close-implementer","orchId":"crm-2","memberId":"imp-2"}""")));
 
-        Assert.Null(ParkedCloseRequest_Reader.Read_OrNull(path));
+        var withReason = ParkedCloseRequest_Reader.Read_OrNull(
+            Write_Request("""{"action":"close-implementer","orchId":"crm-2","memberId":"imp-2","reason":"its task is delivered"}"""));
+
+        Assert.NotNull(withReason);
+        Assert.Equal(ParkedCloseKinds.Implementer, withReason.Kind);
     }
 
-    /// <summary>A kind that has no business being parked is not a close, and reads as nothing.</summary>
+    /// <summary>
+    /// A kind that has no business being parked is not a close, and reads as nothing.
+    ///
+    /// Same shape as above and the same fix: the second half is what says the null came from the
+    /// ACTION rather than from member closes being invisible. Milder, because nothing parks an
+    /// add-implementer today — but a test that cannot fail for its own reason is worth no more here
+    /// than anywhere else tonight.
+    /// </summary>
     [Fact]
     public void ARequestThatIsNotACloseAtAllReadsAsNothing()
     {
-        var path = Write_Request("""{"action":"add-implementer","orchId":"crm-2","reason":"more hands"}""");
+        Assert.Null(ParkedCloseRequest_Reader.Read_OrNull(
+            Write_Request("""{"action":"add-implementer","orchId":"crm-2","reason":"more hands"}""")));
 
-        Assert.Null(ParkedCloseRequest_Reader.Read_OrNull(path));
+        Assert.NotNull(ParkedCloseRequest_Reader.Read_OrNull(Write_Request(MEMBER_CLOSE)));
     }
 
     string Write_Request(string json)
