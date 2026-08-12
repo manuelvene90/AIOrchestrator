@@ -111,17 +111,102 @@ public class MemberStateResolverTests
     /// The one that actually happened: a supervisor's brief WARNING a reviewer about this bug
     /// contained the phrase, and pinned that reviewer in WritingWindowOpen for four hours — through
     /// every nudge, and past the report that should have closed the window.
+    ///
+    /// A window is a statement about what the MEMBER is doing, so only a member can make it. This
+    /// now passes for TWO reasons — the author gate and the body anchoring — so the member-authored
+    /// case below carries the anchoring on its own. A case with two routes to its result pins
+    /// neither, which is the defect this branch shipped once already.
     /// </summary>
     [Fact]
-    public void AnEntryDiscussingTheWindowMarkerDoesNotOpenAWindow()
+    public void ASupervisorCannotOpenAMembersWindowByDiscussingIt()
     {
         var entries = new[]
         {
             Build_Entry(1, ChannelAuthors.Supervisor, "a bug you should know about",
+                "WRITING WINDOW OPEN is matched as a bare substring, which is the bug."),
+        };
+
+        Assert.NotEqual(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// The same discussion from a MEMBER, where the author gate cannot help and the body rule is the
+    /// only thing deciding. Members discuss the vocabulary constantly — they are instructed to.
+    /// </summary>
+    [Fact]
+    public void AMemberDiscussingTheWindowMarkerMidSentenceDoesNotOpenAWindow()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, "a report",
                 "so an entry that merely QUOTES \"writing window open\" flips the member's state."),
         };
 
         Assert.NotEqual(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
+    // ── SUBJECTS ARE MATCHED AS TOKENS, NOT BY POSITION ─────────────────────────────────────────
+    //
+    // Measured against all 95 marker-bearing subjects on this machine: start-anchoring the subject
+    // lost 10 GENUINE declarations to catch 1 discussion. These are the real shapes it lost.
+
+    /// <summary>House style: the result first, the marker after it.</summary>
+    [Fact]
+    public void ASubjectThatNamesAResultBeforeItsMarkerStillDeclares()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, "TASK 1 committed d123150. WRITING WINDOW OPEN for the hardening", "batch 2"),
+        };
+
+        Assert.Equal(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>The compound that missed BOTH markers at once under the position rule.</summary>
+    [Fact]
+    public void TheCombinedWindowSubjectStillOpensAWindow()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, "WRITING + MUTATION WINDOW OPEN — Parser.cs, Model.cs", "starting"),
+        };
+
+        Assert.Equal(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// THE INVERSION, and the reason the subject rule was a regression rather than a lost
+    /// opportunity. A missing close reads as still-open, so a CLOSED marker that stops counting pins
+    /// the member in WritingWindowOpen — the four-hour failure, reached through the other door. This
+    /// subject is a live one from the corpus.
+    /// </summary>
+    [Fact]
+    public void ACompoundSubjectStillCLOSESTheWindow()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "run the mutations"),
+            Build_Entry(2, ChannelAuthors.Implementer, "MUTATION WINDOW OPEN", "seven mutations"),
+            Build_Entry(3, ChannelAuthors.Implementer, "A3 COMPLETE · 512 tests · MUTATION WINDOW CLOSED", "all seven caught"),
+        };
+
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>A longer word merely containing the marker is still not the marker.</summary>
+    [Fact]
+    public void ASubjectTokenMustHaveWordBoundariesOnBothSides()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, "STANDING BYSTANDER", "still working"),
+        };
+
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
     }
 
     /// <summary>

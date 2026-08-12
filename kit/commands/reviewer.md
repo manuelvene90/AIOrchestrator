@@ -137,8 +137,13 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
   really happened and cost 35 minutes). Append with `>>`.
 - **ENGLISH, always**, even when the traffic reaching you is Italian.
 - No acknowledgment-only entries — silence is acknowledgment. One exception, below.
+- **Where a marker may go, exactly:** in the entry's SUBJECT anywhere — the app matches the whole
+  phrase there — or at the START OF A LINE in the body. Mid-sentence in the body is DISCUSSION and
+  deliberately does not count: reviewers quote this vocabulary constantly, and a brief that merely
+  mentioned a marker once pinned a session's state for four hours. Markers are read only from YOUR
+  OWN entries.
 - **`STANDING BY` — required when you go quiet on purpose.** Finished a review and waiting for the
-  next one, or told to hold? Append a one-line entry containing exactly `STANDING BY`, saying what
+  next one, or told to hold? Append a one-line entry whose subject or first line is `STANDING BY`, saying what
   you are waiting for. "Idle on purpose" and "stalled mid-task" are indistinguishable from outside,
   so without the declaration the app nudges you every 8 minutes forever — and nudges your supervisor
   about the entry that asked it for nothing. Once per quiet spell; any inbound entry clears it.

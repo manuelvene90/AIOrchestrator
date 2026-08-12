@@ -58,10 +58,16 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   supervisor, who asks the owner.
 - **No acknowledgment-only entries** — silence is acknowledgment. Write only boundary reports,
   evidence-backed pushbacks, blocked flags, and the one declaration below.
+- **Where a marker may go, exactly** (`STANDING BY`, `BLOCKED ON OWNER`, the window pair): in the
+  entry's SUBJECT anywhere — the app matches the whole phrase there, so
+  `TASK 1 committed abc1234. WRITING WINDOW OPEN for the hardening` counts — or at the START OF A
+  LINE in the body. **Mid-sentence in the body is DISCUSSION and deliberately does not count**:
+  members talk about this vocabulary constantly, and a brief that merely mentioned a marker once
+  pinned a session's state for four hours. Markers are read only from YOUR OWN entries.
 - **`STANDING BY` — the ONE exception, and it is required.** When you go quiet on purpose with
   nothing owed and nothing running — you finished and are waiting for a brief, or you were told to
-  hold — append a one-line entry containing exactly `STANDING BY`. It is the only way the app can
-  tell "idle on purpose" from "stalled mid-task": those two look identical from outside, so without
+  hold — append a one-line entry whose subject or first line is `STANDING BY`. It is the only way the
+  app can tell "idle on purpose" from "stalled mid-task": those two look identical from outside, so without
   it the app nudged idle members every 8 minutes forever and nudged the supervisor about the very
   entry that had asked it for nothing. **Write it once per quiet spell**, not per turn — any inbound
   entry clears it, and if the traffic that arrives asks you for nothing, declare again and stop.
@@ -77,10 +83,12 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   demonstration — never blindly implement a wrong instruction. Being refuted with evidence is
   the system working; implementing a known-wrong order is the system failing.
 - **Announced windows:** BEFORE a long multi-file write batch or a mutation-testing run, append an
-  entry containing exactly `WRITING WINDOW OPEN` (or `MUTATION WINDOW OPEN`) naming the files in
-  flight; when done, append one containing `WRITING WINDOW CLOSED` (or `MUTATION WINDOW CLOSED`)
-  with the results. During your window the supervisor will not audit those files; without one,
-  your half-written state may be reported as defects.
+  entry whose SUBJECT contains `WRITING WINDOW OPEN` (or `MUTATION WINDOW OPEN`) naming the files in
+  flight; when done, append one whose subject contains `WRITING WINDOW CLOSED` (or
+  `MUTATION WINDOW CLOSED`) with the results. During your window the supervisor will not audit those
+  files; without one, your half-written state may be reported as defects.
+  **Closing it matters more than opening it** — an unclosed window is read as still open forever, so
+  it masks your filed report as "still writing" and keeps the app nudging you.
 - **Blocked on the owner?** Say so in your report (the supervisor escalates); phrase it as
   `BLOCKED ON OWNER` plus the question and options. Then arm your watcher and end your turn.
 

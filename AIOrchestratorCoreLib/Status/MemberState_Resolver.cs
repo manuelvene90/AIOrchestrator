@@ -64,10 +64,25 @@ public static class MemberState_Resolver
         return lastClosed < lastOpen;
     }
 
+    /// <summary>
+    /// MEMBER-AUTHORED ENTRIES ONLY, and this is the cheaper half of the whole marker fix.
+    ///
+    /// A window is a statement about what the MEMBER is doing, so only the member can make it. This
+    /// scan used to accept any author, which is how a SUPERVISOR's brief — one warning a reviewer
+    /// about this very bug — opened that reviewer's window and pinned it in WritingWindowOpen for
+    /// four hours. The same file already gates BLOCKED ON OWNER and STANDING BY this way, because
+    /// they are only ever read off the member's own last entry. All six markers are member
+    /// vocabulary; the window pair was the one that had no gate.
+    ///
+    /// This kills the entire supervisor-discussion class on its own, independently of any anchoring.
+    /// </summary>
     static int Find_LastEntryIndex_WithMarker(IReadOnlyList<IChannelEntry> entries, string marker)
     {
         for (var i = entries.Count - 1; i >= 0; i--)
         {
+            if (!ChannelAuthor_Kinds.Is_Member(entries[i].Author))
+                continue;
+
             if (Contains_Marker(entries[i], marker))
                 return i;
         }
@@ -76,33 +91,32 @@ public static class MemberState_Resolver
     }
 
     /// <summary>
-    /// A marker DECLARES only when it begins a line. It used to be a bare substring anywhere in the
-    /// entry, which meant discussing the vocabulary set the state — and these are the sessions
-    /// instructed to discuss the vocabulary. A supervisor's brief warning a reviewer about this very
-    /// bug contained the phrase, and pinned that reviewer in WritingWindowOpen for four hours.
+    /// TWO RULES, because the subject and the body are different kinds of text and one rule measured
+    /// badly on both.
     ///
-    /// The direction of failure is deliberate. Anchoring can only make a marker count for LESS, and
-    /// for both markers less means MORE waking: a missed window makes a member look dormant, a missed
-    /// declaration makes it look like it never declared. Both end in a nudge, which is noise. The
-    /// opposite error is silence — a false StandingBy disarms the orphan recovery that is the app's
-    /// only proof a monitor is dead, and nothing then detects the session at all.
+    /// BODY: line-start anchoring. A body is prose, and a marker inside a sentence is discussion —
+    /// which is how a brief WARNING a reviewer about this bug pinned it for four hours.
     ///
-    /// Blockquotes are NOT stripped, and that is the point of the exclusion: `&gt; STANDING BY` is
-    /// quotation by definition, which is exactly the class being excluded. Bullets and bold are
-    /// stripped because `**STANDING BY** — waiting on rev-3` is a declaration written by someone
-    /// using markdown.
+    /// SUBJECT: token match anywhere, word boundary either side. A subject is one authored summary
+    /// field, not prose, and the positional argument does not transfer to it. Measured rather than
+    /// argued: against all 95 marker-bearing subjects on this machine, start-anchoring the subject
+    /// lost 10 GENUINE declarations to catch 1 discussion. The ten are ordinary house style —
+    /// `TASK 1 committed d123150. WRITING WINDOW OPEN for the hardening` — plus the compound
+    /// `WRITING + MUTATION WINDOW OPEN`, which misses both markers at once.
+    ///
+    /// AND THE SAFE DIRECTION INVERTS FOR THE CLOSED MARKERS, which is why that trade was not merely
+    /// unprofitable but wrong. <see cref="Has_OpenWindow"/> reads a missing close as still-open, so a
+    /// CLOSED marker that stops counting pins the member in WritingWindowOpen — the exact four-hour
+    /// failure this rule exists to prevent, reached through the other door. The corpus contained a
+    /// live one: `A3 COMPLETE · … · MUTATION WINDOW CLOSED`.
+    ///
+    /// Blockquotes are not stripped in the body, and that is the point: `&gt; STANDING BY` is
+    /// quotation by definition. Bullets and bold are stripped because `**STANDING BY** — waiting` is
+    /// a declaration written by someone using markdown.
     /// </summary>
     static bool Contains_Marker(IChannelEntry entry, string marker)
     {
-        // THE SUBJECT COUNTS, and it is where members actually put these — the role commands say to
-        // append "an entry containing exactly WRITING WINDOW OPEN naming the files in flight", and in
-        // practice that lands in the header. Anchored to the START of the subject, so a subject
-        // ABOUT a marker ("the STANDING BY marker is broken") is not a declaration of one.
-        //
-        // Read as a parsed FIELD rather than by scanning the raw header line: the header is a single
-        // line, so anchoring to line starts alone would silently stop recognising every marker ever
-        // written in a subject. Four existing tests caught exactly that.
-        if (Declares_Marker(entry.Subject, marker))
+        if (Contains_MarkerToken(entry.Subject, marker))
             return true;
 
         foreach (var rawLine in entry.Body.Split('\n'))
@@ -117,6 +131,30 @@ public static class MemberState_Resolver
     /// <summary>Quotation, as opposed to decoration. A line that opens with one of these is
     /// reporting what somebody said, which is the whole class being excluded.</summary>
     static readonly char[] QUOTATION_OPENERS = ['>', '"', '\''];
+
+    /// <summary>
+    /// The marker as a whole TOKEN — a letter or digit on either side means this is part of a longer
+    /// word, not the marker. Every occurrence is tried, not just the first: a subject can name a
+    /// result before its marker, which is the house style the position rule lost.
+    /// </summary>
+    static bool Contains_MarkerToken(string text, string marker)
+    {
+        var index = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+
+        while (index >= 0)
+        {
+            var startsCleanly = index == 0 || !char.IsLetterOrDigit(text[index - 1]);
+            var afterIndex = index + marker.Length;
+            var endsCleanly = afterIndex >= text.Length || !char.IsLetterOrDigit(text[afterIndex]);
+
+            if (startsCleanly && endsCleanly)
+                return true;
+
+            index = text.IndexOf(marker, index + 1, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
 
     static bool Declares_Marker(string rawLine, string marker)
     {
