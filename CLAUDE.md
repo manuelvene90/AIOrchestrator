@@ -89,6 +89,11 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     the next app launch silently reverts every change back to the stale build output. Verify a kit
     change AFTER an app restart, never just after a copy — a `diff` taken between the two reads
     IDENTICAL and means nothing. `kit/install.ps1` is for a fresh machine that has not built yet.
+    **And the build must be the MAIN checkout's, never a worktree's:** `dotnet build` inside a
+    worktree lands in THAT worktree's output folder, which the running app never reads — so a kit
+    change can be edited, built, tested and reported as verified while the app keeps installing the
+    old one. Since implementer work happens in worktrees by default, this is the normal case, not the
+    exception.
 18. **SAY WHICH COPY YOU READ — installed, built, or branch source.** Every file in this system
     exists three times: the branch source (`kit/…`), the app's build output, and the installed copy
     (`~/.claude/commands`, `~/.claude/hooks`). They drift, and a finding about one is not a finding
