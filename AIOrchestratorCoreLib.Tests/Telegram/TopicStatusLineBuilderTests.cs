@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Planning;
 using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Telegram;
@@ -29,11 +30,35 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("Telegram UX + limits          72/113 · 63%", line);
     }
 
-    /// <summary>An orchestration with no ledger yet is a title, not a title and a lie.</summary>
+    /// <summary>
+    /// NOTHING TO SAY MEANS SAY NOTHING. With no ledger, no live member and no history, the line
+    /// would have been the topic's own title repeated back at the owner — a message whose entire
+    /// content is what they are already looking at. Item 15.
+    /// </summary>
     [Fact]
-    public void WithNoLedgerTheTitleStandsAlone()
+    public void AnOrchestrationWithNothingToReportEmitsNothing()
     {
-        Assert.Equal("CRM invoice crash", TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW));
+        Assert.Equal("", TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW));
+    }
+
+    /// <summary>But a title with a REAL ledger is substance, and it still stands alone.</summary>
+    [Fact]
+    public void ATitleWithALedgerIsWorthWriting()
+    {
+        Assert.Equal("CRM invoice crash          3/4 · 75%", TopicStatusLine_Builder.Build("CRM invoice crash", Progress(3, 4), [], null, NOW));
+    }
+
+    /// <summary>
+    /// A closed member does not resurrect the line either — the contract says it falls off, and one
+    /// message must not disagree with itself about whether a member exists.
+    /// </summary>
+    [Fact]
+    public void AnOrchestrationWhoseOnlyMemberIsClosedEmitsNothing()
+    {
+        var line = TopicStatusLine_Builder.Build(
+            "orch", null, [Member("imp-1", Brief("the old task", "2026-08-12 09:00"), isClosed: true)], null, NOW);
+
+        Assert.Equal("", line);
     }
 
     [Fact]
@@ -178,6 +203,22 @@ public class TopicStatusLineBuilderTests
         Assert.EndsWith("12 min", lines[2]);
         Assert.Equal("rev-3   idle", lines[3]);
         Assert.StartsWith("last", lines[5]);
+    }
+
+    /// <summary>
+    /// ONE reading of an agent stamp, and the two used to disagree inside a single message: the
+    /// builder printed no duration for a future-stamped entry while the engine's own comparison
+    /// promoted that same entry to `last` and held it there until real time caught up.
+    /// </summary>
+    [Fact]
+    public void AFutureStampIsRefusedByTheSharedReaderTheEngineAlsoUses()
+    {
+        Assert.False(SessionDuration_Formatter.Try_ReadTrustedStamp("2026-08-13 23:00", NOW, out _));
+        Assert.False(SessionDuration_Formatter.Try_ReadTrustedStamp("not a date", NOW, out _));
+        Assert.True(SessionDuration_Formatter.Try_ReadTrustedStamp("2026-08-12 12:26", NOW, out _));
+
+        // The skew tolerance survives: a stamp a minute ahead is a minute-rounded clock, not a lie.
+        Assert.True(SessionDuration_Formatter.Try_ReadTrustedStamp("2026-08-12 12:31", NOW, out _));
     }
 
     static IPlanProgress Progress(int done, int total)

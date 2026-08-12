@@ -23,6 +23,9 @@ public interface IOrchestrationSessionStore
 
     /// <summary>Remembers the topic's one status message, so a restart edits rather than re-posts.</summary>
     void Set_StatusLineMessageId(string orchId, long messageId);
+
+    /// <summary>Forgets the status message, so the next tick posts a fresh one.</summary>
+    void Clear_StatusLineMessageId(string orchId);
     void Set_SupervisorPid(string orchId, int? pid);
 
     /// <summary>Stamps the communicator spawn (watchdog grace) — its pid lives only in its pid file.</summary>

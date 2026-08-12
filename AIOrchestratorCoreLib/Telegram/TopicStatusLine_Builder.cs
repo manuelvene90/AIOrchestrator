@@ -36,7 +36,7 @@ public static class TopicStatusLine_Builder
         string? lastSubject,
         DateTime now)
     {
-        List<string> lines = [Build_TitleLine(title, progress)];
+        List<string> lines = [];
 
         foreach (var member in members)
         {
@@ -45,6 +45,17 @@ public static class TopicStatusLine_Builder
 
             lines.Add(Build_MemberLine(member, now));
         }
+
+        // NOTHING TO SAY MEANS SAY NOTHING. With no ledger, no live member and no history, the line
+        // would have been the topic's own title repeated back at the owner — a message whose entire
+        // content is what they are already looking at. Item 15: if they cannot act on it and it tells
+        // them nothing, it does not get written.
+        var hasSubstance = lines.Count > 0 || (progress != null && progress.Total > 0) || !string.IsNullOrWhiteSpace(lastSubject);
+
+        if (!hasSubstance)
+            return "";
+
+        lines.Insert(0, Build_TitleLine(title, progress));
 
         if (!string.IsNullOrWhiteSpace(lastSubject))
         {

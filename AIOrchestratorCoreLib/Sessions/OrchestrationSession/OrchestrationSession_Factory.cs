@@ -46,10 +46,24 @@ public static class OrchestrationSession_Factory
     /// <summary>
     /// The status message id, once the app has posted it. Persisted so a RESTART edits that
     /// message instead of posting a second one — which is the defect this whole feature replaces.
+    ///
+    /// It carries a wasSet flag because it must be resettable to NULL: `/clear` tears the topic
+    /// down and recreates it, and a stale id then points at a message that no longer exists — the
+    /// orchestration would never get a status line again. Null cannot mean both "unchanged" and
+    /// "cleared", which is what this file's own docstring says and what I did not do.
     /// </summary>
+    /// <summary>
+    /// Forgets the status message — used when the topic it lived in no longer exists, so the next
+    /// tick POSTS a fresh one instead of editing into a void forever.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithoutStatusLineMessageId(IOrchestrationSession existing)
+    {
+        return CreateFrom_Existing(existing, statusLineMessageId: null, statusLineMessageIdWasSet: true);
+    }
+
     public static IOrchestrationSession CreateFrom_Existing_WithStatusLineMessageId(IOrchestrationSession existing, long messageId)
     {
-        return CreateFrom_Existing(existing, statusLineMessageId: messageId);
+        return CreateFrom_Existing(existing, statusLineMessageId: messageId, statusLineMessageIdWasSet: true);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithTopicId(IOrchestrationSession existing, long topicId)
@@ -123,7 +137,8 @@ public static class OrchestrationSession_Factory
         IReadOnlyList<IOrchestrationMember>? members = null,
         TelegramDeliveryModes? telegramMode = null,
         DateTime? closedUtc = null,
-        long? statusLineMessageId = null)
+        long? statusLineMessageId = null,
+        bool statusLineMessageIdWasSet = false)
     {
         return Create(
             existing.OrchId,
@@ -140,6 +155,6 @@ public static class OrchestrationSession_Factory
             members ?? existing.Members,
             telegramMode ?? existing.TelegramMode,
             closedUtc ?? existing.ClosedUtc,
-            statusLineMessageId ?? existing.StatusLineMessageId);
+            statusLineMessageIdWasSet ? statusLineMessageId : existing.StatusLineMessageId);
     }
 }

@@ -227,6 +227,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<string, string> _flaggedIdleMembersByOrchId = [];
 
+    /// <summary>When the status line last FAILED per orchestration, so a real error backs off.</summary>
+    readonly Dictionary<string, DateTime> _statusLineAttemptUtcByOrchId = [];
+
     /// <summary>
     /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
     /// one message instead of three. Key 0 = the General topic (no thread id).
@@ -3792,6 +3795,9 @@ internal sealed class BridgeEngineModel(
             if (action == Telegram.TopicStatusActions.None)
                 continue;
 
+            if (!Is_StatusLineAttemptDue(session.OrchId))
+                continue;
+
             try
             {
                 // The id re-checked rather than asserted through .Value: the decider guarantees it,
@@ -3811,11 +3817,36 @@ internal sealed class BridgeEngineModel(
                 }
 
                 _statusLineTextByOrchId[session.OrchId] = text;
+                _statusLineAttemptUtcByOrchId.Remove(session.OrchId);
+            }
+            catch (Exception exception) when (Is_MessageAlreadyCurrent(exception))
+            {
+                // "message is not modified" means the desired state ALREADY HOLDS — success, not
+                // failure. Advancing the cache is the whole point: static text is the NORMAL state of
+                // an idle orchestration, so without this the tick rejected a call a second, forever.
+                // Sync_TopicNames_BestEffort_Async fixed this exact case 150 lines above and its
+                // comment says a real failure still must not spin. I took the shape of that catch and
+                // inverted its conclusion.
+                _statusLineTextByOrchId[session.OrchId] = text;
+            }
+            catch (Exception exception) when (Is_MessageGone(exception))
+            {
+                // TERMINAL for this message id: the message it names no longer exists, which is what
+                // /clear leaves behind — the topic is torn down and recreated while the id survives in
+                // session.json. Retrying could never succeed, so the id is FORGOTTEN and the next tick
+                // posts a fresh line. Without this the orchestration never gets a status line again
+                // for the life of the machine.
+                _store.Clear_StatusLineMessageId(session.OrchId);
+                _statusLineTextByOrchId.Remove(session.OrchId);
+                _log.Log_Warning(session.OrchId, $"Topic status message is gone — posting a new one next tick ({exception.Message})");
             }
             catch (Exception exception)
             {
                 // Never fatal: a status line that cannot be drawn must not stop the mirror. The
-                // remembered text is deliberately NOT updated, so the next tick retries.
+                // remembered text is deliberately NOT updated, so the next tick retries — but BACKED
+                // OFF, because a 429 answered at the tick rate inverts the cadence from once a minute
+                // to thirty times a minute per topic and sustains the throttling that caused it.
+                _statusLineAttemptUtcByOrchId[session.OrchId] = DateTime.UtcNow;
                 _log.Log_Warning(session.OrchId, $"Topic status line could not be updated — {exception.Message}");
             }
         }
@@ -3944,6 +3975,40 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+
+    /// <summary>
+    /// Telegram's answer when an edit would change nothing. The desired state already holds, so it is
+    /// a SUCCESS — the same reading <see cref="Is_TopicAlreadyNamed"/> applies to editForumTopic, and
+    /// the predicate that was not carried across to editMessageText.
+    /// </summary>
+    static bool Is_MessageAlreadyCurrent(Exception exception)
+    {
+        return exception.Message.Contains("message is not modified", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The message this id names is gone — the topic was torn down and recreated by /clear while the
+    /// id survived in session.json. Terminal for that id: no number of retries brings it back.
+    /// </summary>
+    static bool Is_MessageGone(Exception exception)
+    {
+        return exception.Message.Contains("message to edit not found", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("MESSAGE_ID_INVALID", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("message can't be edited", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Same backoff the mirror uses, for the same reason: answering a 429 at the tick rate is how a
+    /// throttle sustains itself.
+    /// </summary>
+    bool Is_StatusLineAttemptDue(string orchId)
+    {
+        if (!_statusLineAttemptUtcByOrchId.TryGetValue(orchId, out var lastAttemptUtc))
+            return true;
+
+        return DateTime.UtcNow - lastAttemptUtc >= TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS);
+    }
+
     string Build_TopicStatusLineText(IOrchestrationSession session)
     {
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
@@ -3953,14 +4018,26 @@ internal sealed class BridgeEngineModel(
 
         foreach (var member in session.Members)
         {
+            // CLOSED MEMBERS ARE NOT READ AT ALL. They were parsed and then discarded at render — 64%
+            // of 3.65 MB per tick, thirty times a minute, to produce three strings that change once a
+            // minute. And a closed member must not feed the `last` line either: one message cannot
+            // disagree with itself about whether a member exists.
+            if (member.ClosedUtc != null)
+                continue;
+
             var entries = ChannelEntry_Parser.Parse_All(
                 UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));
 
             members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(
-                member.MemberId, entries, member.ClosedUtc != null));
+                member.MemberId, entries, isClosed: false));
 
-            if (entries.Count > 0 && (lastEntry == null || Is_LaterStamp(entries[^1], lastEntry)))
-                lastEntry = entries[^1];
+            // THE ONE PLACE that answers "what was the last real entry" — app nudges are not
+            // conversation. Without it, /resume appends to every member channel in every
+            // orchestration and every topic simultaneously reads `last GO AHEAD`.
+            var candidate = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
+
+            if (candidate != null && (lastEntry == null || Is_LaterStamp(candidate, lastEntry)))
+                lastEntry = candidate;
         }
 
         return Telegram.TopicStatusLine_Builder.Build(
@@ -3972,15 +4049,21 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Which of two entries happened later, by the stamp the AGENT wrote. Untrusted input — an
-    /// unparseable or absent stamp simply loses, rather than winning by accident.
+    /// Which of two entries happened later, by the stamp the AGENT wrote — read through the ONE
+    /// trusted-stamp reader rather than a second DateTime.TryParse.
+    ///
+    /// This was that second reading, and the two disagreed inside a single message: the builder
+    /// correctly printed no duration for a future-stamped entry while this promoted it to `last` and
+    /// held it there until real time caught up. Item 12, and the very incident item 12 records.
     /// </summary>
     static bool Is_LaterStamp(Channels.ChannelEntry.IChannelEntry candidate, Channels.ChannelEntry.IChannelEntry incumbent)
     {
-        if (!DateTime.TryParse(candidate.DateText, out var candidateStamp))
+        var now = DateTime.Now;
+
+        if (!SessionDuration_Formatter.Try_ReadTrustedStamp(candidate.DateText, now, out var candidateStamp))
             return false;
 
-        if (!DateTime.TryParse(incumbent.DateText, out var incumbentStamp))
+        if (!SessionDuration_Formatter.Try_ReadTrustedStamp(incumbent.DateText, now, out var incumbentStamp))
             return true;
 
         return candidateStamp > incumbentStamp;
