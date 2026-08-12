@@ -120,6 +120,38 @@ public static class OrchestrationRequests_Reader
     }
 
     /// <summary>
+    /// The same re-read for a parked close-IMPLEMENTER request. Identical contract to the
+    /// orchestration one above: the same strict parse, so a parked file can never be honoured on
+    /// terms the scanner would have rejected — including the 'reason' every autonomous action owes
+    /// the owner.
+    /// </summary>
+    public static ICloseImplementerRequest? Read_CloseImplementerRequest_OrNull(string filePath)
+    {
+        List<IStartOrchestrationRequest> startRequests = [];
+        List<IAddImplementerRequest> addImplementerRequests = [];
+        List<ICloseImplementerRequest> closeImplementerRequests = [];
+        List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
+        List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
+        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<ISetModelRequest> setModelRequests = [];
+
+        var rejection = Try_ParseInto_OrReason(
+            filePath,
+            startRequests,
+            addImplementerRequests,
+            closeImplementerRequests,
+            closeOrchestrationRequests,
+            setTelegramMutedRequests,
+            setOrchestrationNameRequests,
+            setModelRequests);
+
+        if (rejection != null)
+            return null;
+
+        return closeImplementerRequests.Count == 1 ? closeImplementerRequests[0] : null;
+    }
+
+    /// <summary>
     /// Best-effort orch id from a file the strict parse has REJECTED, so a bad request can still be
     /// reported to the session that wrote it instead of vanishing silently.
     /// </summary>

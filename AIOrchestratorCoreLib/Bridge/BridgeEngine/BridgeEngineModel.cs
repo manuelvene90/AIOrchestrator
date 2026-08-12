@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.WindowFocus;
+using AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
 using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Git;
@@ -2292,29 +2293,84 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// A member close is NOT executed on arrival either — it parks for the owner's tap, exactly as an
+    /// orchestration close does (owner decision 2026-08-12: this one action, not set-model and not
+    /// mute, because those are cheap to undo and this throws away a session's work).
+    ///
+    /// It used to kill the session tree about two seconds after the file landed, on the say-so of a
+    /// request nothing had verified — and <c>Close_Member</c> has no other caller, so there was no
+    /// owner-facing route at all. The guard does not take anything away from them; it gives them the
+    /// only say they had.
+    /// </summary>
     void Process_CloseImplementerRequests(IPendingRequests pending)
     {
         foreach (var request in pending.CloseImplementerRequests)
         {
             try
             {
-                _store.Close_Member(request.OrchId, request.MemberId);
-                SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(request.OrchId, request.MemberId));
+                var parkedPath = CloseConfirmation_Parking.Park(_paths, request.SourceFilePath);
+
+                _log.Log_Info(request.OrchId, $"close-implementer '{request.MemberId}' held for the owner's confirmation ({parkedPath})");
 
                 Append_OrchestrationAppEntry(
                     request.OrchId,
-                    $"implementer '{request.MemberId}' closed — {request.Reason}",
-                    $"Implementer '{request.MemberId}' is retired: its terminal was closed and its channel stays on disk as audit trail.");
+                    $"close of '{request.MemberId}' HELD — the owner confirms every close with a tap now",
+                    $"Nothing has been closed and '{request.MemberId}' is still running. The owner has been asked to confirm.\n\n"
+                    + $"Reason relayed: {request.Reason}\n\n"
+                    + $"You will get an entry here either way. If they do not answer within {CloseConfirmation_Parking.EXPIRY_HOURS} hours the request lapses and you are told — do NOT re-drop it in the meantime.");
             }
             catch (Exception ex)
             {
-                _log.Log_Error(request.OrchId, $"close-implementer '{request.MemberId}' failed", ex);
-                Append_OrchestrationAppEntry(request.OrchId, $"close-implementer FAILED: '{request.MemberId}'", $"Error: {ex.Message}");
+                // The guard could not be honoured, so the member is NOT closed. This is the app, not
+                // a hook: a hook that cannot evaluate its predicate says so and allows, because it
+                // only ever advises — here the effect is destructive and irreversible, so the same
+                // failure has to stop rather than wave through. Fail closed, and say why.
+                _log.Log_Error(request.OrchId, $"close-implementer '{request.MemberId}' could not be held for confirmation — NOT closed", ex);
+
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    $"close of '{request.MemberId}' NOT held — nothing was closed",
+                    $"Your close request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and '{request.MemberId}' is still running. Ask again if the close is still wanted.");
+
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
             }
-            finally
-            {
-                Delete_RequestFile(request.SourceFilePath);
-            }
+        }
+    }
+
+    /// <summary>
+    /// The ONE member-close execution, reached only from the owner's confirmed tap — the same shape
+    /// as <see cref="Execute_Close"/> for an orchestration, so a close cannot come to mean two
+    /// different things depending on which door it walked through.
+    /// </summary>
+    /// <remarks>
+    /// It REPORTS and then rethrows, which is the contract <see cref="Execute_Close"/> already has
+    /// and the caller already relies on: the confirmed-tap path swallows, because it runs on the
+    /// inbound loop with nobody watching. Reporting anywhere but here would mean a failed close is
+    /// silent to the one session waiting on it.
+    /// </remarks>
+    void Execute_CloseImplementer(string orchId, string memberId, string reason)
+    {
+        try
+        {
+            _store.Close_Member(orchId, memberId);
+            SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, memberId));
+
+            Append_OrchestrationAppEntry(
+                orchId,
+                $"member '{memberId}' closed — {reason}",
+                $"'{memberId}' is retired: the owner confirmed it with a tap, its terminal was closed, and its channel stays on disk as audit trail.");
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(orchId, $"close-implementer '{memberId}' failed after the owner confirmed it", ex);
+
+            Append_OrchestrationAppEntry(
+                orchId,
+                $"close of '{memberId}' FAILED — it may still be running",
+                $"The owner confirmed the close, but it did not complete ({ex.Message}). Check whether '{memberId}' is still alive before asking again.");
+
+            throw;
         }
     }
 
@@ -2536,7 +2592,7 @@ internal sealed class BridgeEngineModel(
 
     async Task Ask_OwnerToConfirmClose_Async(string parkedPath, CancellationToken cancellationToken)
     {
-        var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(parkedPath);
+        var request = ParkedCloseRequest_Reader.Read_OrNull(parkedPath);
 
         if (request == null)
         {
@@ -2557,6 +2613,16 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // Same reasoning one level down: a member that is already retired cannot be retired again,
+        // and a prompt offering to would invite a tap that kills nothing while reading as if it had.
+        if (request.Kind == ParkedCloseKinds.Implementer
+            && session.Members.FirstOrDefault(member => member.MemberId == request.MemberId)?.ClosedUtc != null)
+        {
+            _log.Log_Info(request.OrchId, $"Parked close request is moot — '{request.MemberId}' is already closed");
+            Archive_ResolvedRequest_BestEffort(parkedPath, "moot");
+            return;
+        }
+
         // No way to ask means no way to confirm, and this guard fails CLOSED: it keeps waiting and
         // eventually lapses. Nothing is closed on a machine that cannot reach the owner.
         if (_telegramClient == null || session.TelegramTopicId == null)
@@ -2566,16 +2632,17 @@ internal sealed class BridgeEngineModel(
         // close: a ledger that can refuse to let an orchestration end is the tail wagging the dog,
         // and it is the same shape as every deadlock removed tonight — an enforcement demanding an
         // action some other state forbids. The owner is already tapping; give them the fact.
-        var unresolved = Planning.PlanProgress_Formatter.Describe_UnresolvedAtClose_OrNull(
-            Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(request.OrchId))));
+        //
+        // Read only for an ORCHESTRATION close. The ledger belongs to the orchestration, so it says
+        // nothing about one member being safe to retire, and the builder deliberately leaves it out
+        // of that prompt — reading it here anyway would be work whose only possible use is to
+        // mislead.
+        var unresolved = request.Kind != ParkedCloseKinds.Orchestration
+            ? null
+            : Planning.PlanProgress_Formatter.Describe_UnresolvedAtClose_OrNull(
+                Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(request.OrchId))));
 
-        var unresolvedPart = unresolved == null ? "" : $"\n\n⚠️ {unresolved}";
-
-        var text =
-            $"⚠️ Close orchestration '{request.OrchId}'?\n\n"
-            + $"Asked by: {request.Requester}\n"
-            + $"Reason: {request.Reason}{unresolvedPart}\n\n"
-            + "This ends every session in it and deletes this topic. It cannot be undone — the folder stays on disk as audit trail. Nothing happens unless you tap.";
+        var text = CloseConfirmationPrompt_Builder.Build(request, unresolved);
 
         if (_configProvider.Get_Current().TelegramItalianLayer)
             text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
@@ -2742,7 +2809,7 @@ internal sealed class BridgeEngineModel(
 
     void Execute_ConfirmedClose(CloseConfirmation confirmation)
     {
-        var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(confirmation.ParkedPath);
+        var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
 
         // NON-NEGOTIABLE: a request we cannot read is not authority to end an orchestration. This
         // used to close anyway and record it as "Asked by: unrecorded" — killing every session of an
@@ -2772,11 +2839,21 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            Execute_Close(
-                confirmation.OrchId,
-                request.Reason,
-                request.Requester,
-                "The owner confirmed it with a tap.");
+            // The kind decides what the tap ends, and it comes from the FILE rather than from
+            // anything remembered alongside the button. A prompt that said "member" must never be
+            // able to execute an orchestration close because some other state disagreed.
+            if (request.Kind == ParkedCloseKinds.Implementer)
+            {
+                Execute_CloseImplementer(confirmation.OrchId, request.MemberId!, request.Reason);
+            }
+            else
+            {
+                Execute_Close(
+                    confirmation.OrchId,
+                    request.Reason,
+                    request.Requester,
+                    "The owner confirmed it with a tap.");
+            }
         }
         catch (Exception)
         {
@@ -2792,14 +2869,18 @@ internal sealed class BridgeEngineModel(
 
     void Decline_CloseConfirmation(CloseConfirmation confirmation)
     {
-        var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(confirmation.ParkedPath);
+        var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
+
+        // "a close request" while the file is unreadable, and the exact subject when it is not. The
+        // requester is told which of its asks was refused; it may have more than one thing running.
+        var subject = request == null ? "what you asked to close" : CloseConfirmationPrompt_Builder.Describe_Subject(request);
 
         _log.Log_Info(confirmation.OrchId, "The owner declined a close request");
 
         Append_OrchestrationAppEntry(
             confirmation.OrchId,
             "close DECLINED by the owner — keep working",
-            $"You asked to close this orchestration ({request?.Reason ?? "no reason recorded"}) and the owner said no. Nothing was closed and every session is still running.\n\n"
+            $"You asked to close {subject} ({request?.Reason ?? "no reason recorded"}) and the owner said no. Nothing was closed and every session is still running.\n\n"
             + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
 
         Report_CloseOutcome_ToGeneral(confirmation.OrchId, "declined by the owner", request);
@@ -2816,16 +2897,23 @@ internal sealed class BridgeEngineModel(
     /// free-text field: a close that the owner refused is orchestration-level news the general
     /// supervisor already tracks, exactly as a completed close is.
     /// </summary>
-    void Report_CloseOutcome_ToGeneral(string orchId, string outcome, GeneralSupervision.CloseOrchestrationRequest.ICloseOrchestrationRequest? request)
+    void Report_CloseOutcome_ToGeneral(string orchId, string outcome, IParkedCloseRequest? request)
     {
+        // A MEMBER close names the member, because "close of 'orch' declined" for a one-member ask
+        // reads as the whole orchestration having been up for closure — the general supervisor
+        // tracks orchestrations, and it would file the wrong fact.
+        var what = request == null || request.Kind == ParkedCloseKinds.Orchestration
+            ? $"'{orchId}'"
+            : $"'{request.MemberId}' in '{orchId}'";
+
         Append_GeneralAppEntry(
-            $"close of '{orchId}' {outcome} — nothing was closed",
+            $"close of {what} {outcome} — nothing was closed",
             $"Asked by: {request?.Requester ?? "unrecorded"}. Reason given: {request?.Reason ?? "none recorded"}. Its sessions are all still running.");
     }
 
     void Expire_CloseConfirmation(string parkedPath)
     {
-        var request = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(parkedPath);
+        var request = ParkedCloseRequest_Reader.Read_OrNull(parkedPath);
 
         lock (_closeConfirmationLock)
         {
@@ -2839,7 +2927,7 @@ internal sealed class BridgeEngineModel(
 
             Append_OrchestrationAppEntry(
                 request.OrchId,
-                "close request LAPSED — the owner never answered",
+                $"close of {CloseConfirmationPrompt_Builder.Describe_Subject(request)} LAPSED — the owner never answered",
                 $"Your close request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and nothing was closed. "
                 + "It is not carried over: a close must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
 
