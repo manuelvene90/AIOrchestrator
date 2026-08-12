@@ -88,12 +88,24 @@ public static class PlanProgress_Formatter
     /// <summary>
     /// Truncated, never rounded: 75 of 76 tasks must not read as "100%". The only way to see 100%
     /// is for every task to be done, which is the one case where the number has to be trusted.
+    ///
+    /// PUBLIC because the Telegram status line shows the same figure in a different wording. Two
+    /// surfaces quoting the same ledger must never disagree, and the way that is guaranteed is one
+    /// arithmetic — not two that currently round the same way.
     /// </summary>
+    public static int Percent(IPlanProgress progress)
+    {
+        if (progress.Total <= 0)
+            return 0;
+
+        return progress.Done * 100 / progress.Total;
+    }
+
     static string Describe_Percent(IPlanProgress progress)
     {
         if (progress.Total <= 0)
             return "";
 
-        return $" ({progress.Done * 100 / progress.Total}%)";
+        return $" ({Percent(progress)}%)";
     }
 }
