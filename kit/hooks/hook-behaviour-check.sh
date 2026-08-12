@@ -332,10 +332,19 @@ check "the timestamp is really UTC" UTC "$TS_ZONE"
 # exits about forty lines ABOVE the log site — so a mutant that logged unconditionally on a decidable
 # WRITE left this green. The case that the commit message singled out as the one that mattered was
 # the one that could not fail.
-rm -f "$LOG_FILE"
+#
+# AND THE SUPPRESSION MARKERS MUST GO WITH IT, which is how it stopped being able to fail a SECOND
+# time. The rate limiter added in the same commit keys on a marker file, and an earlier undecidable
+# case has already armed one for this predicate — well inside the five-minute window, since the whole
+# suite runs in about ninety seconds. Clearing only the log left a mutant's line SUPPRESSED rather
+# than absent, so both rows passed green while logging on a decidable write.
+#
+# Three later cases already clear the glob. These two did not, and the difference is the entire
+# defect: a case that resets some of the state it depends on resets none of it.
+rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
 check "a decidable DENY records NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")" >/dev/null; flag_state "$LOG_FILE")"
 
-rm -f "$LOG_FILE"
+rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
 check "a decidable ALLOW records NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path "$SUPERVISION/PLAN.md")")" >/dev/null; flag_state "$LOG_FILE")"
 
 # ONE LINE PER PREDICATE PER WINDOW. The reviewer hook has no flag gate, so without suppression it
