@@ -364,6 +364,21 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   final report; then drop
   `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`
   (the same action closes a `rev-<n>` — pass its member id).
+- **CLOSING A FINISHED MEMBER IS A RULE, NOT A JUDGEMENT CALL.** The owner, 2026-08-12: *"if an impl
+  is done and the sup doesn't want to use it anymore and spawns another one, the old one stays open
+  forever monitoring the channel and wasting tokens."* An idle member is not free — it holds a
+  window, a watcher and a context, and it bills for all three while doing nothing.
+  - **A REVIEWER IS FINISHED WHEN ITS FINDINGS ARE FILED and you have acted on them.** There is no
+    such thing as keeping one "in case". Close it; a fresh reviewer costs a spawn and reads the
+    branch itself, and nobody reviews their own work twice anyway.
+  - **An implementer is finished when its deliverable is accepted** and you do not have the next one
+    ready for it. If the next task is genuinely queued, keep it and brief it.
+  - **The app will flag members that have declared `STANDING BY` and stayed that way**, with how long.
+    That flag is a REMINDER, not an instruction and never an automatic action: retiring a live member
+    on an inference is the failure this file already warns about twice. **You decide; the app only
+    makes it impossible not to notice.**
+  - The cost of closing one that turns out to be needed is a spawn. The cost of leaving five open all
+    day is what the owner is actually paying.
 - **Liveness is the APP's job — NEVER yours (hard rule).** The `pid` in `session.json` is NOT a
   liveness signal: it is informational, and it is legitimately `null` for a while after every
   spawn. NEVER run Get-Process to decide whether an implementer is alive, and NEVER

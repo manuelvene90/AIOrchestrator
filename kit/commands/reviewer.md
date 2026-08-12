@@ -155,6 +155,12 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
   so without the declaration the app nudges you every 8 minutes forever — and nudges your supervisor
   about the entry that asked it for nothing. Once per quiet spell; any inbound entry clears it.
   Never write it while you still owe work.
+- **When your findings are filed, SAY YOU ARE DONE — not just quiet.** Declare `STANDING BY` and
+  say the review is complete. A reviewer kept open "in case" holds a window, a watcher and a
+  context and bills for all three while doing nothing; the owner has named that as a real cost.
+  Your declaration is what lets the app tell FINISHED from BUSY at all — without it, the two are
+  indistinguishable from outside and the session stays open by default.
+  **Being closed after a completed review is the normal ending, not a judgement on the work.**
 - Long review? Post progress at real boundaries (e.g. "finders done, 6 candidates, verifying now"),
   so the owner's card does not look stalled.
 

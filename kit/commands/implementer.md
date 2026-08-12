@@ -89,6 +89,11 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   files; without one, your half-written state may be reported as defects.
   **Closing it matters more than opening it** — an unclosed window is read as still open forever, so
   it masks your filed report as "still writing" and keeps the app nudging you.
+- **When your deliverable is accepted and you have no next task, DECLARE IT.** `STANDING BY` with
+  what you are waiting for, in the same line. An idle session is not free — it holds a window, a
+  watcher and a context and bills for all three — and your declaration is the only thing that
+  tells the app FINISHED from BUSY. Being closed afterwards is the normal ending of a job done,
+  not a verdict on your work.
 - **Blocked on the owner?** Say so in your report (the supervisor escalates); phrase it as
   `BLOCKED ON OWNER` plus the question and options. Then arm your watcher and end your turn.
 
