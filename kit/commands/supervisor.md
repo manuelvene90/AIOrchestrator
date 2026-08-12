@@ -154,6 +154,22 @@ As soon as the goal is clear from the owner's first instruction, drop
   running, waiting to be spoken to. It asks you for no verdict and you owe it no reply; the app
   reads the marker and stops nudging both of you. Expect it whenever you tell a member to hold, and
   do not read it as a member being idle by mistake.
+- **But only when the marker LEADS the subject and stands ALONE there** — the marker, what the member
+  is waiting for, and nothing else. Anything sharing that subject is filed work and you still owe a
+  verdict on it:
+
+  ```
+  STANDING BY — waiting on rev-4              declares, owes you nothing
+  STANDING BY — one correction: wrong file    the correction is owed a reply
+  review filed, 3 findings. STANDING BY       a report, owed a verdict
+  ```
+
+  Those look alike and are opposite states, so read the title, not the last line: the second and third
+  are members waiting on YOU, and that is the queue only you can clear.
+- **It is a heuristic and it errs toward telling you a verdict is owed.** A spurious reminder costs you
+  one wake; the opposite costs a member's filed work its reader, silently. If you are reminded about
+  an entry that genuinely asked you for nothing, that is the rule working in the direction it was
+  aimed — and worth telling the members so, since the convention only reaches them after a rebuild.
 - **Without the marker, the nudge comes to YOU, not to them.** A member that goes quiet after its own
   entry, with no open window, reads as a filed report awaiting your verdict — so the app nudges the
   supervisor about an entry that may have asked for nothing. That is the loop the marker exists to
@@ -364,6 +380,21 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   final report; then drop
   `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`
   (the same action closes a `rev-<n>` — pass its member id).
+- **CLOSING A FINISHED MEMBER IS A RULE, NOT A JUDGEMENT CALL.** The owner, 2026-08-12: *"if an impl
+  is done and the sup doesn't want to use it anymore and spawns another one, the old one stays open
+  forever monitoring the channel and wasting tokens."* An idle member is not free — it holds a
+  window, a watcher and a context, and it bills for all three while doing nothing.
+  - **A REVIEWER IS FINISHED WHEN ITS FINDINGS ARE FILED and you have acted on them.** There is no
+    such thing as keeping one "in case". Close it; a fresh reviewer costs a spawn and reads the
+    branch itself, and nobody reviews their own work twice anyway.
+  - **An implementer is finished when its deliverable is accepted** and you do not have the next one
+    ready for it. If the next task is genuinely queued, keep it and brief it.
+  - **The app will flag members that have declared `STANDING BY` and stayed that way**, with how long.
+    That flag is a REMINDER, not an instruction and never an automatic action: retiring a live member
+    on an inference is the failure this file already warns about twice. **You decide; the app only
+    makes it impossible not to notice.**
+  - The cost of closing one that turns out to be needed is a spawn. The cost of leaving five open all
+    day is what the owner is actually paying.
 - **Liveness is the APP's job — NEVER yours (hard rule).** The `pid` in `session.json` is NOT a
   liveness signal: it is informational, and it is legitimately `null` for a while after every
   spawn. NEVER run Get-Process to decide whether an implementer is alive, and NEVER

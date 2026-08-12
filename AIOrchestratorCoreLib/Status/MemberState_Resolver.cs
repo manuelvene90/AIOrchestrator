@@ -76,7 +76,20 @@ public static class MemberState_Resolver
         //
         // Order matters and is not cosmetic: a declaration IS a member-last entry, so the fallback
         // would swallow it if it ran first.
-        if (ChannelAuthor_Kinds.Is_Member(lastEntry.Author) && Contains_Marker(lastEntry, STANDING_BY_MARKER))
+        //
+        // AND THE DECLARATION MUST HAVE NOTHING BEHIND IT. "standing by, nothing filed" and "filed,
+        // standing by, awaiting a verdict" were one value, and every consumer inherited the collapse:
+        // the nudge went silent on a member waiting for a verdict, and the owner's topic read that
+        // member as `idle` — which the builder's own docstring forbids three lines above the code
+        // that produced it. Split HERE, once, rather than in each consumer: two surfaces answering
+        // the same question apart is how they start disagreeing about the same member.
+        //
+        // Both halves of this are load-bearing. Without Is_PureDeclaration inside the predicate the
+        // gate is self-defeating — a declaration is itself a member entry after the supervisor's, so
+        // the predicate would be true for every declaration and this branch would be dead code.
+        if (ChannelAuthor_Kinds.Is_Member(lastEntry.Author)
+            && Contains_Marker(lastEntry, STANDING_BY_MARKER)
+            && !Is_AwaitingVerdict(entries))
             return MemberStates.StandingBy;
 
         if (Is_AwaitingVerdict(entries))
@@ -132,8 +145,17 @@ public static class MemberState_Resolver
 
         for (var position = lastSupervisorPosition + 1; position < entries.Count; position++)
         {
-            if (ChannelAuthor_Kinds.Is_Member(entries[position].Author) && !Is_BootAnnouncement(entries[position]))
-                return true;
+            if (!ChannelAuthor_Kinds.Is_Member(entries[position].Author))
+                continue;
+
+            // A boot announcement is a hello and a PURE DECLARATION is an acknowledgement —
+            // neither is filed work, and neither can put a supervisor on the hook for a verdict.
+            // A report that merely ENDS with the marker is still a report: the subject decides,
+            // which is how members actually distinguish the two.
+            if (Is_BootAnnouncement(entries[position]) || Is_PureDeclaration(entries[position]))
+                continue;
+
+            return true;
         }
 
         return false;
@@ -160,6 +182,111 @@ public static class MemberState_Resolver
     }
 
     /// <summary>
+    /// An entry whose SUBJECT is the standing-by declaration and NOTHING ELSE — an acknowledgement
+    /// rather than filed work.
+    ///
+    /// Bare subject-placement was the first answer and it is not enough, because members really do
+    /// write a declaration and owed content in ONE subject. These are real examples, from live
+    /// channels on this machine — each would have declared itself idle while owing a reply:
+    ///
+    ///   standing by; clearing the nudge, and ONE ITEM STILL OPEN ON YOUR SIDE
+    ///   answering the three questions left open in your [9] and [10], then standing by
+    ///   STANDING BY — one correction to the queued residual: the wrong file is named
+    ///
+    /// So the rule is the marker plus WHAT IT IS WAITING FOR, and no second clause. The marker must
+    /// LEAD the subject — one of those three trails it behind the content it owes — and what follows
+    /// must not open a new clause. A comma is not a clause break: "nothing owed, nothing running" is
+    /// one thought and members write it constantly.
+    ///
+    /// THIS IS A HEURISTIC AND IS LABELLED ONE DELIBERATELY. There is no syntactic rule that fully
+    /// separates the two — "STANDING BY — one correction, wrong file" still reads as a declaration
+    /// here. HOW OFTEN IT IS WRONG CANNOT HONESTLY BE STATED TODAY, and no number belongs in this
+    /// comment: every entry now in the channels was written before any placement rule was taught, so
+    /// counting them measures the old habit against a matcher that did not exist yet, not the rate
+    /// this rule will have once members are told what it expects.
+    ///
+    /// WHAT DECIDES IT UNDER AN UNKNOWN RATE IS THE ASYMMETRY. Wrong toward the body is one spurious
+    /// wake — visible, with a legible cause. Wrong toward the subject is filed work losing its reader,
+    /// silently, with nothing anywhere reporting it. So the predicate errs toward NOT declaring.
+    ///
+    /// AND IT MUST SURVIVE AGENTS THAT NEVER READ THE RULE. The taught convention reaches sessions
+    /// only after the app is rebuilt and restarted; until then every running session writes under the
+    /// old convention while this matcher judges it. A matcher that assumed every agent had already
+    /// been given the instruction would be fragile in exactly the place where it is silent.
+    /// </summary>
+    static bool Is_PureDeclaration(IChannelEntry entry)
+    {
+        var afterMarker = Read_AfterLeadingMarker_OrNull(entry.Subject, STANDING_BY_MARKER);
+
+        if (afterMarker == null)
+            return false;
+
+        return !Opens_ASecondClause(afterMarker);
+    }
+
+    /// <summary>
+    /// What follows the marker when the marker LEADS the subject, or null when it does not lead it.
+    ///
+    /// Leading is read past formatting rather than at index 0 — members write `**STANDING BY**`,
+    /// `- STANDING BY` and `🚩 STANDING BY`, and none of those is a different statement. Quotation is
+    /// refused here exactly as it is in a body line: a subject QUOTING the marker is discussing it.
+    /// </summary>
+    static string? Read_AfterLeadingMarker_OrNull(string subject, string marker)
+    {
+        var start = 0;
+
+        while (start < subject.Length && !char.IsLetterOrDigit(subject[start]))
+        {
+            if (Array.IndexOf(QUOTATION_OPENERS, subject[start]) >= 0)
+                return null;
+
+            start++;
+        }
+
+        if (string.Compare(subject, start, marker, 0, marker.Length, StringComparison.OrdinalIgnoreCase) != 0)
+            return null;
+
+        var end = start + marker.Length;
+
+        // The same word-boundary test the token matcher makes: STANDING BYSTANDER is a different word.
+        if (end < subject.Length && char.IsLetterOrDigit(subject[end]))
+            return null;
+
+        return subject[end..];
+    }
+
+    /// <summary>
+    /// Does the text after the marker start a SECOND thing? One leading separator introduces what the
+    /// member is waiting for and is part of the declaration; anything that opens another clause after
+    /// that is content, and content is owed a reply.
+    /// </summary>
+    static bool Opens_ASecondClause(string afterMarker)
+    {
+        var tail = afterMarker.TrimStart(DECLARATION_SEPARATORS);
+
+        foreach (var breakChar in CLAUSE_BREAKS)
+        {
+            if (tail.IndexOf(breakChar) >= 0)
+                return true;
+        }
+
+        return tail.Contains("--", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Punctuation that merely introduces what the member is waiting for. Stripped ONCE, from the
+    /// front — a semicolon is deliberately absent, because "standing by; clearing the nudge, and one
+    /// item still open" is the live subject that made this rule necessary.
+    /// </summary>
+    static readonly char[] DECLARATION_SEPARATORS = [' ', '\t', '—', '–', '-', ':', '.', ',', '*', '(', ')'];
+
+    /// <summary>
+    /// Punctuation that opens a new clause. A COMMA IS NOT HERE and that is a decision, not an
+    /// oversight: "nothing owed, nothing running" is one thought, and members write it constantly.
+    /// </summary>
+    static readonly char[] CLAUSE_BREAKS = [';', ':', '—', '–'];
+
+    /// <summary>
     /// WHO SPOKE LAST, ignoring the app. The app is not a participant in this conversation — its
     /// nudges and resume notices are about the conversation, not part of it — and it writes into a
     /// channel precisely when someone has been waiting, so counting it inverted the answer on the
@@ -170,6 +297,23 @@ public static class MemberState_Resolver
     /// This is the ONE place the question is answered. The turn-end ledger trigger and the published
     /// awaiting-verdict list both come through here rather than each deciding for themselves.
     /// </summary>
+    /// <summary>
+    /// The member's CURRENT BRIEF — the last thing the supervisor said to it. THE one place this is
+    /// answered: it had three implementations, in the card builder, the status line and here, all
+    /// agreeing today and none joined to the others. The duration beside it already went through a
+    /// single formatter; the question of WHICH ENTRY did not.
+    /// </summary>
+    public static IChannelEntry? Find_LastBrief_OrNull(IReadOnlyList<IChannelEntry> entries)
+    {
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            if (entries[index].Author == ChannelAuthors.Supervisor)
+                return entries[index];
+        }
+
+        return null;
+    }
+
     public static IChannelEntry? Find_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
     {
         for (var index = entries.Count - 1; index >= 0; index--)

@@ -58,15 +58,37 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   supervisor, who asks the owner.
 - **No acknowledgment-only entries** — silence is acknowledgment. Write only boundary reports,
   evidence-backed pushbacks, blocked flags, and the one declaration below.
-- **Where a marker may go, exactly** (`STANDING BY`, `BLOCKED ON OWNER`, the window pair): in the
-  entry's SUBJECT anywhere — the app matches the whole phrase there, so
+- **Where a marker may go, exactly** (`BLOCKED ON OWNER` and the window pair — `STANDING BY` is
+  stricter, see below): in the entry's SUBJECT anywhere — the app matches the whole phrase there, so
   `TASK 1 committed abc1234. WRITING WINDOW OPEN for the hardening` counts — or at the START OF A
   LINE in the body. **Mid-sentence in the body is DISCUSSION and deliberately does not count**:
   members talk about this vocabulary constantly, and a brief that merely mentioned a marker once
   pinned a session's state for four hours. Markers are read only from YOUR OWN entries.
-- **`STANDING BY` — the ONE exception, and it is required.** When you go quiet on purpose with
-  nothing owed and nothing running — you finished and are waiting for a brief, or you were told to
-  hold — append a one-line entry whose subject or first line is `STANDING BY`. It is the only way the
+- **`STANDING BY` is the strict one: it must LEAD your subject and stand ALONE there.** The marker,
+  then what you are waiting FOR, and nothing else — no second clause after it, no result in front of
+  it. These declare; these do not:
+
+  ```
+  STANDING BY                                          declares
+  STANDING BY — waiting on rev-4's re-check            declares
+  STANDING BY — nothing owed, nothing running          declares (a comma is not a second clause)
+
+  STANDING BY — one correction: the wrong file         does NOT — the correction is owed a reply
+  standing by; clearing the nudge, and one item open   does NOT — same
+  answering your [9] and [10], then standing by        does NOT — the answers are owed a reply
+  TASK 1 committed abc1234. STANDING BY                does NOT — that is a report
+  ```
+
+  **The three "does NOT" lines are real subjects from live channels on this machine** — the mixed
+  shape is what members write when nobody has told them not to, which is why the rule has to survive
+  it. Anything you want said BESIDES the declaration goes in its own entry, filed first; then declare.
+- **The rule is a heuristic and it errs toward NOT declaring**, on purpose: a missed declaration costs
+  your supervisor one spurious wake — visible, with a legible cause — while a false one costs your
+  filed work its reader, silently, with nothing anywhere saying so. Where it is unsure, you get the
+  nudge.
+- **`STANDING BY` — the ONE exception to no-acknowledgment-entries, and it is required.** When you go
+  quiet on purpose with nothing owed and nothing running — you finished and are waiting for a brief,
+  or you were told to hold — append a one-line entry whose SUBJECT is `STANDING BY`. It is the only way the
   app can tell "idle on purpose" from "stalled mid-task": those two look identical from outside, so without
   it the app nudged idle members every 8 minutes forever and nudged the supervisor about the very
   entry that had asked it for nothing. **Write it once per quiet spell**, not per turn — any inbound
@@ -89,6 +111,13 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   files; without one, your half-written state may be reported as defects.
   **Closing it matters more than opening it** — an unclosed window is read as still open forever, so
   it masks your filed report as "still writing" and keeps the app nudging you.
+- **When your deliverable is accepted and you have no next task, DECLARE IT.** A one-line entry
+  SUBJECTED `STANDING BY — <what you are waiting for>`. **Accepted is the word that matters:** while
+  your report is still waiting on a verdict you are not idle, you are waiting on your supervisor, and
+  closing that report with the marker in its subject is how it stops being read by anybody. An idle session is not free — it holds a window, a
+  watcher and a context and bills for all three — and your declaration is the only thing that
+  tells the app FINISHED from BUSY. Being closed afterwards is the normal ending of a job done,
+  not a verdict on your work.
 - **Blocked on the owner?** Say so in your report (the supervisor escalates); phrase it as
   `BLOCKED ON OWNER` plus the question and options. Then arm your watcher and end your turn.
 

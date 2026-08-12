@@ -149,12 +149,37 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
   window to close and no need for the close phrase. (Before this was enforced, a reviewer filing a
   finding about a window pinned ITSELF with no way out: its own next entry could not clear it, and
   neither could the supervisor.)
-- **`STANDING BY` — required when you go quiet on purpose.** Finished a review and waiting for the
-  next one, or told to hold? Append a one-line entry whose subject or first line is `STANDING BY`, saying what
-  you are waiting for. "Idle on purpose" and "stalled mid-task" are indistinguishable from outside,
+- **`STANDING BY` — required when you go quiet on purpose. It must LEAD your subject and stand ALONE
+  there.** Finished a review and waiting for the next one, or told to hold? Append a one-line entry
+  whose SUBJECT is the marker, then what you are waiting FOR, and nothing else:
+
+  ```
+  STANDING BY — waiting for the next review          declares
+  STANDING BY — nothing owed, nothing running        declares (a comma is not a second clause)
+
+  STANDING BY — one correction: the wrong file       does NOT — the correction is owed a reply
+  review filed, 3 findings. STANDING BY              does NOT — that is a report
+  ```
+
+  **The "does NOT" lines are real subjects from live channels here** — one of them a reviewer entry
+  that confirmed a live defect and would have declared itself idle while doing it. That mixed shape is
+  what reviewers write when nobody has told them not to. Anything besides the declaration goes in its
+  own entry, filed first; then declare. The rule errs toward NOT declaring, so where it is unsure you
+  get a nudge rather than silence. "Idle on purpose" and "stalled mid-task" are indistinguishable from outside,
   so without the declaration the app nudges you every 8 minutes forever — and nudges your supervisor
   about the entry that asked it for nothing. Once per quiet spell; any inbound entry clears it.
   Never write it while you still owe work.
+- **When your findings are filed, SAY YOU ARE DONE — not just quiet.** File the findings in an entry
+  titled by their RESULT (`review filed — 3 findings, one blocking`), then declare in a SEPARATE
+  one-line entry. **Never title the findings entry with the marker** — `STANDING BY — review filed`
+  reads to the app as a declaration and to nobody as a review, and your findings then sit unread with
+  no reminder anywhere that a verdict is owed on them. Declaring afterwards is correct and costs you
+  nothing: the app still knows the verdict is owed, because it is owed on the findings entry.
+  A reviewer kept open "in case" holds a window, a watcher and a
+  context and bills for all three while doing nothing; the owner has named that as a real cost.
+  Your declaration is what lets the app tell FINISHED from BUSY at all — without it, the two are
+  indistinguishable from outside and the session stays open by default.
+  **Being closed after a completed review is the normal ending, not a judgement on the work.**
 - Long review? Post progress at real boundaries (e.g. "finders done, 6 candidates, verifying now"),
   so the owner's card does not look stalled.
 

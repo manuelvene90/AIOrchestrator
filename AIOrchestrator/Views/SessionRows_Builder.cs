@@ -117,7 +117,7 @@ public static class SessionRows_Builder
             StateText = isClosed ? "closed" : Describe_MemberState(state, isWorkingNow),
             StateBrush = isClosed ? findBrush("StateClosed") : findBrush(isWorkingNow ? "StateWorking" : MemberState_Descriptor.Brush_Key(state)),
             LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",
-            DetailText = Build_MemberDetailText(entries, usageFile),
+            DetailText = Build_MemberDetailText(entries, usageFile, channelFile),
             FocusTitleFragment = $"{memberId.ToUpperInvariant()} · {session.OrchId}",
             ShowButtonVisibility = isClosed ? Visibility.Collapsed : Visibility.Visible,
 
@@ -127,11 +127,11 @@ public static class SessionRows_Builder
     }
 
     /// <summary>Second row per member: current task · time on task · worktree · session cost.</summary>
-    public static string Build_MemberDetailText(IReadOnlyList<IChannelEntry> entries, string usageFilePath)
+    public static string Build_MemberDetailText(IReadOnlyList<IChannelEntry> entries, string usageFilePath, string channelFilePath)
     {
         List<string> parts = [];
 
-        var lastBrief = entries.LastOrDefault(e => e.Author == ChannelAuthors.Supervisor);
+        var lastBrief = MemberState_Resolver.Find_LastBrief_OrNull(entries);
 
         if (lastBrief != null)
         {
@@ -151,6 +151,13 @@ public static class SessionRows_Builder
         var cost = Read_SessionCost_OrNull(usageFilePath);
         if (cost != null)
             parts.Add($"≈${cost.Value:F2} equiv");
+
+        // A crew that has outgrown its work, visible without anyone being messaged about it. The
+        // owner raised this by noticing accumulation themselves — noticing should have been free.
+        var idleFor = Retirement_Advisor.Describe_IdleFor_OrNull(entries, DateTime.Now);
+
+        if (idleFor != null && Retirement_Advisor.Should_SuggestClosing(entries, Nudge_Decider.Has_BeenBriefed(channelFilePath), DateTime.Now))
+            parts.Add($"IDLE {idleFor} — closeable");
 
         return string.Join("  ·  ", parts);
     }

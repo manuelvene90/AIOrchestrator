@@ -116,6 +116,24 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_StatusLineMessageId(string orchId, long messageId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithStatusLineMessageId(session, messageId));
+        }
+    }
+
+    public void Clear_StatusLineMessageId(string orchId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithoutStatusLineMessageId(session));
+        }
+    }
+
     public void Set_SupervisorPid(string orchId, int? pid)
     {
         lock (_writeLock)

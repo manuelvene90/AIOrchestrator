@@ -291,90 +291,34 @@ check "a non-supervisor role is untouched" ALLOW "$(verdict "$(run_hook "$AWAIT_
 #
 # A payload with no file_path is the undecidable case that used to DENY, which made this file the odd
 # one out: three places face the same inability and one of them invented a refusal.
-LOG_FILE="$SUPERVISION/orchestrator.log.jsonl"
-rm -f "$LOG_FILE"
+MARKER_FILE="$SUPERVISION/.guard-not-in-force"
+rm -f "$MARKER_FILE"
 
 check "an undecidable write is ALLOWED" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')")")"
-check "…and it is RECORDED, not silent" PRESENT "$(flag_state "$LOG_FILE")"
+check "...and it leaves a MARKER, not silence" PRESENT "$(flag_state "$MARKER_FILE")"
 
-# The line has to be usable by whoever reads it: the app parses this file, and a reader needs to know
-# WHICH guard stopped working rather than that something went wrong.
-check "the record names the hook" FOUND "$(grep -q 'supervisor-awaiting-answer-check' "$LOG_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
-check "the record names the predicate" FOUND "$(grep -q 'which file is being written' "$LOG_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
-check "the record says the guard is not in force" FOUND "$(grep -q 'this guard is not in force' "$LOG_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
-check "the record is one JSON line" 1 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
-check "the record parses as JSON" OK "$(python3 -c 'import json,sys; json.loads(sys.stdin.readline()); print("OK")' < "$LOG_FILE" 2>/dev/null || printf BROKEN)"
+# THE HOOK DROPS A FACT; THE APP WRITES THE RECORD. Three lines, no timestamp, no JSON, no size
+# ceiling. The app's log panel is fed by an in-process event a separate process can never raise, so a
+# hook-written line stayed invisible until somebody went looking — which preserves the very property
+# this exists to remove. Writing it app-side also means ONE rotation threshold instead of a copy of
+# the 8 MB number living here in shell, unable to honour the low-disk half at all.
+check "the marker names the hook" FOUND "$(grep -q 'supervisor-awaiting-answer-check' "$MARKER_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
+check "the marker names the predicate" FOUND "$(grep -q 'which file is being written' "$MARKER_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
+check "the marker is three lines" 3 "$(wc -l < "$MARKER_FILE" 2>/dev/null | tr -d ' ')"
 
-# THE TIMESTAMP IS UTC, because the line says so with a trailing Z. The stamp comes from a bash
-# builtin (no fork — the condition this log reports on is a machine that cannot fork), and the
-# builtin formats in LOCAL time: the first version of that fix wrote a stamp two hours ahead wearing
-# a Z, offset from every app-written line in the same file.
-#
-# This log is read only by a human reconstructing an incident, so the timestamp is the one field it
-# exists to provide. Compared as an HOUR against `date -u`, accepting the previous hour too so a run
-# crossing the boundary cannot flake — a two-hour drift is still caught.
-LOGGED_HOUR=$(grep -o '"ts":"[^"]*"' "$LOG_FILE" | head -1 | cut -dT -f2 | cut -d: -f1)
-UTC_HOUR=$(date -u +%H)
-PREV_UTC_HOUR=$(printf '%02d' $(( (10#$UTC_HOUR + 23) % 24 )))
+# NO TIMESTAMP IN THE SHELL, and this case is why. The previous version stamped it here and got the
+# zone wrong — local time wearing a Z — in the one field a post-mortem record exists to provide.
+check "the marker carries no timestamp" ABSENT "$(grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}' "$MARKER_FILE" 2>/dev/null && printf PRESENT || printf ABSENT)"
 
-if [ "$LOGGED_HOUR" = "$UTC_HOUR" ] || [ "$LOGGED_HOUR" = "$PREV_UTC_HOUR" ]; then
-  TS_ZONE=UTC
-else
-  TS_ZONE="OFF_BY_$(( (10#$LOGGED_HOUR - 10#$UTC_HOUR + 24) % 24 ))h"
-fi
+# A DECIDABLE call marks nothing. The fixture is a WRITE on purpose: a Read exits about forty lines
+# above the marker site, so a Read-based case cannot see a mutant that marks on a decidable write.
+rm -f "$MARKER_FILE"
+check "a decidable DENY marks NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")" >/dev/null; flag_state "$MARKER_FILE")"
 
-check "the timestamp is really UTC" UTC "$TS_ZONE"
+rm -f "$MARKER_FILE"
+check "a decidable ALLOW marks NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path "$SUPERVISION/PLAN.md")")" >/dev/null; flag_state "$MARKER_FILE")"
 
-# A DECIDABLE call must stay silent. Without this, "log everything" would pass every case above while
-# filling the file the app is meant to keep readable.
-#
-# THE FIXTURE IS A WRITE, AND THAT IS THE WHOLE CASE. It was a `Read`, which is a pure reader that
-# exits about forty lines ABOVE the log site — so a mutant that logged unconditionally on a decidable
-# WRITE left this green. The case that the commit message singled out as the one that mattered was
-# the one that could not fail.
-#
-# AND THE SUPPRESSION MARKERS MUST GO WITH IT, which is how it stopped being able to fail a SECOND
-# time. The rate limiter added in the same commit keys on a marker file, and an earlier undecidable
-# case has already armed one for this predicate — well inside the five-minute window, since the whole
-# suite runs in about ninety seconds. Clearing only the log left a mutant's line SUPPRESSED rather
-# than absent, so both rows passed green while logging on a decidable write.
-#
-# Three later cases already clear the glob. These two did not, and the difference is the entire
-# defect: a case that resets some of the state it depends on resets none of it.
-rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
-check "a decidable DENY records NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")" >/dev/null; flag_state "$LOG_FILE")"
-
-rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
-check "a decidable ALLOW records NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path "$SUPERVISION/PLAN.md")")" >/dev/null; flag_state "$LOG_FILE")"
-
-# ONE LINE PER PREDICATE PER WINDOW. The reviewer hook has no flag gate, so without suppression it
-# logs 269 bytes for every undecidable call for the life of a session — into a file the app rotates
-# at 8 MB and stops writing below 512 MB free, neither of which this append goes through.
-rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
-run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')" >/dev/null
-run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')" >/dev/null
-run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')" >/dev/null
-check "three identical failures record ONE line" 1 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
-
-# But a DIFFERENT predicate is a different fact and must not be suppressed by the first one. The
-# payload is VALID JSON with no tool name — invalid JSON never reaches the hook at all, it is caught
-# by the fixture guard above, so it could not have exercised a second predicate.
-run_hook "$AWAIT_HOOK" '{}' >/dev/null
-check "a different predicate is still recorded" 2 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
-
-# The size ceiling the app would have rotated at. Beyond it this stops writing rather than growing a
-# file nothing is trimming.
-rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
-printf '{"ts":"","orch":"x","level":"Warning","message":"an existing line"}
-' > "$LOG_FILE"
-# EXPORTED, not a prefix assignment: the hook runs in a child process, and a var set only for the
-# duration of a shell FUNCTION call does not reliably reach it. The first version of this case did
-# that and the ceiling was never applied — it measured nothing.
-export AIORCH_LOG_MAX_BYTES=10
-run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')" >/dev/null
-unset AIORCH_LOG_MAX_BYTES
-check "an oversized log is not grown further" 1 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
-rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
+rm -f "$MARKER_FILE"
 
 # The same probe again, and it has to be AFTER: a fork limit reached mid-run leaves everything above
 # it green and everything below it unverifiable, and only a second reading can tell those apart.

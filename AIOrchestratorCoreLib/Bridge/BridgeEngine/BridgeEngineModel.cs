@@ -213,6 +213,29 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// The status-line text last WRITTEN to each topic, so an unchanged line costs no API call.
+    /// In memory on purpose, unlike the message id: after a restart the first tick edits once with
+    /// whatever is current, which is correct, and the id — the thing that must not be lost — lives
+    /// in session.json.
+    /// </summary>
+    readonly Dictionary<string, string> _statusLineTextByOrchId = [];
+
+    /// <summary>
+    /// Which members have already been flagged as idle, per orchestration, so the reminder is written
+    /// ONCE per quiet spell rather than every tick. Cleared when the set changes, which is what makes
+    /// a member becoming idle — or stopping — say something exactly once.
+    /// </summary>
+    readonly Dictionary<string, string> _flaggedIdleMembersByOrchId = [];
+
+    /// <summary>
+    /// When the status line last FAILED per orchestration, so a real error backs off. Stored in
+    /// LOCAL time because the planner compares it against the same clock the durations use — it
+    /// held UtcNow while being compared against DateTime.Now, which cleared a 30-second backoff
+    /// instantly on any machine not on UTC.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _statusLineFailedAtByOrchId = [];
+
+    /// <summary>
     /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
     /// one message instead of three. Key 0 = the General topic (no thread id).
     /// </summary>
@@ -601,6 +624,9 @@ internal sealed class BridgeEngineModel(
         await Send_BudgetAlerts_Async(cancellationToken);
         await Nudge_IdleImplementers_Async(cancellationToken);
         await Resolve_PendingOwnerReplies_Async(cancellationToken);
+        await Refresh_TopicStatusLines_Async(cancellationToken);
+        Flag_IdleMembers();
+        Report_GuardsNotInForce();
 
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
@@ -2948,6 +2974,12 @@ internal sealed class BridgeEngineModel(
                         // while the supervisor is mid-turn (which is exactly when it gets asked).
                         await Send_ProgressReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    // NOT an alias of /progress: the owner asked to KEEP the full detail when the
+                    // short form was built, so this is the second RENDERING of the same parse.
+                    else if (command == "tasks")
+                    {
+                        await Send_TaskListReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "tokens")
                     {
                         await Send_TokensReport_Async(client, message.MessageThreadId, cancellationToken);
@@ -3072,6 +3104,7 @@ internal sealed class BridgeEngineModel(
                     ("status", "What every session of this orchestration is doing"),
                     ("progress", "What's LEFT to do here (all orchestrations in General)"),
                     ("left", "What's left to do — same as /progress"),
+                    ("tasks", "The FULL ledger of this orchestration, done lines included"),
                     ("cost", "What this has cost, per session, and the burn rate"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
@@ -3137,6 +3170,44 @@ internal sealed class BridgeEngineModel(
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    /// <summary>
+    /// /tasks — the FULL ledger, done lines included. The owner asked to keep this level of detail
+    /// when /progress was shortened: "keep the current level of detail in a NEW command." Shortening
+    /// the one command they had would have removed the view rather than moved it.
+    /// </summary>
+    async Task Send_TaskListReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_TaskListText(messageThreadId);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_TaskListText(long? messageThreadId)
+    {
+        if (messageThreadId == null)
+            return "ask for /tasks inside an orchestration's topic — the full ledger is per-orchestration";
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+            return "no orchestration is bound to this topic";
+
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
+
+        if (progress == null)
+            return $"{session.DisplayName ?? session.OrchId}: no task ledger yet";
+
+        // The SAME parse the short form reads — two renderings, one reading. Two commands parsing the
+        // ledger their own way is how two answers to one question start disagreeing.
+        var counts = Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId);
+
+        return $"{counts}\n\n{Planning.PlanProgress_Formatter.Describe_EveryLine(progress)}";
     }
 
     string Build_ProgressReportText(long? messageThreadId)
@@ -3741,6 +3812,275 @@ internal sealed class BridgeEngineModel(
     /// ONE builder for both /status and the periodic push, so the answer the owner pulls and the
     /// one the app sends can never disagree.
     /// </summary>
+
+    /// <summary>
+    /// ONE status message per topic: posted the first time there is anything to say, then EDITED
+    /// forever. It never notifies and never scrolls away, which is why it can be kept current at all.
+    ///
+    /// Three properties matter and each has a test:
+    ///   - a change edits;
+    ///   - an IDENTICAL line does nothing, because an edit that writes the same text is a wasted API
+    ///     call and, against the 429 limit we already have open on the ledger, a real cost;
+    ///   - a RESTART edits the existing message rather than posting a second one — the id is read
+    ///     from session.json, not from memory.
+    /// </summary>
+    async Task Refresh_TopicStatusLines_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null || session.TelegramTopicId == null)
+                continue;
+
+            // PER-TOPIC DND AND SILENCE, the same gate nine other outbound sites in this file use.
+            // Only the app-wide mute stopped this one. The POST branch is an ordinary sendMessage
+            // with no disable_notification, so a topic the owner had explicitly silenced could put
+            // a push on their phone the first time it needed a status line. Silenced means
+            // DISCARDED, not quiet, and this code drew no distinction.
+            _statusLineTextByOrchId.TryGetValue(session.OrchId, out var lastText);
+            _statusLineFailedAtByOrchId.TryGetValue(session.OrchId, out var lastFailedAttemptAt);
+
+            // EVERY decision is made in Telegram.TopicStatusLine_Planner, which the suite can reach.
+            // This method is left with execution only. Three gates lived here and a reviewer deleted
+            // all three at once without reddening a single test — the engine is internal sealed with
+            // no InternalsVisibleTo, so nothing decided inside it can be checked.
+            var plan = Telegram.TopicStatusLine_Planner.Plan(
+                session.DisplayName ?? session.OrchId,
+                Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId))),
+                Build_TopicStatusMembers(session),
+                DateTime.Now,
+                session.StatusLineMessageId,
+                lastText,
+                Resolve_EffectiveMode(session.OrchId),
+                _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
+                MIRROR_RETRY_BACKOFF_SECONDS);
+
+            var action = plan.Action;
+            var text = plan.Text;
+
+            if (action == Telegram.TopicStatusActions.None)
+                continue;
+
+            try
+            {
+                // The id re-checked rather than asserted through .Value: the decider guarantees it,
+                // but a guarantee that lives in another file is not one the compiler can see.
+                if (action == Telegram.TopicStatusActions.Edit && session.StatusLineMessageId != null)
+                {
+                    await _telegramClient.Edit_MessageText_Async(session.StatusLineMessageId.Value, text, cancellationToken);
+                }
+                else
+                {
+                    var messageId = await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
+
+                    if (messageId == null)
+                        continue;
+
+                    _store.Set_StatusLineMessageId(session.OrchId, messageId.Value);
+                }
+
+                _statusLineTextByOrchId[session.OrchId] = text;
+                _statusLineFailedAtByOrchId.Remove(session.OrchId);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Shutdown, not a failure — and THE TOKEN DECIDES, which the unguarded version got
+                // wrong. HttpClient.Timeout surfaces as a TaskCanceledException with the token NOT
+                // cancelled, so a wedged endpoint was being rethrown as if it were a shutdown: the
+                // whole mirror tick aborted, skipping the tailer poll, all agent-to-Telegram
+                // mirroring, usage checks, name sync, compaction and the state persist — and it
+                // bypassed the backoff stamp below, so the next tick retried the same wedged
+                // endpoint immediately, defeating the backoff added in the same commit.
+                //
+                // Before that change the generic catch below handled a timeout and the tick carried
+                // on, which is the behaviour this restores for everything except a real shutdown.
+                throw;
+            }
+            catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_MessageAlreadyCurrent(exception.Message))
+            {
+                // "message is not modified" means the desired state ALREADY HOLDS — success, not
+                // failure. Advancing the cache is the whole point: static text is the NORMAL state of
+                // an idle orchestration, so without this the tick rejected a call a second, forever.
+                // Sync_TopicNames_BestEffort_Async fixed this exact case 150 lines above and its
+                // comment says a real failure still must not spin. I took the shape of that catch and
+                // inverted its conclusion.
+                _statusLineTextByOrchId[session.OrchId] = text;
+            }
+            catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_MessageGone(exception.Message))
+            {
+                // TERMINAL for this message id: the message it names no longer exists, which is what
+                // /clear leaves behind — the topic is torn down and recreated while the id survives in
+                // session.json. Retrying could never succeed, so the id is FORGOTTEN and the next tick
+                // posts a fresh line. Without this the orchestration never gets a status line again
+                // for the life of the machine.
+                _store.Clear_StatusLineMessageId(session.OrchId);
+                _statusLineTextByOrchId.Remove(session.OrchId);
+                _log.Log_Warning(session.OrchId, $"Topic status message is gone — posting a new one next tick ({exception.Message})");
+            }
+            catch (Exception exception)
+            {
+                // Never fatal: a status line that cannot be drawn must not stop the mirror. The
+                // remembered text is deliberately NOT updated, so the next tick retries — but BACKED
+                // OFF, because a 429 answered at the tick rate inverts the cadence from once a minute
+                // to thirty times a minute per topic and sustains the throttling that caused it.
+                _statusLineFailedAtByOrchId[session.OrchId] = DateTime.Now;
+                _log.Log_Warning(session.OrchId, $"Topic status line could not be updated — {exception.Message}");
+            }
+        }
+    }
+
+
+    /// <summary>
+    /// Tells the SUPERVISOR which members have declared themselves idle and stayed that way — the
+    /// owner's directive, 2026-08-12: an implementer nobody wants any more "stays open forever
+    /// monitoring the channel and wasting tokens".
+    ///
+    /// It goes to the supervisor's channel because the supervisor is who closes members, and it
+    /// stays OFF Telegram because the owner cannot close one. Pushing it to their phone would be
+    /// this app forwarding somebody else's job to their lock screen (rule 15); the mirror suppresses
+    /// it by subject, which is the same mechanism every other agent-facing app entry uses.
+    ///
+    /// ONCE PER QUIET SPELL. The set of flagged members is remembered and only a CHANGE speaks, so a
+    /// crew that stays idle is mentioned once rather than every two seconds — a reminder that repeats
+    /// is a reminder that gets ignored, which would leave the accumulation exactly where it started.
+    ///
+    /// It never closes anything. Retiring a live member on an inference is the failure this protocol
+    /// warns about twice; the decision stays the supervisor's.
+    /// </summary>
+    /// <summary>
+    /// Picks up the marker a hook drops when it cannot evaluate its predicate, records it through the
+    /// app's OWN writer, and deletes it.
+    ///
+    /// The app writes rather than the hook because the log panel is fed by an in-process event a
+    /// separate process can never raise — so a hook-written line is invisible until somebody goes
+    /// looking, which preserves the very property this exists to remove. Writing it here also means
+    /// one rotation threshold and one low-disk rule rather than a copy in the shell that could not
+    /// honour the disk half at all.
+    ///
+    /// DELETED once recorded, so the next inability is a new fact rather than a stale one. If the
+    /// record cannot be written the marker STAYS, and the next tick tries again.
+    /// </summary>
+    void Report_GuardsNotInForce()
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            var markerFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), Status.GuardNotInForce_Marker.FILE_NAME);
+
+            if (!File.Exists(markerFile))
+                continue;
+
+            var description = Status.GuardNotInForce_Marker.Describe_OrNull(Read_FileText_Safe(markerFile));
+
+            if (description == null)
+            {
+                File.Delete(markerFile);
+                continue;
+            }
+
+            try
+            {
+                // Warning rather than Info: this is a guard the session believes is protecting it and
+                // is not. It goes through _log, so rotation and the low-disk drop apply and the UI
+                // panel shows it live — which is the whole reason the app writes this and not the hook.
+                _log.Log_Warning(session.OrchId, description);
+
+                ChannelAppender.Append_AppEntry(
+                    _paths.Get_OwnerChannelFile(session.OrchId),
+                    Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
+                    $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now.",
+                    DateTime.Now);
+
+                File.Delete(markerFile);
+            }
+            catch (Exception exception)
+            {
+                // The marker deliberately survives: a report that could not be made has not been made.
+                _log.Log_Warning(session.OrchId, $"Guard-not-in-force marker could not be reported — {exception.Message}");
+            }
+        }
+    }
+
+    void Flag_IdleMembers()
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            List<string> idle = [];
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc != null)
+                    continue;
+
+                var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+
+                if (!File.Exists(channelFile))
+                    continue;
+
+                var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+
+                if (!Status.Retirement_Advisor.Should_SuggestClosing(entries, Nudge_Decider.Has_BeenBriefed(channelFile), DateTime.Now))
+                    continue;
+
+                idle.Add($"{member.MemberId} (idle {Status.Retirement_Advisor.Describe_IdleFor_OrNull(entries, DateTime.Now)})");
+            }
+
+            var signature = string.Join(", ", idle);
+
+            _flaggedIdleMembersByOrchId.TryGetValue(session.OrchId, out var lastSignature);
+
+            if (signature == (lastSignature ?? ""))
+                continue;
+
+            _flaggedIdleMembersByOrchId[session.OrchId] = signature;
+
+            if (idle.Count == 0)
+                continue;
+
+            ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(session.OrchId),
+                Status.Retirement_Advisor.FLAG_SUBJECT,
+                $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
+                DateTime.Now);
+
+            _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
+        }
+    }
+
+
+    /// <summary>
+    /// GATHERS, decides nothing. A closed member's channel is never read — 64% of 3.65 MB per tick —
+    /// but it IS handed over marked closed, so the builder's guard is a state the app can produce.
+    /// </summary>
+    IReadOnlyList<Telegram.TopicStatusMember.ITopicStatusMember> Build_TopicStatusMembers(IOrchestrationSession session)
+    {
+        List<Telegram.TopicStatusMember.ITopicStatusMember> members = [];
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+            {
+                members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, [], isClosed: true));
+                continue;
+            }
+
+            var entries = ChannelEntry_Parser.Parse_All(
+                UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));
+
+            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false));
+        }
+
+        return members;
+    }
+
+
     string Build_MemberStatusText_ForSession(IOrchestrationSession session)
     {
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
@@ -3854,6 +4194,22 @@ internal sealed class BridgeEngineModel(
             _appliedTopicNames[session.OrchId] = topicName;
             Take_KnownTopicMessageIds(messageThreadId);
             Take_ReceiptMessageId_OrNull(messageThreadId);
+
+            // THE STATUS LINE IS FORGOTTEN HERE, DETERMINISTICALLY, beside the four resets that were
+            // already doing this for everything else the old topic owned.
+            //
+            // The error-string recovery on the edit path is REACTIVE: it needs a failed edit to fire.
+            // An all-idle orchestration builds byte-identical text every tick, so the decider returns
+            // None forever, no edit is ever attempted, the predicate never fires — and the recreated
+            // topic gets no status line until somebody is next briefed, which in an idle
+            // orchestration may be never.
+            //
+            // Resetting here makes matching on exception.Message a BACKSTOP rather than the
+            // mechanism, which is where it belongs: substring-against-a-sentence is the class this
+            // repo has now hit four times.
+            _store.Clear_StatusLineMessageId(session.OrchId);
+            _statusLineTextByOrchId.Remove(session.OrchId);
+            _statusLineFailedAtByOrchId.Remove(session.OrchId);
 
             await client.Remove_TopicCreationPin_Async(newTopicId, cancellationToken);
 

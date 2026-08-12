@@ -78,6 +78,11 @@ public class RoleCommandMarkerTests
     /// under BOTH the token rule and the position rule it exists to distinguish, and reverting the
     /// matcher left it green: it proved that a marker declares, which nobody doubted, rather than
     /// that the DOCUMENTED shape does.
+    ///
+    /// STANDING BY IS EXCLUDED AND THIS TEST IS WHAT CAUGHT IT. Narrowing that marker to "leads the
+    /// subject and stands alone" made the promise above false for it alone, and this went red before
+    /// the role commands had been touched — which is the entire reason it exists. The commands now
+    /// carve it out explicitly, and the case below asserts the shape they promise for it instead.
     /// </summary>
     [Fact]
     public void ASubjectShapedAsTheDocsPromiseActuallyDeclares()
@@ -85,6 +90,9 @@ public class RoleCommandMarkerTests
         foreach (var marker in MemberState_Resolver.ALL_MARKERS)
         {
             if (MemberState_Resolver.CLOSING_MARKERS.Contains(marker))
+                continue;
+
+            if (marker == MemberState_Resolver.STANDING_BY_MARKER)
                 continue;
 
             var state = MemberState_Resolver.Resolve(
@@ -97,6 +105,54 @@ public class RoleCommandMarkerTests
                 state != MemberStates.AwaitingSupervisorReview,
                 $"`{marker}` after a result in a subject changed nothing — the docs promise it declares");
         }
+    }
+
+    /// <summary>
+    /// THE STANDING-BY PROMISE, which is the opposite one and therefore needs its own case: the docs
+    /// say that marker must LEAD the subject and stand ALONE there, so the result-first shape must NOT
+    /// declare — and the shape they show as declaring must.
+    ///
+    /// Both directions in one test on purpose. Asserting only that the mixed shape fails would stay
+    /// green if the matcher stopped recognising the marker entirely, which is the way a narrowing rule
+    /// dies quietly.
+    /// </summary>
+    [Fact]
+    public void TheStandingByShapeTheDocsPromiseIsTheOnlyOneThatDeclares()
+    {
+        Assert.Equal(MemberStates.StandingBy, Resolve_MemberSubject("STANDING BY — waiting on rev-4's re-check"));
+
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, Resolve_MemberSubject("TASK 1 committed abc1234. STANDING BY — the details"));
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, Resolve_MemberSubject("STANDING BY — one correction: the wrong file is named"));
+    }
+
+    /// <summary>
+    /// AND THE COMMANDS MUST SAY SO. The narrowing went red in the case above before a single doc was
+    /// touched; nothing would have gone red if the docs had been left teaching "anywhere in the
+    /// subject" for this marker, because that promise is prose to every other test here.
+    /// </summary>
+    [Fact]
+    public void TheRoleCommandsTeachThatStandingByMustLeadItsSubject()
+    {
+        foreach (var file in Find_RoleCommandFiles())
+        {
+            var text = File.ReadAllText(file);
+
+            if (!text.Contains(MemberState_Resolver.STANDING_BY_MARKER))
+                continue;
+
+            Assert.True(
+                text.Contains("LEAD your subject") || text.Contains("LEADS the subject"),
+                $"{Path.GetFileName(file)} teaches `STANDING BY` without saying it must lead the subject");
+        }
+    }
+
+    static MemberStates Resolve_MemberSubject(string subject)
+    {
+        return MemberState_Resolver.Resolve(
+        [
+            Build(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build(2, ChannelAuthors.Implementer, subject, "the body"),
+        ]);
     }
 
     /// <summary>

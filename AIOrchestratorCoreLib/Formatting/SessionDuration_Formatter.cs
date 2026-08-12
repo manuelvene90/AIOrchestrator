@@ -3,6 +3,23 @@ namespace AIOrchestratorCoreLib.Formatting;
 /// <summary>Human durations for owner-facing text ("2 h 14 min"), shared by every surface.</summary>
 public static class SessionDuration_Formatter
 {
+    /// <summary>
+    /// Reads an AGENT-WRITTEN stamp, or refuses it. THE one place that decides whether such a stamp
+    /// can be believed, because there were two: this file returned null for a future stamp while a
+    /// separate comparison happily ranked one as the most recent entry — so a single message could
+    /// print no duration for an entry and simultaneously promote it as the latest. Item 12.
+    ///
+    /// Unparseable is refused, and so is anything beyond the skew tolerance in the FUTURE: a
+    /// supervisor really did stamp 2026-08-11 01:34 on an entry written at 15:20 the day before.
+    /// </summary>
+    public static bool Try_ReadTrustedStamp(string stampText, DateTime now, out DateTime stamp)
+    {
+        if (!DateTime.TryParse(stampText, out stamp))
+            return false;
+
+        return now - stamp >= -CLOCK_SKEW_TOLERANCE;
+    }
+
     public static string Describe(TimeSpan duration)
     {
         if (duration.Ticks < 0)
@@ -34,13 +51,10 @@ public static class SessionDuration_Formatter
     /// </summary>
     public static string? Describe_SinceStamp_OrNull(string stampText, DateTime now)
     {
-        if (!DateTime.TryParse(stampText, out var stamp))
+        if (!Try_ReadTrustedStamp(stampText, now, out var stamp))
             return null;
 
         var elapsed = now - stamp;
-
-        if (elapsed < -CLOCK_SKEW_TOLERANCE)
-            return null;
 
         if (elapsed < TimeSpan.Zero)
             return Describe(TimeSpan.Zero);

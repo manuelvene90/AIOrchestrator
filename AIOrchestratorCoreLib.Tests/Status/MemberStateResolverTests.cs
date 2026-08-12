@@ -235,11 +235,48 @@ public class MemberStateResolverTests
     /// <summary>
     /// The subject lost its quotation protection when it moved to a token match: the exact string the
     /// body rule FORBIDS was declaring from a subject. Same exclusion, both fields.
+    ///
+    /// EVERY CASE HERE MUST REACH THE QUOTATION REFUSAL, and one of them did not. `on 'STANDING BY'
+    /// and why it is needed` begins with a letter, so once the marker was required to LEAD the subject
+    /// it was refused for that reason and returned before the quotation check ran — it passed with the
+    /// check deleted outright, in the very test written to answer a quotation finding. It has moved to
+    /// the leading Theory below, where it pins what it actually pins.
+    ///
+    /// So each subject here opens with the quotation mark: the marker leads, the tail carries no
+    /// clause break, and the ONLY thing standing between it and a declaration is the refusal. A
+    /// reviewer verified by mutation that this is a live decision and not a belief — deleting the two
+    /// lines flips six subjects to declaring, and the block quote below is the one case where nothing
+    /// else in the resolver catches it.
     /// </summary>
     [Theory]
     [InlineData("\"STANDING BY\" is the new marker")]
-    [InlineData("on 'STANDING BY' and why it is needed")]
+    [InlineData("'STANDING BY' and why it is needed")]
+    [InlineData("> STANDING BY")]
+    [InlineData("> STANDING BY, quoting the member I am reviewing")]
     public void AQuotedMarkerInASubjectIsNotADeclaration(string subject)
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, subject, "the report"),
+        };
+
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// WHERE THE MOVED CASE LIVES NOW, saying what it pins: a subject that talks its way up to the
+    /// marker is discussion, and the marker has to LEAD. It was sitting in the quotation Theory above,
+    /// passing on this rule instead of on the one that Theory exists for.
+    ///
+    /// Kept rather than deleted because the property is real and was otherwise pinned only by a corpus
+    /// subject: two different sentences can reach a state, and a case that names which one it means is
+    /// worth more than the assertion count suggests.
+    /// </summary>
+    [Theory]
+    [InlineData("on 'STANDING BY' and why it is needed")]
+    [InlineData("a note about STANDING BY for the next member")]
+    public void AMarkerThatDoesNotLeadTheSubjectIsNotADeclaration(string subject)
     {
         var entries = new[]
         {
@@ -376,7 +413,11 @@ public class MemberStateResolverTests
 
     /// <summary>
     /// And the declarations that must still work, including the markdown a member actually writes.
-    /// Without these the anchoring could be "fixed" by never matching anything.
+    /// Without these the matcher could be "fixed" by never matching anything.
+    ///
+    /// THE VARIANTS MOVED FROM THE BODY TO THE SUBJECT, because that is where a declaration now lives
+    /// — see the reclassified case at the bottom of this file. What is under test did not change, and
+    /// is why this is a Theory: the formatting members really write must not defeat the match.
     /// </summary>
     [Theory]
     [InlineData("STANDING BY")]
@@ -385,36 +426,103 @@ public class MemberStateResolverTests
     [InlineData("standing by. Nothing in flight.")]
     [InlineData("- STANDING BY")]
     [InlineData("🚩 STANDING BY")]
-    public void ADeclarationAtTheStartOfALineStillCounts(string body)
+    public void ADeclarationSurvivesTheMarkdownMembersWrite(string subject)
     {
         var entries = new[]
         {
-            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
-            Build_Entry(2, ChannelAuthors.Implementer, "a report", body),
+            Build_Entry(1, ChannelAuthors.Supervisor, "hold", "nothing queued for you"),
+            Build_Entry(2, ChannelAuthors.Implementer, subject, "Nothing owed, nothing running."),
         };
 
         Assert.Equal(MemberStates.StandingBy, MemberState_Resolver.Resolve(entries));
     }
 
-    /// <summary>A longer token that merely starts the same way is a different word.</summary>
-    [Fact]
-    public void ALongerTokenStartingWithTheMarkerIsNotTheMarker()
+    /// <summary>
+    /// THE SHAPE BARE PLACEMENT COULD NOT SURVIVE: a declaration and owed content sharing one subject.
+    /// A reviewer went through the live channels on this machine and found members write it regularly
+    /// — that is what these fixtures are evidence of, and it is the only claim the corpus supports.
+    /// It cannot say how often the new rule will be wrong, because every one of those entries was
+    /// written before any placement rule was taught.
+    ///
+    /// These three are REAL SUBJECTS from that corpus, not invented ones. Each would have declared
+    /// itself idle while owing its supervisor an answer — and the second one is the very entry that
+    /// was recorded as the fourth independent confirmation of the defect this branch exists to fix. A
+    /// rule that silences the report which established the defect is not finished.
+    ///
+    /// Two properties carry all three: the marker must LEAD the subject (the second trails it behind
+    /// the content), and what follows must not open a second clause (the first with a semicolon, the
+    /// third with a colon).
+    /// </summary>
+    [Theory]
+    [InlineData("standing by; clearing the nudge, and ONE ITEM STILL OPEN ON YOUR SIDE")]
+    [InlineData("answering the three questions left open in your [9] and [10], then standing by")]
+    [InlineData("STANDING BY — one correction to the queued residual: the wrong file is named")]
+    public void ADeclarationSharingItsSubjectWithOwedContentIsNotADeclaration(string subject)
     {
         var entries = new[]
         {
             Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
-            Build_Entry(2, ChannelAuthors.Implementer, "a report", "STANDING BYSTANDER, still working"),
+            Build_Entry(2, ChannelAuthors.Implementer, subject, "the body"),
         };
 
         Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
     }
 
     /// <summary>
-    /// A declaration further down the body counts — members write a line of context first, and the
-    /// rule is "begins a line", not "begins the entry".
+    /// AND THE COMMA IS NOT A CLAUSE BREAK, asserted on its own because it is the one piece of the
+    /// rule that had to be decided rather than measured. "nothing owed, nothing running" is a single
+    /// thought and is what members actually write; treating every comma as a second clause would
+    /// leave almost nothing able to declare at all.
     /// </summary>
     [Fact]
-    public void ADeclarationOnALaterLineCounts()
+    public void ACommaInsideTheDeclarationDoesNotBreakIt()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "hold", "nothing queued"),
+            Build_Entry(2, ChannelAuthors.Implementer, "STANDING BY — nothing owed, nothing running", "."),
+        };
+
+        Assert.Equal(MemberStates.StandingBy, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// A longer token that merely starts the same way is a different word.
+    ///
+    /// ALSO MOVED TO THE SUBJECT, and not cosmetically: left in the body this would still have
+    /// expected AwaitingSupervisorReview and passed no matter what the matcher did, because a body is
+    /// no longer where a declaration is read from. A test that cannot fail is worse than no test.
+    /// </summary>
+    [Fact]
+    public void ALongerTokenStartingWithTheMarkerIsNotTheMarker()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, "STANDING BYSTANDER, still working", "in flight"),
+        };
+
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// RECLASSIFIED, and this assertion is now the inverse of what it used to make. It said a report
+    /// whose BODY ends with the marker is standing by — that is the entry shape members file every
+    /// single time, and reading it as idle is what silenced the verdict reminder and printed `idle` in
+    /// the owner's topic for a member whose work was sitting unread.
+    ///
+    /// PLACEMENT is what separates the two states, because nothing else in the entry can: a
+    /// declaration is titled by the marker, a report is titled by its result and may close with the
+    /// marker. The role commands already say a declaration is a ONE-LINE entry; they now say where the
+    /// marker goes, so the docs and the matcher teach one thing.
+    ///
+    /// The failure directions are not symmetric, which is why placement is read this way round. A
+    /// member that puts the marker only in the body of a genuinely-nothing-owed entry costs its
+    /// supervisor one spurious wake. The reverse — titling filed work with the marker — costs that
+    /// work its reader, silently, which is the defect this whole branch exists to remove.
+    /// </summary>
+    [Fact]
+    public void AReportThatOnlyClosesWithTheMarkerIsStillAwaitingAVerdict()
     {
         var entries = new[]
         {
@@ -422,6 +530,6 @@ public class MemberStateResolverTests
             Build_Entry(2, ChannelAuthors.Implementer, "a report", "Commit abc1234, 489 tests pass.\n\nSTANDING BY — waiting for the next brief."),
         };
 
-        Assert.Equal(MemberStates.StandingBy, MemberState_Resolver.Resolve(entries));
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
     }
 }
