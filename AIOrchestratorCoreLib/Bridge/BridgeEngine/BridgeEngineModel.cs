@@ -227,8 +227,13 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<string, string> _flaggedIdleMembersByOrchId = [];
 
-    /// <summary>When the status line last FAILED per orchestration, so a real error backs off.</summary>
-    readonly Dictionary<string, DateTime> _statusLineAttemptUtcByOrchId = [];
+    /// <summary>
+    /// When the status line last FAILED per orchestration, so a real error backs off. Stored in
+    /// LOCAL time because the planner compares it against the same clock the durations use — it
+    /// held UtcNow while being compared against DateTime.Now, which cleared a 30-second backoff
+    /// instantly on any machine not on UTC.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _statusLineFailedAtByOrchId = [];
 
     /// <summary>
     /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
@@ -3835,7 +3840,7 @@ internal sealed class BridgeEngineModel(
             // a push on their phone the first time it needed a status line. Silenced means
             // DISCARDED, not quiet, and this code drew no distinction.
             _statusLineTextByOrchId.TryGetValue(session.OrchId, out var lastText);
-            _statusLineAttemptUtcByOrchId.TryGetValue(session.OrchId, out var lastFailedAttemptUtc);
+            _statusLineFailedAtByOrchId.TryGetValue(session.OrchId, out var lastFailedAttemptAt);
 
             // EVERY decision is made in Telegram.TopicStatusLine_Planner, which the suite can reach.
             // This method is left with execution only. Three gates lived here and a reviewer deleted
@@ -3850,7 +3855,7 @@ internal sealed class BridgeEngineModel(
                 session.StatusLineMessageId,
                 lastText,
                 Resolve_EffectiveMode(session.OrchId),
-                _statusLineAttemptUtcByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptUtc : null,
+                _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
                 MIRROR_RETRY_BACKOFF_SECONDS);
 
             var action = plan.Action;
@@ -3878,7 +3883,7 @@ internal sealed class BridgeEngineModel(
                 }
 
                 _statusLineTextByOrchId[session.OrchId] = text;
-                _statusLineAttemptUtcByOrchId.Remove(session.OrchId);
+                _statusLineFailedAtByOrchId.Remove(session.OrchId);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -3921,7 +3926,7 @@ internal sealed class BridgeEngineModel(
                 // remembered text is deliberately NOT updated, so the next tick retries — but BACKED
                 // OFF, because a 429 answered at the tick rate inverts the cadence from once a minute
                 // to thirty times a minute per topic and sustains the throttling that caused it.
-                _statusLineAttemptUtcByOrchId[session.OrchId] = DateTime.UtcNow;
+                _statusLineFailedAtByOrchId[session.OrchId] = DateTime.Now;
                 _log.Log_Warning(session.OrchId, $"Topic status line could not be updated — {exception.Message}");
             }
         }
@@ -4251,7 +4256,7 @@ internal sealed class BridgeEngineModel(
             // repo has now hit four times.
             _store.Clear_StatusLineMessageId(session.OrchId);
             _statusLineTextByOrchId.Remove(session.OrchId);
-            _statusLineAttemptUtcByOrchId.Remove(session.OrchId);
+            _statusLineFailedAtByOrchId.Remove(session.OrchId);
 
             await client.Remove_TopicCreationPin_Async(newTopicId, cancellationToken);
 

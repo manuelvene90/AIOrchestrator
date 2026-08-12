@@ -64,14 +64,35 @@ public class TopicStatusLinePlannerTests
     [Fact]
     public void ARecentFailureHoldsTheNextAttempt()
     {
-        Assert.Equal(TopicStatusActions.None, Plan(lastFailedAttemptUtc: NOW.AddSeconds(-5)).Action);
-        Assert.Equal(TopicStatusActions.Post, Plan(lastFailedAttemptUtc: NOW.AddSeconds(-BACKOFF)).Action);
+        Assert.Equal(TopicStatusActions.None, Plan(lastFailedAttemptAt: NOW.AddSeconds(-5)).Action);
+        Assert.Equal(TopicStatusActions.Post, Plan(lastFailedAttemptAt: NOW.AddSeconds(-BACKOFF)).Action);
     }
 
     [Fact]
     public void NoRecordedFailureIsAlwaysDue()
     {
         Assert.True(TopicStatusLine_Planner.Is_AttemptDue(null, NOW, BACKOFF));
+        Assert.False(TopicStatusLine_Planner.Is_AttemptDue(NOW.AddSeconds(-1), NOW, BACKOFF));
+    }
+
+    /// <summary>
+    /// THE CLOCK MISMATCH, written down as a test because no assertion can catch it structurally —
+    /// the tests build both sides from one constant, so two clocks can never disagree in here.
+    ///
+    /// This is what it LOOKED like in production: the failure stamp came from UtcNow while `now` came
+    /// from DateTime.Now, so on a UTC+2 machine one second after a failure computed as two hours
+    /// elapsed and a 30-second backoff cleared instantly — at every value it could be given. The 429
+    /// protection was absent while every test passed.
+    ///
+    /// The fix is that the caller now has only ONE clock to give. This case pins the arithmetic that
+    /// made it invisible, so the next reader recognises the shape rather than rediscovering it.
+    /// </summary>
+    [Fact]
+    public void AStampFromTheWrongClockReadsAsImmediatelyDue()
+    {
+        var twoHoursBehind = NOW.AddHours(-2);
+
+        Assert.True(TopicStatusLine_Planner.Is_AttemptDue(twoHoursBehind, NOW, BACKOFF));
         Assert.False(TopicStatusLine_Planner.Is_AttemptDue(NOW.AddSeconds(-1), NOW, BACKOFF));
     }
 
@@ -96,7 +117,7 @@ public class TopicStatusLinePlannerTests
         long? existingMessageId = null,
         string? lastWrittenText = null,
         TelegramDeliveryModes mode = TelegramDeliveryModes.Normal,
-        DateTime? lastFailedAttemptUtc = null)
+        DateTime? lastFailedAttemptAt = null)
     {
         return TopicStatusLine_Planner.Plan(
             "orch",
@@ -107,7 +128,7 @@ public class TopicStatusLinePlannerTests
             existingMessageId,
             lastWrittenText,
             mode,
-            lastFailedAttemptUtc,
+            lastFailedAttemptAt,
             BACKOFF);
     }
 

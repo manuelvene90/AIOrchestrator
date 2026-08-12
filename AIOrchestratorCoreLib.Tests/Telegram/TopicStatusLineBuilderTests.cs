@@ -25,7 +25,7 @@ public class TopicStatusLineBuilderTests
     [Fact]
     public void TheTitleLineCarriesTheLedgerCountAndPercent()
     {
-        var line = TopicStatusLine_Builder.Build("Telegram UX + limits", Progress(72, 113), [], null, NOW);
+        var line = TopicStatusLine_Builder.Build("Telegram UX + limits", Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false);
 
         Assert.Equal("Telegram UX + limits          72/113 · 63%", line);
     }
@@ -38,14 +38,14 @@ public class TopicStatusLineBuilderTests
     [Fact]
     public void AnOrchestrationWithNothingToReportEmitsNothing()
     {
-        Assert.Equal("", TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW));
+        Assert.Equal("", TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>But a title with a REAL ledger is substance, and it still stands alone.</summary>
     [Fact]
     public void ATitleWithALedgerIsWorthWriting()
     {
-        Assert.Equal("CRM invoice crash          3/4 · 75%", TopicStatusLine_Builder.Build("CRM invoice crash", Progress(3, 4), [], null, NOW));
+        Assert.Equal("CRM invoice crash          3/4 · 75%", TopicStatusLine_Builder.Build("CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
@@ -56,7 +56,7 @@ public class TopicStatusLineBuilderTests
     public void AnOrchestrationWhoseOnlyMemberIsClosedEmitsNothing()
     {
         var line = TopicStatusLine_Builder.Build(
-            "orch", null, [Member("imp-1", Brief("the old task", "2026-08-12 09:00"), isClosed: true)], null, NOW);
+            "orch", null, [Member("imp-1", Brief("the old task", "2026-08-12 09:00"), isClosed: true)], null, NOW, aMessageIsAlreadyPosted: false);
 
         Assert.Equal("", line);
     }
@@ -69,7 +69,7 @@ public class TopicStatusLineBuilderTests
     [Fact]
     public void ALedgerOfNothingButDroppedLinesHasNothingToSay()
     {
-        Assert.Equal("", TopicStatusLine_Builder.Build("orch", Progress(0, 0), [], null, NOW));
+        Assert.Equal("", TopicStatusLine_Builder.Build("orch", Progress(0, 0), [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
@@ -100,7 +100,7 @@ public class TopicStatusLineBuilderTests
             null,
             [Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26"))],
             null,
-            NOW);
+            NOW, aMessageIsAlreadyPosted: false);
 
         Assert.Contains("imp-1", line);
         Assert.Contains("committing the marker fix", line);
@@ -122,7 +122,7 @@ public class TopicStatusLineBuilderTests
             Entry(2, ChannelAuthors.Reviewer, "STANDING BY — review filed", "2026-08-12 12:00"),
         };
 
-        var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW);
+        var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
         Assert.Contains("rev-3   idle", line);
         Assert.DoesNotContain("review the marker fix", line);
@@ -141,7 +141,7 @@ public class TopicStatusLineBuilderTests
             Entry(2, ChannelAuthors.Implementer, "done, 565 tests pass", "2026-08-12 12:20"),
         };
 
-        var line = TopicStatusLine_Builder.Build("orch", null, [Member("imp-1", entries)], null, NOW);
+        var line = TopicStatusLine_Builder.Build("orch", null, [Member("imp-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
         Assert.DoesNotContain("idle", line);
         Assert.Contains("fix the ledger", line);
@@ -156,7 +156,7 @@ public class TopicStatusLineBuilderTests
             null,
             [Member("rev-1", [Entry(1, ChannelAuthors.Reviewer, "rev-1 online", "2026-08-12 12:00")])],
             null,
-            NOW);
+            NOW, aMessageIsAlreadyPosted: false);
 
         Assert.Contains("rev-1   idle", line);
     }
@@ -172,7 +172,7 @@ public class TopicStatusLineBuilderTests
             null,
             [Member("imp-1", brief, isClosed: true), Member("imp-2", Brief("the live task", "2026-08-12 12:25"))],
             null,
-            NOW);
+            NOW, aMessageIsAlreadyPosted: false);
 
         Assert.DoesNotContain("imp-1", line);
         Assert.Contains("imp-2", line);
@@ -191,7 +191,7 @@ public class TopicStatusLineBuilderTests
             null,
             [Member("imp-1", Brief("the task", "2026-08-13 23:00"))],
             null,
-            NOW);
+            NOW, aMessageIsAlreadyPosted: false);
 
         // Asserted as the WHOLE member ROW, not as "contains the task": a duration appended after it
         // is exactly what must not happen, and a Contains check cannot see a trailing anything.
@@ -201,9 +201,9 @@ public class TopicStatusLineBuilderTests
     [Fact]
     public void TheLastLineIsAddedOnlyWhenThereIsSomethingToSay()
     {
-        Assert.Contains("last", TopicStatusLine_Builder.Build("orch", null, [], "gate cleared on 34e5515", NOW));
-        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build("orch", null, [], null, NOW));
-        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build("orch", null, [], "   ", NOW));
+        Assert.Contains("last", TopicStatusLine_Builder.Build("orch", null, [], "gate cleared on 34e5515", NOW, aMessageIsAlreadyPosted: false));
+        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build("orch", null, [], null, NOW, aMessageIsAlreadyPosted: false));
+        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build("orch", null, [], "   ", NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
@@ -222,7 +222,7 @@ public class TopicStatusLineBuilderTests
                 Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
             ],
             "gate cleared on 34e5515",
-            NOW);
+            NOW, aMessageIsAlreadyPosted: false);
 
         var lines = line.Split('\n');
 

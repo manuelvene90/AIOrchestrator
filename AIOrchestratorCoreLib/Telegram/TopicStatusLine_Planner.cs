@@ -36,7 +36,7 @@ public static class TopicStatusLine_Planner
         long? existingMessageId,
         string? lastWrittenText,
         TelegramDeliveryModes mode,
-        DateTime? lastFailedAttemptUtc,
+        DateTime? lastFailedAttemptAt,
         int backoffSeconds)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
@@ -56,7 +56,7 @@ public static class TopicStatusLine_Planner
 
         // THE BACKOFF, last: a 429 answered at the tick rate inverts the cadence from once a minute
         // to thirty times a minute per topic and sustains the throttling that caused it.
-        if (!Is_AttemptDue(lastFailedAttemptUtc, now, backoffSeconds))
+        if (!Is_AttemptDue(lastFailedAttemptAt, now, backoffSeconds))
             return new TopicStatusPlan(TopicStatusActions.None, text);
 
         return new TopicStatusPlan(action, text);
@@ -65,12 +65,21 @@ public static class TopicStatusLine_Planner
     /// <summary>
     /// Has the backoff elapsed since the last FAILED attempt? No recorded failure means due — the
     /// common case, and it must not cost a wait.
+    ///
+    /// BOTH ARGUMENTS MUST COME FROM THE SAME CLOCK, and the caller now has only one to give. This
+    /// was passed a UTC stamp against a LOCAL `now`: on a UTC+2 machine that made one second after a
+    /// failure compute as two hours elapsed, so a 30-second backoff cleared instantly at every value
+    /// it could ever be given — the 429 protection was absent while every test passed, because the
+    /// tests build both sides from one constant and cannot observe two clocks disagreeing.
+    ///
+    /// The seam moved the DECISION and left the CLOCK at the call site. That is the same shape as the
+    /// derived bool removed for M-G3, one parameter to the left.
     /// </summary>
-    public static bool Is_AttemptDue(DateTime? lastFailedAttemptUtc, DateTime now, int backoffSeconds)
+    public static bool Is_AttemptDue(DateTime? lastFailedAttemptAt, DateTime now, int backoffSeconds)
     {
-        if (lastFailedAttemptUtc == null)
+        if (lastFailedAttemptAt == null)
             return true;
 
-        return now - lastFailedAttemptUtc.Value >= TimeSpan.FromSeconds(backoffSeconds);
+        return now - lastFailedAttemptAt.Value >= TimeSpan.FromSeconds(backoffSeconds);
     }
 }

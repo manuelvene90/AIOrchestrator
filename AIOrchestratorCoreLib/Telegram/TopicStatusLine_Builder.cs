@@ -34,6 +34,11 @@ public static class TopicStatusLine_Builder
     /// message up it means silence; with one up it means the BARE TITLE, because saying nothing
     /// would leave the last row standing — a running duration for a member that has been closed.
     ///
+    /// REQUIRED, with no default, because `false` is the dangerous value: a caller who omitted it
+    /// would silently get the pre-fix behaviour — an emptied line returning empty while a message
+    /// is posted, which is the frozen-row regression this parameter exists to prevent. A default
+    /// that is the wrong answer for the very case the parameter was added for is a trap.
+    ///
     /// The fallback lives HERE, not at the call site, because the decider must see the text that
     /// is actually sent. Substituting it after the decision made the decider compare an empty
     /// string against a cached title forever: same title, same message, a rejected edit every two
@@ -46,7 +51,7 @@ public static class TopicStatusLine_Builder
         IReadOnlyList<ITopicStatusMember> members,
         string? lastSubject,
         DateTime now,
-        bool aMessageIsAlreadyPosted = false)
+        bool aMessageIsAlreadyPosted)
     {
         List<string> lines = [];
 
