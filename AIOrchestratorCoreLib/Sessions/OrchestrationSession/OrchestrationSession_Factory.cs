@@ -31,7 +31,8 @@ public static class OrchestrationSession_Factory
         string? implementerModelOverride,
         IReadOnlyList<IOrchestrationMember> members,
         TelegramDeliveryModes telegramMode,
-        DateTime? closedUtc)
+        DateTime? closedUtc,
+        long? statusLineMessageId = null)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -39,7 +40,16 @@ public static class OrchestrationSession_Factory
         return new OrchestrationSessionModel(
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
-            telegramMode, closedUtc);
+            telegramMode, closedUtc, statusLineMessageId);
+    }
+
+    /// <summary>
+    /// The status message id, once the app has posted it. Persisted so a RESTART edits that
+    /// message instead of posting a second one — which is the defect this whole feature replaces.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithStatusLineMessageId(IOrchestrationSession existing, long messageId)
+    {
+        return CreateFrom_Existing(existing, statusLineMessageId: messageId);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithTopicId(IOrchestrationSession existing, long topicId)
@@ -112,7 +122,8 @@ public static class OrchestrationSession_Factory
         bool implementerModelWasSet = false,
         IReadOnlyList<IOrchestrationMember>? members = null,
         TelegramDeliveryModes? telegramMode = null,
-        DateTime? closedUtc = null)
+        DateTime? closedUtc = null,
+        long? statusLineMessageId = null)
     {
         return Create(
             existing.OrchId,
@@ -128,6 +139,7 @@ public static class OrchestrationSession_Factory
             implementerModelWasSet ? implementerModelOverride : existing.ImplementerModelOverride,
             members ?? existing.Members,
             telegramMode ?? existing.TelegramMode,
-            closedUtc ?? existing.ClosedUtc);
+            closedUtc ?? existing.ClosedUtc,
+            statusLineMessageId ?? existing.StatusLineMessageId);
     }
 }

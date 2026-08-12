@@ -12,6 +12,16 @@ public interface IOrchestrationSession
     long? TelegramTopicId { get; }
 
     /// <summary>
+    /// The ONE status message in this orchestration's topic — posted once, edited forever.
+    ///
+    /// Persisted rather than held in memory precisely because a restart is when it matters: the
+    /// narration canvas keeps its id in a field, which is why it cannot survive one. A second
+    /// status message appearing after every restart is the bug this feature exists to avoid, so
+    /// the id lives where the topic id lives.
+    /// </summary>
+    long? StatusLineMessageId { get; }
+
+    /// <summary>
     /// The TRUE session-host shell pid, synced from the pid file after spawn — null while a spawn
     /// is in flight. Informational only: liveness is the watchdog's job (pid files), and agents
     /// must never infer death from this field.

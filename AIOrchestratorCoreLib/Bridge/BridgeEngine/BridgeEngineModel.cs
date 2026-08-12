@@ -213,6 +213,14 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// The status-line text last WRITTEN to each topic, so an unchanged line costs no API call.
+    /// In memory on purpose, unlike the message id: after a restart the first tick edits once with
+    /// whatever is current, which is correct, and the id — the thing that must not be lost — lives
+    /// in session.json.
+    /// </summary>
+    readonly Dictionary<string, string> _statusLineTextByOrchId = [];
+
+    /// <summary>
     /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
     /// one message instead of three. Key 0 = the General topic (no thread id).
     /// </summary>
@@ -601,6 +609,7 @@ internal sealed class BridgeEngineModel(
         await Send_BudgetAlerts_Async(cancellationToken);
         await Nudge_IdleImplementers_Async(cancellationToken);
         await Resolve_PendingOwnerReplies_Async(cancellationToken);
+        await Refresh_TopicStatusLines_Async(cancellationToken);
 
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
@@ -3741,6 +3750,110 @@ internal sealed class BridgeEngineModel(
     /// ONE builder for both /status and the periodic push, so the answer the owner pulls and the
     /// one the app sends can never disagree.
     /// </summary>
+
+    /// <summary>
+    /// ONE status message per topic: posted the first time there is anything to say, then EDITED
+    /// forever. It never notifies and never scrolls away, which is why it can be kept current at all.
+    ///
+    /// Three properties matter and each has a test:
+    ///   - a change edits;
+    ///   - an IDENTICAL line does nothing, because an edit that writes the same text is a wasted API
+    ///     call and, against the 429 limit we already have open on the ledger, a real cost;
+    ///   - a RESTART edits the existing message rather than posting a second one — the id is read
+    ///     from session.json, not from memory.
+    /// </summary>
+    async Task Refresh_TopicStatusLines_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null || session.TelegramTopicId == null)
+                continue;
+
+            var text = Build_TopicStatusLineText(session);
+
+            _statusLineTextByOrchId.TryGetValue(session.OrchId, out var lastText);
+
+            // The decision lives in Telegram.TopicStatusLine_Decider so it can be tested — in
+            // particular the restart case, which has an id and no remembered text and must EDIT.
+            var action = Telegram.TopicStatusLine_Decider.Decide(text, lastText, session.StatusLineMessageId);
+
+            if (action == Telegram.TopicStatusActions.None)
+                continue;
+
+            try
+            {
+                // The id re-checked rather than asserted through .Value: the decider guarantees it,
+                // but a guarantee that lives in another file is not one the compiler can see.
+                if (action == Telegram.TopicStatusActions.Edit && session.StatusLineMessageId != null)
+                {
+                    await _telegramClient.Edit_MessageText_Async(session.StatusLineMessageId.Value, text, cancellationToken);
+                }
+                else
+                {
+                    var messageId = await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
+
+                    if (messageId == null)
+                        continue;
+
+                    _store.Set_StatusLineMessageId(session.OrchId, messageId.Value);
+                }
+
+                _statusLineTextByOrchId[session.OrchId] = text;
+            }
+            catch (Exception exception)
+            {
+                // Never fatal: a status line that cannot be drawn must not stop the mirror. The
+                // remembered text is deliberately NOT updated, so the next tick retries.
+                _log.Log_Warning(session.OrchId, $"Topic status line could not be updated — {exception.Message}");
+            }
+        }
+    }
+
+    string Build_TopicStatusLineText(IOrchestrationSession session)
+    {
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
+
+        List<Telegram.TopicStatusMember.ITopicStatusMember> members = [];
+        Channels.ChannelEntry.IChannelEntry? lastEntry = null;
+
+        foreach (var member in session.Members)
+        {
+            var entries = ChannelEntry_Parser.Parse_All(
+                UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));
+
+            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(
+                member.MemberId, entries, member.ClosedUtc != null));
+
+            if (entries.Count > 0 && (lastEntry == null || Is_LaterStamp(entries[^1], lastEntry)))
+                lastEntry = entries[^1];
+        }
+
+        return Telegram.TopicStatusLine_Builder.Build(
+            session.DisplayName ?? session.OrchId,
+            progress,
+            members,
+            lastEntry?.Subject,
+            DateTime.Now);
+    }
+
+    /// <summary>
+    /// Which of two entries happened later, by the stamp the AGENT wrote. Untrusted input — an
+    /// unparseable or absent stamp simply loses, rather than winning by accident.
+    /// </summary>
+    static bool Is_LaterStamp(Channels.ChannelEntry.IChannelEntry candidate, Channels.ChannelEntry.IChannelEntry incumbent)
+    {
+        if (!DateTime.TryParse(candidate.DateText, out var candidateStamp))
+            return false;
+
+        if (!DateTime.TryParse(incumbent.DateText, out var incumbentStamp))
+            return true;
+
+        return candidateStamp > incumbentStamp;
+    }
+
     string Build_MemberStatusText_ForSession(IOrchestrationSession session)
     {
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);

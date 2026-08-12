@@ -20,6 +20,9 @@ public interface IOrchestrationSessionStore
     IOrchestrationSession Add_Member(string orchId, MemberKinds kind);
 
     void Set_TelegramTopicId(string orchId, long topicId);
+
+    /// <summary>Remembers the topic's one status message, so a restart edits rather than re-posts.</summary>
+    void Set_StatusLineMessageId(string orchId, long messageId);
     void Set_SupervisorPid(string orchId, int? pid);
 
     /// <summary>Stamps the communicator spawn (watchdog grace) — its pid lives only in its pid file.</summary>

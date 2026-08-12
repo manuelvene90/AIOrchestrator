@@ -30,6 +30,7 @@ public static class SessionJson_Serializer
             ["repoPath"] = session.RepoPath,
             ["createdUtc"] = session.CreatedUtc.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicId"] = session.TelegramTopicId,
+            ["statusLineMessageId"] = session.StatusLineMessageId,
             ["supervisorPid"] = session.SupervisorPid,
             ["supervisorSpawnedUtc"] = session.SupervisorSpawnedUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["communicatorSpawnedUtc"] = session.CommunicatorSpawnedUtc?.ToString("O", CultureInfo.InvariantCulture),
@@ -88,7 +89,8 @@ public static class SessionJson_Serializer
             Get_String_OrNull(root, "implementerModelOverride"),
             members,
             Read_TelegramMode(root),
-            Get_DateTime_OrNull(root, "closedUtc"));
+            Get_DateTime_OrNull(root, "closedUtc"),
+            Get_Long_OrNull(root, "statusLineMessageId"));
     }
 
     /// <summary>Reads the mode, still honouring the older boolean "telegramSilenced" key.</summary>
