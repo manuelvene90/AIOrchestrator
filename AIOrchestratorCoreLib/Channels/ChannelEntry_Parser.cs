@@ -81,9 +81,25 @@ public static partial class ChannelEntry_Parser
         return ChannelEntry_Factory.Create(index, author, dateText, subject, body, rawText);
     }
 
+    /// <summary>
+    /// The author word, with surrounding punctuation and markdown stripped before it is matched.
+    ///
+    /// The header regex captures a bare token, so `FROM **implementer**`, `FROM implementer:` and
+    /// `FROM _supervisor_` all used to fall through to <see cref="ChannelAuthors.Unknown"/> — and
+    /// agents really do write those: the shape validator records three malformed headers observed
+    /// live on 2026-08-07.
+    ///
+    /// Unknown is not a neutral outcome any more. Window markers are only read from member-authored
+    /// entries, so an entry that OPENS a window under a clean header and CLOSES it under a drifted
+    /// one leaves the close invisible — and a missing close reads as still-open, forever, with the
+    /// app then telling the member to append the close it already appended.
+    ///
+    /// Normalised HERE, where the author word is interpreted, rather than in the resolver that
+    /// happened to notice: a second normaliser would be one more rule with two copies.
+    /// </summary>
     static ChannelAuthors Parse_Author(string authorWord)
     {
-        var normalized = authorWord.Trim().ToLowerInvariant();
+        var normalized = authorWord.Trim().ToLowerInvariant().Trim('*', '_', '`', ':', ',', '.', ';', '(', ')', '[', ']', '"', '\'');
 
         return normalized switch
         {

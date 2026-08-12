@@ -196,6 +196,82 @@ public class MemberStateResolverTests
         Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
     }
 
+    /// <summary>
+    /// A REVIEWER can never hold a writing window: it is launched without Write/Edit/NotebookEdit,
+    /// so it cannot open one. Before this was enforced, a reviewer filing a finding ABOUT a window
+    /// pinned itself with NO EXIT — the window test runs before the last-entry rules, so its own
+    /// next entry could not clear it, and once markers became member-gated neither could the
+    /// supervisor. Reviewers are the members most likely to write about markers; it is their job.
+    /// </summary>
+    [Fact]
+    public void AReviewerCannotOpenAWritingWindow()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "review the marker fix", "depth standard"),
+            Build_Entry(2, ChannelAuthors.Reviewer, "F3 · MEDIUM · WRITING WINDOW OPEN is matched too loosely", "the finding"),
+        };
+
+        Assert.NotEqual(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>An implementer, by contrast, is exactly who may announce one.</summary>
+    [Fact]
+    public void AnImplementerStillOpensAWindowWithTheSameSubject()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs", "starting"),
+        };
+
+        Assert.Equal(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// The subject lost its quotation protection when it moved to a token match: the exact string the
+    /// body rule FORBIDS was declaring from a subject. Same exclusion, both fields.
+    /// </summary>
+    [Theory]
+    [InlineData("\"STANDING BY\" is the new marker")]
+    [InlineData("on 'STANDING BY' and why it is needed")]
+    public void AQuotedMarkerInASubjectIsNotADeclaration(string subject)
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, subject, "the report"),
+        };
+
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// AUTHOR-WORD DRIFT MUST NOT PIN A WINDOW. Open under a clean header, close under a drifted one
+    /// — `FROM **implementer**`, which agents really write — and the close used to be invisible,
+    /// because a drifted word parses to Unknown and window markers are member-gated. A missing close
+    /// reads as still-open forever, and the app then tells the member to append the close it already
+    /// appended.
+    /// </summary>
+    [Fact]
+    public void ADriftedAuthorWordStillClosesTheWindow()
+    {
+        var entries = ChannelEntry_Parser.Parse_All(string.Join('\n',
+        [
+            "## [1] FROM supervisor — 2026-08-12 09:00 — brief",
+            "do the work",
+            "",
+            "## [2] FROM implementer — 2026-08-12 09:10 — WRITING WINDOW OPEN — Parser.cs",
+            "starting the batch",
+            "",
+            "## [3] FROM **implementer** — 2026-08-12 09:40 — WRITING WINDOW CLOSED — done",
+            "batch landed",
+        ]));
+
+        Assert.Equal(3, entries.Count);
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
+    }
+
     /// <summary>A longer word merely containing the marker is still not the marker.</summary>
     [Fact]
     public void ASubjectTokenMustHaveWordBoundariesOnBothSides()

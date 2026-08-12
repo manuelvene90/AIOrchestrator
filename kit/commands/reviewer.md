@@ -138,10 +138,17 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 - **ENGLISH, always**, even when the traffic reaching you is Italian.
 - No acknowledgment-only entries — silence is acknowledgment. One exception, below.
 - **Where a marker may go, exactly:** in the entry's SUBJECT anywhere — the app matches the whole
-  phrase there — or at the START OF A LINE in the body. Mid-sentence in the body is DISCUSSION and
-  deliberately does not count: reviewers quote this vocabulary constantly, and a brief that merely
-  mentioned a marker once pinned a session's state for four hours. Markers are read only from YOUR
-  OWN entries.
+  phrase there, so a subject naming a result before its marker still counts — or at the START OF A
+  LINE in the body. Mid-sentence in the body is DISCUSSION and does not count. Markers are read only
+  from YOUR OWN entries.
+  **In a SUBJECT there is no such protection**: writing a marker phrase into a subject IS declaring
+  it, even inside a sentence about it. When a finding is about marker vocabulary, keep the phrase out
+  of the subject and put it mid-line in the body.
+- **The WINDOW markers do nothing from you, by construction** — a reviewer cannot open a writing
+  window because it cannot write, so the app never resolves a reviewer to that state. You have no
+  window to close and no need for the close phrase. (Before this was enforced, a reviewer filing a
+  finding about a window pinned ITSELF with no way out: its own next entry could not clear it, and
+  neither could the supervisor.)
 - **`STANDING BY` — required when you go quiet on purpose.** Finished a review and waiting for the
   next one, or told to hold? Append a one-line entry whose subject or first line is `STANDING BY`, saying what
   you are waiting for. "Idle on purpose" and "stalled mid-task" are indistinguishable from outside,

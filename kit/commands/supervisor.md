@@ -170,8 +170,11 @@ As soon as the goal is clear from the owner's first instruction, drop
 - **Announced windows:** while an implementer has announced `WRITING WINDOW OPEN` or
   `MUTATION WINDOW OPEN` (closed by `WRITING WINDOW CLOSED` / `MUTATION WINDOW CLOSED`), do NOT
   audit or quote the uncommitted files it named — uncommitted shared-tree state is unattributable
-  during a window. Use these EXACT phrases yourself when relevant; the orchestrator app's status
-  chips key on them.
+  during a window. **Do NOT write these phrases yourself expecting them to DO anything** — window
+  markers are read only from the member's own entries, so a supervisor-authored one sets nothing and
+  clears nothing. That gate exists because a brief of mine that merely discussed a marker opened a
+  reviewer's window and pinned it for four hours. If a member is stuck with a window it never closed,
+  the fix is to tell the member to append the close, not to append it for them.
 - **EVERY owner message gets a reply from you, before your turn ends — no exceptions.** Even when
   there is nothing to decide and nothing is finished, the owner must never be left with "Sup:
   thinking…" as the last thing they see. One line is enough: `noted — imp-2 is on it, I'll report

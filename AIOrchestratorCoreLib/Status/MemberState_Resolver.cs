@@ -80,7 +80,7 @@ public static class MemberState_Resolver
     {
         for (var i = entries.Count - 1; i >= 0; i--)
         {
-            if (!ChannelAuthor_Kinds.Is_Member(entries[i].Author))
+            if (!Can_AnnounceAWindow(entries[i].Author))
                 continue;
 
             if (Contains_Marker(entries[i], marker))
@@ -88,6 +88,26 @@ public static class MemberState_Resolver
         }
 
         return -1;
+    }
+
+    /// <summary>
+    /// Only a session that can WRITE can announce a writing window — so a REVIEWER never can. It is
+    /// launched without Write, Edit and NotebookEdit, and a hook blocks mutating shell commands.
+    ///
+    /// This is a root fix for a trap, not a tidy-up. A reviewer filing a finding ABOUT a window used
+    /// to pin itself in <see cref="MemberStates.WritingWindowOpen"/> with NO EXIT: the window test
+    /// runs before the last-entry rules, so its own declaration cannot clear it; `reviewer.md` never
+    /// taught the close marker at all; and once window markers became member-gated, a supervisor
+    /// could no longer clear it either. The session was stuck until somebody killed it — and
+    /// reviewers are the members most likely to write about markers, because reviewing this
+    /// vocabulary is their job.
+    ///
+    /// Making the state UNREACHABLE for them closes it by construction, which no wording in a doc
+    /// can do.
+    /// </summary>
+    static bool Can_AnnounceAWindow(ChannelAuthors author)
+    {
+        return author == ChannelAuthors.Implementer || author == ChannelAuthors.Solo;
     }
 
     /// <summary>
@@ -143,11 +163,18 @@ public static class MemberState_Resolver
 
         while (index >= 0)
         {
-            var startsCleanly = index == 0 || !char.IsLetterOrDigit(text[index - 1]);
+            var before = index == 0 ? ' ' : text[index - 1];
             var afterIndex = index + marker.Length;
+
+            var startsCleanly = !char.IsLetterOrDigit(before);
             var endsCleanly = afterIndex >= text.Length || !char.IsLetterOrDigit(text[afterIndex]);
 
-            if (startsCleanly && endsCleanly)
+            // QUOTATION IS EXCLUDED HERE TOO. A body line refuses a leading >, " or ' — and moving the
+            // subject onto a token match silently dropped that, so the exact quoted string the suite
+            // FORBIDS in a body was declaring in a subject. Same rule, both fields, one list.
+            var isQuoted = Array.IndexOf(QUOTATION_OPENERS, before) >= 0;
+
+            if (startsCleanly && endsCleanly && !isQuoted)
                 return true;
 
             index = text.IndexOf(marker, index + 1, StringComparison.OrdinalIgnoreCase);
