@@ -89,6 +89,35 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     the next app launch silently reverts every change back to the stale build output. Verify a kit
     change AFTER an app restart, never just after a copy — a `diff` taken between the two reads
     IDENTICAL and means nothing. `kit/install.ps1` is for a fresh machine that has not built yet.
+18. **SAY WHICH COPY YOU READ — installed, built, or branch source.** Every file in this system
+    exists three times: the branch source (`kit/…`), the app's build output, and the installed copy
+    (`~/.claude/commands`, `~/.claude/hooks`). They drift, and a finding about one is not a finding
+    about another. On 2026-08-11 this happened FIVE times in one evening, twice to the supervisor:
+    "the hooks contain no python3" (true of the installed copy, false of the branch), "the hooks were
+    not edited tonight" (installed mtime, branch had six commits), a `diff` between build output and
+    main tree that read identical and meant nothing. **State the copy in every report** — it is the
+    single cheapest habit here and the one that would have saved that evening.
+19. **`python3` on this machine is native WINDOWS Python, not the msys one.** It cannot see msys
+    paths: `open('/tmp/x.sh')` throws `FileNotFoundError` on a file `cp` has just created and `bash`
+    can read. Anything handing a path from bash to python3 must hand it a Windows path. The failure
+    is silent in a heredoc — a script that "ran" wrote nothing, and the two green runs that followed
+    were the unmodified original.
+20. **A harness that cannot find what it tests must REFUSE TO RUN.** `hook-behaviour-check.sh`
+    resolves the hooks relative to its own location, so a copy run from elsewhere finds none of them,
+    every invocation returns nothing, and nothing-is-ALLOW: it reported 16 confident failures about
+    code it never executed. Same class as the fixture guard — a harness must fail loudly rather than
+    certify the absence of the thing it is testing. **And never assert on a state with two routes to
+    it:** a case that allows for either of two reasons pins neither, which is how a guard stayed
+    green with its check deleted.
+21. **Hooks ADVISE, the app ENFORCES at the point of effect.** Every session runs as the same OS user
+    as the app, so no filesystem location is beyond its reach — a session can delete a flag, edit the
+    hook script, or unwire it from `settings.json`. A guard there restrains an honest session and
+    stops nobody else, so the enforcement that must actually hold belongs in the app, where a session
+    can only ask. **Corollary: a hook that cannot evaluate its predicate SAYS SO and ALLOWS.** It must
+    never invent a denial it cannot justify, and never grant silent consent either — the line goes to
+    `orchestrator.log.jsonl` (the app tails it; not Telegram, see 15; not stderr, which nothing
+    reads), one appended line naming WHICH predicate failed and why. "Could not extract a tool name
+    from the payload" is actionable; "hook error" is the silence again.
 
 ## Resolved Decisions (2026-08-06, owner)
 
