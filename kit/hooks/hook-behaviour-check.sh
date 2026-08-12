@@ -305,6 +305,26 @@ check "the record says the guard is not in force" FOUND "$(grep -q 'this guard i
 check "the record is one JSON line" 1 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
 check "the record parses as JSON" OK "$(python3 -c 'import json,sys; json.loads(sys.stdin.readline()); print("OK")' < "$LOG_FILE" 2>/dev/null || printf BROKEN)"
 
+# THE TIMESTAMP IS UTC, because the line says so with a trailing Z. The stamp comes from a bash
+# builtin (no fork — the condition this log reports on is a machine that cannot fork), and the
+# builtin formats in LOCAL time: the first version of that fix wrote a stamp two hours ahead wearing
+# a Z, offset from every app-written line in the same file.
+#
+# This log is read only by a human reconstructing an incident, so the timestamp is the one field it
+# exists to provide. Compared as an HOUR against `date -u`, accepting the previous hour too so a run
+# crossing the boundary cannot flake — a two-hour drift is still caught.
+LOGGED_HOUR=$(grep -o '"ts":"[^"]*"' "$LOG_FILE" | head -1 | cut -dT -f2 | cut -d: -f1)
+UTC_HOUR=$(date -u +%H)
+PREV_UTC_HOUR=$(printf '%02d' $(( (10#$UTC_HOUR + 23) % 24 )))
+
+if [ "$LOGGED_HOUR" = "$UTC_HOUR" ] || [ "$LOGGED_HOUR" = "$PREV_UTC_HOUR" ]; then
+  TS_ZONE=UTC
+else
+  TS_ZONE="OFF_BY_$(( (10#$LOGGED_HOUR - 10#$UTC_HOUR + 24) % 24 ))h"
+fi
+
+check "the timestamp is really UTC" UTC "$TS_ZONE"
+
 # A DECIDABLE call must stay silent. Without this, "log everything" would pass every case above while
 # filling the file the app is meant to keep readable.
 #

@@ -99,7 +99,17 @@ aiorch_log_undecidable() {
   # printf's %(...)T is a BASH BUILTIN — no fork. That matters here more than anywhere: the condition
   # this file reports on is a machine that cannot fork, and `date` failing wrote an empty timestamp
   # into a field the app parses as a date.
-  stamp=$(printf '%(%Y-%m-%dT%H:%M:%S)T' -1 2>/dev/null)
+  #
+  # TZ=UTC IS NOT OPTIONAL. The builtin formats in LOCAL time while the format string below appends
+  # `.0000000Z`, which asserts UTC — so the first version of this fix traded a fork for a stamp two
+  # hours ahead, wearing a Z. Every hook-written line would have been offset from every app-written
+  # line in the same file and labelled as though it were not.
+  #
+  # That is the worst field to be wrong in here. This log is read only by a human reconstructing an
+  # incident afterwards, so the timestamp is the one thing the file exists to provide — and this repo
+  # has already been bitten by a stamp two hours out, which is why the app blanks a future stamp
+  # rather than trusting it.
+  stamp=$(TZ=UTC printf '%(%Y-%m-%dT%H:%M:%S)T' -1 2>/dev/null)
 
   if [ -z "$stamp" ]; then
     stamp="1970-01-01T00:00:00"
