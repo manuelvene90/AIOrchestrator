@@ -19,10 +19,15 @@ if [ "${AIORCH_ROLE:-}" != "reviewer" ]; then
 fi
 
 # A HOOK THAT CANNOT EVALUATE ITS PREDICATE SAYS SO, AND ALLOWS — see hook-log.sh for both halves.
+# DEFINED FIRST, UNCONDITIONALLY, then overridden by the real one. The stub used to live in an
+# `else`, so it covered a MISSING helper only — a helper that EXISTS but is truncated or empty left
+# the function undefined and the call failed to stderr, the stream this feature's own header says
+# nobody reads. That window is real rather than theoretical: KitAssets_Installer overwrites
+# ~/.claude/hooks at every app start, so a hook firing during that copy sees a partial file.
+aiorch_log_undecidable() { return 0; }
+
 if [ -f "$(dirname "$0")/hook-log.sh" ]; then
-  . "$(dirname "$0")/hook-log.sh"
-else
-  aiorch_log_undecidable() { return 0; }
+  . "$(dirname "$0")/hook-log.sh" 2>/dev/null || true
 fi
 
 if ! INPUT=$(cat 2>/dev/null); then

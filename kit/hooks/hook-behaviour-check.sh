@@ -306,9 +306,46 @@ check "the record is one JSON line" 1 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d
 check "the record parses as JSON" OK "$(python3 -c 'import json,sys; json.loads(sys.stdin.readline()); print("OK")' < "$LOG_FILE" 2>/dev/null || printf BROKEN)"
 
 # A DECIDABLE call must stay silent. Without this, "log everything" would pass every case above while
-# filling the file the app tails with a line per tool call.
+# filling the file the app is meant to keep readable.
+#
+# THE FIXTURE IS A WRITE, AND THAT IS THE WHOLE CASE. It was a `Read`, which is a pure reader that
+# exits about forty lines ABOVE the log site — so a mutant that logged unconditionally on a decidable
+# WRITE left this green. The case that the commit message singled out as the one that mattered was
+# the one that could not fail.
 rm -f "$LOG_FILE"
-check "a decidable call records NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Read file_path 'C:/repo/Foo.cs')")" >/dev/null; flag_state "$LOG_FILE")"
+check "a decidable DENY records NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")" >/dev/null; flag_state "$LOG_FILE")"
+
+rm -f "$LOG_FILE"
+check "a decidable ALLOW records NOTHING" ABSENT "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path "$SUPERVISION/PLAN.md")")" >/dev/null; flag_state "$LOG_FILE")"
+
+# ONE LINE PER PREDICATE PER WINDOW. The reviewer hook has no flag gate, so without suppression it
+# logs 269 bytes for every undecidable call for the life of a session — into a file the app rotates
+# at 8 MB and stops writing below 512 MB free, neither of which this append goes through.
+rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
+run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')" >/dev/null
+run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')" >/dev/null
+run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')" >/dev/null
+check "three identical failures record ONE line" 1 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
+
+# But a DIFFERENT predicate is a different fact and must not be suppressed by the first one. The
+# payload is VALID JSON with no tool name — invalid JSON never reaches the hook at all, it is caught
+# by the fixture guard above, so it could not have exercised a second predicate.
+run_hook "$AWAIT_HOOK" '{}' >/dev/null
+check "a different predicate is still recorded" 2 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
+
+# The size ceiling the app would have rotated at. Beyond it this stops writing rather than growing a
+# file nothing is trimming.
+rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
+printf '{"ts":"","orch":"x","level":"Warning","message":"an existing line"}
+' > "$LOG_FILE"
+# EXPORTED, not a prefix assignment: the hook runs in a child process, and a var set only for the
+# duration of a shell FUNCTION call does not reliably reach it. The first version of this case did
+# that and the ceiling was never applied — it measured nothing.
+export AIORCH_LOG_MAX_BYTES=10
+run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')" >/dev/null
+unset AIORCH_LOG_MAX_BYTES
+check "an oversized log is not grown further" 1 "$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')"
+rm -f "$LOG_FILE" "$SUPERVISION"/.hook-log-*
 
 # The same probe again, and it has to be AFTER: a fork limit reached mid-run leaves everything above
 # it green and everything below it unverifiable, and only a second reading can tell those apart.
