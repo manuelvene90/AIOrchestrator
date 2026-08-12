@@ -17,10 +17,18 @@
 # and this file stayed green.
 #
 # That is worse than a thin test: malformed input always yields ALLOW, so ANY future ALLOW case
-# written with a Windows path would have been a silent no-op. Two defences now:
-#   1. fixtures are serialised by json.dumps, so no escaping is ever hand-rolled;
-#   2. every fixture is parsed BEFORE use, and an unparseable one fails the run loudly instead of
-#      passing quietly.
+# written with a Windows path would have been a silent no-op. Three defences now:
+#   1. fixtures are serialised by json.dumps, which is what actually CLOSES the class — no escaping
+#      is ever hand-rolled, so the bad payload cannot be written in the first place;
+#   2. every fixture is parsed before use, and an unparseable one yields a sentinel that no case
+#      expects, so it fails the run instead of scoring ALLOW;
+#   3. the same for a hook that is missing, crashes, or cannot start.
+#
+# Defence 2 is stated carefully because it was overstated before. The sentinel used to be swallowed
+# by verdict() — which returned ALLOW for anything that was not a denial — so only the one case that
+# compares it WITHOUT verdict() could ever see it: the header claimed a guard that covered 1 case of
+# 29. verdict() now passes every non-verdict outcome through untouched. A comment that overstates a
+# defence is how the next reader stops checking, which is the same defect in prose.
 #
 # The row that matters most is "ledger behind + question open -> ALLOW". If that ever goes back to
 # DENY, a supervisor is stuck until a flag expires.
@@ -56,11 +64,55 @@ fixture() {
 }
 
 # A hook "denies" when it emits a deny decision (PreToolUse) or a block decision (Stop).
+#
+# EVERY NON-VERDICT OUTCOME PASSES STRAIGHT THROUGH, and that is the point. This function used to
+# collapse them all into ALLOW, so "the hook allowed it" and "the hook crashed, was killed, never ran,
+# or was handed a fixture it could not parse" were the same result — and ALLOW is what most of these
+# cases assert, so a broken run scored as a passing one. The sentinel below was the only outcome that
+# could be detected, and only because that one case compares it without calling this function.
+#
+# Note what is NOT treated as a failure: empty output with exit 0. That is how a hook legitimately
+# says ALLOW, so emptiness alone cannot be the signal — the EXIT STATUS is, and run_hook turns a
+# non-zero one into an outcome that no case expects.
 verdict() {
+  case "$1" in
+    UNPARSEABLE_FIXTURE|HOOK_MISSING|HOOK_EXIT_*)
+      printf '%s' "$1"
+      return ;;
+  esac
+
   if printf '%s' "$1" | grep -q '"deny"\|"block"'; then
     printf 'DENY'
   else
     printf 'ALLOW'
+  fi
+}
+
+# A known-DENY probe, run before AND after the PreToolUse block. A TOTAL environment failure is loud
+# — every DENY case reddens at once — but a PARTIAL one is not: this machine hit its commit limit
+# three times tonight, and a fork that fails for only some invocations leaves the affected ALLOW
+# cases passing silently in a sea of green. The probe converts that into a VOID run instead, because
+# a suite that cannot evaluate its subject must not report on it.
+assert_environment_can_evaluate() {
+  local when="$1" result
+
+  result=$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")")
+
+  if [ "$result" = "DENY" ]; then
+    return 0
+  fi
+
+  printf '\n  VOID  the environment cannot evaluate these hooks (%s): probe returned %s, wanted DENY\n' "$when" "$result"
+  printf '        Every ALLOW case in this run is unverifiable. Nothing here is a pass.\n\n'
+  exit 2
+}
+
+# Lets a case assert the SETUP it depends on, not only the hook's answer.
+flag_state() {
+  if [ -f "$1" ]; then
+    printf 'PRESENT'
+  else
+    printf 'ABSENT'
   fi
 }
 
@@ -80,14 +132,32 @@ check() {
 # fail open, which is indistinguishable from a genuine ALLOW — that is exactly how two cases here
 # certified nothing for a whole commit.
 run_hook() {
-  local hook="$1" payload="$2" role="${3:-supervisor}"
+  local hook="$1" payload="$2" role="${3:-supervisor}" output status
+
+  # A missing hook produces no output, and no output used to read as ALLOW — so a copy of this file
+  # run from anywhere else found neither hook and reported 16 confident failures about code it never
+  # executed, while its ten ALLOW cases "passed". A harness must not certify the absence of the thing
+  # it is testing.
+  if [ ! -f "$hook" ]; then
+    printf 'HOOK_MISSING'
+    return
+  fi
 
   if ! printf '%s' "$payload" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; then
     printf 'UNPARSEABLE_FIXTURE'
     return
   fi
 
-  printf '%s' "$payload" | AIORCH_ROLE="$role" AIORCH_ID="$ORCH" bash "$hook" 2>/dev/null
+  output=$(printf '%s' "$payload" | AIORCH_ROLE="$role" AIORCH_ID="$ORCH" bash "$hook" 2>/dev/null)
+  status=$?
+
+  # Crashed, killed, or unable to start. Distinct from "ran and said nothing", which is a real ALLOW.
+  if [ "$status" -ne 0 ]; then
+    printf 'HOOK_EXIT_%s' "$status"
+    return
+  fi
+
+  printf '%s' "$output"
 }
 
 printf '\nStop hook — the task ledger\n'
@@ -97,7 +167,13 @@ check "ledger behind, no question" DENY "$(verdict "$(run_hook "$LEDGER_HOOK" '{
 # ONE route to ALLOW per case, which is why "no ledger debt" runs BEFORE the question is raised.
 # With the flag already up there are two independent reasons to allow, so deleting the hook's ledger
 # check entirely leaves this case green — it certifies nothing.
+#
+# CHECKED, not merely commented. The ordering above is the whole substance of the case, and a comment
+# cannot stop a future reader restoring the state it warns about — that state is exactly what shipped
+# at 133911e, which ran fully green while proving nothing. So the precondition is asserted as a case
+# in its own right: if the question is open here, this run says so instead of quietly certifying.
 rm -f "$SUPERVISION/.ledger-behind"
+check "no-ledger-debt runs with NO question open" ABSENT "$(flag_state "$SUPERVISION/.awaiting-answer")"
 check "no ledger debt" ALLOW "$(verdict "$(run_hook "$LEDGER_HOOK" '{}')")"
 
 # Raised here and deliberately LEFT UP: every PreToolUse case below is about a question being open.
@@ -106,6 +182,7 @@ check "ledger behind + question open" ALLOW "$(verdict "$(run_hook "$LEDGER_HOOK
 rm -f "$SUPERVISION/.ledger-behind"
 
 printf '\nPreToolUse hook — a question is with the owner\n'
+assert_environment_can_evaluate "before"
 check "Read" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Read file_path 'C:/repo/Foo.cs')")")"
 check "Grep" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Grep pattern 'x')")")"
 check "Write into the repo" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")")"
@@ -160,6 +237,18 @@ check "Edit a member that is NOT waiting" DENY "$(verdict "$(run_hook "$AWAIT_HO
 # TWO-DIGIT IDS. `imp-1` must not satisfy `imp-10`, and `imp-10` must work at all. The whole-line
 # match is already correct in both directions — which is exactly why it needs a case: a correct
 # behaviour with nothing pinning it is one refactor away from being an incorrect one.
+#
+# imp-1 IS THE WAITING MEMBER HERE. It used to run with imp-2 in the file, so it asserted only that
+# imp-10 is not imp-2 — true, and already covered three lines above.
+#
+# BUT DO NOT READ THIS CASE AS LOAD-BEARING: it is documentation, not a pin. Measured, not assumed —
+# mutating the hook's whole-line match to a bare substring leaves it GREEN even in this corrected
+# form, because the prefix hazard is asymmetric. Waiting `imp-1` against target `imp-10` searches for
+# the LONGER id inside the shorter file and misses either way; only the reverse direction bites, and
+# that is the sibling case below, which does redden. Kept because the invariant is worth stating in
+# both directions, and labelled because a case whose weight is overstated is how the next reader
+# stops checking.
+printf 'imp-1\n' > "$SUPERVISION/.awaiting-verdict"
 check "imp-1 waiting does NOT unlock imp-10" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$SUPERVISION/imp-10/channel.md")")")"
 printf 'imp-10\n' > "$SUPERVISION/.awaiting-verdict"
 check "a two-digit member id works" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Edit file_path "$SUPERVISION/imp-10/channel.md")")")"
@@ -176,12 +265,36 @@ check "no awaiting-verdict file (fail closed)" DENY "$(verdict "$(run_hook "$AWA
 
 check "a non-supervisor role is untouched" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')" implementer)")"
 
+# The same probe again, and it has to be AFTER: a fork limit reached mid-run leaves everything above
+# it green and everything below it unverifiable, and only a second reading can tell those apart.
+assert_environment_can_evaluate "after"
+
 rm -f "$SUPERVISION/.awaiting-answer"
 check "no question open" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")")"
 
-# The guard on the guard: if this ever reports ALLOW, every ALLOW case above is meaningless.
-printf '\nThe fixture guard itself\n'
+# THE GUARDS ON THE GUARDS. If any of these reports ALLOW, every ALLOW case above is meaningless —
+# they are assertions about the CLASS of silent failure, not about the individual instances that
+# happened to be found. Each one is the exact shape that certified nothing for a whole commit.
+printf '\nThe guards on this harness itself\n'
 check "an unparseable fixture is NOT a pass" UNPARSEABLE_FIXTURE "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Write","tool_input":{"file_path":"C:\bad\escape"}}')"
+
+# Through verdict() deliberately: the sentinel used to be swallowed there, so this is the case that
+# would have caught the overstated header claim.
+check "…and it survives verdict()" UNPARSEABLE_FIXTURE "$(verdict "$(run_hook "$AWAIT_HOOK" '{"tool_name":"Write","tool_input":{"file_path":"C:\bad\escape"}}')")"
+
+# A hook that is not there produces nothing, and nothing used to read as consent.
+check "a MISSING hook is not a pass" HOOK_MISSING "$(verdict "$(run_hook "$SCRIPT_DIR/no-such-hook.sh" '{}')")"
+
+# A hook that runs and fails is not a pass either. `exit 3` stands in for crashed, killed, or unable
+# to start — the states this machine produced three times tonight at its commit limit.
+printf '#!/usr/bin/env bash\nexit 3\n' > "$TEMP_HOME/failing-hook.sh"
+check "a FAILING hook is not a pass" HOOK_EXIT_3 "$(verdict "$(run_hook "$TEMP_HOME/failing-hook.sh" '{}')")"
+
+# And the one that must NOT be a failure: silence with exit 0 is how a hook says ALLOW. Without this
+# case the obvious fix for the three above is "empty means broken", which would redden every genuine
+# ALLOW in the file.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TEMP_HOME/silent-hook.sh"
+check "silence with exit 0 IS an allow" ALLOW "$(verdict "$(run_hook "$TEMP_HOME/silent-hook.sh" '{}')")"
 
 printf '\n'
 
