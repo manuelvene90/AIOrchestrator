@@ -200,6 +200,23 @@ internal sealed class BridgeEngineModel(
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
 
+    /// <summary>
+    /// WHICH unanswered thing each member was last nudged about — the raw text of the conversation
+    /// entry, never its index or stamp (see Nudge_Decider.Identify_LastConversationEntry_OrNull for
+    /// why those are silent failures).
+    ///
+    /// A SECOND DICTIONARY, DELIBERATELY, AND IT IS THE POINT OF THE FIX. `_nudgedMemberUtc` is
+    /// ESCALATION state: it dates the nudge so the orphan probe can run six minutes later, and the
+    /// probe clears it the moment the member proves alive. Two earlier fixes tried to answer "should
+    /// we nudge again?" by changing when that map is cleared or refreshed — one re-arms a nudge, the
+    /// other re-arms a RESPAWN — because the nudge gate was borrowing a map that already carried two
+    /// meanings. It never needed to: this one has exactly one meaning and drives nothing else.
+    ///
+    /// Lost on restart, which costs ONE extra nudge per member. Visible, cheap, self-correcting —
+    /// and the alternative is a third meaning in the map that can respawn a session.
+    /// </summary>
+    readonly Dictionary<string, string> _nudgedAboutEntry = [];
+
     /// <summary>When the supervisor last posted a verdict into a spoke — the ledger's due-by signal.</summary>
     readonly Dictionary<string, DateTime> _lastSupervisorVerdictUtc = [];
     readonly HashSet<string> _ledgerBehindReportedOrchIds = [];
@@ -954,8 +971,42 @@ internal sealed class BridgeEngineModel(
 
                 if (!alreadyNudged)
                 {
+                    // ONE NUDGE PER UNANSWERED THING. The app's own entry cannot change the last
+                    // CONVERSATION entry, so nothing the app writes can qualify a member for another
+                    // nudge — which is what made the old repetition self-feeding: it woke the member,
+                    // the waking proved it alive, that proof cleared the escalation map, and the
+                    // clock its own write had restarted elapsed. Every 8 minutes, needing nobody.
+                    //
+                    // MEMBER PATH ONLY. The supervisor nudge is keyed and written elsewhere and does
+                    // not self-feed the same way; it is not covered here, and saying so is the point
+                    // of this sentence.
+                    //
+                    // A LIVENESS CHECK STOPPED RUNNING HERE AND IT WAS NOT LOST BY ACCIDENT. Under
+                    // the old loop a healthy idle member was re-probed every eight minutes — but
+                    // nobody designed that polling, it was the defect's exhaust: the repeat existed
+                    // only because the app kept re-qualifying the member with its own writes. A
+                    // member is now probed once per unanswered thing.
+                    //
+                    // The case that leaves open is narrow and deliberate: a member that is nudged,
+                    // proves alive, and dies LATER with nothing new said to it. PROCESS death is not
+                    // this path's job — pid files and the watchdog cover that. This path catches a
+                    // live process whose MONITOR is dead, and such a member goes unnoticed only for
+                    // as long as nobody needs it: the moment anyone writes, the conversation moves,
+                    // the nudge fires and the probe runs six minutes later. Detected when it matters
+                    // rather than polled forever.
+                    var conversationIdentity = Nudge_Decider.Identify_LastConversationEntry_OrNull(entries);
+
+                    if (conversationIdentity != null
+                        && _nudgedAboutEntry.TryGetValue(memberKey, out var alreadyNudgedAbout)
+                        && alreadyNudgedAbout == conversationIdentity)
+                        continue;
+
                     await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, dormantMidWork, cancellationToken);
                     _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
+
+                    if (conversationIdentity != null)
+                        _nudgedAboutEntry[memberKey] = conversationIdentity;
+
                     continue;
                 }
 

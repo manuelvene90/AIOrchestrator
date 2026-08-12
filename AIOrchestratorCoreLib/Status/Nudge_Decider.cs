@@ -59,9 +59,46 @@ public static class Nudge_Decider
     }
 
     /// <summary>
+    /// WHICH unanswered thing a member is being nudged about — so it can be nudged ONCE for it.
+    ///
+    /// The nudge used to repeat every 8 minutes for as long as a member behaved correctly, and the
+    /// app's own entry was the engine: it made <see cref="Has_UnansweredInboundTraffic"/> true, it
+    /// woke the member (whose watcher fires on any write), the waking proved the member alive, that
+    /// proof cleared the nudged map, and the quiet clock — restarted by that same write — elapsed.
+    /// Nothing outside the app was needed for any turn of it. Measured on two channels; one member
+    /// took three in a row while saying nothing, which is what the protocol tells it to do.
+    ///
+    /// This is the identity the app remembers, and comparing it is the whole gate: the app's own
+    /// writes never change the last CONVERSATION entry, so nothing the app says can ever qualify a
+    /// member for another nudge. One nudge per unanswered thing.
+    ///
+    /// IT IS THE RAW TEXT AND IT MUST NEVER BE THE INDEX OR THE TIMESTAMP. Both are agent-written and
+    /// neither is unique: `option-lab-2` carried two `[80]`s and two `[81]`s on 2026-08-10, and one
+    /// evening's traffic produced two duplicate indices in a single channel. A genuinely NEW entry
+    /// that repeats an index — or that lands in the same MINUTE as the one before it, which is the
+    /// resolution of a header stamp — would compare equal to what is remembered here and lose the
+    /// nudge it earned. That failure is silent, and it is the exact defect this gate replaces wearing
+    /// the other mask. The next person to touch this will reach for the index because it is smaller;
+    /// this paragraph is why they should not.
+    ///
+    /// Null when the channel holds nothing but app entries: there is no conversation to be nudged
+    /// about, and the caller treats that as "no memory", which nudges rather than suppresses.
+    /// </summary>
+    public static string? Identify_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
+    {
+        return MemberState_Resolver.Find_LastConversationEntry_OrNull(entries)?.RawText;
+    }
+
+    /// <summary>
     /// Somebody else wrote last and the member has not replied. Note this counts the APP's own
     /// entries: that is deliberate, because the escalation to orphan-recovery is what proves a
     /// member's monitor is dead, and it can only run on a member that has already been nudged.
+    ///
+    /// UNCHANGED ON PURPOSE. Two fixes that reinterpreted this predicate were tried and withdrawn:
+    /// skipping app entries here makes it and <see cref="Is_DormantMidWork"/> false at the same
+    /// instant, the settled-reset fires, and a genuinely dead session can never escalate. The
+    /// repetition was never in this predicate — it was in what the app remembered about the nudge it
+    /// had already sent, which was nothing.
     /// </summary>
     public static bool Has_UnansweredInboundTraffic(IReadOnlyList<IChannelEntry> entries)
     {
