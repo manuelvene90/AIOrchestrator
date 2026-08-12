@@ -39,6 +39,24 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 LEDGER_HOOK="$SCRIPT_DIR/supervisor-ledger-check.sh"
 AWAIT_HOOK="$SCRIPT_DIR/supervisor-awaiting-answer-check.sh"
 
+# REFUSE TO RUN RATHER THAN CERTIFY. The hooks are resolved relative to THIS file, so a copy taken
+# somewhere else — `git show <sha>:… > /tmp/x.sh && bash /tmp/x.sh` is how it actually happened —
+# finds neither of them. Every invocation then returns nothing, nothing scored as ALLOW, and the run
+# reported 16 confident failures about code it never executed, with its ten ALLOW cases "passing".
+# That result was quoted as evidence in a live investigation and sent it down a false trail.
+#
+# One refusal beats thirty results that describe nothing. Exit 2 means THIS RUN CERTIFIES NOTHING —
+# the same code the environment probe uses, and deliberately distinct from exit 1, which means the
+# suite ran and the hooks are wrong.
+if [ ! -f "$LEDGER_HOOK" ] || [ ! -f "$AWAIT_HOOK" ]; then
+  printf '\n  REFUSED  this harness cannot find the hooks it tests.\n'
+  printf '           expected beside %s:\n' "$SCRIPT_DIR"
+  [ -f "$LEDGER_HOOK" ] || printf '             MISSING  %s\n' "$LEDGER_HOOK"
+  [ -f "$AWAIT_HOOK" ] || printf '             MISSING  %s\n' "$AWAIT_HOOK"
+  printf '           Run it from kit/hooks/ in a checkout. Nothing was tested.\n\n'
+  exit 2
+fi
+
 FAILURES=0
 ORCH="check-orch"
 
@@ -295,6 +313,15 @@ check "a FAILING hook is not a pass" HOOK_EXIT_3 "$(verdict "$(run_hook "$TEMP_H
 # ALLOW in the file.
 printf '#!/usr/bin/env bash\nexit 0\n' > "$TEMP_HOME/silent-hook.sh"
 check "silence with exit 0 IS an allow" ALLOW "$(verdict "$(run_hook "$TEMP_HOME/silent-hook.sh" '{}')")"
+
+# A DETACHED COPY REFUSES, and this case exists because of what it asserts: REFUSED, not merely a
+# non-zero exit. Delete the preflight and a detached copy still fails — the environment probe catches
+# it — but it fails saying "the environment cannot evaluate these hooks", which is the WRONG CAUSE.
+# That misdiagnosis is not hypothetical: a detached run reported 16 failures tonight, was read as
+# evidence of a sick machine, and sent an investigation down an hour-long false trail. Getting the
+# right answer for the wrong stated reason is how this file lies to the next reader.
+cp "$0" "$TEMP_HOME/detached-copy.sh"
+check "a detached copy REFUSES to run" REFUSED "$(bash "$TEMP_HOME/detached-copy.sh" 2>&1 | grep -oE 'REFUSED|VOID|did not match' | head -1)"
 
 printf '\n'
 
