@@ -886,7 +886,7 @@ internal sealed class BridgeEngineModel(
 
                 // Both nudge rules live in Nudge_Decider, together — see the class comment for why
                 // splitting them across two files is what made them exhaustive.
-                var dormantMidWork = Nudge_Decider.Is_DormantMidWork(entries);
+                var dormantMidWork = Nudge_Decider.Is_DormantMidWork(entries, Nudge_Decider.Has_BeenBriefed(channelFile));
 
                 if (!dormantMidWork && !Nudge_Decider.Has_UnansweredInboundTraffic(entries))
                 {

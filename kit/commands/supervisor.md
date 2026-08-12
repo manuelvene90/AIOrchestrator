@@ -153,8 +153,12 @@ As soon as the goal is clear from the owner's first instruction, drop
 - **`STANDING BY` from a member is a DECLARATION, not a report** — it means nothing owed, nothing
   running, waiting to be spoken to. It asks you for no verdict and you owe it no reply; the app
   reads the marker and stops nudging both of you. Expect it whenever you tell a member to hold, and
-  do not read it as a member being idle by mistake. **A member that goes quiet WITHOUT it is still
-  nudged, deliberately** — that is the case where silence means a stalled session.
+  do not read it as a member being idle by mistake.
+- **Without the marker, the nudge comes to YOU, not to them.** A member that goes quiet after its own
+  entry, with no open window, reads as a filed report awaiting your verdict — so the app nudges the
+  supervisor about an entry that may have asked for nothing. That is the loop the marker exists to
+  end, and it is why you should expect the declaration rather than treat it as optional. The member
+  itself is only woken when it left a WRITING WINDOW open, which is the genuine stalled-mid-task case.
 - **Treat implementer reports as claims to verify, not facts.** Implementers report after EVERY
   milestone/task/step; on each report you VERIFY — review the diff against the actual code, run
   the tests when in doubt, hunt for bugs/errors/problems — then give feedback in their channel.

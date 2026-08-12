@@ -25,7 +25,7 @@ public static class Nudge_Decider
     /// The member stopped with work in flight and nobody about to speak to it. Its monitor fires
     /// only when someone ELSE writes, so this state cannot resolve itself.
     /// </summary>
-    public static bool Is_DormantMidWork(IReadOnlyList<IChannelEntry> entries)
+    public static bool Is_DormantMidWork(IReadOnlyList<IChannelEntry> entries, bool hasBeenBriefed)
     {
         if (entries.Count == 0)
             return false;
@@ -36,10 +36,26 @@ public static class Nudge_Decider
         // Never briefed is not dormant — it is a freshly spawned member waiting for work, which is
         // the correct state for the imp-1 and rev-1 that every orchestration starts with. Nudging
         // them for saying "online" respawned them on a loop and cost them their context.
-        if (!Has_BeenBriefed(entries))
+        if (!hasBeenBriefed)
             return false;
 
         return !Is_LegitimatelyQuiet(entries);
+    }
+
+    /// <summary>
+    /// Has a supervisor EVER written here — across the live file AND its archive.
+    ///
+    /// CLAUDE.md item 13: <see cref="Channel_Compactor"/> moves older entries into a sibling archive,
+    /// so a live-file scan is not monotonic and "no supervisor entry" stops meaning "never briefed"
+    /// the moment a long-running channel compacts. The failure is silent and one-directional: a
+    /// briefed member reverts to looking freshly spawned, and the stalled-mid-task nudge — the
+    /// load-bearing one — switches off for exactly the members that have been running longest.
+    ///
+    /// Counted through the one reader that spans both, never by re-scanning here.
+    /// </summary>
+    public static bool Has_BeenBriefed(string channelFilePath)
+    {
+        return ChannelHistory_Counter.Count_Entries_ByAuthor(channelFilePath, ChannelAuthors.Supervisor) > 0;
     }
 
     /// <summary>
@@ -85,14 +101,4 @@ public static class Nudge_Decider
             || state == MemberStates.StandingBy;
     }
 
-    static bool Has_BeenBriefed(IReadOnlyList<IChannelEntry> entries)
-    {
-        foreach (var entry in entries)
-        {
-            if (entry.Author == ChannelAuthors.Supervisor)
-                return true;
-        }
-
-        return false;
-    }
 }

@@ -26,7 +26,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Supervisor, "hold — nothing to build, nothing to commit"),
             (ChannelAuthors.Implementer, "STANDING BY — waiting on rev-2's review"));
 
-        Assert.False(Nudge_Decider.Is_DormantMidWork(entries));
+        Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
         Assert.False(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
         Assert.False(Nudge_Decider.Owes_MemberAVerdict(entries));
     }
@@ -42,7 +42,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Supervisor, "hold — nothing to build, nothing to commit"),
             (ChannelAuthors.Implementer, "holding, nothing in flight"));
 
-        Assert.True(Nudge_Decider.Is_DormantMidWork(entries) || Nudge_Decider.Owes_MemberAVerdict(entries));
+        Assert.True(Nudge_Decider.Is_DormantMidWork(entries, true) || Nudge_Decider.Owes_MemberAVerdict(entries));
     }
 
     /// <summary>Load-bearing and NOT weakened: work announced, then silence, is still woken.</summary>
@@ -53,7 +53,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Supervisor, "implement the parser"),
             (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs, Model.cs"));
 
-        Assert.True(Nudge_Decider.Is_DormantMidWork(entries));
+        Assert.True(Nudge_Decider.Is_DormantMidWork(entries, true));
     }
 
     /// <summary>
@@ -69,10 +69,17 @@ public class NudgeDeciderTests
             (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Parser.cs"),
             (ChannelAuthors.Implementer, "STANDING BY"));
 
-        Assert.True(Nudge_Decider.Is_DormantMidWork(entries));
+        Assert.True(Nudge_Decider.Is_DormantMidWork(entries, true));
     }
 
-    /// <summary>New inbound traffic clears the declaration — both nudges are live again.</summary>
+    /// <summary>
+    /// New inbound traffic clears the declaration — both nudges are live again.
+    ///
+    /// The two False assertions are not padding: without them, removing the "last author is not a
+    /// member" guard from EITHER predicate left all 484 tests green. A supervisor-last channel would
+    /// have counted as the member being dormant mid-work AND as the supervisor owing itself a
+    /// verdict for its own entry.
+    /// </summary>
     [Fact]
     public void InboundTrafficAfterADeclarationMakesTheNudgesLiveAgain()
     {
@@ -81,6 +88,8 @@ public class NudgeDeciderTests
             (ChannelAuthors.Supervisor, "new task: fix the ledger denominator"));
 
         Assert.True(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
+        Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
+        Assert.False(Nudge_Decider.Owes_MemberAVerdict(entries));
     }
 
     /// <summary>A filed report still owes the supervisor a verdict — that nudge is not weakened.</summary>
@@ -92,7 +101,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Implementer, "done, commit 8b58b2e, 473 tests pass"));
 
         Assert.True(Nudge_Decider.Owes_MemberAVerdict(entries));
-        Assert.False(Nudge_Decider.Is_DormantMidWork(entries));
+        Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
     }
 
     /// <summary>BLOCKED ON OWNER is quiet for the other legitimate reason, and stays quiet.</summary>
@@ -103,7 +112,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Supervisor, "implement it"),
             (ChannelAuthors.Implementer, "BLOCKED ON OWNER — which schema do they want?"));
 
-        Assert.False(Nudge_Decider.Is_DormantMidWork(entries));
+        Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
     }
 
     /// <summary>
@@ -119,9 +128,11 @@ public class NudgeDeciderTests
     [Fact]
     public void ANeverBriefedMemberIsWaitingForWork_NotDormant()
     {
-        Assert.False(Nudge_Decider.Is_DormantMidWork(Build(
+        var entries = Build(
             (ChannelAuthors.Implementer, "imp-1 online"),
-            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — scratch.cs"))));
+            (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — scratch.cs"));
+
+        Assert.False(Nudge_Decider.Is_DormantMidWork(entries, hasBeenBriefed: false));
     }
 
     /// <summary>Reviewers are members too — they were invisible to this detector once already.</summary>
@@ -132,7 +143,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Supervisor, "review 40dacff"),
             (ChannelAuthors.Reviewer, "STANDING BY — review filed, nothing else queued"));
 
-        Assert.False(Nudge_Decider.Is_DormantMidWork(entries));
+        Assert.False(Nudge_Decider.Is_DormantMidWork(entries, true));
         Assert.False(Nudge_Decider.Owes_MemberAVerdict(entries));
     }
 
@@ -154,9 +165,48 @@ public class NudgeDeciderTests
     [Fact]
     public void AnEmptyChannelNudgesNobody()
     {
-        Assert.False(Nudge_Decider.Is_DormantMidWork([]));
+        Assert.False(Nudge_Decider.Is_DormantMidWork([], true));
         Assert.False(Nudge_Decider.Has_UnansweredInboundTraffic([]));
         Assert.False(Nudge_Decider.Owes_MemberAVerdict([]));
+    }
+
+    /// <summary>
+    /// CLAUDE.md item 13, applied to "has this member ever been briefed". Compaction moves older
+    /// entries into a sibling archive, so a live-file scan is not monotonic: a long-running member
+    /// whose briefs have all been archived reverts to looking freshly spawned, and the load-bearing
+    /// stalled-mid-task nudge switches off for exactly the members that have been running longest.
+    ///
+    /// Real files, because the defect is entirely about which file is read.
+    /// </summary>
+    [Fact]
+    public void BeingBriefedIsRememberedAfterCompactionMovesTheBriefsToTheArchive()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-briefed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            File.WriteAllText(channelFile, "## [9] FROM implementer — 2026-08-12 03:00 — WRITING WINDOW OPEN\nbatch 2\n");
+            Assert.False(Nudge_Decider.Has_BeenBriefed(channelFile));
+
+            File.WriteAllText(
+                Channel_Compactor.Build_ArchiveFilePath(channelFile),
+                "## [1] FROM supervisor — 2026-08-11 22:00 — the brief\ndo the work\n");
+
+            Assert.True(Nudge_Decider.Has_BeenBriefed(channelFile));
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    [Fact]
+    public void AChannelThatDoesNotExistHasNoBriefs()
+    {
+        Assert.False(Nudge_Decider.Has_BeenBriefed(Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}", "channel.md")));
     }
 
     /// <summary>
