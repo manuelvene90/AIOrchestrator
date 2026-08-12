@@ -153,6 +153,38 @@ public class TopicStatusLinePlannerTests
         Assert.Equal("newer", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
     }
 
+    /// <summary>
+    /// PINS THE CALL, not the callee. Replacing Pick_LastSubject_OrNull(...) with a plain null at the
+    /// planner's own call site left 634 green, because the only two assertions on Plan(...).Text used
+    /// an EMPTY roster — where the picker returns null anyway — and every other Plan assertion looks
+    /// at .Action.
+    ///
+    /// Third instance of one shape: the derived bool, then the clock, now the picker call. Each time
+    /// a decision moved somewhere the tests could reach and the WIRING that activates it stayed
+    /// behind, unobserved. The rule is to pin the call as well as the thing it calls.
+    ///
+    /// In production that mutation removes the `last` row from every topic message, and where the
+    /// subject is the only substance it reduces the message to the bare title or to nothing.
+    /// </summary>
+    [Fact]
+    public void ThePlanActuallyCallsThePickerAndPutsTheWinnerInTheText()
+    {
+        var plan = Plan(members:
+        [
+            Member("imp-1", "older thing", "2026-08-12 10:00"),
+            Member("imp-2", "the winning subject", "2026-08-12 14:55"),
+        ]);
+
+        // Asserted on the LAST LINE, not on the whole text: every member's brief also appears as its
+        // own row, so "contains the subject" is satisfied by the row and says nothing about the
+        // picker. The `last` line is the only place the picker's answer shows up.
+        var lastLine = plan.Text.Split('\n')[^1];
+
+        Assert.StartsWith("last", lastLine);
+        Assert.Contains("the winning subject", lastLine);
+        Assert.DoesNotContain("older thing", lastLine);
+    }
+
     static TopicStatusLine_Planner.TopicStatusPlan Plan(
         IReadOnlyList<ITopicStatusMember>? members = null,
         IPlanProgress? progress = null,
