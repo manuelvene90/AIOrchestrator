@@ -380,6 +380,18 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   final report; then drop
   `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`
   (the same action closes a `rev-<n>` — pass its member id).
+- **THE MEMBER IS NOT CLOSED WHEN YOU DROP THAT FILE. The owner confirms it with a tap**, exactly as
+  they do for a whole-orchestration close (owner decision 2026-08-12: this action and no other,
+  because closing a member throws away a session's work while a model or mute change is cheap to
+  undo). It used to execute about two seconds after the file landed.
+  - **You get an app entry saying it is HELD, and the member keeps working meanwhile.** Do not brief
+    it as if it were gone, and do NOT re-drop the request — a second file is a second prompt for the
+    same close.
+  - **You are told either way**: closed, declined, or lapsed unanswered after 12 hours. A lapse is not
+    carried over; ask again if it still applies.
+  - **`reason` is what the owner reads on their phone before deciding.** "no longer needed" tells them
+    nothing; "its deliverable is merged and nothing is queued for it" is a decision they can make in
+    one tap.
 - **CLOSING A FINISHED MEMBER IS A RULE, NOT A JUDGEMENT CALL.** The owner, 2026-08-12: *"if an impl
   is done and the sup doesn't want to use it anymore and spawns another one, the old one stays open
   forever monitoring the channel and wasting tokens."* An idle member is not free — it holds a
