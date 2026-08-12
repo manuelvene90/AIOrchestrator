@@ -94,11 +94,16 @@ printf '\nStop hook — the task ledger\n'
 touch "$SUPERVISION/.ledger-behind"
 check "ledger behind, no question" DENY "$(verdict "$(run_hook "$LEDGER_HOOK" '{}')")"
 
-touch "$SUPERVISION/.awaiting-answer"
-check "ledger behind + question open" ALLOW "$(verdict "$(run_hook "$LEDGER_HOOK" '{}')")"
-
+# ONE route to ALLOW per case, which is why "no ledger debt" runs BEFORE the question is raised.
+# With the flag already up there are two independent reasons to allow, so deleting the hook's ledger
+# check entirely leaves this case green — it certifies nothing.
 rm -f "$SUPERVISION/.ledger-behind"
 check "no ledger debt" ALLOW "$(verdict "$(run_hook "$LEDGER_HOOK" '{}')")"
+
+# Raised here and deliberately LEFT UP: every PreToolUse case below is about a question being open.
+touch "$SUPERVISION/.ledger-behind" "$SUPERVISION/.awaiting-answer"
+check "ledger behind + question open" ALLOW "$(verdict "$(run_hook "$LEDGER_HOOK" '{}')")"
+rm -f "$SUPERVISION/.ledger-behind"
 
 printf '\nPreToolUse hook — a question is with the owner\n'
 check "Read" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Read file_path 'C:/repo/Foo.cs')")")"
