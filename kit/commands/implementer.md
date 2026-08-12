@@ -58,22 +58,37 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   supervisor, who asks the owner.
 - **No acknowledgment-only entries** — silence is acknowledgment. Write only boundary reports,
   evidence-backed pushbacks, blocked flags, and the one declaration below.
-- **Where a marker may go, exactly** (`STANDING BY`, `BLOCKED ON OWNER`, the window pair): in the
-  entry's SUBJECT anywhere — the app matches the whole phrase there, so
+- **Where a marker may go, exactly** (`BLOCKED ON OWNER` and the window pair — `STANDING BY` is
+  stricter, see below): in the entry's SUBJECT anywhere — the app matches the whole phrase there, so
   `TASK 1 committed abc1234. WRITING WINDOW OPEN for the hardening` counts — or at the START OF A
   LINE in the body. **Mid-sentence in the body is DISCUSSION and deliberately does not count**:
   members talk about this vocabulary constantly, and a brief that merely mentioned a marker once
   pinned a session's state for four hours. Markers are read only from YOUR OWN entries.
-- **`STANDING BY` is read from the SUBJECT ONLY, and that is the whole rule.** It is the one marker
-  whose placement carries meaning, because placement is the only thing that separates the two states
-  it used to collapse: an entry TITLED with the marker is a declaration, and an entry titled by a
-  result that merely closes with the marker is a REPORT — which is still waiting for a verdict. Both
-  read identically as text; only the title says which one you meant. Get this backwards toward the
-  body and your supervisor gets one spurious wake; get it backwards toward the subject and your
-  filed work waits in silence with nothing anywhere saying so.
-- **`STANDING BY` — the ONE exception, and it is required.** When you go quiet on purpose with
-  nothing owed and nothing running — you finished and are waiting for a brief, or you were told to
-  hold — append a one-line entry whose SUBJECT is `STANDING BY`. It is the only way the
+- **`STANDING BY` is the strict one: it must LEAD your subject and stand ALONE there.** The marker,
+  then what you are waiting FOR, and nothing else — no second clause after it, no result in front of
+  it. These declare; these do not:
+
+  ```
+  STANDING BY                                          declares
+  STANDING BY — waiting on rev-4's re-check            declares
+  STANDING BY — nothing owed, nothing running          declares (a comma is not a second clause)
+
+  STANDING BY — one correction: the wrong file         does NOT — the correction is owed a reply
+  standing by; clearing the nudge, and one item open   does NOT — same
+  answering your [9] and [10], then standing by        does NOT — the answers are owed a reply
+  TASK 1 committed abc1234. STANDING BY                does NOT — that is a report
+  ```
+
+  **The three "does NOT" lines are real subjects from live channels on this machine** — the mixed
+  shape is what members write when nobody has told them not to, which is why the rule has to survive
+  it. Anything you want said BESIDES the declaration goes in its own entry, filed first; then declare.
+- **The rule is a heuristic and it errs toward NOT declaring**, on purpose: a missed declaration costs
+  your supervisor one spurious wake — visible, with a legible cause — while a false one costs your
+  filed work its reader, silently, with nothing anywhere saying so. Where it is unsure, you get the
+  nudge.
+- **`STANDING BY` — the ONE exception to no-acknowledgment-entries, and it is required.** When you go
+  quiet on purpose with nothing owed and nothing running — you finished and are waiting for a brief,
+  or you were told to hold — append a one-line entry whose SUBJECT is `STANDING BY`. It is the only way the
   app can tell "idle on purpose" from "stalled mid-task": those two look identical from outside, so without
   it the app nudged idle members every 8 minutes forever and nudged the supervisor about the very
   entry that had asked it for nothing. **Write it once per quiet spell**, not per turn — any inbound

@@ -149,11 +149,23 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
   window to close and no need for the close phrase. (Before this was enforced, a reviewer filing a
   finding about a window pinned ITSELF with no way out: its own next entry could not clear it, and
   neither could the supervisor.)
-- **`STANDING BY` — required when you go quiet on purpose, and read from the SUBJECT ONLY.** Finished
-  a review and waiting for the next one, or told to hold? Append a one-line entry whose SUBJECT is
-  `STANDING BY`, saying what you are waiting for. **Placement is the whole rule:** an entry TITLED
-  with the marker is a declaration; an entry titled by a result that merely closes with the marker is
-  a report still waiting for a verdict. Nothing else in the entry can tell those apart. "Idle on purpose" and "stalled mid-task" are indistinguishable from outside,
+- **`STANDING BY` — required when you go quiet on purpose. It must LEAD your subject and stand ALONE
+  there.** Finished a review and waiting for the next one, or told to hold? Append a one-line entry
+  whose SUBJECT is the marker, then what you are waiting FOR, and nothing else:
+
+  ```
+  STANDING BY — waiting for the next review          declares
+  STANDING BY — nothing owed, nothing running        declares (a comma is not a second clause)
+
+  STANDING BY — one correction: the wrong file       does NOT — the correction is owed a reply
+  review filed, 3 findings. STANDING BY              does NOT — that is a report
+  ```
+
+  **The "does NOT" lines are real subjects from live channels here** — one of them a reviewer entry
+  that confirmed a live defect and would have declared itself idle while doing it. That mixed shape is
+  what reviewers write when nobody has told them not to. Anything besides the declaration goes in its
+  own entry, filed first; then declare. The rule errs toward NOT declaring, so where it is unsure you
+  get a nudge rather than silence. "Idle on purpose" and "stalled mid-task" are indistinguishable from outside,
   so without the declaration the app nudges you every 8 minutes forever — and nudges your supervisor
   about the entry that asked it for nothing. Once per quiet spell; any inbound entry clears it.
   Never write it while you still owe work.

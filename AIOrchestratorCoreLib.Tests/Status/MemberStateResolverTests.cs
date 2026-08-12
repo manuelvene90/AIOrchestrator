@@ -401,6 +401,55 @@ public class MemberStateResolverTests
     }
 
     /// <summary>
+    /// THE SHAPE BARE PLACEMENT COULD NOT SURVIVE: a declaration and owed content sharing one subject.
+    /// A reviewer went through the live channels on this machine and found members write it regularly
+    /// — that is what these fixtures are evidence of, and it is the only claim the corpus supports.
+    /// It cannot say how often the new rule will be wrong, because every one of those entries was
+    /// written before any placement rule was taught.
+    ///
+    /// These three are REAL SUBJECTS from that corpus, not invented ones. Each would have declared
+    /// itself idle while owing its supervisor an answer — and the second one is the very entry that
+    /// was recorded as the fourth independent confirmation of the defect this branch exists to fix. A
+    /// rule that silences the report which established the defect is not finished.
+    ///
+    /// Two properties carry all three: the marker must LEAD the subject (the second trails it behind
+    /// the content), and what follows must not open a second clause (the first with a semicolon, the
+    /// third with a colon).
+    /// </summary>
+    [Theory]
+    [InlineData("standing by; clearing the nudge, and ONE ITEM STILL OPEN ON YOUR SIDE")]
+    [InlineData("answering the three questions left open in your [9] and [10], then standing by")]
+    [InlineData("STANDING BY — one correction to the queued residual: the wrong file is named")]
+    public void ADeclarationSharingItsSubjectWithOwedContentIsNotADeclaration(string subject)
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "brief", "do the work"),
+            Build_Entry(2, ChannelAuthors.Implementer, subject, "the body"),
+        };
+
+        Assert.Equal(MemberStates.AwaitingSupervisorReview, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
+    /// AND THE COMMA IS NOT A CLAUSE BREAK, asserted on its own because it is the one piece of the
+    /// rule that had to be decided rather than measured. "nothing owed, nothing running" is a single
+    /// thought and is what members actually write; treating every comma as a second clause would
+    /// leave almost nothing able to declare at all.
+    /// </summary>
+    [Fact]
+    public void ACommaInsideTheDeclarationDoesNotBreakIt()
+    {
+        var entries = new[]
+        {
+            Build_Entry(1, ChannelAuthors.Supervisor, "hold", "nothing queued"),
+            Build_Entry(2, ChannelAuthors.Implementer, "STANDING BY — nothing owed, nothing running", "."),
+        };
+
+        Assert.Equal(MemberStates.StandingBy, MemberState_Resolver.Resolve(entries));
+    }
+
+    /// <summary>
     /// A longer token that merely starts the same way is a different word.
     ///
     /// ALSO MOVED TO THE SUBJECT, and not cosmetically: left in the body this would still have
