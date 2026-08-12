@@ -3834,18 +3834,29 @@ internal sealed class BridgeEngineModel(
             // with no disable_notification, so a topic the owner had explicitly silenced could put
             // a push on their phone the first time it needed a status line. Silenced means
             // DISCARDED, not quiet, and this code drew no distinction.
-            var text = Build_TopicStatusLineText(session);
-
             _statusLineTextByOrchId.TryGetValue(session.OrchId, out var lastText);
+            _statusLineAttemptUtcByOrchId.TryGetValue(session.OrchId, out var lastFailedAttemptUtc);
 
-            // The decision lives in Telegram.TopicStatusLine_Decider so it can be tested — in
-            // particular the restart case, which has an id and no remembered text and must EDIT.
-            var action = Telegram.TopicStatusLine_Decider.Decide(text, lastText, session.StatusLineMessageId);
+            // EVERY decision is made in Telegram.TopicStatusLine_Planner, which the suite can reach.
+            // This method is left with execution only. Three gates lived here and a reviewer deleted
+            // all three at once without reddening a single test — the engine is internal sealed with
+            // no InternalsVisibleTo, so nothing decided inside it can be checked.
+            var plan = Telegram.TopicStatusLine_Planner.Plan(
+                session.DisplayName ?? session.OrchId,
+                Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId))),
+                Build_TopicStatusMembers(session),
+                Find_LastConversationSubject_OrNull(session),
+                DateTime.Now,
+                session.StatusLineMessageId,
+                lastText,
+                Resolve_EffectiveMode(session.OrchId),
+                _statusLineAttemptUtcByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptUtc : null,
+                MIRROR_RETRY_BACKOFF_SECONDS);
+
+            var action = plan.Action;
+            var text = plan.Text;
 
             if (action == Telegram.TopicStatusActions.None)
-                continue;
-
-            if (!Is_StatusLineAttemptDue(session.OrchId))
                 continue;
 
             try
@@ -3858,13 +3869,6 @@ internal sealed class BridgeEngineModel(
                 }
                 else
                 {
-                    // THE GATE IS ON THE POST ONLY. An edit produces no notification, so silencing it
-                    // buys nothing and costs a line frozen at pre-DND content for the whole period —
-                    // the same stale-state failure as a closed member's row. A POST does notify, and a
-                    // topic the owner silenced must not be the thing that pushes to their phone.
-                    if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
-                        continue;
-
                     var messageId = await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
 
                     if (messageId == null)
@@ -4048,34 +4052,15 @@ internal sealed class BridgeEngineModel(
 
 
     /// <summary>
-    /// Same backoff the mirror uses, for the same reason: answering a 429 at the tick rate is how a
-    /// throttle sustains itself.
+    /// GATHERS, decides nothing. A closed member's channel is never read — 64% of 3.65 MB per tick —
+    /// but it IS handed over marked closed, so the builder's guard is a state the app can produce.
     /// </summary>
-    bool Is_StatusLineAttemptDue(string orchId)
+    IReadOnlyList<Telegram.TopicStatusMember.ITopicStatusMember> Build_TopicStatusMembers(IOrchestrationSession session)
     {
-        if (!_statusLineAttemptUtcByOrchId.TryGetValue(orchId, out var lastAttemptUtc))
-            return true;
-
-        return DateTime.UtcNow - lastAttemptUtc >= TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS);
-    }
-
-    string Build_TopicStatusLineText(IOrchestrationSession session)
-    {
-        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
-
         List<Telegram.TopicStatusMember.ITopicStatusMember> members = [];
-        Channels.ChannelEntry.IChannelEntry? lastEntry = null;
 
         foreach (var member in session.Members)
         {
-            // A CLOSED MEMBER'S CHANNEL IS NEVER READ — 64% of 3.65 MB per tick, thirty times a
-            // minute, parsed and then discarded at render — but it IS still handed to the builder,
-            // marked closed and carrying no entries.
-            //
-            // Hard-coding isClosed:false here made the builder's own guard unreachable in production
-            // while two tests constructed `isClosed: true` themselves and pinned the dead branch.
-            // Passing the real flag costs nothing and makes those tests describe a state the app can
-            // actually produce.
             if (member.ClosedUtc != null)
             {
                 members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, [], isClosed: true));
@@ -4085,25 +4070,36 @@ internal sealed class BridgeEngineModel(
             var entries = ChannelEntry_Parser.Parse_All(
                 UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));
 
-            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(
-                member.MemberId, entries, isClosed: false));
+            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false));
+        }
 
-            // THE ONE PLACE that answers "what was the last real entry" — app nudges are not
-            // conversation. Without it, /resume appends to every member channel in every
-            // orchestration and every topic simultaneously reads `last GO AHEAD`.
+        return members;
+    }
+
+    /// <summary>
+    /// The most recent real entry across the live members, by the stamp the AGENT wrote. App entries
+    /// are not conversation — without that, /resume appends to every member channel in every
+    /// orchestration and every topic simultaneously reads `last GO AHEAD`.
+    /// </summary>
+    string? Find_LastConversationSubject_OrNull(IOrchestrationSession session)
+    {
+        Channels.ChannelEntry.IChannelEntry? lastEntry = null;
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+                continue;
+
+            var entries = ChannelEntry_Parser.Parse_All(
+                UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));
+
             var candidate = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
 
             if (candidate != null && (lastEntry == null || Is_LaterStamp(candidate, lastEntry)))
                 lastEntry = candidate;
         }
 
-        return Telegram.TopicStatusLine_Builder.Build(
-            session.DisplayName ?? session.OrchId,
-            progress,
-            members,
-            lastEntry?.Subject,
-            DateTime.Now,
-            session.StatusLineMessageId != null);
+        return lastEntry?.Subject;
     }
 
     /// <summary>

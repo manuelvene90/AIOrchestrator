@@ -76,16 +76,20 @@ public class TopicStatusLineDeciderTests
     }
 
     /// <summary>
-    /// N1: these were unreachable from the suite — `internal sealed`, no InternalsVisibleTo — so a
-    /// finder deleted three engine guards at once and 610 stayed green. Pure string questions belong
-    /// where they can be asked.
+    /// SPLIT, because one test asserting both predicates is one state with two routes — item 20, in
+    /// the tests written to answer an item 20 finding. Two mutations reddened the same method, which
+    /// told us something failed and not which.
     /// </summary>
     [Fact]
-    public void NotModifiedIsSuccessAndAMissingMessageIsTerminal()
+    public void NotModifiedIsSuccess()
     {
         Assert.True(TopicStatusLine_Decider.Is_MessageAlreadyCurrent("Bad Request: message is not modified"));
         Assert.False(TopicStatusLine_Decider.Is_MessageAlreadyCurrent("Bad Request: message to edit not found"));
+    }
 
+    [Fact]
+    public void AMissingMessageIsTerminal()
+    {
         Assert.True(TopicStatusLine_Decider.Is_MessageGone("Bad Request: message to edit not found"));
         Assert.True(TopicStatusLine_Decider.Is_MessageGone("MESSAGE_ID_INVALID"));
     }
@@ -99,6 +103,11 @@ public class TopicStatusLineDeciderTests
     public void AMessageThatExistsButCannotBeEditedIsNotTreatedAsGone()
     {
         Assert.False(TopicStatusLine_Decider.Is_MessageGone("Bad Request: message can't be edited"));
+
+        // BOTH DIRECTIONS. On its own the Assert.False above is satisfied by an always-false
+        // Is_MessageGone — it pins the exclusion while proving nothing about the inclusion, so a
+        // predicate that had stopped working entirely would keep it green.
+        Assert.True(TopicStatusLine_Decider.Is_MessageGone("Bad Request: message to edit not found"));
     }
 
     /// <summary>The genuine first time: no id anywhere, so there is nothing to edit.</summary>
