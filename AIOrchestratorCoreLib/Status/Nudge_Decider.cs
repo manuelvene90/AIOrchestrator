@@ -138,6 +138,14 @@ public static class Nudge_Decider
     /// described the westward behaviour; the loud failure is the one that gets noticed, and it is not
     /// the one we have here.
     /// </summary>
+    /// <param name="now">
+    /// LOCAL wall time — <c>DateTime.Now</c>, never <c>DateTime.UtcNow</c>. Both sources this reads
+    /// are local: channel header stamps are written in local time by agents, and
+    /// <c>File.GetLastWriteTime</c> is local. "Correcting" this to UTC does not shift the answer, it
+    /// INVERTS it — on any machine ahead of UTC the subtraction goes negative, nothing ever reaches
+    /// the nudge threshold, and every alarm in the system goes silent while the suite stays green.
+    /// <c>NudgeClockProbeTests</c> exists for that one mutation.
+    /// </param>
     public static TimeSpan Measure_QuietFor(IReadOnlyList<IChannelEntry> entries, string channelFilePath, DateTime now)
     {
         var lastConversationEntry = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
