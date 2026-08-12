@@ -159,6 +159,16 @@ public class NudgeDeciderTests
         Assert.False(Nudge_Decider.Owes_MemberAVerdict([]));
     }
 
+    /// <summary>
+    /// The SUBJECT is deliberately not the body. An earlier version passed one string as both, so a
+    /// marker matcher reading Subject instead of RawText — or Body instead of either — would have
+    /// been invisible here: every field said the same thing, so every implementation agreed. That
+    /// matters most while the matcher is the thing being changed.
+    ///
+    /// The body is also placed on its OWN LINE below the header, which is where a real entry puts it.
+    /// A declaration is anchored to the start of a line, so a fixture that flattens the entry into
+    /// one string cannot tell a declaration from a mention of one.
+    /// </summary>
     static IReadOnlyList<IChannelEntry> Build(params (ChannelAuthors Author, string Body)[] entries)
     {
         List<IChannelEntry> built = [];
@@ -167,14 +177,15 @@ public class NudgeDeciderTests
         {
             var author = entries[index].Author;
             var body = entries[index].Body;
+            var subject = $"entry {index + 1} from {author}";
 
             built.Add(ChannelEntry_Factory.Create(
                 index + 1,
                 author,
                 "2026-08-12",
+                subject,
                 body,
-                body,
-                $"## [{index + 1}] FROM {author} — 2026-08-12 02:00 — {body}\n{body}"));
+                $"## [{index + 1}] FROM {author} — 2026-08-12 02:00 — {subject}\n{body}"));
         }
 
         return built;
