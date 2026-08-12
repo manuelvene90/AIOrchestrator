@@ -6,12 +6,25 @@ namespace AIOrchestratorCoreLib.Sessions;
 /// </summary>
 public static class ChannelSeed_Builder
 {
+    /// <summary>
+    /// Used for EVERY member channel, reviewers included — so the author word it names must match the
+    /// member it is for. It said `supervisor|implementer` in a reviewer's channel, telling that
+    /// reviewer to sign entries as an implementer.
+    ///
+    /// Nothing has gone wrong yet: reviewers write `FROM reviewer` because their role command says
+    /// so, and zero occurrences turned up across 17 reviewer channels. But the author word is not
+    /// cosmetic any more — window markers are read only from member-authored entries, and a reviewer
+    /// is specifically barred from that state — so a file that instructs the wrong word is a defect
+    /// waiting for a session that trusts the file it was handed over the command it was given.
+    /// </summary>
     public static string Build_ImplementerChannelSeed(string orchId, string memberId)
     {
+        var authorWord = MemberKind_Ids.Resolve_Kind(memberId) == MemberKinds.Reviewer ? "reviewer" : "implementer";
+
         return
             $"# SUPERVISION CHANNEL — supervisor ⇄ {memberId} — orchestration '{orchId}'\n" +
             "\n" +
-            "Append-only duplex channel. Entries start with `## [n] FROM supervisor|implementer — date — subject`.\n" +
+            $"Append-only duplex channel. Entries start with `## [n] FROM supervisor|{authorWord} — date — subject`.\n" +
             "Protocol rules live in the /supervisor and /implementer role commands. Never edit past entries.\n" +
             "\n" +
             "---\n";
