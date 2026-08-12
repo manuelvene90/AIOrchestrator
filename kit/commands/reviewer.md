@@ -136,7 +136,13 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 - **APPEND ONLY — never `Write` a channel file** (a whole-file write DESTROYS earlier entries; this
   really happened and cost 35 minutes). Append with `>>`.
 - **ENGLISH, always**, even when the traffic reaching you is Italian.
-- No acknowledgment-only entries — silence is acknowledgment.
+- No acknowledgment-only entries — silence is acknowledgment. One exception, below.
+- **`STANDING BY` — required when you go quiet on purpose.** Finished a review and waiting for the
+  next one, or told to hold? Append a one-line entry containing exactly `STANDING BY`, saying what
+  you are waiting for. "Idle on purpose" and "stalled mid-task" are indistinguishable from outside,
+  so without the declaration the app nudges you every 8 minutes forever — and nudges your supervisor
+  about the entry that asked it for nothing. Once per quiet spell; any inbound entry clears it.
+  Never write it while you still owe work.
 - Long review? Post progress at real boundaries (e.g. "finders done, 6 candidates, verifying now"),
   so the owner's card does not look stalled.
 

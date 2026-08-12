@@ -884,40 +884,11 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                var spokeLast = ChannelAuthor_Kinds.Is_Member(entries[^1].Author);
+                // Both nudge rules live in Nudge_Decider, together — see the class comment for why
+                // splitting them across two files is what made them exhaustive.
+                var dormantMidWork = Nudge_Decider.Is_DormantMidWork(entries);
 
-                // A session CANNOT give itself the next turn — its monitor fires only when someone
-                // ELSE writes. So a member that spoke last and then went quiet is waiting for a
-                // message that is never coming, and the nudge IS that message.
-                //
-                // The two states that are LEGITIMATE dormancy are excluded: a filed report is
-                // waiting for the supervisor's verdict, and BLOCKED ON OWNER is waiting for the
-                // owner. Both have someone who owes them a reply; nudging them would be noise.
-                // Everything else the member said last — an open writing window, a "proceeding
-                // with X" — means it stopped mid-task with nobody about to speak to it.
-                var memberState = MemberState_Resolver.Resolve(entries);
-
-                var waitingOnSomeoneElse =
-                    memberState == MemberStates.AwaitingSupervisorReview || memberState == MemberStates.BlockedOnOwner;
-
-                // A member that has NEVER been briefed is not dormant mid-work — it is waiting for
-                // work, which is the correct state for a freshly spawned imp-1 or rev-1. Without
-                // this, every orchestration's pre-spawned members were nudged for saying "online"
-                // and then respawned, losing their context on a loop.
-                var everBriefed = false;
-
-                foreach (var channelEntry in entries)
-                {
-                    if (channelEntry.Author == ChannelAuthors.Supervisor)
-                    {
-                        everBriefed = true;
-                        break;
-                    }
-                }
-
-                var dormantMidWork = spokeLast && everBriefed && !waitingOnSomeoneElse;
-
-                if (spokeLast && !dormantMidWork)
+                if (!dormantMidWork && !Nudge_Decider.Has_UnansweredInboundTraffic(entries))
                 {
                     _nudgedMemberUtc.Remove(memberKey);
                     continue;
@@ -1071,7 +1042,7 @@ internal sealed class BridgeEngineModel(
 
             var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
 
-            if (entries.Count == 0 || !ChannelAuthor_Kinds.Is_Member(entries[^1].Author))
+            if (!Nudge_Decider.Owes_MemberAVerdict(entries))
                 continue;
 
             if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile)).TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
@@ -1111,13 +1082,18 @@ internal sealed class BridgeEngineModel(
         bool dormantMidWork,
         CancellationToken cancellationToken)
     {
+        // NO CLAIM ABOUT THE MONITOR. The old subject said "nothing was going to wake you" and the
+        // body asserted the same thing; the app cannot see a session's monitor, and it was told to a
+        // reviewer whose monitor was alive and had fired on every write for the previous half hour.
+        // An alert that asserts an unchecked fact teaches the reader to discount the ones that are
+        // checked — and this one is load-bearing for a genuinely stalled session.
         var subject = dormantMidWork
-            ? "you stopped mid-task — nothing was going to wake you"
+            ? "you went quiet mid-task — resume or say what you are waiting for"
             : "unread traffic — you have not answered";
 
         var body = dormantMidWork
-            ? $"Your own entry [{lastEntry.Index}] is the last thing on this channel and nothing has moved for {SessionDuration_Formatter.Describe(quietFor)}. Your monitor only fires when someone ELSE writes, so a turn ended mid-task can never continue on its own — this entry is the app waking you. Resume the work you announced. If you are in fact waiting on somebody, say so explicitly (file your report, or write BLOCKED ON OWNER with the question) instead of going quiet — silence is indistinguishable from a dead session."
-            : $"Entry [{lastEntry.Index}] FROM {lastEntry.Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If your monitor is no longer running, arm a fresh one.";
+            ? $"Your own entry [{lastEntry.Index}] is the last thing on this channel and nothing has moved for {SessionDuration_Formatter.Describe(quietFor)}, with work still announced. A monitor only fires when someone ELSE writes, so if nobody owes you a reply this cannot continue on its own — this entry is the app waking you in case that is what happened. Resume what you announced. If you are in fact waiting, say which: file your report, write BLOCKED ON OWNER with the question, or write STANDING BY if you have nothing owed and nothing running. Any of the three stops these nudges; silence does not, because silence is indistinguishable from a dead session."
+            : $"Entry [{lastEntry.Index}] FROM {lastEntry.Author.ToString().ToLowerInvariant()} has been waiting {SessionDuration_Formatter.Describe(quietFor)} with no reply from you. Read this channel from your last entry down and act on it. If it asked you for nothing — a hold, an acknowledgement — reply STANDING BY once and these stop. If your monitor is no longer running, arm a fresh one.";
 
         ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
 

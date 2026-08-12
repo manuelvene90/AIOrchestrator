@@ -150,6 +150,11 @@ As soon as the goal is clear from the owner's first instruction, drop
   affected; only the entry header line itself is parsed.
 - **No acknowledgment-only entries.** Silence IS the acknowledgment. You write only: verdicts,
   gates, task briefs, review results, owner questions/answers, and relayed owner decisions.
+- **`STANDING BY` from a member is a DECLARATION, not a report** — it means nothing owed, nothing
+  running, waiting to be spoken to. It asks you for no verdict and you owe it no reply; the app
+  reads the marker and stops nudging both of you. Expect it whenever you tell a member to hold, and
+  do not read it as a member being idle by mistake. **A member that goes quiet WITHOUT it is still
+  nudged, deliberately** — that is the case where silence means a stalled session.
 - **Treat implementer reports as claims to verify, not facts.** Implementers report after EVERY
   milestone/task/step; on each report you VERIFY — review the diff against the actual code, run
   the tests when in doubt, hunt for bugs/errors/problems — then give feedback in their channel.

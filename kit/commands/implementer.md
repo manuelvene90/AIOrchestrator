@@ -57,7 +57,16 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   only interlocutor is your supervisor. A question only the owner can answer goes to the
   supervisor, who asks the owner.
 - **No acknowledgment-only entries** — silence is acknowledgment. Write only boundary reports,
-  evidence-backed pushbacks, and blocked flags.
+  evidence-backed pushbacks, blocked flags, and the one declaration below.
+- **`STANDING BY` — the ONE exception, and it is required.** When you go quiet on purpose with
+  nothing owed and nothing running — you finished and are waiting for a brief, or you were told to
+  hold — append a one-line entry containing exactly `STANDING BY`. It is the only way the app can
+  tell "idle on purpose" from "stalled mid-task": those two look identical from outside, so without
+  it the app nudged idle members every 8 minutes forever and nudged the supervisor about the very
+  entry that had asked it for nothing. **Write it once per quiet spell**, not per turn — any inbound
+  entry clears it, and if the traffic that arrives asks you for nothing, declare again and stop.
+  Say in the same line what you are waiting FOR. Do not write it while you still owe work: a session
+  that goes quiet mid-task must be woken, and this is the switch that turns that off.
 - **You do not review your own work, and you never sign it off.** Your report states what you did
   and the evidence for it; a separate READ-ONLY reviewer session (`rev-n`) and your supervisor
   decide whether it is good. This holds for one-line changes too — "it's small" is exactly when

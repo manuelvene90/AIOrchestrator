@@ -15,6 +15,12 @@ public static class MemberState_Resolver
     public const string MUTATION_WINDOW_CLOSED_MARKER = "MUTATION WINDOW CLOSED";
     public const string BLOCKED_ON_OWNER_MARKER = "BLOCKED ON OWNER";
 
+    /// <summary>
+    /// The member declaring it has nothing owed and nothing running. Protocol vocabulary: the role
+    /// commands instruct members to write this exact phrase when they go quiet on purpose.
+    /// </summary>
+    public const string STANDING_BY_MARKER = "STANDING BY";
+
     public static MemberStates Resolve(IReadOnlyList<IChannelEntry> entries)
     {
         if (entries.Count == 0)
@@ -32,6 +38,13 @@ public static class MemberState_Resolver
         {
             if (Contains_Marker(lastEntry, BLOCKED_ON_OWNER_MARKER))
                 return MemberStates.BlockedOnOwner;
+
+            // Checked BEFORE the fallback, because the fallback is what made an idle member look
+            // like a pending review: every member-last entry resolved to AwaitingSupervisorReview,
+            // so "standing by, nothing owed" put the supervisor on the hook for a verdict that was
+            // never requested — and it was nudged for not giving one.
+            if (Contains_Marker(lastEntry, STANDING_BY_MARKER))
+                return MemberStates.StandingBy;
 
             return MemberStates.AwaitingSupervisorReview;
         }
