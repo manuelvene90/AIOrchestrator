@@ -980,6 +980,20 @@ internal sealed class BridgeEngineModel(
                     // MEMBER PATH ONLY. The supervisor nudge is keyed and written elsewhere and does
                     // not self-feed the same way; it is not covered here, and saying so is the point
                     // of this sentence.
+                    //
+                    // A LIVENESS CHECK STOPPED RUNNING HERE AND IT WAS NOT LOST BY ACCIDENT. Under
+                    // the old loop a healthy idle member was re-probed every eight minutes — but
+                    // nobody designed that polling, it was the defect's exhaust: the repeat existed
+                    // only because the app kept re-qualifying the member with its own writes. A
+                    // member is now probed once per unanswered thing.
+                    //
+                    // The case that leaves open is narrow and deliberate: a member that is nudged,
+                    // proves alive, and dies LATER with nothing new said to it. PROCESS death is not
+                    // this path's job — pid files and the watchdog cover that. This path catches a
+                    // live process whose MONITOR is dead, and such a member goes unnoticed only for
+                    // as long as nobody needs it: the moment anyone writes, the conversation moves,
+                    // the nudge fires and the probe runs six minutes later. Detected when it matters
+                    // rather than polled forever.
                     var conversationIdentity = Nudge_Decider.Identify_LastConversationEntry_OrNull(entries);
 
                     if (conversationIdentity != null
