@@ -3872,11 +3872,18 @@ internal sealed class BridgeEngineModel(
                 _statusLineTextByOrchId[session.OrchId] = text;
                 _statusLineAttemptUtcByOrchId.Remove(session.OrchId);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Shutdown, not a failure. Sync_TopicNames rethrows it first 130 lines above for
-                // the same reason: swallowing it left the loop issuing HTTP calls on a cancelled
-                // token for every remaining orchestration.
+                // Shutdown, not a failure — and THE TOKEN DECIDES, which the unguarded version got
+                // wrong. HttpClient.Timeout surfaces as a TaskCanceledException with the token NOT
+                // cancelled, so a wedged endpoint was being rethrown as if it were a shutdown: the
+                // whole mirror tick aborted, skipping the tailer poll, all agent-to-Telegram
+                // mirroring, usage checks, name sync, compaction and the state persist — and it
+                // bypassed the backoff stamp below, so the next tick retried the same wedged
+                // endpoint immediately, defeating the backoff added in the same commit.
+                //
+                // Before that change the generic catch below handled a timeout and the tick carried
+                // on, which is the behaviour this restores for everything except a real shutdown.
                 throw;
             }
             catch (Exception exception) when (Is_MessageAlreadyCurrent(exception))
@@ -4242,6 +4249,22 @@ internal sealed class BridgeEngineModel(
             _appliedTopicNames[session.OrchId] = topicName;
             Take_KnownTopicMessageIds(messageThreadId);
             Take_ReceiptMessageId_OrNull(messageThreadId);
+
+            // THE STATUS LINE IS FORGOTTEN HERE, DETERMINISTICALLY, beside the four resets that were
+            // already doing this for everything else the old topic owned.
+            //
+            // The error-string recovery on the edit path is REACTIVE: it needs a failed edit to fire.
+            // An all-idle orchestration builds byte-identical text every tick, so the decider returns
+            // None forever, no edit is ever attempted, the predicate never fires — and the recreated
+            // topic gets no status line until somebody is next briefed, which in an idle
+            // orchestration may be never.
+            //
+            // Resetting here makes matching on exception.Message a BACKSTOP rather than the
+            // mechanism, which is where it belongs: substring-against-a-sentence is the class this
+            // repo has now hit four times.
+            _store.Clear_StatusLineMessageId(session.OrchId);
+            _statusLineTextByOrchId.Remove(session.OrchId);
+            _statusLineAttemptUtcByOrchId.Remove(session.OrchId);
 
             await client.Remove_TopicCreationPin_Async(newTopicId, cancellationToken);
 
