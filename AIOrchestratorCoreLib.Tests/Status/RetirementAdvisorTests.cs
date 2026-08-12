@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Status;
 using Xunit;
 
@@ -133,6 +134,27 @@ public class RetirementAdvisorTests
     {
         Assert.False(Retirement_Advisor.Should_SuggestClosing([], hasBeenBriefed: true, NOW));
         Assert.Null(Retirement_Advisor.Describe_IdleFor_OrNull([], NOW));
+    }
+
+    /// <summary>
+    /// THE FLAG MUST NEVER REACH TELEGRAM, and this is the assertion that keeps it that way.
+    ///
+    /// The owner cannot close a member — the supervisor can — so pushing this to their phone would
+    /// be the app forwarding somebody else's job to their lock screen, which is exactly what rule 15
+    /// exists to stop. Suppression is by SUBJECT, so the constant and the mirror's list must agree
+    /// exactly; asserting through the real predicate is what makes a rename impossible to get half
+    /// right.
+    /// </summary>
+    [Fact]
+    public void TheFlagSubjectIsSuppressedFromTelegram()
+    {
+        var entry = ChannelEntry_Factory.Create(
+            1, ChannelAuthors.App, "2026-08-12 12:00", Retirement_Advisor.FLAG_SUBJECT, "body",
+            $"## [1] FROM app — 2026-08-12 12:00 — {Retirement_Advisor.FLAG_SUBJECT}");
+
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("orch-1", "owner-channel.md");
+
+        Assert.False(AIOrchestratorCoreLib.Mirroring.MirrorText_Formatter.Should_Mirror(ownerChannel, entry));
     }
 
     static IReadOnlyList<IChannelEntry> Build(params (ChannelAuthors Author, string Subject, string Stamp)[] entries)

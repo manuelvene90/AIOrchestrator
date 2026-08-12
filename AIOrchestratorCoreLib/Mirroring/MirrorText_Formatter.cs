@@ -104,6 +104,7 @@ public static class MirrorText_Formatter
         "Do-Not-Disturb is off",
         "GO AHEAD — resume",
         "unread traffic — you have not answered",
+        Status.Retirement_Advisor.FLAG_SUBJECT,
         "you stopped mid-task",
         "INVISIBLE — malformed header",
         "entries are INVISIBLE",

@@ -221,6 +221,13 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _statusLineTextByOrchId = [];
 
     /// <summary>
+    /// Which members have already been flagged as idle, per orchestration, so the reminder is written
+    /// ONCE per quiet spell rather than every tick. Cleared when the set changes, which is what makes
+    /// a member becoming idle — or stopping — say something exactly once.
+    /// </summary>
+    readonly Dictionary<string, string> _flaggedIdleMembersByOrchId = [];
+
+    /// <summary>
     /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
     /// one message instead of three. Key 0 = the General topic (no thread id).
     /// </summary>
@@ -610,6 +617,7 @@ internal sealed class BridgeEngineModel(
         await Nudge_IdleImplementers_Async(cancellationToken);
         await Resolve_PendingOwnerReplies_Async(cancellationToken);
         await Refresh_TopicStatusLines_Async(cancellationToken);
+        Flag_IdleMembers();
 
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
@@ -3809,6 +3817,73 @@ internal sealed class BridgeEngineModel(
                 // remembered text is deliberately NOT updated, so the next tick retries.
                 _log.Log_Warning(session.OrchId, $"Topic status line could not be updated — {exception.Message}");
             }
+        }
+    }
+
+
+    /// <summary>
+    /// Tells the SUPERVISOR which members have declared themselves idle and stayed that way — the
+    /// owner's directive, 2026-08-12: an implementer nobody wants any more "stays open forever
+    /// monitoring the channel and wasting tokens".
+    ///
+    /// It goes to the supervisor's channel because the supervisor is who closes members, and it
+    /// stays OFF Telegram because the owner cannot close one. Pushing it to their phone would be
+    /// this app forwarding somebody else's job to their lock screen (rule 15); the mirror suppresses
+    /// it by subject, which is the same mechanism every other agent-facing app entry uses.
+    ///
+    /// ONCE PER QUIET SPELL. The set of flagged members is remembered and only a CHANGE speaks, so a
+    /// crew that stays idle is mentioned once rather than every two seconds — a reminder that repeats
+    /// is a reminder that gets ignored, which would leave the accumulation exactly where it started.
+    ///
+    /// It never closes anything. Retiring a live member on an inference is the failure this protocol
+    /// warns about twice; the decision stays the supervisor's.
+    /// </summary>
+    void Flag_IdleMembers()
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            List<string> idle = [];
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc != null)
+                    continue;
+
+                var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+
+                if (!File.Exists(channelFile))
+                    continue;
+
+                var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+
+                if (!Status.Retirement_Advisor.Should_SuggestClosing(entries, Nudge_Decider.Has_BeenBriefed(channelFile), DateTime.Now))
+                    continue;
+
+                idle.Add($"{member.MemberId} (idle {Status.Retirement_Advisor.Describe_IdleFor_OrNull(entries, DateTime.Now)})");
+            }
+
+            var signature = string.Join(", ", idle);
+
+            _flaggedIdleMembersByOrchId.TryGetValue(session.OrchId, out var lastSignature);
+
+            if (signature == (lastSignature ?? ""))
+                continue;
+
+            _flaggedIdleMembersByOrchId[session.OrchId] = signature;
+
+            if (idle.Count == 0)
+                continue;
+
+            ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(session.OrchId),
+                Status.Retirement_Advisor.FLAG_SUBJECT,
+                $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
+                DateTime.Now);
+
+            _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
         }
     }
 

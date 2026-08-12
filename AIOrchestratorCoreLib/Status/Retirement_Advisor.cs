@@ -29,6 +29,15 @@ public static class Retirement_Advisor
     public const int IDLE_MINUTES_BEFORE_FLAGGING = 30;
 
     /// <summary>
+    /// The subject the app writes when it flags idle members. A CONSTANT because two places must
+    /// agree on it exactly: the engine writes it, and the mirror suppresses it by subject so it
+    /// never reaches Telegram. The owner cannot close a member — the supervisor can — so pushing
+    /// this to their phone would be the app forwarding somebody else's job to their lock screen,
+    /// which is precisely what rule 15 exists to stop.
+    /// </summary>
+    public const string FLAG_SUBJECT = "idle members you could close";
+
+    /// <summary>
     /// True when this member has done work, has DECLARED it has nothing left, and has been that way
     /// long enough to be an accumulation rather than a pause.
     ///
