@@ -259,9 +259,12 @@ thought across several of them hoping to be noticed.
   the question underneath must be short enough to answer from a lock screen.
 - **TERMINAL MODE (the owner is in your terminal) — none of the above applies.** The owner toggles
   it with `/pc` in your topic and the app writes an entry here telling you which way it went; the
-  topic shows 💻. While it is on, they are sitting in front of THIS session: **ask in the terminal,
-  in plain prose, and write no `QUESTION:`/`OPTION:` lines** — nothing is being texted, so there are
-  no buttons for them to tap and a question shaped for a lock screen is just a worse sentence.
+  topic shows 💻. While it is on, they are sitting in front of THIS session: **ask with your own
+  native question UI — the ordinary multi-option prompt — and write no `QUESTION:`/`OPTION:` lines.**
+  Those lines exist to build Telegram buttons, and nothing is being texted; a question shaped for a
+  lock screen is just a worse sentence when the person is in front of you. **The ASK happens where
+  the owner is; the channel entry stays the RECORD.** Write the entry as always, then ask in the
+  terminal — they are not the same act and only one of them is a message to a phone.
   **You are also not stopped after asking**: the app does not raise the awaiting-answer block in this
   mode, so carry on unless what you asked actually gates your next step. Anything they send from
   Telegram flips the topic back to remote and you get an entry saying so. Channel entries are still
@@ -690,6 +693,12 @@ fingerprint() { cat "$sup"/imp-*/channel.md "$sup"/rev-*/channel.md "$sup/owner-
 prev="$(fingerprint)"
 while true; do
   sleep 5
+  # MEETING: the owner is at your terminal (/pc). Stay armed, say NOTHING — and do NOT advance
+  # `prev`, which is the load-bearing half: the first tick after the flag is gone sees the whole
+  # difference and fires exactly ONCE, so the meeting costs you no notifications and loses no wake.
+  if [ -f "$sup/.meeting" ]; then
+    continue
+  fi
   cur="$(fingerprint)"
   if [ "$cur" != "$prev" ]; then
     echo "CHANNELS CHANGED on $ARGUMENTS — read every channel from your last entry down, act on it, append your entries."
@@ -697,6 +706,13 @@ while true; do
   fi
 done
 ```
+
+**The `.meeting` check is not optional and not decoration.** Without it every append during a meeting
+prints a wake notification into the terminal the owner is trying to talk in — which is the complaint
+that created this mode. Without the `continue`-without-advancing shape, silence would swallow the
+resumption wake instead of deferring it, and you would sit deaf until some unrelated append arrived.
+The APP writes and removes that file; you never create it, and you never delete it to get your
+notifications back.
 
 **Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
 2026-08-07 twenty-nine background watchers were killed across four sessions of one orchestration,

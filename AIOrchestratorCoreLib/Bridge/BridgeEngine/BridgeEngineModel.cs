@@ -619,6 +619,10 @@ internal sealed class BridgeEngineModel(
         // After closes are processed, so a freshly-closed session is not immediately revived.
         _watchdog.Check_AndRestart_DeadSessions();
 
+        // Before anything that could write to a channel: the flag is what keeps a supervisor's
+        // watcher silent, and a tick that appends before reconciling it would litter the meeting.
+        Sync_MeetingFlags();
+
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
@@ -3805,13 +3809,26 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Apply_PresenceCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+        // NO THREAD ID IS THE GENERAL TOPIC, and the owner sits at that terminal too — it is the
+        // session they talk to most. General keeps no session.json, so its meeting flag IS its
+        // presence rather than a projection of one.
+        if (messageThreadId == null)
+        {
+            var generalPresence = OwnerPresence_Policy.Toggle(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID));
+
+            Status.MeetingFlag_Marker.Sync(_paths, ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
+            _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"Owner presence → {generalPresence}");
+            Tell_Supervisor_AboutPresence(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
+
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Presence(generalPresence), cancellationToken);
+            return;
+        }
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         if (session == null)
         {
-            // General has no orchestration to be present AT — saying so beats toggling nothing and
-            // leaving the owner to wonder which topic they just changed.
-            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "/pc works inside an orchestration's topic — it says which terminal you are sitting at.", cancellationToken);
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "/pc works in an orchestration's topic or in General — it says which terminal you are sitting at.", cancellationToken);
             return;
         }
 
@@ -3820,6 +3837,7 @@ internal sealed class BridgeEngineModel(
             var newPresence = OwnerPresence_Policy.Toggle(session.OwnerPresence);
 
             _store.Set_OwnerPresence(session.OrchId, newPresence);
+            Status.MeetingFlag_Marker.Sync(_paths, session.OrchId, newPresence);
             _log.Log_Info(session.OrchId, $"Owner presence → {newPresence}");
             Raise_OrchestrationActivity(session.OrchId);
 
@@ -3863,7 +3881,11 @@ internal sealed class BridgeEngineModel(
             : "They are on their phone again (📱). Questions are texted, the awaiting-answer block is back on, and "
                 + "the usual protocol applies: ask ONE question, with options, and stop.";
 
-        ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(orchId), subject, text, DateTime.Now);
+        var channelFile = orchId == ChannelDiscovery.GENERAL_ORCH_ID
+            ? _paths.GeneralChannelFile
+            : _paths.Get_OwnerChannelFile(orchId);
+
+        ChannelAppender.Append_AppEntry(channelFile, subject, text, DateTime.Now);
         Raise_OrchestrationActivity(orchId);
     }
 
@@ -3873,7 +3895,20 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Flip_ToRemote_IfOwnerTextedFromTelegram(long? messageThreadId, bool isPresenceCommandItself)
     {
-        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+        // General texted from Telegram ends ITS meeting too, by the same argument: they cannot be
+        // typing here and sitting at that terminal. Its flag is its state, so the flag is what moves.
+        if (messageThreadId == null)
+        {
+            if (!OwnerPresence_Policy.Should_FlipToRemote(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID), isPresenceCommandItself))
+                return;
+
+            Status.MeetingFlag_Marker.Sync(_paths, ChannelDiscovery.GENERAL_ORCH_ID, OwnerPresenceModes.Remote);
+            _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, "Owner presence → Remote (they texted General)");
+            Tell_Supervisor_AboutPresence(ChannelDiscovery.GENERAL_ORCH_ID, OwnerPresenceModes.Remote);
+            return;
+        }
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         if (session == null)
             return;
@@ -3882,6 +3917,7 @@ internal sealed class BridgeEngineModel(
             return;
 
         _store.Set_OwnerPresence(session.OrchId, OwnerPresenceModes.Remote);
+        Status.MeetingFlag_Marker.Sync(_paths, session.OrchId, OwnerPresenceModes.Remote);
         _log.Log_Info(session.OrchId, "Owner presence → Remote (they texted this topic)");
         Tell_Supervisor_AboutPresence(session.OrchId, OwnerPresenceModes.Remote);
     }
@@ -4915,10 +4951,39 @@ internal sealed class BridgeEngineModel(
         return true;
     }
 
-    /// <summary>Where the owner is for this orchestration; General has no session, so it is Remote.</summary>
+    /// <summary>
+    /// Where the owner is for this orchestration. GENERAL has no session.json, so its meeting FILE is
+    /// the state rather than a projection of it — the owner sits at that terminal too, and refusing
+    /// it presence would have left the one session they talk to most as the only one that cannot go
+    /// quiet.
+    /// </summary>
     OwnerPresenceModes Resolve_Presence(string orchId)
     {
+        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
+        {
+            return Status.MeetingFlag_Marker.Is_InMeeting(_paths, orchId)
+                ? OwnerPresenceModes.Terminal
+                : OwnerPresenceModes.Remote;
+        }
+
         return _store.Get_Session_OrNull(orchId)?.OwnerPresence ?? OwnerPresenceModes.Remote;
+    }
+
+    /// <summary>
+    /// Makes every meeting flag match its session's presence. Runs on every tick because it is two
+    /// file existence checks per orchestration, and because it is what stops a flag outliving the
+    /// mode: an app that died mid-meeting clears the flag as soon as it is running again.
+    /// </summary>
+    void Sync_MeetingFlags()
+    {
+        foreach (var session in _store.Load_All())
+        {
+            // A closed orchestration is never in a meeting, whatever its last presence said.
+            var presence = session.ClosedUtc == null ? session.OwnerPresence : OwnerPresenceModes.Remote;
+
+            if (Status.MeetingFlag_Marker.Sync(_paths, session.OrchId, presence))
+                _log.Log_Info(session.OrchId, $"Meeting flag {(presence == OwnerPresenceModes.Terminal ? "raised" : "cleared")} — the supervisor's watcher goes {(presence == OwnerPresenceModes.Terminal ? "silent" : "live")}");
+        }
     }
 
     void Raise_AwaitingAnswerFlag(string orchId)
