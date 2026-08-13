@@ -102,6 +102,41 @@ public class EffectiveModeResolverTests
         Assert.Equal(TelegramDeliveryModes.Deferred, mode);
     }
 
+    /// <summary>
+    /// THE COMPOSITION. A Deferred topic has a backlog frozen behind its cursor. The owner sits down
+    /// at that terminal, presence outranks delivery, the topic resolves to Silenced — and Silenced
+    /// topics ARE polled, so the held backlog would be read, dropped, and its offset advanced past
+    /// every entry the owner had explicitly asked to keep.
+    /// </summary>
+    [Fact]
+    public void ADeferredTopic_KeepsFreezing_WhenPresenceSilencesIt()
+    {
+        Assert.True(EffectiveMode_Resolver.Freezes_Offsets(TelegramDeliveryModes.Silenced, topicMode: TelegramDeliveryModes.Deferred));
+    }
+
+    /// <summary>
+    /// A topic that was NOT deferred is still dropped-while-silenced, deliberately: the owner is
+    /// reading it live in the terminal, and this is the behaviour Silenced is documented to have.
+    /// Without this the fix above would quietly turn every meeting into a replay queue.
+    /// </summary>
+    [Fact]
+    public void ANormalTopic_SilencedByPresence_IsStillPolledAndDropped()
+    {
+        Assert.False(EffectiveMode_Resolver.Freezes_Offsets(TelegramDeliveryModes.Silenced, topicMode: TelegramDeliveryModes.Normal));
+    }
+
+    [Fact]
+    public void AnEffectivelyDeferredTopic_Freezes()
+    {
+        Assert.True(EffectiveMode_Resolver.Freezes_Offsets(TelegramDeliveryModes.Deferred, topicMode: TelegramDeliveryModes.Normal));
+    }
+
+    [Fact]
+    public void ANormalTopic_IsPolled()
+    {
+        Assert.False(EffectiveMode_Resolver.Freezes_Offsets(TelegramDeliveryModes.Normal, topicMode: TelegramDeliveryModes.Normal));
+    }
+
     [Fact]
     public void NobodyHasAnOpinion_IsNormal()
     {

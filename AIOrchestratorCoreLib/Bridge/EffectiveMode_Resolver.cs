@@ -49,4 +49,28 @@ public static class EffectiveMode_Resolver
 
         return TelegramDeliveryModes.Normal;
     }
+
+    /// <summary>
+    /// Whether this topic must not be POLLED at all, so its offsets freeze and everything it produced
+    /// replays later. DEFERRED means held; SILENCED means dropped — and the difference is a promise
+    /// the owner is given in writing.
+    ///
+    /// <para>
+    /// THE COMPOSITION THIS EXISTS FOR. A topic set to Deferred is skipped, so a backlog builds behind
+    /// a frozen cursor. If the owner then sits down at that terminal, presence outranks delivery and
+    /// the topic resolves to SILENCED — and Silenced topics ARE polled, so the whole held backlog was
+    /// read, dropped, and its offset advanced past every entry. Leaving terminal mode restored
+    /// Deferred with the backlog gone (rev-7 P4, 2026-08-13).
+    /// </para>
+    /// <para>
+    /// Silenced's licence to drop rests on the owner reading the same content live in the terminal.
+    /// That cannot cover entries written while they were AWAY, which is exactly what a Deferred
+    /// backlog is. So the precedence is unchanged — presence still wins, nothing is pushed — but the
+    /// topic keeps FREEZING rather than starting to consume.
+    /// </para>
+    /// </summary>
+    public static bool Freezes_Offsets(TelegramDeliveryModes effectiveMode, TelegramDeliveryModes topicMode)
+    {
+        return effectiveMode == TelegramDeliveryModes.Deferred || topicMode == TelegramDeliveryModes.Deferred;
+    }
 }

@@ -1651,7 +1651,11 @@ internal sealed class BridgeEngineModel(
             // DEFERRED topics are not polled at all, so their offsets FREEZE and everything they
             // produced replays the moment the mode goes back to Normal. (Silenced topics ARE
             // polled — their traffic is dropped, deliberately never replayed.)
-            if (Resolve_EffectiveMode(channel.OrchId) == TelegramDeliveryModes.Deferred)
+            //
+            // The topic's OWN deferral is asked about separately from the effective mode, because
+            // presence turns a Deferred topic into a Silenced one — which would poll it and consume
+            // the very backlog the deferral was holding. See Freezes_Offsets.
+            if (EffectiveMode_Resolver.Freezes_Offsets(Resolve_EffectiveMode(channel.OrchId), session.TelegramMode))
                 continue;
 
             // WAIT holds BOTH directions. It means "hold on, I am still writing" — so the
