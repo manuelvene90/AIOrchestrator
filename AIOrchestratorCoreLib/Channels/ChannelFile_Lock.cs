@@ -240,27 +240,17 @@ public static class ChannelFile_Lock
             //
             // So fall back to the DIRECTORY's own age. A live acquire is microseconds old; anything
             // older than the same STALE_SECONDS had a holder that is not coming back.
-            if (!File.Exists(ownerFile))
-                return Is_DirectoryOlderThanStale(lockDirectory);
+            var heldSinceUtc = Read_UsableHeldSinceUtc_OrNull(ownerFile);
 
-            var heldSinceUtc = Read_HeldSinceUtc_OrNull(ownerFile);
-
-            // Unreadable or unparseable metadata means the same thing: this code cannot show the
-            // holder is dead, so it does not get to claim that it is. A false "alive" costs a wait;
-            // a false "dead" breaks a live lock and corrupts the file the lock was protecting.
-            if (heldSinceUtc == null)
-                return Is_DirectoryOlderThanStale(lockDirectory);
-
-            // A stamp in the FUTURE is unusable metadata, not fresh metadata. Staleness is
-            // now - held, so a future stamp makes that negative, it never exceeds the threshold, the
-            // lock is never stale — and a dead holder then wedges the channel permanently. Clock
-            // skew between a session and the app is enough, on a file two languages write.
+            // ONE condition, not a row of special cases. The metadata is either usable or it is not,
+            // and every way of not being usable has the same answer: fall back to the age of the
+            // directory, the one clock this process can vouch for.
             //
-            // This is the same defect that once rendered "on task under a minute" for hours: a
-            // future stamp turning a duration into a number that means nothing. There the fix was to
-            // refuse to display it; here it is to stop trusting it and fall through to the age of
-            // the directory, which is the one clock this process can actually vouch for.
-            if (heldSinceUtc.Value > DateTime.UtcNow)
+            // This was three sequential guards that happened to share a recovery, which is not one
+            // condition — it is three, and the fourth route gets added beside them by whoever comes
+            // next. That is not hypothetical: this defect reached production by four separate routes
+            // (absent, unparseable, empty, future-stamped) and each was repaired on its own.
+            if (heldSinceUtc == null)
                 return Is_DirectoryOlderThanStale(lockDirectory);
 
             return (DateTime.UtcNow - heldSinceUtc.Value).TotalSeconds > STALE_SECONDS;
@@ -300,6 +290,39 @@ public static class ChannelFile_Lock
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The moment the holder took the lock, or null when the metadata cannot be TRUSTED — which is
+    /// deliberately one answer covering every reason: the file is missing, it cannot be read, it has
+    /// no <c>utc</c> line, the stamp will not parse, or the stamp is in the FUTURE.
+    /// <para>
+    /// The future case belongs here rather than at the call site because it is not a different kind
+    /// of problem. Staleness is <c>now - held</c>, so a future stamp makes that negative, it never
+    /// exceeds the threshold, the lock is never stale, and a dead holder wedges the channel forever
+    /// — the same outcome as a stamp that will not parse. It is the defect that once rendered "on
+    /// task under a minute" for hours: a future stamp turning a duration into a number that means
+    /// nothing. There the fix was to refuse to DISPLAY it; here it is to refuse to TRUST it.
+    /// </para>
+    /// <para>
+    /// Null is never "the holder is dead" on its own — a false "dead" breaks a live lock and
+    /// corrupts the file the lock was protecting. It means "ask the directory instead".
+    /// </para>
+    /// </summary>
+    static DateTime? Read_UsableHeldSinceUtc_OrNull(string ownerFile)
+    {
+        if (!File.Exists(ownerFile))
+            return null;
+
+        var heldSinceUtc = Read_HeldSinceUtc_OrNull(ownerFile);
+
+        if (heldSinceUtc == null)
+            return null;
+
+        if (heldSinceUtc.Value > DateTime.UtcNow)
+            return null;
+
+        return heldSinceUtc;
     }
 
     static DateTime? Read_HeldSinceUtc_OrNull(string ownerFile)

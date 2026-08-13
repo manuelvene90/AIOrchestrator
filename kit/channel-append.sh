@@ -102,40 +102,44 @@ trap 'release_lock' EXIT INT TERM
 
 # Returns 0 when the holder looks dead. Anything it cannot READ or PARSE counts as ALIVE: a false
 # "alive" costs a wait, a false "dead" breaks a live lock and corrupts the file the lock protects.
+# Echoes the epoch the holder took the lock, or NOTHING when the metadata cannot be TRUSTED —
+# deliberately one answer covering every reason: the file is missing, it has no utc line, the stamp
+# will not parse, or the stamp is in the FUTURE.
+#
+# The future case belongs here rather than at the call site because it is not a different kind of
+# problem. Staleness is now - held, so a future stamp makes that negative, it never exceeds the
+# threshold, the lock is never stale, and a dead holder wedges the channel forever — the same outcome
+# as a stamp that will not parse. Clock skew between a session and the app is enough, on a file two
+# languages write.
+usable_held_epoch() {
+  local stamp epoch
+  [ -f "$OWNER_FILE" ] || return 1
+
+  stamp="$(grep -m1 '^utc=' "$OWNER_FILE" 2>/dev/null | cut -d= -f2-)"
+  [ -n "$stamp" ] || return 1
+
+  epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" || return 1
+  [ -n "$epoch" ] || return 1
+
+  [ "$epoch" -le "$(date -u +%s)" ] || return 1
+
+  printf '%s' "$epoch"
+}
+
 lock_is_stale() {
   [ -d "$LOCK_DIR" ] || return 1
 
-  local stamp held_epoch now_epoch
+  local held_epoch
+  held_epoch="$(usable_held_epoch)" || held_epoch=""
 
-  # No owner file is USUALLY a writer part-way through acquiring, and breaking one microseconds old
-  # would be worse than waiting. But treating it as alive UNCONDITIONALLY made the state permanently
-  # unbreakable by both sides — and this script is the only thing that can create it, because it
-  # mkdirs the lock and then writes the metadata. A hard kill in between (the app tree-kills every
-  # session on exit, which does not run the EXIT trap below) would wedge the channel forever.
-  # So fall back to the DIRECTORY's own age.
-  if [ ! -f "$OWNER_FILE" ]; then
-    directory_is_older_than_stale
-    return $?
-  fi
-
-  stamp="$(grep -m1 '^utc=' "$OWNER_FILE" 2>/dev/null | cut -d= -f2-)"
-  [ -n "$stamp" ] || { directory_is_older_than_stale; return $?; }
-
-  held_epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" || { directory_is_older_than_stale; return $?; }
+  # ONE condition, not a row of special cases. The metadata is either usable or it is not, and every
+  # way of not being usable has the same answer: fall back to the age of the directory, the one clock
+  # this script can vouch for. This was a chain of guards that happened to share a recovery, which is
+  # not one condition — it is several, and the next route gets added beside them. That is not
+  # hypothetical: this defect reached production by four separate routes.
   [ -n "$held_epoch" ] || { directory_is_older_than_stale; return $?; }
-  now_epoch="$(date -u +%s)"
 
-  # A stamp in the FUTURE is unusable metadata, not fresh metadata. Staleness is now - held, so a
-  # future stamp makes that negative, it never exceeds the threshold, the lock is never stale, and a
-  # dead holder wedges the channel permanently. Clock skew between a session and the app is enough,
-  # on a file two languages write. Fall through to the directory's age, which is the one clock this
-  # script can vouch for.
-  if [ "$held_epoch" -gt "$now_epoch" ]; then
-    directory_is_older_than_stale
-    return $?
-  fi
-
-  [ $((now_epoch - held_epoch)) -gt "$STALE_SECONDS" ]
+  [ $(( $(date -u +%s) - held_epoch )) -gt "$STALE_SECONDS" ]
 }
 
 # The one recovery path for "the owner file cannot be trusted", whatever the reason — absent,
