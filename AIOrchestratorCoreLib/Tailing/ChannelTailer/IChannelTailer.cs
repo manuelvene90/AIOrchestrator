@@ -27,10 +27,16 @@ public interface IChannelTailer
     void Confirm_Append(string channelFilePath);
 
     /// <summary>
-    /// Whether this file still owes a delivery, from any of the three places one can be owed from:
-    /// entries emitted but not yet acknowledged, bytes read but not yet emitted (only these survive
-    /// a poll's rewind), and bytes on disk PAST THE CURSOR that no poll has read yet. The bridge
-    /// must not rewrite such a file meanwhile.
+    /// Whether this file owes a delivery AS FAR AS THIS TAILER CAN ESTABLISH, from the three places
+    /// one can be owed from: entries emitted but not yet acknowledged, bytes read but not yet
+    /// emitted (only these survive a poll's rewind), and bytes on disk PAST THE CURSOR that no poll
+    /// has read yet. The bridge must not rewrite such a file meanwhile.
+    /// <para>
+    /// It is a POINT-IN-TIME answer and not a lock, which is the honest limit of it: an entry
+    /// appended after this returns — while the caller is still deciding, or while the compactor is
+    /// reading the file — is outside what it was asked. Closing that needs the write held off for
+    /// the whole decision, which nothing here does.
+    /// </para>
     /// <para>
     /// The third is the one that is easy to forget: the mirror tick appends entries after its own
     /// poll, so a channel can owe a delivery that exists nowhere in this object's memory. It

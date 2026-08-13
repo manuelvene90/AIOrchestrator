@@ -15,6 +15,17 @@ namespace AIOrchestratorCoreLib.Tailing;
 /// copy of the code and not the code (found by rev-3, 2026-08-13). What remains in the engine is the
 /// discovery loop and its log line.
 /// </para>
+/// <para>
+/// WHAT THESE GUARDS DO NOT COVER, so nobody reads them as more than they are. Both are pre-existing,
+/// both are narrow, and neither is closed here:
+/// (1) an entry appended between the guard's answer and the compactor's read is seen by neither, so
+/// the rewrite keeps it and the re-anchor parks the cursor past it — the same loss the unread-bytes
+/// clause closes, in a window of microseconds rather than a whole tick phase;
+/// (2) an entry appended between the compactor's read and its rename-over is discarded from the FILE
+/// and not merely from the mirror, because the rewrite replaces the file that append landed in.
+/// Closing either means holding channel writes off across the whole read-decide-rewrite, which
+/// nothing here does.
+/// </para>
 /// </summary>
 public static class Channel_CompactionStep
 {
