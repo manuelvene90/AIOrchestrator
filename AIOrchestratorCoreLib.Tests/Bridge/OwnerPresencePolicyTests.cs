@@ -32,26 +32,12 @@ public class OwnerPresencePolicyTests
         Assert.True(OwnerPresence_Policy.Should_RaiseAwaitingAnswer(OwnerPresenceModes.Remote));
     }
 
-    [Fact]
-    public void OwnerTextingTheTopic_EndsTerminalMode()
-    {
-        Assert.True(OwnerPresence_Policy.Should_FlipToRemote(OwnerPresenceModes.Terminal, isPresenceCommandItself: false));
-    }
-
-    [Fact]
-    public void ThePresenceCommandItself_DoesNotEndTheModeItJustAskedFor()
-    {
-        // /pc arrives from Telegram like any other message. Without this exclusion the command
-        // would be undone by its own delivery — the trap the mode commands already dodge by
-        // deferring themselves out of the inbound loop.
-        Assert.False(OwnerPresence_Policy.Should_FlipToRemote(OwnerPresenceModes.Terminal, isPresenceCommandItself: true));
-    }
-
-    [Fact]
-    public void AlreadyRemote_HasNothingToFlip()
-    {
-        Assert.False(OwnerPresence_Policy.Should_FlipToRemote(OwnerPresenceModes.Remote, isPresenceCommandItself: false));
-    }
+    // The three flip tests that stood here moved to OwnerPresenceFlipPlannerTests with the rule
+    // itself: an owner message ends EVERY meeting, not only the topic it arrived in, so the decision
+    // needs the whole roster and no longer fits a one-orchestration predicate. All three cases are
+    // preserved there (Terminal flips, the presence command is exempt for its own target, Remote has
+    // nothing to flip) — they were not dropped, and leaving them here would have left three greens
+    // pinning a function nothing calls.
 
     [Fact]
     public void Terminal_StopsTheAppPullingTheSupervisorBackToWork()

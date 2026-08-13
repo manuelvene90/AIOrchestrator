@@ -3906,36 +3906,46 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Any owner message ARRIVING FROM TELEGRAM proves they are not at that orchestration's
-    /// terminal. Same shape as the auto-unmute; the presence command excludes itself.
+    /// Any owner message ARRIVING FROM TELEGRAM proves they are holding a phone, so it ends EVERY
+    /// meeting rather than only the one whose topic they typed in — they cannot be at a terminal and
+    /// texting. This was topic-scoped, which left terminal mode with a single exit and an owner who
+    /// walked away without toggling leaving that orchestration silent indefinitely (rev-4 F6).
+    /// The decision is <see cref="OwnerPresenceFlip_Planner"/>'s; this does the moving.
     /// </summary>
     void Flip_ToRemote_IfOwnerTextedFromTelegram(long? messageThreadId, bool isPresenceCommandItself)
     {
-        // General texted from Telegram ends ITS meeting too, by the same argument: they cannot be
-        // typing here and sitting at that terminal. Its flag is its state, so the flag is what moves.
-        if (messageThreadId == null)
-        {
-            if (!OwnerPresence_Policy.Should_FlipToRemote(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID), isPresenceCommandItself))
-                return;
+        var textedOrchId = messageThreadId == null
+            ? ChannelDiscovery.GENERAL_ORCH_ID
+            : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value)?.OrchId;
 
-            Sync_MeetingFlag_AndReport(ChannelDiscovery.GENERAL_ORCH_ID, OwnerPresenceModes.Remote);
-            _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, "Owner presence → Remote (they texted General)");
-            Tell_Supervisor_AboutPresence(ChannelDiscovery.GENERAL_ORCH_ID, OwnerPresenceModes.Remote);
-            return;
+        // General carries its presence in the FLAG rather than a session, so it is gathered by hand
+        // and moved by hand — it has no session.json for the store to update.
+        List<OrchestrationPresence> presences =
+        [
+            new(ChannelDiscovery.GENERAL_ORCH_ID, Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID)),
+        ];
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc == null)
+                presences.Add(new OrchestrationPresence(session.OrchId, session.OwnerPresence));
         }
 
-        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+        foreach (var orchId in OwnerPresenceFlip_Planner.Resolve_Flips(presences, textedOrchId, isPresenceCommandItself))
+        {
+            if (orchId != ChannelDiscovery.GENERAL_ORCH_ID)
+                _store.Set_OwnerPresence(orchId, OwnerPresenceModes.Remote);
 
-        if (session == null)
-            return;
+            Sync_MeetingFlag_AndReport(orchId, OwnerPresenceModes.Remote);
 
-        if (!OwnerPresence_Policy.Should_FlipToRemote(session.OwnerPresence, isPresenceCommandItself))
-            return;
+            _log.Log_Info(
+                orchId,
+                orchId == textedOrchId
+                    ? "Owner presence → Remote (they texted this topic)"
+                    : "Owner presence → Remote (they texted Telegram, so they are not at this terminal either)");
 
-        _store.Set_OwnerPresence(session.OrchId, OwnerPresenceModes.Remote);
-        Sync_MeetingFlag_AndReport(session.OrchId, OwnerPresenceModes.Remote);
-        _log.Log_Info(session.OrchId, "Owner presence → Remote (they texted this topic)");
-        Tell_Supervisor_AboutPresence(session.OrchId, OwnerPresenceModes.Remote);
+            Tell_Supervisor_AboutPresence(orchId, OwnerPresenceModes.Remote);
+        }
     }
 
     async Task Apply_AppWideMode_Async(ITelegramApiClient client, long? messageThreadId, TelegramDeliveryModes wantedMode, bool forceNormal, CancellationToken cancellationToken)

@@ -42,20 +42,10 @@ public static class OwnerPresence_Policy
         return presence == OwnerPresenceModes.Remote;
     }
 
-    /// <summary>
-    /// An owner message that ARRIVED FROM TELEGRAM in this topic proves they are not at its
-    /// terminal, so terminal mode ends by itself — the same shape as the auto-unmute, and for the
-    /// same reason: a mode the owner has to remember to turn off is one they will be trapped by.
-    /// <para>
-    /// The presence command itself is excluded. Without that, `/pc` would be flipped back to Remote
-    /// by the very message that asked for Terminal — the trap the mode commands already dodge by
-    /// deferring themselves out of the inbound loop.
-    /// </para>
-    /// </summary>
-    public static bool Should_FlipToRemote(OwnerPresenceModes presence, bool isPresenceCommandItself)
-    {
-        return presence == OwnerPresenceModes.Terminal && !isPresenceCommandItself;
-    }
+    // The auto-flip rule lives in OwnerPresenceFlip_Planner, not here. It stopped being a fact about
+    // ONE orchestration's presence when an owner message became proof about every terminal at once,
+    // and a predicate taking a single presence cannot express that. It is not restated here: two
+    // copies of a rule is how the next reader learns the narrower one.
 
     /// <summary>
     /// Whether the app must stop trying to get this orchestration's SUPERVISOR back to work. Terminal
