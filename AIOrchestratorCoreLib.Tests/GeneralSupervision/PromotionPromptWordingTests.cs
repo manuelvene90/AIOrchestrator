@@ -83,6 +83,41 @@ public class PromotionPromptWordingTests
     }
 
     /// <summary>
+    /// AND THE POST-TAP TEXT SAYS WHAT HAPPENED — the half `DoesNotContain("clos")` cannot check, and
+    /// the half that matters most, which is the wrong way round without this test.
+    ///
+    /// rev-6 found it by asking whether a degenerate fix could satisfy the properties above: true of
+    /// the buttons, FALSE of the decided text, which had one negative assertion and no positive one
+    /// anywhere. A negative pins nothing on its own — `DoesNotContain("clos")` is satisfied by every
+    /// string in the language bar a small family, so it excludes one wrong answer and admits all the
+    /// rest.
+    ///
+    /// **A promotion is the kind where this text is DURABLE.** A confirmed close deletes the topic, so
+    /// nobody ever reads the edit it leaves behind; a promotion keeps the topic, and this sentence
+    /// stays at the top of it as the record of what the owner decided. The assertion was strongest
+    /// where it was cheapest and absent where it survives.
+    /// </summary>
+    [Fact]
+    public void ThePromotionDecidedTextNamesWhatHappened()
+    {
+        var confirmedText = CloseConfirmationPrompt_Builder.Build_DecidedText(ParkedCloseKinds.Promotion, "crm-4", confirmed: true);
+        var declinedText = CloseConfirmationPrompt_Builder.Build_DecidedText(ParkedCloseKinds.Promotion, "crm-4", confirmed: false);
+
+        // Both keep the QUESTION above the answer, so the topic reads as a decision and not as a
+        // verdict on something the reader has to remember.
+        Assert.Contains("full crew", confirmedText);
+        Assert.Contains("full crew", declinedText);
+
+        // Confirmed: promoted, and WHO the owner is now talking to — the one consequence they act on.
+        Assert.Contains("Promoted", confirmedText);
+        Assert.Contains("supervisor", confirmedText, StringComparison.OrdinalIgnoreCase);
+
+        // Declined: still one session, still working. Not merely "not promoted".
+        Assert.Contains("one session", declinedText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Promoted", declinedText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// THE CLOSE WORDING IS UNCHANGED, so this fix cannot pass by making every kind neutral. Both
     /// close kinds keep the buttons and the decided text they had.
     /// </summary>
