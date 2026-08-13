@@ -68,9 +68,6 @@ internal sealed class BridgeEngineModel(
     /// <summary>The communicator's "still at it" cadence while the supervisor stays busy.</summary>
     const int NARRATION_REPEAT_SECONDS = 180;
 
-    /// <summary>The supervisor's old ~30-minute STATUS cadence, now emitted by the app.</summary>
-    const int PERIODIC_STATUS_SECONDS = 1800;
-
     /// <summary>
     /// How long a nudged, idle session may stay frozen before it is declared ORPHANED. The nudge
     /// changed its channel, so a live watcher fires within seconds — this window is generous
@@ -275,8 +272,11 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<string, PendingOwnerReply> _pendingOwnerReplies = [];
 
-    /// <summary>Per-orchestration clock for the app-emitted periodic STATUS.</summary>
-    readonly Dictionary<string, DateTime> _lastPeriodicStatusUtc = [];
+    /// <summary>
+    /// The last half-hour SLOT each orchestration has spent, LOCAL — not a clock reading, and named
+    /// so nobody compares it against a UTC one. `PeriodicStatusSlot_Planner` owns the rule.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _lastPeriodicStatusSlot = [];
 
     /// <summary>Per-orchestration cooldown so the brevity feedback never becomes noise itself.</summary>
     readonly Dictionary<string, DateTime> _lastVerbosityNudgeUtc = [];
@@ -5247,11 +5247,23 @@ internal sealed class BridgeEngineModel(
     /// (~$44) spent restating what this process can compute for free from PLAN.md, the member
     /// states and the activity probes. Same cadence, same content, same "only while work is in
     /// flight" condition, and it runs on the bridge tick, so it adds no session and no idle wake.
+    ///
+    /// THE CADENCE IS THE WALL CLOCK'S, not each orchestration's own. This used to gate on elapsed
+    /// time since THIS orchestration's last push, so every topic carried the phase of whenever it
+    /// first pushed and the owner got a trickle: "when I have many orchestration sessions open I get
+    /// continuously spammed because they are all out of sync". Every topic now fires on the same
+    /// :00/:30 tick. `PeriodicStatusSlot_Planner` owns WHEN — out of this class because it is
+    /// `internal sealed` with no `InternalsVisibleTo`, so a rule decided in here is unreachable from
+    /// the suite; this method keeps only the sending.
     /// </summary>
     async Task Push_PeriodicStatus_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
             return;
+
+        // ONE reading of the clock for the whole sweep. Taking it per session would let a sweep that
+        // straddles a boundary split the batch across two slots — the trickle, in miniature.
+        var now = DateTime.Now;
 
         foreach (var session in _store.Load_All())
         {
@@ -5260,9 +5272,18 @@ internal sealed class BridgeEngineModel(
 
             // No mode gate here: the status now rides the channel, so Normal mirrors it, Deferred
             // queues it (newest only) and Silenced drops it — all handled by the mirror already.
-            _lastPeriodicStatusUtc.TryGetValue(session.OrchId, out var lastUtc);
+            var plan = PeriodicStatusSlot_Planner.Decide(now, Last_PeriodicStatusSlot_OrNull(session.OrchId));
 
-            if ((DateTime.UtcNow - lastUtc).TotalSeconds < PERIODIC_STATUS_SECONDS)
+            if (plan.Action == PeriodicStatusSlotActions.Skip)
+                continue;
+
+            // Spent whatever happens below: an Adopt sends nothing, and of the three sending paths
+            // one deliberately stays silent. Recording once here is why none of them can fire twice.
+            _lastPeriodicStatusSlot[session.OrchId] = plan.SlotStart;
+
+            // First sight — including EVERY orchestration after an app restart, since this store is
+            // in-memory. It stays silent so a restart cannot push every topic at once, off-boundary.
+            if (plan.Action == PeriodicStatusSlotActions.Adopt)
                 continue;
 
             // Away mode: the owner cannot reply, so this update is their ONLY window into the
@@ -5270,24 +5291,26 @@ internal sealed class BridgeEngineModel(
             // because "imp-1 is blocked waiting for you" is exactly what they need to know.
             if (Is_AwayMode())
             {
-                _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
                 Post_StatusEntry(session.OrchId, Build_AwayUpdateText(session));
                 continue;
             }
 
+            // Nothing running: the supervisor's rule was to stop the cadence, not to report
+            // "no change" forever. The slot is spent above, so work starting mid-slot waits for
+            // the next boundary like everyone else rather than firing on its own schedule.
             if (!Has_WorkInFlight(session))
-            {
-                // Nothing running: the supervisor's rule was to stop the cadence, not to report
-                // "no change" forever. Stamp anyway so work starting does not fire instantly.
-                _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
                 continue;
-            }
 
-            _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
             Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session));
         }
 
         await Task.CompletedTask;
+    }
+
+    /// <summary>The slot this orchestration last spent, or null when it has never been seen.</summary>
+    DateTime? Last_PeriodicStatusSlot_OrNull(string orchId)
+    {
+        return _lastPeriodicStatusSlot.TryGetValue(orchId, out var slot) ? slot : null;
     }
 
     /// <summary>
