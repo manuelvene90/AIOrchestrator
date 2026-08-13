@@ -243,6 +243,19 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _flaggedIdleMembersByOrchId = [];
 
     /// <summary>
+    /// The last guard-not-in-force marker reported per orchestration, and when. Keyed on the marker's
+    /// CONTENT rather than on a rendered line, for the reason the field above learned the hard way:
+    /// a key with a moving value in it never matches itself.
+    /// </summary>
+    sealed class GuardReportRecord
+    {
+        public string MarkerText = "";
+        public DateTime ReportedAt;
+    }
+
+    readonly Dictionary<string, GuardReportRecord> _reportedGuardsByOrchId = [];
+
+    /// <summary>
     /// When the status line last FAILED per orchestration, so a real error backs off. Stored in
     /// LOCAL time because the planner compares it against the same clock the durations use — it
     /// held UtcNow while being compared against DateTime.Now, which cleared a 30-second backoff
@@ -4147,9 +4160,24 @@ internal sealed class BridgeEngineModel(
             if (!File.Exists(markerFile))
                 continue;
 
-            var description = Status.GuardNotInForce_Marker.Describe_OrNull(Read_FileText_Safe(markerFile));
+            var markerText = Read_FileText_Safe(markerFile);
+
+            var description = Status.GuardNotInForce_Marker.Describe_OrNull(markerText);
 
             if (description == null)
+            {
+                File.Delete(markerFile);
+                continue;
+            }
+
+            // The same inability, again, is not a second fact. hook-log.sh overwrites one marker
+            // rather than appending and says the judgement about repetition belongs here — it did not
+            // exist, so three identical alerts landed in twelve minutes on 2026-08-13. The marker is
+            // still DELETED when suppressed: the fact is recorded, and leaving the file would only
+            // re-ask the same question every two seconds.
+            _reportedGuardsByOrchId.TryGetValue(session.OrchId, out var lastReport);
+
+            if (!Status.GuardReport_Decider.Should_Report(markerText, lastReport?.MarkerText, lastReport?.ReportedAt, DateTime.Now))
             {
                 File.Delete(markerFile);
                 continue;
@@ -4175,6 +4203,14 @@ internal sealed class BridgeEngineModel(
                     Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
                     description,
                     DateTime.Now);
+
+                // Recorded only after the append SUCCEEDED — a report that was not made must not
+                // start a cooldown, or the failure silences the next thirty minutes as well.
+                _reportedGuardsByOrchId[session.OrchId] = new GuardReportRecord
+                {
+                    MarkerText = markerText,
+                    ReportedAt = DateTime.Now,
+                };
 
                 File.Delete(markerFile);
             }

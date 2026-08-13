@@ -112,6 +112,62 @@ public class GuardReportProbeTests : IDisposable
         Assert.Contains(HOOK, body);
     }
 
+    /// <summary>
+    /// THE LIVE CASE. Three markers with the same content produced three identical entries at 18:29,
+    /// 18:30 and 18:41 on 2026-08-13 — one per marker, no comparison of any kind between them. The
+    /// marker file is deleted once reported, so a repeat is a genuinely NEW file: dedup cannot come
+    /// from the file's existence, only from remembering what was last said.
+    /// </summary>
+    [Fact]
+    public async Task TheSameInabilityReportedThreeTimesIsOneEntry()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        for (var repeat = 0; repeat < 3; repeat++)
+        {
+            Write_Marker(session.OrchId, HOOK, PREDICATE, REASON);
+            await Tick_Once_Async();
+        }
+
+        Assert.True(Wait_Until(() => Count_GuardEntries(ownerChannel) >= 1), "the guard marker was never reported at all");
+        Assert.Equal(1, Count_GuardEntries(ownerChannel));
+    }
+
+    /// <summary>
+    /// The other half, and the reason this is not "one guard alert per orchestration, ever": a
+    /// DIFFERENT inability is a different fact and must get through immediately. This is the disjoint
+    /// control for the test above — a dedup that swallowed everything would pass that one and fail
+    /// this one.
+    /// </summary>
+    [Fact]
+    public async Task ADifferentInabilityStillGetsThrough()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        Write_Marker(session.OrchId, HOOK, PREDICATE, REASON);
+        await Tick_Once_Async();
+
+        Write_Marker(session.OrchId, "supervisor-awaiting-answer-check.sh", "which tool is being called", "no tool name could be extracted from the payload");
+        await Tick_Once_Async();
+
+        Assert.True(Wait_Until(() => Count_GuardEntries(ownerChannel) >= 2), "a different inability was swallowed by the first one's cooldown");
+        Assert.Equal(2, Count_GuardEntries(ownerChannel));
+    }
+
+    int Count_GuardEntries(string ownerChannel)
+    {
+        if (!File.Exists(ownerChannel))
+            return 0;
+
+        return ChannelEntry_Parser
+            .Parse_All(File.ReadAllText(ownerChannel))
+            .Count(entry =>
+                entry.Author == ChannelAuthors.App
+                && entry.Subject.Contains(GuardNotInForce_Marker.ENTRY_SUBJECT, StringComparison.OrdinalIgnoreCase));
+    }
+
     void Write_Marker(string orchId, string hook, string predicate, string reason)
     {
         File.WriteAllText(
