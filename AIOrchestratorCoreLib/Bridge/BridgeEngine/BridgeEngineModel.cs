@@ -855,14 +855,22 @@ internal sealed class BridgeEngineModel(
         {
             var heldSession = _store.Get_Session_OrNull(key.OrchId);
 
-            // A CLOSED orchestration's topic is closed with it, so this send can NEVER succeed and
-            // holding it is a retry with no possible end. Six members and an orchestration were
-            // closed on the evening this was written, so it is the live case rather than the exotic
-            // one (rev-5, 2026-08-13).
+            // A CLOSED orchestration's held alert is dropped, and BOTH reasons are real.
+            //
+            // Close_Orchestration DELETES the Telegram topic — Delete_TelegramTopic_FireAndForget,
+            // called immediately after _store.Close_Orchestration — so once that completes the
+            // stored topic id is gone and every send against it fails, for ever. The deletion is
+            // fire-and-forget, so there is also a short window before it lands in which the alert
+            // WOULD arrive: the owner texted that a session is crash-looping in an orchestration
+            // they just ended. Undeliverable after, over-delivery before.
+            //
+            // It is still NOT the bound below: that covers the cases nothing here can see — a topic
+            // the owner deleted from their phone, revoked bot rights — which Telegram answers 400
+            // for ever regardless of what this session thinks its state is.
             if (heldSession == null || heldSession.ClosedUtc != null)
             {
                 _heldCrashLoopAlerts.Remove(key);
-                _log.Log_Warning(key.OrchId, $"Crash-loop alert GIVEN UP undelivered — the orchestration is closed, so its topic can no longer receive it: {key.AlertText}");
+                _log.Log_Info(key.OrchId, $"Crash-loop alert dropped — the orchestration is closed and its topic deleted with it: {key.AlertText}");
                 continue;
             }
 
@@ -1252,13 +1260,26 @@ internal sealed class BridgeEngineModel(
             if (unreported.Count == 0)
                 continue;
 
-            Append_AppEntry_Safe(
-                channel.FilePath,
-                $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
-                ChannelShape_Validator.Build_ReportBody(unreported),
-                DateTime.Now);
+            // CONSULT THE RETURN VALUE. This block used to rely on the append THROWING past it, and
+            // said so — "the append above either wrote the report or threw past this line". Nine
+            // minutes later the safe wrapper made that false: it catches, logs and returns false, so
+            // the memo was recorded whether or not the report landed, and `_reportedMalformedHeaders`
+            // has no release. One failed append then suppressed the report for those entries for the
+            // life of the process — the session never told, never re-posting, while the owner was
+            // texted that it "has been told to re-post", a claim whose only carrier was the append
+            // that had just been lost.
+            //
+            // Both commits are right alone; the defect lived in their composition, because the second
+            // changed the throwing behaviour the first depended on (rev-5, 2026-08-13).
+            if (!Append_AppEntry_Safe(
+                    channel.FilePath,
+                    $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
+                    ChannelShape_Validator.Build_ReportBody(unreported),
+                    DateTime.Now))
+                continue;
 
-            // Recorded only now: the append above either wrote the report or threw past this line.
+            // Recorded only after a CONFIRMED write, so a failed one is retried on the next tick
+            // rather than remembered as reported.
             foreach (var entry in unreported)
                 _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
 
