@@ -883,10 +883,15 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
-            var channelQuietFor = Nudge_Decider.Measure_QuietFor(entries, channelFile, now);
+            var channelQuietFor = Nudge_Decider.Measure_QuietFor(entries, now);
 
-            if (channelQuietFor < quietFor)
-                quietFor = channelQuietFor;
+            // A CHANNEL THAT CANNOT BE DATED CONTRIBUTES NOTHING TO THE MINIMUM, and skipping is the
+            // noisy direction here rather than the quiet one. This span is the SHORTEST across
+            // channels, so any value at all pulls it down and can mask a stall; treating an
+            // unmeasurable channel as recent activity would let one unreadable stamp vouch for a
+            // whole orchestration being alive.
+            if (channelQuietFor != null && channelQuietFor < quietFor)
+                quietFor = channelQuietFor.Value;
         }
 
         return quietFor;
@@ -992,10 +997,14 @@ internal sealed class BridgeEngineModel(
                 // nothing reaches the threshold and every nudge in the system stops — silently, with
                 // a green suite. NudgeClockProbeTests pins this call for that reason; the decision is
                 // pure and pinned four ways, and all four passed while this line was wrong.
-                var quietFor = Nudge_Decider.Measure_QuietFor(entries, channelFile, DateTime.Now);
+                var quietFor = Nudge_Decider.Measure_QuietFor(entries, DateTime.Now);
                 var alreadyNudged = _nudgedMemberUtc.TryGetValue(memberKey, out var nudgedUtc);
 
-                if (!alreadyNudged && quietFor.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+                // NULL IS PAST THE THRESHOLD, never under it. An unreadable clock means nobody can say
+                // this member is working, and the expensive mistake is the one that stays quiet: the
+                // gate below still holds it to one nudge per unanswered thing, so the cost of being
+                // wrong here is a single wake.
+                if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
                     continue;
 
                 // Transcript growing = genuinely working (a long build, a big read). NOT orphaned:
@@ -1223,7 +1232,11 @@ internal sealed class BridgeEngineModel(
             // stamp, both local wall time. The UtcNow this line used to pass was correct only because
             // it was paired with GetLastWriteTimeUtc; handing UtcNow to the shared reader on this
             // machine (UTC+2) would make the span NEGATIVE and silence the path completely.
-            if (Nudge_Decider.Measure_QuietFor(entries, channelFile, DateTime.Now).TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+            // Null — nothing here can be dated — is PAST the threshold, so the supervisor is told
+            // rather than left to assume silence means nothing is waiting.
+            var memberQuietFor = Nudge_Decider.Measure_QuietFor(entries, DateTime.Now);
+
+            if (memberQuietFor != null && memberQuietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
                 continue;
 
             waitingMembers.Add(member.MemberId);
@@ -1256,7 +1269,7 @@ internal sealed class BridgeEngineModel(
         string memberId,
         string channelFile,
         Channels.ChannelEntry.IChannelEntry lastEntry,
-        TimeSpan quietFor,
+        TimeSpan? quietFor,
         bool dormantMidWork,
         CancellationToken cancellationToken)
     {
@@ -1278,16 +1291,16 @@ internal sealed class BridgeEngineModel(
         var subject = Nudge_Wording.Subject_For(dormantMidWork);
 
         var body = dormantMidWork
-            ? Nudge_Wording.Body_ForOpenWindow(lastEntry.Index, SessionDuration_Formatter.Describe(quietFor))
+            ? Nudge_Wording.Body_ForOpenWindow(lastEntry.Index, Nudge_Wording.Describe_QuietFor(quietFor))
             : Nudge_Wording.Body_ForUnansweredTraffic(
                 lastEntry.Index,
                 lastEntry.Author.ToString().ToLowerInvariant(),
-                SessionDuration_Formatter.Describe(quietFor));
+                Nudge_Wording.Describe_QuietFor(quietFor));
 
         ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
 
         var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
-        _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
+        _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {Nudge_Wording.Describe_QuietFor(quietFor)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
 
         // The owner is NOT told. This is routine self-healing that already worked — the nudge is

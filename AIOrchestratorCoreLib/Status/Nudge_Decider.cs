@@ -119,10 +119,14 @@ public static class Nudge_Decider
     /// legitimate nudge by up to the full 8 minutes, for a member that was genuinely stalled.
     ///
     /// The stamp is AGENT-WRITTEN and therefore not trusted: it goes through the one trusted reader,
-    /// which refuses a future date. When it cannot be read the file stamp is used exactly as before —
-    /// the old behaviour, which is noisy rather than silent, and that is the right direction to fall
-    /// back in. A quiet clock that cannot be computed must never make a member look busy: that would
-    /// suppress the nudge for a session that really had stopped.
+    /// which refuses a future date. **When nothing here can be dated this returns NULL, and null means
+    /// PAST THE THRESHOLD at every call site** — a quiet clock that cannot be computed must never make
+    /// a member look busy, because that suppresses the nudge for a session that really had stopped.
+    ///
+    /// That sentence used to sit above a fallback that did the opposite. The file's age was described
+    /// here as "the old behaviour, noisy rather than silent"; it is neither, because the file stamp
+    /// moves on every app write and on a compaction that says nothing, so the member read as busy. The
+    /// rule was right and had simply never been implemented.
     ///
     /// ONE CLOCK, and `now` must be LOCAL because both sources are: agent stamps are local wall time
     /// and so is the file stamp read here. It is the same mismatch that once made a 30-second backoff
@@ -146,7 +150,14 @@ public static class Nudge_Decider
     /// the nudge threshold, and every alarm in the system goes silent while the suite stays green.
     /// <c>NudgeClockProbeTests</c> exists for that one mutation.
     /// </param>
-    public static TimeSpan Measure_QuietFor(IReadOnlyList<IChannelEntry> entries, string channelFilePath, DateTime now)
+    /// <remarks>
+    /// THE CHANNEL PATH IS GONE FROM THIS SIGNATURE and that is part of the fix, not tidying. It
+    /// existed only to stat the file, and a parameter that no longer does anything is a signature
+    /// claiming a source the code has stopped reading — the same species as a docstring that outruns
+    /// its function, one level up. Removing it makes "this clock does not touch the filesystem"
+    /// checkable by anyone who reads the first line.
+    /// </remarks>
+    public static TimeSpan? Measure_QuietFor(IReadOnlyList<IChannelEntry> entries, DateTime now)
     {
         var lastConversationEntry = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
 
@@ -170,7 +181,23 @@ public static class Nudge_Decider
             && SessionDuration_Formatter.Try_ReadTrustedStamp(entries[^1].DateText, now, out var lastEntryAt))
             return now - lastEntryAt;
 
-        return now - File.GetLastWriteTime(channelFilePath);
+        // NULL IS "CANNOT BE COMPUTED", AND EVERY CALLER MUST READ IT AS PAST THE THRESHOLD.
+        //
+        // This used to return the FILE's age, described one paragraph above as "the old behaviour,
+        // which is noisy rather than silent". It was neither: the file stamp moves on every app write
+        // and on a compaction's rename-over, so the fallback reported "quiet for ~0" for a member
+        // nobody had heard from — the member looked BUSY, which is the one outcome the rule above
+        // forbids. A guarantee stated in a docstring and contradicted by the line under it is worse
+        // than no guarantee, because it is the one the next reader relies on.
+        //
+        // Reachable through documented behaviour rather than in theory: a single future-dated stamp on
+        // the last entry defeats both steps above — it is a conversation entry, so the first refuses
+        // it, and it is also the last entry, so the second refuses the same text — and item 12 records
+        // future stamps happening twice in this orchestration's own channels in one day.
+        //
+        // There is no third source worth inventing. The honest answer is that the conversation cannot
+        // be dated, and the safe direction for that answer is to wake somebody.
+        return null;
     }
 
     /// <summary>

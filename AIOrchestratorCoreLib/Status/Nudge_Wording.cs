@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Formatting;
+
 namespace AIOrchestratorCoreLib.Status;
 
 /// <summary>
@@ -17,6 +19,27 @@ namespace AIOrchestratorCoreLib.Status;
 /// </summary>
 public static class Nudge_Wording
 {
+    /// <summary>
+    /// How long the channel has been quiet, in words — or that it could not be worked out.
+    ///
+    /// <see cref="Nudge_Decider.Measure_QuietFor"/> returns null when nothing in the channel can be
+    /// dated, and this text goes into the entry the member reads. Printing a number there would be
+    /// the same defect the clock just stopped committing: a confident figure standing in for an
+    /// answer nobody has. Item 12 settled this shape once already —
+    /// <see cref="SessionDuration_Formatter.Describe_SinceStamp_OrNull"/> returns null for a stamp it
+    /// cannot trust rather than a wrong duration — and this is that rule reaching the wording.
+    ///
+    /// It DELEGATES to <see cref="SessionDuration_Formatter.Describe"/> for the ordinary case rather
+    /// than formatting its own, because a second copy of a duration formatter is exactly what item 12
+    /// forbids: the UI once grew one and rendered a future stamp as "under a minute".
+    /// </summary>
+    public static string Describe_QuietFor(TimeSpan? quietFor)
+    {
+        return quietFor == null
+            ? "an unknown time — nothing in this channel carries a stamp I can read"
+            : SessionDuration_Formatter.Describe(quietFor.Value);
+    }
+
     public static string Subject_For(bool dormantMidWork)
     {
         if (dormantMidWork)

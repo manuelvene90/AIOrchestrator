@@ -135,20 +135,41 @@ public class SupervisorNudgeClockProbeTests : IDisposable
     }
 
     /// <summary>
-    /// THE FILE-STAMP FALLBACK, PINNED AT THIS CALL SITE — rev-7's F3, which observed that removing it
-    /// left all 701 green. It is the last resort of a three-step clock (conversation stamp, then last
-    /// entry, then the file) and it is what stands between an untrustworthy stamp and a member that
-    /// can never be reported as waiting.
+    /// AN UNDATEABLE CHANNEL IS PAST THE THRESHOLD, NOT AT ZERO — 3(a), and the case that changes.
     ///
-    /// The report here is stamped SIX HOURS IN THE FUTURE — the agent-written-stamp failure item 12
-    /// records twice in this orchestration's own channels — so both stamp-reading steps refuse it and
-    /// only the file can answer. The file is old, so the supervisor must still be told.
+    /// The report is stamped SIX HOURS IN THE FUTURE, which item 12 records happening twice in this
+    /// orchestration's own channels in a day, so neither stamp-reading step will touch it. **And the
+    /// file is stamped NOW**, as an app write or a compaction's rename-over leaves it.
     ///
-    /// This is the direction that matters: a clock that cannot be computed must never make a member
-    /// look busy, because that suppresses the report of a session that really has stopped.
+    /// Before fail-noisy the clock answered "quiet for ~0" from that file and the supervisor was told
+    /// nothing was waiting — a member that could not be dated read as a member hard at work, which is
+    /// precisely what the rule in `Measure_QuietFor`'s docstring forbade while the line beneath it did
+    /// the opposite. Now the clock returns null, null is past the threshold, and the report is
+    /// reported.
+    ///
+    /// It is the fresh file stamp that makes this case discriminating: with an OLD one the nudge fires
+    /// under both behaviours and the change is invisible.
     /// </summary>
     [Fact]
-    public async Task AnUntrustworthyStampFallsBackToTheFileRatherThanHidingTheReport()
+    public async Task AnUndateableChannelIsReportedRatherThanReadingAsBusy()
+    {
+        var ownerChannel = Start_WithReportStampedInTheFuture_AndAFreshFileStamp();
+
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => Has_SupervisorNudge(ownerChannel)),
+            "a report the clock could not date was hidden from the supervisor — the file stamp answered for it and said 'busy'");
+    }
+
+    /// <summary>
+    /// THE SAME UNDATEABLE CHANNEL WITH AN OLD FILE STAMP — kept because it pins the OTHER direction:
+    /// that fail-noisy did not simply make everything nudge. It passed before 3(a) and passes after,
+    /// for different reasons — the file answered then, null answers now — and saying so is the point,
+    /// since a test whose reason changes silently is the trap this branch has been fixing all evening.
+    /// </summary>
+    [Fact]
+    public async Task AnUntrustworthyStampDoesNotHideTheReportWhenTheFileIsOldEither()
     {
         var ownerChannel = Start_WithReportStampedInTheFuture_AndAnOldFileStamp();
 
@@ -199,6 +220,22 @@ public class SupervisorNudgeClockProbeTests : IDisposable
             $"## [1] FROM supervisor — {filed:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n\n"
             + $"## [2] FROM implementer — {filed:yyyy-MM-dd HH:mm} — TASK 1 landed abc1234\nparser done, suite green\n",
             filed);
+    }
+
+    /// <summary>
+    /// A stamp no reader will trust and a file stamped NOW — so nothing in the channel can date it and
+    /// the only thing that could have answered is the one source that says "a moment ago" for reasons
+    /// that have nothing to do with the member.
+    /// </summary>
+    string Start_WithReportStampedInTheFuture_AndAFreshFileStamp()
+    {
+        var briefed = DateTime.Now.AddMinutes(-20);
+        var impossible = DateTime.Now.AddHours(6);
+
+        return Start_WithMemberChannel(
+            $"## [1] FROM supervisor — {briefed:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n\n"
+            + $"## [2] FROM implementer — {impossible:yyyy-MM-dd HH:mm} — TASK 1 landed abc1234\nparser done, suite green\n",
+            DateTime.Now);
     }
 
     /// <summary>

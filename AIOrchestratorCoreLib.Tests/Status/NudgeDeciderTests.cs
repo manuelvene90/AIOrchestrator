@@ -422,7 +422,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Implementer, "STANDING BY", "2026-08-12 18:30"),
             (ChannelAuthors.App, "you stopped mid-task", "2026-08-12 18:58"));
 
-        Assert.Equal(30, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Equal(30, Nudge_Decider.Measure_QuietFor(entries, now)!.Value.TotalMinutes, 1);
     }
 
     /// <summary>
@@ -440,7 +440,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Supervisor, "brief", "2026-08-12 18:00"),
             (ChannelAuthors.Implementer, "done, commit 8b58b2e", "2026-08-12 18:58"));
 
-        Assert.Equal(2, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Equal(2, Nudge_Decider.Measure_QuietFor(entries, now)!.Value.TotalMinutes, 1);
     }
 
     /// <summary>
@@ -460,7 +460,7 @@ public class NudgeDeciderTests
 
         var entries = Stamped((ChannelAuthors.Implementer, "STANDING BY", "not a date at all"));
 
-        Assert.Equal(45, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Null(Nudge_Decider.Measure_QuietFor(entries, now));
     }
 
     /// <summary>
@@ -478,7 +478,7 @@ public class NudgeDeciderTests
 
         var entries = Stamped((ChannelAuthors.Implementer, "STANDING BY", now.AddHours(6).ToString("yyyy-MM-dd HH:mm")));
 
-        Assert.Equal(45, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Null(Nudge_Decider.Measure_QuietFor(entries, now));
     }
 
     /// <summary>
@@ -512,7 +512,7 @@ public class NudgeDeciderTests
 
         var entries = Stamped((ChannelAuthors.App, "GO AHEAD — resume", "2026-08-12 18:40"));
 
-        Assert.Equal(20, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Equal(20, Nudge_Decider.Measure_QuietFor(entries, now)!.Value.TotalMinutes, 1);
     }
 
     static string Write_TempChannel()
