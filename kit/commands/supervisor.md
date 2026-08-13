@@ -123,19 +123,45 @@ As soon as the goal is clear from the owner's first instruction, drop
   `n` is a PLAIN NUMBER incrementing per channel (never `2b`, never `[supervisor]`), the author word
   follows `FROM`, and both separators are em-dashes. NEVER edit or delete past entries. Append only.
 
-  **Both `n` and the date come from a FRESH READ, never from memory** — you read the channel at the
-  start of your turn, the app and other members appended while you worked, and the values you
-  remember are stale by the time you write:
-  - **`n`**: re-read the LAST header of the file immediately before appending and add one. On
-    2026-08-10 an `option-lab-2` channel ended up with two `[80]` and two `[81]` entries, because the
-    supervisor numbered from a read taken minutes earlier while the app appended in between. The
-    index is how we cite each other ("act on entry [83]"), so a duplicate makes a citation ambiguous.
-  - **The timestamp**: take it from the system clock (`date +'%Y-%m-%d %H:%M'`), never from your own
-    sense of the time. On the same day a supervisor stamped `2026-08-11 01:34` on an entry written at
-    `15:20` the day before — a day ahead and ten hours off. The app measures "time on task" from this
-    field, and a future stamp made every member card read "on task under a minute" for hours. The app
-    now refuses to display a future stamp, so the cost of getting it wrong is a BLANK where your
-    working time should be.
+  **You never write that header by hand — the append helper is the ONLY sanctioned way to write to
+  ANY channel**, this one, `owner-channel.md`, and every member spoke:
+
+  ```bash
+  bash ~/.claude/commands/channel-append.sh \
+    --channel "$HOME/.claude/supervision/$ARGUMENTS/imp-2/channel.md" \
+    --author  supervisor \
+    --subject "TASK 2 — accepted, merge held for the owner" \
+    --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
+  ```
+
+  (Same call with `--channel "$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md"` for the owner.)
+  It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the APP takes the same lock
+  from .NET, so you and it interlock), **allocates `n` and stamps the time itself INSIDE that lock**,
+  and writes the entry in a single append. It prints the index it used.
+
+  **So you compute NEITHER, and hand-numbering is precisely what broke.** "Re-read the LAST header
+  and add one" cannot be made safe by trying harder — the window it leaves open IS the write:
+  - **`n`**: on 2026-08-10 an `option-lab-2` channel ended up with two `[80]` and two `[81]` entries,
+    because the supervisor numbered from a read taken minutes earlier while the app appended in
+    between; on 2026-08-13 two writers both read `[71]` and both wrote `[72]`. The index is how we
+    cite each other ("act on entry [83]"), so a duplicate makes a citation ambiguous — and the
+    multi-write shape that goes with hand-numbering put a reviewer's nine findings under a
+    supervisor's header, an audit trail that is confidently wrong.
+  - **The timestamp**: a supervisor stamped `2026-08-11 01:34` on an entry written at `15:20` the day
+    before — a day ahead and ten hours off. The app measures "time on task" from this field, and a
+    future stamp made every member card read "on task under a minute" for hours. The app now refuses
+    to display a future stamp, so the cost of getting it wrong is a BLANK where your working time
+    should be. The helper stamps from the system clock; your sense of the time never enters it.
+
+  **Exit code 3 means NOTHING WAS WRITTEN** — "could not acquire the lock within the budget". Never
+  read it as success: the entry is not in the file, and if it was your reply to the owner, they are
+  still waiting. Retry the call (raise `--budget-seconds` if the channel is busy). **Never fall back
+  to a bare `>>` redirect** — an unlocked append under contention is the exact collision this
+  prevents. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
+
+  **The honest limit: this serialises the writers that USE it, and nothing else.** A session
+  appending with a bare redirect is stopped by nothing here, so it is a protocol to follow, not a
+  boundary that binds.
 
   **A header in any other shape makes the entry INVISIBLE — this is not pedantry, it happened.** On
   2026-08-07 one supervisor wrote headers three ways (`## [SUPERVISOR — date] subject`,
@@ -584,7 +610,8 @@ report in its channel; it never talks to the owner.
 - **NEVER `Write` a channel file — APPEND ONLY.** A whole-file write overwrites entries that other
   sessions just appended. This really happened: a supervisor's `Write` on `imp-3/channel.md` wiped
   imp-3's own `online` entry, and imp-3 then waited 35 minutes for a brief that was already sitting
-  in its file. Brief an implementer by APPENDING (`>>` or an Edit that adds at the end).
+  in its file. Brief an implementer by APPENDING through `channel-append.sh` (see Channel protocol),
+  never with a whole-file write and never with a bare redirect.
 - **NEVER `git add -A`, `git add .`, or `git commit -a`.** Stage by explicit path, always — other
   sessions' uncommitted work may share the tree.
 - You normally do not commit code; implementers commit their own work per their briefs.

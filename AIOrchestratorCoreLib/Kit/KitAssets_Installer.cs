@@ -2,8 +2,9 @@ namespace AIOrchestratorCoreLib.Kit;
 
 /// <summary>
 /// Self-installs the kit assets the agents depend on, so launching the app is enough:
-/// - EVERY role command in the shipped kit folder into ~/.claude/commands (the folder is globbed,
-///   never a hard-coded list, so a role added to the kit cannot be silently left uninstalled)
+/// - EVERY role command in the shipped kit folder into ~/.claude/commands, plus the .sh helpers
+///   sitting beside them (the folder is globbed, never a hard-coded list, so a role or a helper
+///   added to the kit cannot be silently left uninstalled)
 /// - the status line script into the supervision root
 /// Runs at every app startup; files are overwritten when their content changed (the shipped kit
 /// is the source of truth). The one thing left to install.ps1 is wiring the status line into
@@ -39,7 +40,12 @@ public static class KitAssets_Installer
         {
             Directory.CreateDirectory(claudeCommandsFolder);
 
-            foreach (var sourceFile in Directory.EnumerateFiles(kitCommandsFolder, "*.md"))
+            // .md AND .sh: the role commands, plus the append helper they instruct sessions to run.
+            // Installing the instructions without the script they name would leave every session
+            // pointing at a path that does not exist, and falling back to the unlocked append the
+            // helper exists to replace.
+            foreach (var sourceFile in Directory.EnumerateFiles(kitCommandsFolder, "*.*")
+                         .Where(Is_InstallableCommandAsset))
             {
                 var targetFile = Path.Combine(claudeCommandsFolder, Path.GetFileName(sourceFile));
 
@@ -60,6 +66,14 @@ public static class KitAssets_Installer
         }
 
         return installedFiles;
+    }
+
+    static bool Is_InstallableCommandAsset(string filePath)
+    {
+        var extension = Path.GetExtension(filePath);
+
+        return extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".sh", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

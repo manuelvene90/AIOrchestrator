@@ -1,0 +1,180 @@
+#!/bin/bash
+#
+# channel-append.sh — the ONE way a session appends to a supervision channel.
+#
+# It exists because "re-read the last header and add one" cannot be made safe by trying harder: the
+# window it leaves open IS the write. Two writers who both read [71] both write [72], and a writer
+# that emits its entry in more than one write() call gets another author's header dropped into the
+# middle of it. Both happened on 2026-08-13, five minutes apart, and the second put a reviewer's
+# nine findings under the supervisor's header — an audit trail that misattributes under load is
+# worse than one that drops entries, because it is confidently wrong.
+#
+# WHAT THIS GUARANTEES: writers that use this helper are serialised against every other writer that
+# uses it, INCLUDING the app, which takes the same lock from .NET. It cannot bind a writer that does
+# not ask. A session can append with a bare redirect and nothing here will stop it — every session
+# runs as the same OS user and no location is out of its reach. So the true sentence is "writers
+# using the protocol cannot collide with each other", never "channel appends are atomic".
+#
+# The lock is a DIRECTORY, because mkdir is a single atomic syscall that fails when the target
+# exists — the one exclusive-create bash and .NET can both perform without either emulating the
+# other. flock was rejected: msys flock and Windows LockFileEx are different mechanisms, and
+# assuming msys/Windows equivalence is how this repo has already produced silent failures.
+#
+# Exit codes are meant to be distinguishable, because "could not acquire" and "wrote it" must never
+# look alike to the caller:
+#   0  the entry was appended; its index is printed on stdout
+#   2  usage error
+#   3  COULD NOT ACQUIRE THE LOCK within the budget — nothing was written, retry is the caller's
+#   4  an I/O error; nothing was appended
+#
+set -u
+
+STALE_SECONDS=60          # Must match ChannelFile_Lock.STALE_SECONDS. See its comment: a GUESS,
+                          # deliberately conservative, invalidated only by a writer that does
+                          # something slow while holding the lock — which nothing may do.
+RETRY_INITIAL_MS=50
+RETRY_MAX_MS=400
+DEFAULT_BUDGET_SECONDS=10
+
+usage() {
+  echo "usage: channel-append.sh --channel <file> --author <word> --subject <text> --body-file <file> [--budget-seconds N]" >&2
+  echo "       (--body - reads the body from stdin)" >&2
+  exit 2
+}
+
+CHANNEL=""; AUTHOR=""; SUBJECT=""; BODY_FILE=""; BUDGET_SECONDS="$DEFAULT_BUDGET_SECONDS"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --channel)        CHANNEL="${2:-}"; shift 2 ;;
+    --author)         AUTHOR="${2:-}"; shift 2 ;;
+    --subject)        SUBJECT="${2:-}"; shift 2 ;;
+    --body-file)      BODY_FILE="${2:-}"; shift 2 ;;
+    --budget-seconds) BUDGET_SECONDS="${2:-}"; shift 2 ;;
+    -h|--help)        usage ;;
+    *) echo "channel-append.sh: unknown argument '$1'" >&2; usage ;;
+  esac
+done
+
+[ -n "$CHANNEL" ] && [ -n "$AUTHOR" ] && [ -n "$SUBJECT" ] && [ -n "$BODY_FILE" ] || usage
+
+if [ "$BODY_FILE" = "-" ]; then
+  BODY_FILE="$(mktemp)" || { echo "channel-append.sh: cannot create a temp file" >&2; exit 4; }
+  cat > "$BODY_FILE"
+  trap 'rm -f "$BODY_FILE"' EXIT
+fi
+
+[ -f "$BODY_FILE" ] || { echo "channel-append.sh: body file '$BODY_FILE' does not exist" >&2; exit 2; }
+[ -f "$CHANNEL" ] || { echo "channel-append.sh: channel '$CHANNEL' does not exist" >&2; exit 2; }
+
+LOCK_DIR="${CHANNEL}.lock"
+OWNER_FILE="$LOCK_DIR/owner"
+HELD=0
+
+release_lock() {
+  # Only ever release a lock this process actually holds. Without the guard, a run that failed to
+  # acquire would delete the lock belonging to whoever DID hold it on its way out.
+  if [ "$HELD" = "1" ]; then
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    HELD=0
+  fi
+}
+trap 'release_lock' EXIT INT TERM
+
+# Returns 0 when the holder looks dead. Anything it cannot READ or PARSE counts as ALIVE: a false
+# "alive" costs a wait, a false "dead" breaks a live lock and corrupts the file the lock protects.
+lock_is_stale() {
+  [ -d "$LOCK_DIR" ] || return 1
+  [ -f "$OWNER_FILE" ] || return 1          # mid-acquire, not dead
+
+  local stamp held_epoch now_epoch
+  stamp="$(grep -m1 '^utc=' "$OWNER_FILE" 2>/dev/null | cut -d= -f2-)"
+  [ -n "$stamp" ] || return 1
+
+  held_epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" || return 1
+  [ -n "$held_epoch" ] || return 1
+  now_epoch="$(date -u +%s)"
+
+  [ $((now_epoch - held_epoch)) -gt "$STALE_SECONDS" ]
+}
+
+# Breaking is a RENAME, never a delete. Two writers can both judge the same lock stale; if both
+# deleted it both would then acquire, producing exactly the collision this exists to prevent. Only
+# one rename can win. The broken lock is kept as evidence of a writer that died holding it.
+break_if_stale() {
+  if lock_is_stale; then
+    # Read the stamp BEFORE the move: afterwards the path is gone, and a diagnostic that cannot say
+    # WHEN the dead holder took the lock is not evidence of anything.
+    local held_since
+    held_since="$(grep -m1 '^utc=' "$OWNER_FILE" 2>/dev/null | cut -d= -f2-)"
+
+    if mv "$LOCK_DIR" "${LOCK_DIR}.broken.$$.$(date -u +%s)" 2>/dev/null; then
+      echo "channel-append.sh: broke a stale lock on $(basename "$CHANNEL") — its holder took it at ${held_since:-an unrecorded time} and never released it" >&2
+    fi
+  fi
+}
+
+acquire_lock() {
+  local waited_ms=0 budget_ms delay_ms="$RETRY_INITIAL_MS"
+  budget_ms=$(awk "BEGIN{printf \"%d\", $BUDGET_SECONDS * 1000}")
+
+  while true; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      HELD=1
+      printf 'pid=%s\nutc=%s\nrole=%s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "session" > "$OWNER_FILE"
+      return 0
+    fi
+
+    break_if_stale
+
+    [ "$waited_ms" -ge "$budget_ms" ] && return 1
+
+    sleep "$(awk "BEGIN{printf \"%.3f\", $delay_ms/1000}")"
+    waited_ms=$((waited_ms + delay_ms))
+    delay_ms=$((delay_ms * 2))
+    [ "$delay_ms" -gt "$RETRY_MAX_MS" ] && delay_ms="$RETRY_MAX_MS"
+  done
+}
+
+if ! acquire_lock; then
+  echo "channel-append.sh: COULD NOT ACQUIRE the lock on '$CHANNEL' within ${BUDGET_SECONDS}s — NOTHING WAS WRITTEN." >&2
+  echo "channel-append.sh: retry; do not append without the lock, that is the collision this prevents." >&2
+  exit 3
+fi
+
+# ---- critical section -------------------------------------------------------------------------
+# The index is read HERE, inside the lock, which is what stops two writers choosing the same one.
+# Read it outside and the lock protects the write while leaving the decision it depends on racing.
+LAST_INDEX="$(grep -oE '^## \[[0-9]+\]' "$CHANNEL" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1)"
+[ -n "$LAST_INDEX" ] || LAST_INDEX=0
+NEXT_INDEX=$((LAST_INDEX + 1))
+
+# The HIGHEST index, not the last line's: once a collision has happened the file is no longer
+# sorted, and numbering from the tail hands out an index that already exists further up.
+
+# The helper stamps the time itself. An agent writing its own stamp is guessing — a future stamp
+# blanks the app's time-on-task display, and one was observed 10 hours ahead of the entry it sat on.
+STAMP="$(date +'%Y-%m-%d %H:%M')"
+
+STAGED_ENTRY="$(mktemp)" || { echo "channel-append.sh: cannot create a temp file" >&2; exit 4; }
+
+{
+  printf '\n## [%s] FROM %s — %s — %s\n\n' "$NEXT_INDEX" "$AUTHOR" "$STAMP" "$SUBJECT"
+  cat "$BODY_FILE"
+  printf '\n'
+} > "$STAGED_ENTRY" || { rm -f "$STAGED_ENTRY"; echo "channel-append.sh: could not stage the entry" >&2; exit 4; }
+
+# ONE append of a fully-formed entry. The entry is built in a temp file first so that exactly one
+# write() reaches the channel: a writer that emits header and body separately is the shape that let
+# another author's header land in the middle of an entry.
+if ! cat "$STAGED_ENTRY" >> "$CHANNEL"; then
+  rm -f "$STAGED_ENTRY"
+  echo "channel-append.sh: the append FAILED — nothing was written" >&2
+  exit 4
+fi
+
+rm -f "$STAGED_ENTRY"
+# ---- end critical section ---------------------------------------------------------------------
+
+release_lock
+echo "$NEXT_INDEX"

@@ -5059,7 +5059,23 @@ internal sealed class BridgeEngineModel(
             // supervisor answered THIS message.
             var supervisorEntryCountBefore = Count_SupervisorEntries(delivery.Key);
 
-            ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now);
+            // Take_ReadyDeliveries REMOVED this from the buffer before we got here, so the only copy
+            // of the owner's message is the local variable. A failed append that simply fell through
+            // would destroy it — which is worse than the collision the lock exists to prevent, and is
+            // why "fail the write" cannot mean "drop the write" on this path.
+            if (!ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now))
+            {
+                // Put it back and mark it ready: the owner has already waited out one aggregation
+                // window and must not serve a second one for a lock they know nothing about.
+                _ownerDeliveryBuffer.Add_Segment(delivery.Key, deliveryText, DateTime.UtcNow);
+                _ownerDeliveryBuffer.Release(delivery.Key);
+
+                _log.Log_Warning(target.OrchId,
+                    $"Owner message NOT delivered — '{Path.GetFileName(delivery.Key)}' stayed locked by another writer for the whole budget; it is back in the buffer and the next tick retries it");
+
+                continue;
+            }
+
             _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
             Raise_OrchestrationActivity(target.OrchId);
 

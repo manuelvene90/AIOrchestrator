@@ -7,28 +7,39 @@ namespace AIOrchestratorCoreLib.Channels;
 /// It is not the only place the bridge WRITES one: <see cref="Channel_Compactor"/> rewrites the
 /// live file whole when it archives an old tail. This comment used to claim otherwise, which made
 /// the rewrite-versus-append race invisible to anyone reading here first. Both writers take
-/// <see cref="ChannelWrite_Lock"/> so they cannot overlap — within this process.
+/// <see cref="ChannelWrite_Lock"/>, so they cannot overlap with each other or with a session that
+/// appends through <c>kit/channel-append.sh</c>.
+/// </para>
+/// <para>
+/// Both methods return WHETHER THEY WROTE. False means the channel was locked by another writer
+/// for the whole budget and the entry was not appended — it is not a detail to discard. Today most
+/// call sites in the bridge ignore it, which is a known gap recorded with this change rather than
+/// papered over: the entry is dropped and nothing says so. The owner-delivery path does check it,
+/// because an owner message has already left its buffer by then and is otherwise lost outright.
 /// </para>
 /// </summary>
 public static class ChannelAppender
 {
-    public static void Append_OwnerEntry(string channelFilePath, string messageText, DateTime nowLocal)
+    /// <summary>Returns whether the entry was appended; false means the channel stayed locked.</summary>
+    public static bool Append_OwnerEntry(string channelFilePath, string messageText, DateTime nowLocal)
     {
-        Append_Entry(channelFilePath, "owner", "via Telegram", messageText, nowLocal);
+        return Append_Entry(channelFilePath, "owner", "via Telegram", messageText, nowLocal);
     }
 
-    /// <summary>App-authored entries: request confirmations/failures on the general channel.</summary>
-    public static void Append_AppEntry(string channelFilePath, string subject, string body, DateTime nowLocal)
+    /// <summary>
+    /// App-authored entries: request confirmations/failures on the general channel. Returns whether
+    /// the entry was appended.
+    /// </summary>
+    public static bool Append_AppEntry(string channelFilePath, string subject, string body, DateTime nowLocal)
     {
-        Append_Entry(channelFilePath, "app", subject, body, nowLocal);
+        return Append_Entry(channelFilePath, "app", subject, body, nowLocal);
     }
 
-    static void Append_Entry(string channelFilePath, string authorWord, string subject, string body, DateTime nowLocal)
+    static bool Append_Entry(string channelFilePath, string authorWord, string subject, string body, DateTime nowLocal)
     {
         // The index comes from a read, so the read and the append have to be one indivisible step:
-        // split them and two appenders pick the same index. The gate covers this process only —
-        // see ChannelWrite_Lock for what remains open.
-        ChannelWrite_Lock.Run_Serialised(channelFilePath, () =>
+        // split them and two appenders pick the same index.
+        return ChannelWrite_Lock.Try_Run_Serialised(channelFilePath, ChannelWrite_Lock.DEFAULT_BUDGET, () =>
         {
             var existingText = File.Exists(channelFilePath)
                 ? File.ReadAllText(channelFilePath)
@@ -41,6 +52,6 @@ public static class ChannelAppender
                 $"\n{body.Trim()}\n";
 
             File.AppendAllText(channelFilePath, entry);
-        });
+        }, out _);
     }
 }

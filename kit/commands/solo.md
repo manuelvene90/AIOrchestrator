@@ -38,11 +38,30 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
 
 - Entries start EXACTLY: `## [n] FROM solo — YYYY-MM-DD HH:mm — subject`. `n` increments per
   channel. A header in any other shape is INVISIBLE to the app — never mirrored, never counted.
-- **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
-  immediately before appending and add one (the app appends while you work, so a remembered number
-  collides — real duplicates happened on 2026-08-10), and take the time from the system clock
-  (`date +'%Y-%m-%d %H:%M'`). The app measures time-on-task from that field and now BLANKS it when
-  the stamp is in the future, so guessing costs you the display.
+- **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
+
+  ```bash
+  bash ~/.claude/commands/channel-append.sh \
+    --channel "$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md" \
+    --author  solo \
+    --subject "fix landed — 214 tests green, branch ready" \
+    --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
+  ```
+
+  It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the app takes the same one
+  from .NET), **allocates `n` and stamps the time itself INSIDE that lock**, and prints the index it
+  used. **You compute NEITHER.** "Re-read the last header and add one" cannot be made safe by trying
+  harder — the window it leaves open IS the write: two writers both read `[71]` and both wrote
+  `[72]`. Hand-stamping failed the same way, ten hours ahead of the entry it sat on; the app measures
+  time-on-task from that field and BLANKS a future stamp.
+- **Exit code 3 means NOTHING WAS WRITTEN** — "could not acquire the lock within the budget". Never
+  read it as success: the entry is not in the file and the owner never saw it. Retry the call (raise
+  `--budget-seconds` if the channel is busy). **Never fall back to a bare `>>` redirect** — an
+  unlocked append under contention is the exact collision this prevents. `2` (usage) and `4` (I/O)
+  also wrote nothing; only `0` did.
+- **The honest limit: this serialises the writers that USE it, and nothing else.** A session
+  appending with a bare redirect is stopped by nothing here — a protocol to follow, not a boundary
+  that binds.
 - **APPEND ONLY — never `Write` the channel file.** A whole-file write destroys entries.
 - **ENGLISH always**, even when the owner writes in Italian (the app translates for their phone).
 - **Everything you write lands on a PHONE. THREE lines is the norm, FIVE the hard ceiling, 600

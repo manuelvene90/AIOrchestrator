@@ -32,6 +32,12 @@ public static class Channel_Compactor
     /// or something went wrong — in which case the live channel file is byte-for-byte unchanged and
     /// a later pass retries).
     /// </summary>
+    /// <summary>
+    /// Shorter than a write's budget on purpose: compaction is the one channel write nobody is
+    /// waiting for, so it should yield to an append rather than make it queue.
+    /// </summary>
+    static readonly TimeSpan COMPACTION_LOCK_BUDGET = TimeSpan.FromSeconds(2);
+
     public static long? Compact_IfNeeded(string channelFilePath)
     {
         try
@@ -41,9 +47,19 @@ public static class Channel_Compactor
 
             // Read-then-rewrite is only safe if nothing appends in between: an entry landing after
             // the read is written to content the rename below discards, and nothing anywhere
-            // records that it existed. The gate makes the pair indivisible against this process's
-            // appenders — session processes are outside its reach, see ChannelWrite_Lock.
-            return ChannelWrite_Lock.Run_Serialised(channelFilePath, () => Compact_Gated(channelFilePath));
+            // records that it existed. The gate makes the pair indivisible against every writer
+            // that takes it, in this process and in the sessions.
+            long? newLength = null;
+
+            var acquired = ChannelWrite_Lock.Try_Run_Serialised(
+                channelFilePath,
+                COMPACTION_LOCK_BUDGET,
+                () => newLength = Compact_Gated(channelFilePath),
+                out _);
+
+            // Not acquiring is a non-event: compaction is housekeeping with no deadline, and null
+            // already means "nothing happened, the offset is unchanged". It retries next tick.
+            return acquired ? newLength : null;
         }
         catch
         {

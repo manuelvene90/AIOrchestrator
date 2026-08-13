@@ -26,34 +26,47 @@ public class ChannelCompactionSerialisationTests : IDisposable
         Directory.Delete(_tempFolder, recursive: true);
     }
 
+    /// <summary>
+    /// While another writer holds the gate, compaction must DECLINE — return null and leave the
+    /// file byte-for-byte alone — rather than rewrite it underneath them. It is housekeeping with
+    /// no deadline, so giving up and retrying is the correct behaviour, not a degraded one.
+    /// </summary>
     [Fact]
-    public void Compaction_WaitsForTheChannelGate_InsteadOfRewritingUnderAWriter()
+    public void Compaction_WhileAWriterHoldsTheGate_DeclinesAndLeavesTheFileUntouched()
     {
         Write_ChannelWith(entryCount: 120);
 
-        var compactionStarted = new ManualResetEventSlim(false);
-        var compactionFinished = new ManualResetEventSlim(false);
+        var textBefore = File.ReadAllText(_channelFile);
+        long? resultWhileHeld = null;
 
-        ChannelWrite_Lock.Run_Serialised(_channelFile, () =>
+        var held = ChannelWrite_Lock.Try_Run_Serialised(_channelFile, TimeSpan.FromSeconds(5), () =>
         {
-            var compaction = Task.Run(() =>
-            {
-                compactionStarted.Set();
-                Channel_Compactor.Compact_IfNeeded(_channelFile);
-                compactionFinished.Set();
-            });
+            var compaction = Task.Run(() => resultWhileHeld = Channel_Compactor.Compact_IfNeeded(_channelFile));
 
-            Assert.True(compactionStarted.Wait(TimeSpan.FromSeconds(5)), "compaction task never started");
+            Assert.True(compaction.Wait(TimeSpan.FromSeconds(20)), "compaction never returned while the gate was held");
+        }, out _);
 
-            // The gate is held here. A compaction that ignores it rewrites the file underneath this
-            // block and signals well inside a second; one that takes the gate cannot signal at all
-            // until this block returns.
-            Assert.False(
-                compactionFinished.Wait(TimeSpan.FromSeconds(2)),
-                "compaction rewrote the channel while a writer held the gate");
-        });
+        Assert.True(held, "the test could not take the gate it is testing against");
+        Assert.Null(resultWhileHeld);
+        Assert.Equal(textBefore, File.ReadAllText(_channelFile));
+    }
 
-        Assert.True(compactionFinished.Wait(TimeSpan.FromSeconds(10)), "compaction never completed after the gate was released");
+    /// <summary>
+    /// The other half, and it has to be here: a compactor that simply never compacted would pass
+    /// the test above. Once the gate is free the same call must actually do the work.
+    /// </summary>
+    [Fact]
+    public void Compaction_OnceTheGateIsFree_CompactsNormally()
+    {
+        Write_ChannelWith(entryCount: 120);
+
+        var newLength = Channel_Compactor.Compact_IfNeeded(_channelFile);
+
+        Assert.NotNull(newLength);
+
+        var entries = ChannelEntry_Parser.Parse_All(File.ReadAllText(_channelFile));
+
+        Assert.Equal(45, entries.Count);
     }
 
     void Write_ChannelWith(int entryCount)
