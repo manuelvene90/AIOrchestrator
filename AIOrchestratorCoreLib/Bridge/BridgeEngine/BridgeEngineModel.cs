@@ -1453,13 +1453,18 @@ internal sealed class BridgeEngineModel(
 
             var (_, tokens) = UsageTotals_Reader.Build_OrchestrationTotals(_paths, session);
 
-            if (tokens < budgetTokens.Value)
-                continue;
+            // The token is spent only on an alert that actually goes out — this took it BEFORE
+            // consulting the mode, and nothing anywhere releases it (rev-7 P1).
+            var outcome = BudgetAlert_Planner.Decide(
+                tokens,
+                budgetTokens.Value,
+                alreadyAlerted: _budgetAlertedOrchIds.Contains(session.OrchId),
+                Resolve_EffectiveMode(session.OrchId));
 
-            if (!_budgetAlertedOrchIds.Add(session.OrchId))
-                continue;
+            if (outcome.RemembersAlerted)
+                _budgetAlertedOrchIds.Add(session.OrchId);
 
-            if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+            if (!outcome.ShouldSend)
                 continue;
 
             var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} used — past the {UsageTotals_Reader.Format_Tokens(budgetTokens.Value)} budget you set.";
