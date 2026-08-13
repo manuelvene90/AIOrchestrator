@@ -804,7 +804,7 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            var quietFor = DateTime.UtcNow - Get_LastChannelActivityUtc(session);
+            var quietFor = Get_OrchestrationQuietFor(session);
 
             if (quietFor.TotalMinutes < STALL_ALERT_MINUTES)
             {
@@ -841,9 +841,36 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    DateTime Get_LastChannelActivityUtc(IOrchestrationSession session)
+    /// <summary>
+    /// How long this orchestration has been quiet — the SHORTEST quiet across its channels, since any
+    /// one of them speaking means the orchestration is alive.
+    ///
+    /// THE THIRD CLOCK, and the last of them to stop reading file stamps (rev-7's F1). It used to take
+    /// the max <c>File.GetLastWriteTimeUtc</c> over the owner channel and every member channel, so any
+    /// write that SAID NOTHING marked the whole orchestration alive: a compaction's rename-over, a
+    /// request confirmation, a `/resume` broadcast — and, self-referentially, **the supervisor nudge
+    /// this engine fires itself.** The app wrote to say a report was waiting, and that write told the
+    /// stall detector everything was fine. A liveness signal its own alarm resets is not a liveness
+    /// signal.
+    ///
+    /// It goes through the SAME reader as both nudge clocks rather than measuring its own way — that
+    /// is the whole point of the branch this arrived on, and a fourth private notion of "quiet" is how
+    /// there came to be three.
+    ///
+    /// LOCAL throughout, deliberately. <see cref="Nudge_Decider.Measure_QuietFor"/> reads agent stamps
+    /// and file stamps, both local wall time, so mixing a UTC `now` in here would make every span two
+    /// hours short on this machine and suppress the alert rather than fire it — the silent direction.
+    /// The comparison is done in TimeSpans for the same reason: nothing has to be converted, so
+    /// nothing can be converted wrongly.
+    /// </summary>
+    TimeSpan Get_OrchestrationQuietFor(IOrchestrationSession session)
     {
-        var latest = session.CreatedUtc;
+        var now = DateTime.Now;
+
+        // An orchestration cannot have been quiet for longer than it has existed — and with entry
+        // stamps in play that is no longer automatic, because a stamp inside a channel can predate
+        // the session that owns it.
+        var quietFor = now - session.CreatedUtc.ToLocalTime();
 
         List<string> channelFiles = [_paths.Get_OwnerChannelFile(session.OrchId)];
 
@@ -855,13 +882,14 @@ internal sealed class BridgeEngineModel(
             if (!File.Exists(channelFile))
                 continue;
 
-            var lastWrite = File.GetLastWriteTimeUtc(channelFile);
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var channelQuietFor = Nudge_Decider.Measure_QuietFor(entries, channelFile, now);
 
-            if (lastWrite > latest)
-                latest = lastWrite;
+            if (channelQuietFor < quietFor)
+                quietFor = channelQuietFor;
         }
 
-        return latest;
+        return quietFor;
     }
 
     /// <summary>
