@@ -293,28 +293,15 @@ public partial class MainWindow : Window
     /// tokens without producing code, so a card that hides them behind an implementer count lies
     /// about where the spend is going.
     /// </summary>
+    /// <summary>
+    /// MOVED TO CoreLib so it can be tested. It counted a solo as an implementer — everything that
+    /// was not a reviewer fell into that bucket — so a basic orchestration's card read "1 implementer"
+    /// for something with no implementer and no supervisor. This project has no suite, and a counting
+    /// rule the owner reads before deciding whether to spend more should not be untestable.
+    /// </summary>
     static string Describe_OpenMembers(IOrchestrationSession session)
     {
-        var implementers = 0;
-        var reviewers = 0;
-
-        foreach (var member in session.Members)
-        {
-            if (member.ClosedUtc != null)
-                continue;
-
-            if (MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Reviewer)
-                reviewers++;
-            else
-                implementers++;
-        }
-
-        var text = $"{implementers} implementer{(implementers == 1 ? "" : "s")}";
-
-        if (reviewers > 0)
-            text += $" · {reviewers} reviewer{(reviewers == 1 ? "" : "s")}";
-
-        return text;
+        return MemberRoster_Describer.Describe_OpenMembers(session.Members);
     }
 
     OrchestrationCardView Build_Card(IOrchestrationSession session)
