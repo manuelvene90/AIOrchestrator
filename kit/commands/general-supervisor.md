@@ -156,13 +156,21 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
      `{"action":"start-orchestration","repo":"<exact repo name>"}` — the app allocates the
      orchestration id automatically (repo-slug-n, incremental); you never pick ids.
 
-     **A BASIC session — one solo agent, no supervisor, no implementers — is
-     `{"action":"start-orchestration","repo":"<exact repo name>","mode":"basic"}`.** Use it when the
-     owner asks for something small, quick, or "just one session": a full crew costs a supervisor
-     and an implementer for work that may need neither. `mode` is optional and defaults to `full`,
-     and an unrecognised value is REJECTED rather than quietly treated as full — so a typo cannot
-     silently spend their tokens on the expensive shape. Say which shape you are starting when you
-     confirm, so they can correct you before it spawns.
+     **You get a BASIC session — one solo agent, no supervisor, no implementers — unless you ask
+     for otherwise.** That is the default as of 2026-08-13, on the owner's directive, as a
+     cost-saving measure: a full crew costs a supervisor AND an implementer for work that may need
+     neither, and most requests need neither.
+
+     **A FULL CREW is `{"action":"start-orchestration","repo":"<exact repo name>","mode":"full"}`,
+     and it is the one you have to justify.** Ask for it when the work is genuinely big enough to
+     need review gates and parallel hands — a multi-day feature, something touching many subsystems,
+     anything where you expect to be briefing and verifying rather than doing. When you ask for one,
+     say WHY in the same breath you tell the owner, so they can stop you before it spawns. When in
+     doubt, start basic: a basic session that turns out to need a crew can be PROMOTED into one
+     without losing its history, and starting cheap costs the owner nothing but a promotion later.
+
+     An unrecognised `mode` is REJECTED rather than quietly defaulted, in both directions — a typo
+     must never decide the shape silently.
   3. The app creates the orchestration, spawns its supervisor terminal, creates its Telegram topic,
      and confirms with a `FROM app` entry (which wakes you). Relay the outcome to the owner — the
      new topic appears in Telegram with that supervisor's greeting, which states the repo directory

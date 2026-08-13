@@ -22,7 +22,8 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 /// Supported actions (retries REUSE the same action string — never invent variants):
 ///   {"action":"start-orchestration","repo":"...","mode":"full|basic"}
 ///                                       (general supervisor; id auto-allocated. mode is optional
-///                                        and defaults to full — basic is one solo session)
+///                                        and defaults to BASIC — one solo session. A full crew is
+///                                        the expensive shape and must be asked for by name.)
 ///   {"action":"add-implementer","orchId":"..."}                       (orchestration supervisor)
 ///   {"action":"add-reviewer","orchId":"..."}                          (orchestration supervisor; read-only member)
 ///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor; also closes rev-n)
@@ -52,10 +53,13 @@ public static class OrchestrationRequests_Reader
     /// </summary>
     public const string MISSING_REASON_MESSAGE = "missing 'reason' — every autonomous action must state WHY in one short line (it is relayed to the owner)";
 
-    /// <summary>A full crew: supervisor plus imp-1. The default when no mode is given.</summary>
+    /// <summary>
+    /// A full crew: supervisor plus imp-1. **Must be asked for by name** since 2026-08-13 — it is the
+    /// expensive shape, and the one the owner wants justified rather than defaulted into.
+    /// </summary>
     public const string FULL_MODE = "full";
 
-    /// <summary>One solo session, no supervisor — the shape the owner asks the concierge for.</summary>
+    /// <summary>One solo session, no supervisor. THE DEFAULT: what a start request buys unless it says otherwise.</summary>
     public const string BASIC_MODE = "basic";
 
     public const string MISSING_REQUESTER_MESSAGE = "missing 'requester' — closing an orchestration is irreversible, so the audit trail and the owner's confirmation must both be able to name WHO asked (e.g. \"supervisor of crm-2\")";
@@ -206,16 +210,23 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(repoQuery))
                         return "missing 'repo'";
 
-                    // Absent means FULL, so every request written before this field existed keeps
-                    // working. A value we do not recognise is REJECTED rather than defaulted: a
-                    // typo must never quietly hand the owner the expensive shape when they asked
-                    // for the cheap one.
+                    // ABSENT MEANS BASIC since the owner's directive of 2026-08-13, "as a cost-saving
+                    // measure". A crew is the expensive shape and now has to be asked for by name.
+                    //
+                    // The old default was FULL and its argument was migration — every request written
+                    // before this field existed kept working. That argument now points the other way:
+                    // a stale request buys ONE session instead of a crew, so the failure mode is
+                    // underspending, which the owner sees and corrects. The reverse was overspending
+                    // they only met on the bill.
+                    //
+                    // A value we do not recognise is still REJECTED rather than defaulted: a typo must
+                    // never decide the shape silently, and that is now true in both directions.
                     var mode = root["mode"]?.GetValue<string>()?.Trim().ToLowerInvariant();
 
                     if (mode != null && mode != FULL_MODE && mode != BASIC_MODE)
                         return $"mode must be '{FULL_MODE}' or '{BASIC_MODE}', got '{mode}'";
 
-                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, mode == BASIC_MODE, filePath));
+                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, mode != FULL_MODE, filePath));
                     return null;
                 }
                 case ADD_IMPLEMENTER_ACTION:
