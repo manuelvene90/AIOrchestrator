@@ -13,19 +13,13 @@ public enum ParkedConfirmationActions
     Ask,
 }
 
-/// <summary>
-/// Which kind of decision a parked request is asking the owner to make. The parked file carries its
-/// own `action`, so the kind is read from the request rather than remembered beside it.
-/// </summary>
-public enum ConfirmationKinds
-{
-    /// <summary>An action this build does not know. NOTHING may be executed on it — see the resolver.</summary>
-    Unknown,
-
-    CloseOrchestration,
-    CloseImplementer,
-    PromoteOrchestration,
-}
+// THERE IS NO KIND ENUM HERE, and there was one for three commits. `ParkedCloseKinds` already existed
+// on `IParkedCloseRequest`, consumed in seventeen places including the prompt the owner reads — and I
+// wrote a second answer to "what kind of parked request is this" three commits after arguing against a
+// second copy of this very machine. I came at it from the tick's guard chain instead of from the
+// parked file, which is exactly how two right-looking things end up answering one question.
+//
+// `Resolve_Kind` below returns that existing type. Nothing here defines a kind.
 
 /// <summary>
 /// THE DECISIONS behind the owner-confirmation machinery, pulled out of the tick so they can be
@@ -78,9 +72,10 @@ public static class ParkedConfirmation_Planner
     }
 
     /// <summary>
-    /// The kind of decision a parked request carries, from its own `action` string.
+    /// The kind of decision a parked request carries, from its own `action` string — as the type the
+    /// rest of this machine already speaks.
     ///
-    /// UNKNOWN IS A REFUSAL, not a default. A parked file's actions are destructive or expensive —
+    /// NULL IS A REFUSAL, not a default. A parked file's actions are destructive or expensive —
     /// closing an orchestration, retiring a member, spending a crew — so an action this build does not
     /// recognise must execute NOTHING. Guessing the closest match is how a file written by a newer
     /// build, or corrupted, gets executed as something it never said.
@@ -89,14 +84,14 @@ public static class ParkedConfirmation_Planner
     /// evaluate its predicate ALLOWS, because it only ever advises. Here the effect is irreversible,
     /// so the same uncertainty must stop instead.
     /// </summary>
-    public static ConfirmationKinds Resolve_Kind(string? action)
+    public static ParkedCloseRequest.ParkedCloseKinds? Resolve_Kind(string? action)
     {
         return action switch
         {
-            OrchestrationRequests_Reader.CLOSE_ORCHESTRATION_ACTION => ConfirmationKinds.CloseOrchestration,
-            OrchestrationRequests_Reader.CLOSE_IMPLEMENTER_ACTION => ConfirmationKinds.CloseImplementer,
-            OrchestrationRequests_Reader.PROMOTE_ORCHESTRATION_ACTION => ConfirmationKinds.PromoteOrchestration,
-            _ => ConfirmationKinds.Unknown,
+            OrchestrationRequests_Reader.CLOSE_ORCHESTRATION_ACTION => ParkedCloseRequest.ParkedCloseKinds.Orchestration,
+            OrchestrationRequests_Reader.CLOSE_IMPLEMENTER_ACTION => ParkedCloseRequest.ParkedCloseKinds.Implementer,
+            OrchestrationRequests_Reader.PROMOTE_ORCHESTRATION_ACTION => ParkedCloseRequest.ParkedCloseKinds.Promotion,
+            _ => null,
         };
     }
 }

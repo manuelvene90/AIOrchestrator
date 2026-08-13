@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.GeneralSupervision;
@@ -82,10 +83,10 @@ public class ParkedConfirmationPlannerTests
     /// than relying on something remembered beside it.
     /// </summary>
     [Theory]
-    [InlineData("close-orchestration", ConfirmationKinds.CloseOrchestration)]
-    [InlineData("close-implementer", ConfirmationKinds.CloseImplementer)]
-    [InlineData("promote-orchestration", ConfirmationKinds.PromoteOrchestration)]
-    public void TheKindIsReadFromTheAction(string action, ConfirmationKinds expected)
+    [InlineData("close-orchestration", ParkedCloseKinds.Orchestration)]
+    [InlineData("close-implementer", ParkedCloseKinds.Implementer)]
+    [InlineData("promote-orchestration", ParkedCloseKinds.Promotion)]
+    public void TheKindIsReadFromTheAction(string action, ParkedCloseKinds expected)
     {
         Assert.Equal(expected, ParkedConfirmation_Planner.Resolve_Kind(action));
     }
@@ -106,8 +107,8 @@ public class ParkedConfirmationPlannerTests
     [InlineData("close-orchestration-retry")]
     [InlineData("")]
     [InlineData(null)]
-    public void AnUnrecognisedActionIsUnknownRatherThanTheClosestMatch(string? action)
+    public void AnUnrecognisedActionIsRefusedRatherThanMatchedToTheClosest(string? action)
     {
-        Assert.Equal(ConfirmationKinds.Unknown, ParkedConfirmation_Planner.Resolve_Kind(action));
+        Assert.Null(ParkedConfirmation_Planner.Resolve_Kind(action));
     }
 }

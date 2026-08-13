@@ -17,6 +17,7 @@ public static class CloseConfirmationPrompt_Builder
         {
             ParkedCloseKinds.Orchestration => Build_ForOrchestration(request, unresolvedLedger),
             ParkedCloseKinds.Implementer => Build_ForImplementer(request),
+            ParkedCloseKinds.Promotion => Build_ForPromotion(request),
             _ => throw new ArgumentOutOfRangeException(nameof(request), $"unhandled close kind '{request.Kind}'"),
         };
     }
@@ -35,6 +36,7 @@ public static class CloseConfirmationPrompt_Builder
         {
             ParkedCloseKinds.Orchestration => "this orchestration",
             ParkedCloseKinds.Implementer => $"'{request.MemberId}'",
+            ParkedCloseKinds.Promotion => "the promotion to a full crew",
             _ => throw new ArgumentOutOfRangeException(nameof(request), $"unhandled close kind '{request.Kind}'"),
         };
     }
@@ -58,6 +60,29 @@ public static class CloseConfirmationPrompt_Builder
     ///
     /// What the owner needs instead is the scope: the rest keeps running.
     /// </summary>
+    /// <summary>
+    /// THE ONE PROMPT THAT ASKS FOR MORE RATHER THAN LESS, so it names the cost first: this is the
+    /// owner agreeing to spend a supervisor and an implementer indefinitely, in place of one session.
+    ///
+    /// It says what SURVIVES as plainly as what ends, because the fear a reader brings to a tap that
+    /// kills their session is the wrong fear here — the conversation, the topic and the history all
+    /// carry over untouched, and only the session itself is replaced.
+    ///
+    /// And it says ONE-WAY, because there is no demotion: the way back is closing the orchestration
+    /// and starting a basic one, which loses this channel. That is exactly the sort of thing a person
+    /// discovers afterwards unless the prompt says it.
+    /// </summary>
+    static string Build_ForPromotion(IParkedCloseRequest request)
+    {
+        return
+            $"⚙️ Turn '{request.OrchId}' into a full crew?\n\n"
+            + $"Asked by: {request.Requester}\n"
+            + $"Reason: {request.Reason}\n\n"
+            + "This spends a supervisor AND an implementer from now on, instead of the one session you have. "
+            + "That session ends — but this conversation, this topic and everything already said carry over to the supervisor untouched. "
+            + "Treat it as one-way: there is no going back to a single session without closing the orchestration. Nothing happens unless you tap.";
+    }
+
     static string Build_ForImplementer(IParkedCloseRequest request)
     {
         return

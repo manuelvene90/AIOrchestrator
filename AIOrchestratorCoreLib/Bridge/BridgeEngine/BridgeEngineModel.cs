@@ -2110,6 +2110,7 @@ internal sealed class BridgeEngineModel(
 
         Process_StartRequests(pending);
         Process_AddImplementerRequests(pending);
+        Process_PromoteOrchestrationRequests(pending);
         Process_CloseImplementerRequests(pending);
         Process_CloseOrchestrationRequests(pending);
         Process_SetTelegramMutedRequests(pending);
@@ -2354,6 +2355,96 @@ internal sealed class BridgeEngineModel(
     /// owner-facing route at all. The guard does not take anything away from them; it gives them the
     /// only say they had.
     /// </summary>
+    /// <summary>
+    /// A solo asking for its basic orchestration to become a full crew.
+    ///
+    /// TWO REFUSALS BEFORE THE OWNER IS EVER INVOLVED, and both go to the SOLO rather than to them.
+    /// A request that cannot be honoured is not a decision anybody should be asked to adjudicate: the
+    /// owner's tap answers "should this become a crew", never "is this request well-formed". Parking
+    /// a broken one spends a tap on "no" and teaches them to distrust the button.
+    ///
+    /// The handover requirement is the one that matters. The solo's session ENDS on promotion and its
+    /// in-context state dies with it; the channel is the only thing the supervisor inherits, so a
+    /// promotion granted without that entry silently discards whatever was never written down.
+    /// </summary>
+    void Process_PromoteOrchestrationRequests(IPendingRequests pending)
+    {
+        foreach (var request in pending.PromoteOrchestrationRequests)
+        {
+            try
+            {
+                var session = _store.Get_Session_OrNull(request.OrchId);
+
+                if (session == null || session.ClosedUtc != null)
+                {
+                    Append_GeneralAppEntry(
+                        $"promote-orchestration FAILED: '{request.OrchId}'",
+                        $"No open orchestration '{request.OrchId}' — nothing was promoted.");
+
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unpromotable");
+                    continue;
+                }
+
+                if (!Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc))
+                {
+                    Append_OrchestrationAppEntry(
+                        request.OrchId,
+                        "promotion REFUSED — this orchestration already has a supervisor",
+                        "A promotion turns a basic orchestration into a full crew, and this one is already a crew. Nothing was changed and the owner was not asked.");
+
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "already-a-crew");
+                    continue;
+                }
+
+                if (!HandoverEntry_Detector.Has_HandoverEntry(Read_OwnerChannelEntries(request.OrchId)))
+                {
+                    Append_OrchestrationAppEntry(
+                        request.OrchId,
+                        "promotion REFUSED — file your HANDOVER entry first, then ask again",
+                        "Your session ENDS when a promotion happens, and everything you know that is not in this channel dies with it. The supervisor that replaces you inherits this file and nothing else.\n\n"
+                        + $"So append an entry whose SUBJECT carries `{HandoverEntry_Detector.HANDOVER_MARKER}` — where the work really stands, what you tried that did not work, what is half-done and in which files, and the traps — and then drop the request again.\n\n"
+                        + "The owner has NOT been asked and nothing was changed.");
+
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "no-handover-entry");
+                    continue;
+                }
+
+                var parkedPath = CloseConfirmation_Parking.Park(_paths, request.SourceFilePath);
+
+                _log.Log_Info(request.OrchId, $"promote-orchestration held for the owner's confirmation ({parkedPath})");
+
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    "promotion HELD — the owner confirms this with a tap",
+                    $"Nothing has changed yet and you are still the session here. The owner has been asked.\n\n"
+                    + $"Reason relayed: {request.Reason}\n\n"
+                    + $"You will get an entry here either way. If they do not answer within {CloseConfirmation_Parking.EXPIRY_HOURS} hours it lapses and you are told — do NOT re-drop it in the meantime, and carry on working.");
+            }
+            catch (Exception ex)
+            {
+                // Fail closed and say so: the guard could not be honoured, so NOTHING was promoted.
+                _log.Log_Error(request.OrchId, "promote-orchestration could not be held for confirmation — NOT promoted", ex);
+
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    "promotion NOT held — nothing was changed",
+                    $"Your promotion request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and you are still the session here. Ask again if it is still wanted.");
+
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The orchestration's owner channel, parsed — the file the solo writes and the supervisor
+    /// inherits. Empty when it cannot be read, which the caller treats as "no handover entry": a
+    /// channel this app cannot read is not evidence that the solo wrote one.
+    /// </summary>
+    IReadOnlyList<Channels.ChannelEntry.IChannelEntry> Read_OwnerChannelEntries(string orchId)
+    {
+        return ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(orchId)));
+    }
+
     void Process_CloseImplementerRequests(IPendingRequests pending)
     {
         foreach (var request in pending.CloseImplementerRequests)
@@ -2889,17 +2980,37 @@ internal sealed class BridgeEngineModel(
             // The kind decides what the tap ends, and it comes from the FILE rather than from
             // anything remembered alongside the button. A prompt that said "member" must never be
             // able to execute an orchestration close because some other state disagreed.
+            //
+            // EVERY KIND IS NAMED, and the catch-all `else` that used to sit here is gone. It read as
+            // "orchestration is the default", which was true while there were two kinds and became a
+            // live hazard the moment a third existed: a PROMOTION falling into it would have closed
+            // the orchestration the owner had just agreed to EXPAND — the worst outcome this feature
+            // can produce, from the one tap they were most confident about.
             if (request.Kind == ParkedCloseKinds.Implementer)
             {
                 Execute_CloseImplementer(confirmation.OrchId, request.MemberId!, request.Reason);
             }
-            else
+            else if (request.Kind == ParkedCloseKinds.Promotion)
+            {
+                Execute_ConfirmedPromotion(confirmation.OrchId, request.Reason);
+            }
+            else if (request.Kind == ParkedCloseKinds.Orchestration)
             {
                 Execute_Close(
                     confirmation.OrchId,
                     request.Reason,
                     request.Requester,
                     "The owner confirmed it with a tap.");
+            }
+            else
+            {
+                // A kind this build cannot execute — from a newer build, or a file that parsed as
+                // something this one does not know how to act on. NOTHING happens, and it says so:
+                // silence here would archive an unexecuted request as though it had been done, which
+                // is the same lie as executing the wrong thing, one step quieter.
+                _log.Log_Warning(
+                    confirmation.OrchId,
+                    $"A confirmed request carried a kind this build cannot execute ('{request.Kind}') — NOTHING was done ({confirmation.ParkedPath})");
             }
         }
         catch (Exception)
@@ -2910,7 +3021,50 @@ internal sealed class BridgeEngineModel(
         }
         finally
         {
-            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "closed");
+            // The label names what the tap actually authorised. "closed" on a promotion would leave
+            // an audit trail saying the opposite of what happened to an orchestration that is still
+            // running.
+            Archive_ResolvedRequest_BestEffort(
+                confirmation.ParkedPath,
+                request.Kind == ParkedCloseKinds.Promotion ? "promoted" : "closed");
+        }
+    }
+
+    /// <summary>
+    /// The owner agreed to spend a crew. The solo ends, a supervisor takes over its channel, imp-1
+    /// spawns empty — all of it in the launcher, which is where the ORDER of those three steps is
+    /// argued and where a failure at each one is survivable.
+    ///
+    /// It reports into the orchestration's own channel, which the new supervisor reads as its history:
+    /// the entry is the first thing it sees about why it exists, sitting directly under the handover
+    /// the solo was required to write.
+    /// </summary>
+    void Execute_ConfirmedPromotion(string orchId, string reason)
+    {
+        try
+        {
+            _launcher.Promote_ToFullCrew(orchId);
+
+            _log.Log_Info(orchId, $"Promoted to a full crew on the owner's confirmation — {reason}");
+
+            Append_OrchestrationAppEntry(
+                orchId,
+                "PROMOTED to a full crew — the owner confirmed",
+                $"The solo session has ended and a supervisor has taken over this channel, with imp-1 spawned and waiting for a brief.\n\n"
+                + $"Reason given: {reason}\n\n"
+                + "Everything above is the history you inherit — the handover entry is in it. The Telegram topic is unchanged, so the owner is reading this same thread.");
+        }
+        catch (Exception ex)
+        {
+            // The orchestration is NOT left half-promoted silently. Whatever the launcher managed
+            // before it threw, the channel says what was attempted, and the watchdog covers a
+            // supervisor whose spawn was stamped but failed.
+            _log.Log_Error(orchId, "Promotion to a full crew FAILED after the owner confirmed it", ex);
+
+            Append_OrchestrationAppEntry(
+                orchId,
+                "promotion FAILED after the owner confirmed it",
+                $"The owner approved the promotion and it could not be completed ({ex.Message}). Check which sessions are actually running before asking again.");
         }
     }
 

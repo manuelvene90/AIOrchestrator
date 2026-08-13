@@ -167,6 +167,39 @@ public static class OrchestrationRequests_Reader
     }
 
     /// <summary>
+    /// Re-reads ONE parked promote-orchestration request, through the SAME strict parse as everything
+    /// else — including the mandatory reason. A parked file can never be honoured on terms the scanner
+    /// would have refused, and the reason is what the owner is shown when they are asked to spend.
+    /// </summary>
+    public static IPromoteOrchestrationRequest? Read_PromoteOrchestrationRequest_OrNull(string filePath)
+    {
+        List<IStartOrchestrationRequest> startRequests = [];
+        List<IAddImplementerRequest> addImplementerRequests = [];
+        List<ICloseImplementerRequest> closeImplementerRequests = [];
+        List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
+        List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
+        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
+        List<ISetModelRequest> setModelRequests = [];
+
+        var rejection = Try_ParseInto_OrReason(
+            filePath,
+            startRequests,
+            addImplementerRequests,
+            closeImplementerRequests,
+            closeOrchestrationRequests,
+            setTelegramMutedRequests,
+            setOrchestrationNameRequests,
+            promoteOrchestrationRequests,
+            setModelRequests);
+
+        if (rejection != null)
+            return null;
+
+        return promoteOrchestrationRequests.Count == 1 ? promoteOrchestrationRequests[0] : null;
+    }
+
+    /// <summary>
     /// Best-effort orch id from a file the strict parse has REJECTED, so a bad request can still be
     /// reported to the session that wrote it instead of vanishing silently.
     /// </summary>
