@@ -3830,7 +3830,7 @@ internal sealed class BridgeEngineModel(
         {
             var generalPresence = OwnerPresence_Policy.Toggle(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID));
 
-            Status.MeetingFlag_Marker.Sync(_paths, ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
+            Sync_MeetingFlag_AndReport(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
             Apply_Presence_ToAwaitingAnswerFlag(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
             _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"Owner presence → {generalPresence}");
             Tell_Supervisor_AboutPresence(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
@@ -3852,7 +3852,7 @@ internal sealed class BridgeEngineModel(
             var newPresence = OwnerPresence_Policy.Toggle(session.OwnerPresence);
 
             _store.Set_OwnerPresence(session.OrchId, newPresence);
-            Status.MeetingFlag_Marker.Sync(_paths, session.OrchId, newPresence);
+            Sync_MeetingFlag_AndReport(session.OrchId, newPresence);
             Apply_Presence_ToAwaitingAnswerFlag(session.OrchId, newPresence);
             _log.Log_Info(session.OrchId, $"Owner presence → {newPresence}");
             Raise_OrchestrationActivity(session.OrchId);
@@ -3918,7 +3918,7 @@ internal sealed class BridgeEngineModel(
             if (!OwnerPresence_Policy.Should_FlipToRemote(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID), isPresenceCommandItself))
                 return;
 
-            Status.MeetingFlag_Marker.Sync(_paths, ChannelDiscovery.GENERAL_ORCH_ID, OwnerPresenceModes.Remote);
+            Sync_MeetingFlag_AndReport(ChannelDiscovery.GENERAL_ORCH_ID, OwnerPresenceModes.Remote);
             _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, "Owner presence → Remote (they texted General)");
             Tell_Supervisor_AboutPresence(ChannelDiscovery.GENERAL_ORCH_ID, OwnerPresenceModes.Remote);
             return;
@@ -3933,7 +3933,7 @@ internal sealed class BridgeEngineModel(
             return;
 
         _store.Set_OwnerPresence(session.OrchId, OwnerPresenceModes.Remote);
-        Status.MeetingFlag_Marker.Sync(_paths, session.OrchId, OwnerPresenceModes.Remote);
+        Sync_MeetingFlag_AndReport(session.OrchId, OwnerPresenceModes.Remote);
         _log.Log_Info(session.OrchId, "Owner presence → Remote (they texted this topic)");
         Tell_Supervisor_AboutPresence(session.OrchId, OwnerPresenceModes.Remote);
     }
@@ -5003,9 +5003,27 @@ internal sealed class BridgeEngineModel(
             // A closed orchestration is never in a meeting, whatever its last presence said.
             var presence = session.ClosedUtc == null ? session.OwnerPresence : OwnerPresenceModes.Remote;
 
-            if (Status.MeetingFlag_Marker.Sync(_paths, session.OrchId, presence))
-                _log.Log_Info(session.OrchId, $"Meeting flag {(presence == OwnerPresenceModes.Terminal ? "raised" : "cleared")} — the supervisor's watcher goes {(presence == OwnerPresenceModes.Terminal ? "silent" : "live")}");
+            Sync_MeetingFlag_AndReport(session.OrchId, presence);
         }
+    }
+
+    /// <summary>
+    /// The ONE route every meeting-flag write goes through, so no site can forget to report a
+    /// failure. A flag that cannot be deleted silences a watcher permanently, and a session that has
+    /// stopped hearing anyone looks identical from outside to one that is simply quiet — so the
+    /// failure is named in the log rather than swallowed (decision 21: a guard that cannot evaluate
+    /// its predicate says so).
+    /// </summary>
+    bool Sync_MeetingFlag_AndReport(string orchId, OwnerPresenceModes presence)
+    {
+        var changed = Status.MeetingFlag_Marker.Sync(_paths, orchId, presence, out var failure);
+
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
+        else if (changed)
+            _log.Log_Info(orchId, $"Meeting flag {(presence == OwnerPresenceModes.Terminal ? "raised" : "cleared")} — this session's watcher goes {(presence == OwnerPresenceModes.Terminal ? "silent" : "live")}");
+
+        return changed;
     }
 
     void Raise_AwaitingAnswerFlag(string orchId)

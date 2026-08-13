@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.SupervisionPaths;
+﻿using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestratorCoreLib.Status;
@@ -61,8 +61,9 @@ public static class MeetingFlag_Marker
     /// Makes the file match the mode. Returns whether anything changed, so the caller can log a
     /// transition without logging a no-op on every tick.
     /// </summary>
-    public static bool Sync(ISupervisionPaths paths, string orchId, OwnerPresenceModes presence)
+    public static bool Sync(ISupervisionPaths paths, string orchId, OwnerPresenceModes presence, out string? failure)
     {
+        failure = null;
         var flagFile = Build_FilePath(paths, orchId);
         var wanted = presence == OwnerPresenceModes.Terminal;
 
@@ -83,10 +84,18 @@ public static class MeetingFlag_Marker
 
             return true;
         }
-        catch
+        catch (Exception exception)
         {
-            // Never throws at the caller: this is a convenience for a shell loop, and failing to
-            // write it must not take down a presence toggle or the tick that reconciles it.
+            // NEVER THROWS at the caller — failing to write a convenience file must not take down a
+            // presence toggle or the tick that reconciles it. But it never fails SILENTLY either, and
+            // the REMOVAL direction is why: a delete that fails leaves a file that silences a
+            // watcher, permanently, and the owner sees a session that has simply stopped hearing
+            // anyone — with every liveness check still reporting it healthy (rev-4, 2026-08-13).
+            //
+            // A swallowed exception and an unlogged failure are the same silence, so this names the
+            // operation AND the path: "could not clear" on a path nobody can delete is actionable,
+            // "flag error" is the silence again.
+            failure = $"could not {(wanted ? "raise" : "clear")} the meeting flag at '{flagFile}' — {exception.GetType().Name}: {exception.Message}";
             return false;
         }
     }
