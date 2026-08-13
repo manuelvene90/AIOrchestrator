@@ -25,6 +25,18 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// completion before the loop's delay observes the cancellation. Two probe classes were already
 /// doing this at the time I wrote that sentence (rev-7 P3, 2026-08-13).
 /// </para>
+/// <para>
+/// WHICH CASES ACTUALLY PIN WHAT — measured by rev-6 running this file verbatim on the pre-fix tree
+/// rather than reasoning about it. <c>ASpellThatENDEDDuringAMeeting_DoesNotSilenceTheNextOne</c> and
+/// <c>AnAppendThatTHROWS_DoesNotTakeTheRestOfTheTickWithIt</c> FAIL without their fix. The two named
+/// <c>Invariant…</c> PASS pre-fix and cannot discriminate, because
+/// <c>Append_SupervisorAttention_UnlessMeeting</c> carries its own meeting check at the append, which
+/// satisfies them whichever side of the release the bail sits on. They are kept because they are
+/// true and something must hold them, and renamed because three guard-sounding names for one guard
+/// is how the next reader concludes a fix is covered when it is not — the same discipline
+/// <c>NudgeOncePerThingProbeTests</c> documents, where two cases the control showed to be vacuous
+/// were deleted outright.
+/// </para>
 /// </summary>
 public class MeetingDefersAlertsProbeTests : IDisposable
 {
@@ -100,11 +112,18 @@ public class MeetingDefersAlertsProbeTests : IDisposable
     }
 
     /// <summary>
-    /// The other half, so the fix above cannot be "nudge regardless": while the owner IS in the
-    /// meeting, the nudge stays away. Suppressing and deferring are both required.
+    /// INVARIANT, NOT A GUARD FOR THE BAIL — and this is measured rather than argued. rev-6 ran the
+    /// control: with this file copied verbatim onto the pre-fix tree, this case PASSES. It cannot
+    /// discriminate, because <c>Append_SupervisorAttention_UnlessMeeting</c> carries its own meeting
+    /// check at the append, which satisfies this whichever side of the release the bail sits on.
+    /// <para>
+    /// It is kept because it is true and worth holding — a fix of "nudge regardless" would redden
+    /// it — but it is named for what it pins: the CHOKE POINT suppresses, not the bail's placement.
+    /// Only <c>ASpellThatENDEDDuringAMeeting_DoesNotSilenceTheNextOne</c> fails pre-fix.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task DuringAMeeting_TheSupervisorIsNotNudgedAtAll()
+    public async Task InvariantDuringAMeeting_TheChokePointSuppressesTheNudge()
     {
         var (orchId, _) = Start_WithDormantMember();
         var ownerChannel = _paths.Get_OwnerChannelFile(orchId);
@@ -117,11 +136,13 @@ public class MeetingDefersAlertsProbeTests : IDisposable
     }
 
     /// <summary>
-    /// And the deferred nudge ARRIVES afterwards rather than being lost — the owner's rule, driven
-    /// end to end: suppressed while they are there, delivered once they leave.
+    /// INVARIANT, same measurement: this also passes on the pre-fix tree, for the same reason — the
+    /// choke point's own check lifts when presence returns, wherever the bail sits. Kept because
+    /// "suppressed while they are there, delivered once they leave" is the owner's rule end to end
+    /// and something must hold it; named so nobody reads it as covering the release.
     /// </summary>
     [Fact]
-    public async Task AfterTheMeeting_TheDeferredNudgeIsDelivered()
+    public async Task InvariantAfterTheMeeting_TheChokePointDeliversTheHeldNudge()
     {
         var (orchId, _) = Start_WithDormantMember();
         var ownerChannel = _paths.Get_OwnerChannelFile(orchId);

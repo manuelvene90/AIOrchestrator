@@ -6,10 +6,20 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// Every decision presence makes, in one pure place — what it does to delivery, whether a session
 /// may block on a Telegram answer, and when it ends. The engine is left with the execution.
 /// <para>
-/// It lives outside <c>BridgeEngineModel</c> for the reason that file's own history documents: the
-/// engine's only entry point is <c>Run_Async</c>, so a test cannot ask it for one tick and assert.
-/// A decision left in there is verified by a timing-dependent loop test or by nothing at all, and
-/// on this system it has repeatedly been nothing at all.
+/// It lives outside <c>BridgeEngineModel</c> because a decision stated in one pure place is one a
+/// reader and a test can both see, while the same decision spread through a 6000-line loop is
+/// verified by inspection or not at all — and on this system it has repeatedly been not at all.
+/// </para>
+/// <para>
+/// THE REASON THAT USED TO BE GIVEN HERE WAS FALSE, and it is corrected rather than deleted because
+/// it was believed and repeated. It read: "the engine's only entry point is Run_Async, so a test
+/// cannot ask it for one tick and assert." <c>BridgeEngine_Factory.Create</c> is public — internal
+/// sealed blocks NAMING the type, not building it — and starting the loop with an already-cancelled
+/// token runs exactly one tick with no sleep, because the tick body completes before the loop's
+/// delay observes the cancellation. <c>MeetingDefersAlertsProbeTests</c> does precisely that, and
+/// ships in the same series as this correction. The engine IS reachable; a pure unit is preferred
+/// here for legibility, which is a weaker and true claim (rev-6, 2026-08-13 — the eighth surviving
+/// copy of that premise across two branches).
 /// </para>
 /// </summary>
 public static class OwnerPresence_Policy
