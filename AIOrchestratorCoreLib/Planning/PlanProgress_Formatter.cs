@@ -23,72 +23,41 @@ public static class PlanProgress_Formatter
         return $"{progress.Done}/{progress.Total} done{Describe_Percent(progress)}{runningPart}{blockedPart}{notDoingPart}";
     }
 
-    /// <summary>Open lines shown by name before the rest become a count.</summary>
-    public const int NEXT_TASKS_SHOWN = 3;
-
     /// <summary>
-    /// How many lines of one KIND are worth naming individually. Beyond this the kind becomes a
-    /// number, because a list that long stops being a list and becomes a wall.
-    /// </summary>
-    public const int DETAIL_CAP = 6;
-
-    /// <summary>
-    /// What is LEFT, on a phone. The owner: "the progress command is way too detailed" — shown 593
-    /// of 683 lines and then the finished ones, one after another.
+    /// THE LEDGER, one line per line, each carrying the marker the supervisor wrote — in the file's
+    /// own order, with nothing omitted, capped at nothing.
     ///
-    /// DETAIL IS A FUNCTION OF COUNT, NOT OF CATEGORY, and that is the correction. The previous
-    /// version printed every running and blocked line in full "because they are few and they are the
-    /// actionable ones" — an assumption written against a ledger with two of them. Their real ledger
-    /// has 53 running, where naming each one is 53 lines of noise; four blocked, where each line is
-    /// the thing they can act on. So a kind is named while it is small enough to read and collapses
-    /// to a count when it is not, which is one rule rather than a special case per category.
+    /// TWO OWNER DIRECTIVES BUILT THIS, and the second overrules a rule that had stood since the
+    /// first. Reading them in order matters, because the older comment here argued the opposite and a
+    /// future reader will otherwise re-derive it:
     ///
-    /// A DONE line is never printed under any circumstance. That was the whole complaint.
+    /// 2026-08-12 — "the progress command is way too detailed": it printed 593 of 683 lines, done
+    /// ones included. The answer then was to collapse each KIND to a count once it grew past a
+    /// handful, and never to print a done line at all.
+    ///
+    /// 2026-08-13 — that answer was itself the complaint. It rendered as PROSE, joining every task of
+    /// a kind onto one line with ` · `, so four tasks became roughly fifteen wrapped visual lines on
+    /// a phone: "I want it to be a list of the main macro tasks... let's say 7/8 max, and it should
+    /// be in the [-], [>], [X] format." Then, correcting an 8-line cap read into that: "The done rows
+    /// must not be hidden. I want to see all the rows, it must not be truncated. If all the tasks
+    /// don't fit in 8/9 rows it means you haven't managed to group the tasks sufficiently into
+    /// macrotasks."
+    ///
+    /// So 7/8 IS NOT A RENDERING LIMIT. It is how many macro tasks a ledger should have, and meeting
+    /// it belongs to whoever writes PLAN.md. A truncating renderer would hide that author's failure
+    /// to group — which is exactly what the owner does not want to be hidden from. THE WHY OF THE
+    /// OLDER RULE SURVIVES INTACT: a ledger of hundreds is unreadable on a phone. The answer is a
+    /// shorter LEDGER, not a shorter message.
+    ///
+    /// The ledger's own line structure was always one line per deliverable. Nothing here decides
+    /// anything; it stopped flattening it on the way out.
     /// </summary>
     public static string Describe_Remaining(IPlanProgress progress)
     {
-        List<string> lines = [];
+        if (progress.Lines.Count == 0)
+            return "the ledger is empty";
 
-        Add_Kind(lines, "in progress", progress.InProgressTasks);
-        Add_Kind(lines, "blocked", progress.BlockedTasks);
-
-        if (progress.OpenTasks.Count > 0)
-            lines.Add($"next          {Describe_Next(progress.OpenTasks)}");
-
-        if (lines.Count == 0)
-            return "nothing left — every line is done or dropped";
-
-        return string.Join('\n', lines);
-    }
-
-    /// <summary>
-    /// Named while few, counted while many. The count is ALWAYS shown — it is the part the owner
-    /// asked for — and the names follow only when there are few enough to read on a phone.
-    /// </summary>
-    static void Add_Kind(List<string> lines, string label, IReadOnlyList<string> tasks)
-    {
-        if (tasks.Count == 0)
-            return;
-
-        if (tasks.Count > DETAIL_CAP)
-        {
-            lines.Add($"{label,-13} {tasks.Count}");
-            return;
-        }
-
-        lines.Add($"{label,-13} {tasks.Count} — {string.Join(" · ", tasks)}");
-    }
-
-    /// <summary>
-    /// The next few by name, then a count. Their ledger had 33 open behind the three shown; naming
-    /// all of them is the message they said they would not read.
-    /// </summary>
-    static string Describe_Next(IReadOnlyList<string> openTasks)
-    {
-        var shown = string.Join(" · ", openTasks.Take(NEXT_TASKS_SHOWN));
-        var hidden = openTasks.Count - NEXT_TASKS_SHOWN;
-
-        return hidden > 0 ? $"{shown} · +{hidden} more" : shown;
+        return string.Join('\n', progress.Lines.Select(line => $"[{line.Marker}] {line.Text}"));
     }
 
     /// <summary>

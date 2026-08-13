@@ -29,22 +29,37 @@ public class TaskListSplitTests
             PlanProgress_Formatter.Describe_EveryLine(progress));
     }
 
-    /// <summary>The whole point of the long form: it shows what the short one refuses to.</summary>
+    /// <summary>
+    /// BOTH FORMS SHOW DONE LINES NOW — the owner's directive of 2026-08-13 — so what separates them
+    /// is no longer WHICH rows they carry. This case used to assert that only /tasks showed a done
+    /// line, and it is kept, inverted, because the two commands answering the same question in
+    /// different words is now the live risk rather than a hypothetical one.
+    ///
+    /// What still separates them is ORDER and VOCABULARY: /progress prints the ledger as written,
+    /// with the ledger's own markers; /tasks groups by state with its own prefixes.
+    /// </summary>
     [Fact]
-    public void OnlyTheFullFormShowsDoneLines()
+    public void BothFormsShowDoneLines_AndStillReadDifferently()
     {
         var progress = Parse("- [x] the delivered thing", "- [ ] the open one")!;
 
-        Assert.DoesNotContain("the delivered thing", PlanProgress_Formatter.Describe_Remaining(progress));
+        Assert.Contains("the delivered thing", PlanProgress_Formatter.Describe_Remaining(progress));
         Assert.Contains("the delivered thing", PlanProgress_Formatter.Describe_EveryLine(progress));
+
+        Assert.Equal("[x] the delivered thing\n[ ] the open one", PlanProgress_Formatter.Describe_Remaining(progress));
+        Assert.Equal("  · the open one\n  x the delivered thing", PlanProgress_Formatter.Describe_EveryLine(progress));
     }
 
     /// <summary>
-    /// And the whole point of the short one: it truncates where the long one does not. Asserted on a
-    /// ledger big enough that the difference cannot be an accident of ordering.
+    /// NEITHER FORM TRUNCATES ANY MORE. The short one used to, and that was its whole point: "it
+    /// truncates where the long one does not". The owner removed the cap — "I want to see all the
+    /// rows, it must not be truncated" — so the 40th open line is in both.
+    ///
+    /// Kept rather than deleted because the property it guards is now the opposite one and still
+    /// needs a guard: a renderer that quietly reintroduces a limit reddens here.
     /// </summary>
     [Fact]
-    public void OnlyTheShortFormTruncates()
+    public void NeitherFormTruncates()
     {
         List<string> lines = [];
 
@@ -53,8 +68,9 @@ public class TaskListSplitTests
 
         var progress = Parse([.. lines])!;
 
-        Assert.DoesNotContain("open 39", PlanProgress_Formatter.Describe_Remaining(progress));
+        Assert.Contains("open 39", PlanProgress_Formatter.Describe_Remaining(progress));
         Assert.Contains("open 39", PlanProgress_Formatter.Describe_EveryLine(progress));
+        Assert.Equal(40, PlanProgress_Formatter.Describe_Remaining(progress).Split('\n').Length);
     }
 
     static AIOrchestratorCoreLib.Planning.PlanProgress.IPlanProgress? Parse(params string[] lines)
