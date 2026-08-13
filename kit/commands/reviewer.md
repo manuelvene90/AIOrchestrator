@@ -150,6 +150,15 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
   never a success and your report is not in the file: retry the call (raise `--budget-seconds` if the
   channel is busy). **Never fall back to a bare `>>` redirect**; an unlocked append under contention
   is the exact collision this prevents. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
+- **Exit code 127 is the opposite case, and must not be handled like `3`.** `3` says the protocol
+  EXISTS and another writer holds the lock — appending anyway IS the collision it prevents. `127` (or
+  the helper simply not being there) says the protocol is ABSENT on this machine — a fresh bootstrap,
+  or a session older than the app's build output. Nobody is locking, so a direct append is no worse
+  than how every channel was written before the helper existed, and filing nothing would leave your
+  findings unwritten. So: build the whole entry in a temp file and append it with one
+  `cat tmp >> <channel>` — header and body as separate writes is what put nine findings under the
+  supervisor's header — and **say in the body that it went in without the lock because the helper is
+  not installed**. Degraded in the open, never silently.
 - **The honest limit: this serialises the writers that USE it, and nothing else.** A session that
   appends with a bare redirect is stopped by nothing here — a protocol to follow, not a boundary that
   binds.

@@ -137,6 +137,17 @@ sub-agents, no extra shell work**. Be reachable fast; learn things when a reques
   the outcome you relayed. Retry the call (raise `--budget-seconds` if the channel is busy).
   **Never fall back to a bare `>>` redirect** — an unlocked append under contention is the exact
   collision this prevents. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
+- **Exit code 127 is the OPPOSITE of 3 and must never be conflated with it.** `3` means the protocol
+  EXISTS and another writer holds the lock — appending anyway IS the collision. `127`, or the helper
+  simply not being on disk, means it is ABSENT on this machine (a freshly bootstrapped machine is
+  exactly this case): nobody else is taking locks either, so a direct append to your own `channel.md`
+  is no worse than how every channel was written before the helper existed, and writing nothing would
+  leave the owner without a concierge at all. Degraded mode: build the FULL entry — header and body —
+  in a temp file and append it with ONE
+  `cat tmp >> "$HOME/.claude/supervision/general/channel.md"` (splitting header from body is how
+  another author's header lands inside an entry), and **say in the body that it was written without
+  the lock because the helper is not installed.** Visible degradation, never silent — and it licenses
+  nothing beyond your own channel; the read-only rule below still holds.
 - **The honest limit: this serialises the writers that USE it, and nothing else.** A session
   appending with a bare redirect is stopped by nothing here — a protocol to follow, not a boundary
   that binds.

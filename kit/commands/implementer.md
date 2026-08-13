@@ -62,6 +62,15 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   channel is busy). **Never fall back to a bare `>>` redirect**: an unlocked append under contention
   is the exact collision this prevents — the one that filed a reviewer's nine findings under the
   supervisor's header. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
+- **Exit code 127 is the OPPOSITE case — never treat it like `3`.** `3` means the protocol EXISTS and
+  another writer holds the lock, so bypassing it IS the collision. `127` (or the helper simply not
+  being there) means the protocol is ABSENT on this machine — a fresh bootstrap, or a session older
+  than the app's build output. Nobody else is locking either, so a direct append is no worse than how
+  every channel was written before the helper existed, and writing nothing would leave you unable to
+  report at all. Degraded mode, then: build the FULL entry — header and body — in a temp file and
+  append it with ONE `cat tmp >> <channel>` (emitting header and body as separate writes is what puts
+  another author's header inside an entry), and **state in the body that it was written without the
+  lock because the helper is not installed.** Degraded in the open, never silently.
 - **The honest limit: this serialises the writers that USE it, and nothing else.** A session that
   appends with a bare redirect is stopped by nothing here, so this is a protocol to follow, not a
   boundary that binds.

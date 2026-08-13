@@ -41,6 +41,21 @@ Copy-Item $roleCommands.FullName $commandsFolder -Force
 $installedNames = ($roleCommands | ForEach-Object { '/' + $_.BaseName }) -join ', '
 Write-Host "Installed $($roleCommands.Count) role commands: $installedNames" -ForegroundColor Green
 
+# The append helper ships INTO the commands folder, because that is the path every role command
+# tells a session to run. It is not optional decoration: all five mandate it for every channel
+# write, and a session that cannot find it gets exit 127, which is not in the script's own contract.
+#
+# The comment above is about this exact class of miss and did not prevent it: the glob was widened
+# from three hand-named files to every .md, and the helper is a .sh, so the bootstrap path silently
+# went on disagreeing with the app's installer (which globs .md AND .sh). Two delivery paths, one
+# behaviour — check both whenever either changes.
+$appendHelper = Join-Path $kitFolder 'channel-append.sh'
+if (-not (Test-Path -LiteralPath $appendHelper)) {
+    throw "kit\channel-append.sh is missing from the kit at '$appendHelper'. Every role command mandates it for channel writes; installing the instructions without the script would leave every session pointing at a dead path."
+}
+Copy-Item $appendHelper $commandsFolder -Force
+Write-Host 'Installed the channel append helper (channel-append.sh).' -ForegroundColor Green
+
 Copy-Item (Join-Path $kitFolder 'statusline\statusline.ps1') $statusLineTarget -Force
 Write-Host 'Installed status line script.' -ForegroundColor Green
 

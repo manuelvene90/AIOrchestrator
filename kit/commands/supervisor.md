@@ -159,6 +159,18 @@ As soon as the goal is clear from the owner's first instruction, drop
   to a bare `>>` redirect** — an unlocked append under contention is the exact collision this
   prevents. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
 
+  **Exit code 127 is its OPPOSITE and must never be conflated with 3.** `3` means the protocol EXISTS
+  and another writer holds the lock, so an unlocked append is precisely the collision it prevents.
+  `127` — or the helper simply not being on disk — means the protocol is ABSENT on this machine (a
+  fresh bootstrap, or a session started before the app's build output was refreshed): nobody else is
+  taking locks either, so a direct append is no worse than how every channel was written before the
+  helper existed, and refusing to write would leave you unable to answer the owner at all. The defined
+  degraded mode, on a spoke and on the owner-channel alike: build the FULL entry — header and body —
+  in a temp file and append it with ONE `cat tmp >> <channel>` (splitting header from body is what let
+  another author's header land inside an entry), and **state in the entry body that it was written
+  without the lock because the helper is not installed.** The degradation is visible in the channel or
+  it did not happen.
+
   **The honest limit: this serialises the writers that USE it, and nothing else.** A session
   appending with a bare redirect is stopped by nothing here, so it is a protocol to follow, not a
   boundary that binds.

@@ -59,6 +59,16 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
   `--budget-seconds` if the channel is busy). **Never fall back to a bare `>>` redirect** — an
   unlocked append under contention is the exact collision this prevents. `2` (usage) and `4` (I/O)
   also wrote nothing; only `0` did.
+- **Exit code 127 is the opposite case — never handle it like `3`.** `3` means the protocol EXISTS
+  and someone else holds the lock, so an unlocked append is the collision itself. `127` (or the helper
+  simply not being there) means the protocol is ABSENT on this machine — a fresh bootstrap, or a
+  session started before the app's build output was refreshed. Nobody is locking, so a direct append
+  to the owner-channel is no worse than how channels were written before the helper existed, and
+  writing nothing leaves the owner with silence, which is strictly worse. Then: build the whole entry
+  in a temp file and append it with a single `cat tmp >> <channel>` (header and body as separate
+  writes is how an entry ends up with another author's header inside it), and **say in the body that
+  it went in without the lock because the helper is not installed**. The owner sees the degradation;
+  it is never silent.
 - **The honest limit: this serialises the writers that USE it, and nothing else.** A session
   appending with a bare redirect is stopped by nothing here — a protocol to follow, not a boundary
   that binds.
