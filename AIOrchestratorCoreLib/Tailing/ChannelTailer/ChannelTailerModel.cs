@@ -26,6 +26,22 @@ internal sealed class ChannelTailerModel : IChannelTailer
         public int QuietPolls;
     }
 
+    /// <summary>
+    /// Guards <see cref="_states"/>, <see cref="_lastPolledFiles"/> AND the contents of every
+    /// <see cref="FileTailState"/> they hold. Two bridge loops share this object: the mirror loop
+    /// polls, confirms and re-anchors, while the inbound loop persists the offsets snapshot. Before
+    /// this, the mirror side took no lock at all and the inbound side took one the mirror side never
+    /// touched — a dictionary mutated while another thread enumerated it (an exception surfacing as
+    /// a Telegram fault), or a cursor persisted mid-update and silently wrong.
+    /// <para>
+    /// TAKE IT AT THE PUBLIC BOUNDARY, for the WHOLE operation — never per dictionary lookup. The
+    /// state a caller reads is a StringBuilder that a poll appends to, so serialising the lookup
+    /// while leaving the read of Pending outside the lock would look safe and protect nothing.
+    /// Every public method below opens with it; the private helpers assume it is already held.
+    /// </para>
+    /// </summary>
+    readonly Lock _statesLock = new();
+
     readonly Dictionary<string, FileTailState> _states = [];
 
     /// <summary>
@@ -44,6 +60,18 @@ internal sealed class ChannelTailerModel : IChannelTailer
     }
 
     public ITailerPollResult Poll(IReadOnlyList<IDiscoveredChannel> channels)
+    {
+        // The file reads happen under the lock too. They are the only reason a poll takes long
+        // enough to matter, and dropping the lock around them would hand the snapshot reader a
+        // half-updated cursor — precisely the state this lock exists to make unobservable.
+        lock (_statesLock)
+        {
+            return Poll_AllChannels(channels);
+        }
+    }
+
+    /// <summary>Runs with <see cref="_statesLock"/> HELD, as does everything it calls.</summary>
+    ITailerPollResult Poll_AllChannels(IReadOnlyList<IDiscoveredChannel> channels)
     {
         List<ICompletedChannelAppend> completedAppends = [];
         List<string> truncatedFiles = [];
@@ -80,6 +108,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
         return TailerPollResult_Factory.Create(completedAppends, truncatedFiles, unreadableFiles);
     }
 
+    /// <summary>Runs with <see cref="_statesLock"/> HELD.</summary>
     IReadOnlyList<IChannelEntry> Poll_OneChannel(IDiscoveredChannel channel, List<string> truncatedFiles)
     {
         var fileLength = Get_FileLength_OrNull(channel.FilePath);
@@ -130,35 +159,45 @@ internal sealed class ChannelTailerModel : IChannelTailer
     /// </summary>
     public void Confirm_Append(string channelFilePath)
     {
-        if (!_states.TryGetValue(channelFilePath, out var state))
-            return;
+        lock (_statesLock)
+        {
+            if (!_states.TryGetValue(channelFilePath, out var state))
+                return;
 
-        state.Unconfirmed.Clear();
+            state.Unconfirmed.Clear();
+        }
     }
 
     public bool Has_UndeliveredEntries(string channelFilePath)
     {
-        if (!_states.TryGetValue(channelFilePath, out var state))
-            return false;
+        lock (_statesLock)
+        {
+            if (!_states.TryGetValue(channelFilePath, out var state))
+                return false;
 
-        // PENDING COUNTS TOO, and testing Unconfirmed alone was a silent-loss bug: every poll starts
-        // by draining Unconfirmed back into Pending (Rewind_Unconfirmed), and bytes read but not yet
-        // emitted — a trailing entry still serving its quiet-poll window — live in Pending and
-        // nowhere else. The compaction guard asking this question was told "nothing owed", rewrote
-        // the file underneath the tailer, and Set_Offset then discarded exactly those bytes: the
-        // newest entry vanished from Telegram for good while the file on disk stayed intact.
-        //
-        // The cost, taken deliberately: a file whose last byte is not a newline holds Pending
-        // forever and so never compacts. That file's trailing entry is already permanently unemitted
-        // (Extract_CompleteEntries needs Ends_WithLineBreak), so this trades a file that grows —
-        // visible, recoverable — for a delivery that disappears silently. Header-less noise does not
-        // stick: it is cleared after the quiet-poll window.
-        return state.Unconfirmed.Length > 0 || state.Pending.Length > 0;
+            // PENDING COUNTS TOO, and testing Unconfirmed alone was a silent-loss bug: every poll
+            // starts by draining Unconfirmed back into Pending (Rewind_Unconfirmed), and bytes read
+            // but not yet emitted — a trailing entry still serving its quiet-poll window — live in
+            // Pending and nowhere else. The compaction guard asking this question was told "nothing
+            // owed", rewrote the file underneath the tailer, and Set_Offset then discarded exactly
+            // those bytes: the newest entry vanished from Telegram for good while the file on disk
+            // stayed intact.
+            //
+            // The cost, taken deliberately: a file whose last byte is not a newline holds Pending
+            // forever and so never compacts. That file's trailing entry is already permanently
+            // unemitted (Extract_CompleteEntries needs Ends_WithLineBreak), so this trades a file
+            // that grows — visible, recoverable — for a delivery that disappears silently.
+            // Header-less noise does not stick: it is cleared after the quiet-poll window.
+            return state.Unconfirmed.Length > 0 || state.Pending.Length > 0;
+        }
     }
 
     public bool Was_PolledInLastPoll(string channelFilePath)
     {
-        return _lastPolledFiles.Contains(channelFilePath);
+        lock (_statesLock)
+        {
+            return _lastPolledFiles.Contains(channelFilePath);
+        }
     }
 
     static void Rewind_Unconfirmed(FileTailState state)
@@ -176,35 +215,44 @@ internal sealed class ChannelTailerModel : IChannelTailer
 
     public void Set_Offset(string channelFilePath, long offset)
     {
-        if (!_states.TryGetValue(channelFilePath, out var state))
+        lock (_statesLock)
         {
-            _states[channelFilePath] = new FileTailState { Offset = offset };
-            return;
-        }
+            if (!_states.TryGetValue(channelFilePath, out var state))
+            {
+                _states[channelFilePath] = new FileTailState { Offset = offset };
+                return;
+            }
 
-        // Pending bytes belong to the pre-rewrite file — dropping them is the point: everything
-        // up to the new length has already been mirrored. Unconfirmed bytes go with them: they
-        // point into a file that no longer exists in that shape. The bridge does not compact a
-        // channel that still owes a delivery, so this discards nothing in practice.
-        state.Offset = offset;
-        state.Pending.Clear();
-        state.Unconfirmed.Clear();
-        state.QuietPolls = 0;
+            // Pending bytes belong to the pre-rewrite file — dropping them is the point: everything
+            // up to the new length has already been mirrored. Unconfirmed bytes go with them: they
+            // point into a file that no longer exists in that shape. The bridge does not compact a
+            // channel that still owes a delivery, so this discards nothing in practice.
+            state.Offset = offset;
+            state.Pending.Clear();
+            state.Unconfirmed.Clear();
+            state.QuietPolls = 0;
+        }
     }
 
     public IReadOnlyDictionary<string, long> Get_OffsetsSnapshot()
     {
         Dictionary<string, long> snapshot = [];
 
-        foreach (var pair in _states)
+        // This runs on the INBOUND loop while the mirror loop polls. Enumerating the dictionary and
+        // reading those StringBuilders unlocked is the race: an exception out of the enumerator that
+        // presents as a Telegram fault, or an offset persisted from a half-applied poll.
+        lock (_statesLock)
         {
-            // Un-emitted pending bytes stay "unread" in the snapshot so a restart re-reads them —
-            // and so do UNCONFIRMED ones, which is what carries at-least-once across a restart: a
-            // send that never landed is re-read and re-sent by the next process rather than lost
-            // with the memory of the one that failed.
-            snapshot[pair.Key] = pair.Value.Offset
-                - Encoding.UTF8.GetByteCount(pair.Value.Pending.ToString())
-                - Encoding.UTF8.GetByteCount(pair.Value.Unconfirmed.ToString());
+            foreach (var pair in _states)
+            {
+                // Un-emitted pending bytes stay "unread" in the snapshot so a restart re-reads them —
+                // and so do UNCONFIRMED ones, which is what carries at-least-once across a restart: a
+                // send that never landed is re-read and re-sent by the next process rather than lost
+                // with the memory of the one that failed.
+                snapshot[pair.Key] = pair.Value.Offset
+                    - Encoding.UTF8.GetByteCount(pair.Value.Pending.ToString())
+                    - Encoding.UTF8.GetByteCount(pair.Value.Unconfirmed.ToString());
+            }
         }
 
         return snapshot;
