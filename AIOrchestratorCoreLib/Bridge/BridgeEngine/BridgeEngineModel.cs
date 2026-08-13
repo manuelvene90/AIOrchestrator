@@ -209,7 +209,23 @@ internal sealed class BridgeEngineModel(
     /// resets only when that slot comes alive (rev-6 F1, 2026-08-13).
     /// </para>
     /// </summary>
-    readonly Dictionary<(string OrchId, string AlertText), DateTime> _heldCrashLoopAlerts = [];
+    readonly Dictionary<(string OrchId, string AlertText), CrashLoopAlertHold> _heldCrashLoopAlerts = [];
+
+    /// <summary>
+    /// A held crash-loop alert's delivery state: when it was last attempted, and how many attempts it
+    /// has cost. ATTEMPTS, not elapsed time, because a meeting or a DND spell holds the alert without
+    /// trying — counting wall-clock would let a long meeting spend the budget and drop an alert that
+    /// was never once offered to Telegram.
+    /// </summary>
+    readonly record struct CrashLoopAlertHold(DateTime LastAttemptUtc, int Attempts);
+
+    /// <summary>
+    /// How many failed sends a crash-loop alert costs before it is given up. It must TERMINATE: the
+    /// hold added for rev-6 F3 turned "one failed send" into a retry with no ceiling, and an alert
+    /// that can never be delivered — a closed topic, a revoked token — would otherwise log every
+    /// backoff for the life of the app (rev-5, 2026-08-13).
+    /// </summary>
+    const int CRASH_LOOP_ALERT_MAX_ATTEMPTS = 10;
 
     /// <summary>
     /// One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only). Both are
@@ -826,7 +842,7 @@ internal sealed class BridgeEngineModel(
         // alert differs in its text and must survive alongside it. Bounded because the watchdog
         // emits each one exactly once, at the threshold.
         foreach (var alert in _watchdog.Take_PendingCrashLoopAlerts())
-            _heldCrashLoopAlerts.TryAdd((alert.OrchId, alert.AlertText), default);
+            _heldCrashLoopAlerts.TryAdd((alert.OrchId, alert.AlertText), new CrashLoopAlertHold(default, 0));
 
         if (_telegramClient == null)
         {
@@ -835,8 +851,35 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        foreach (var (key, lastAttemptUtc) in _heldCrashLoopAlerts.ToList())
+        foreach (var (key, hold) in _heldCrashLoopAlerts.ToList())
         {
+            var heldSession = _store.Get_Session_OrNull(key.OrchId);
+
+            // A CLOSED orchestration's topic is closed with it, so this send can NEVER succeed and
+            // holding it is a retry with no possible end. Six members and an orchestration were
+            // closed on the evening this was written, so it is the live case rather than the exotic
+            // one (rev-5, 2026-08-13).
+            if (heldSession == null || heldSession.ClosedUtc != null)
+            {
+                _heldCrashLoopAlerts.Remove(key);
+                _log.Log_Warning(key.OrchId, $"Crash-loop alert GIVEN UP undelivered — the orchestration is closed, so its topic can no longer receive it: {key.AlertText}");
+                continue;
+            }
+
+            // AND A BOUND, because the hold turned "one failed send" into a retry with no ceiling.
+            // It counts ATTEMPTS, never elapsed time: a meeting or a DND spell holds the alert
+            // WITHOUT trying, and a wall-clock bound would let a long meeting spend the budget and
+            // discard an alert that was never once offered to Telegram.
+            //
+            // The give-up says WHICH alert and WHY. An alert that quietly stops retrying is the
+            // lost-alert failure returning through the door the hold just closed (decision 21).
+            if (hold.Attempts >= CRASH_LOOP_ALERT_MAX_ATTEMPTS)
+            {
+                _heldCrashLoopAlerts.Remove(key);
+                _log.Log_Warning(key.OrchId, $"Crash-loop alert GIVEN UP undelivered after {hold.Attempts} failed sends: {key.AlertText}");
+                continue;
+            }
+
             // The EFFECTIVE MODE, not silence alone. Gating on Is_TopicSilenced pushed this straight
             // to the phone for a topic explicitly set to DEFERRED — bypassing the frozen cursor that
             // deferral promises — while app-wide DND held it, because the tick returns above this
@@ -852,15 +895,16 @@ internal sealed class BridgeEngineModel(
             // CRASH_LOOP_THRESHOLD and the counter resets only when the slot comes alive — so a
             // single 502 meant the owner was never told at all. Holding with a backoff answers the
             // throttle concern without paying for it in lost alerts (rev-6 F3, 2026-08-13).
-            if (lastAttemptUtc != default && DateTime.UtcNow - lastAttemptUtc < TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS))
+            if (hold.LastAttemptUtc != default && DateTime.UtcNow - hold.LastAttemptUtc < TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS))
                 continue;
 
-            _heldCrashLoopAlerts[key] = DateTime.UtcNow;
+            // The attempt is counted BEFORE it is made, so a send that throws still spends one — the
+            // bound must count what was tried, not what came back.
+            _heldCrashLoopAlerts[key] = new CrashLoopAlertHold(DateTime.UtcNow, hold.Attempts + 1);
 
             try
             {
-                var session = _store.Get_Session_OrNull(key.OrchId);
-                await _telegramClient.Send_Message_Async(session?.TelegramTopicId, key.AlertText, cancellationToken);
+                await _telegramClient.Send_Message_Async(heldSession.TelegramTopicId, key.AlertText, cancellationToken);
 
                 // Dropped only after a CONFIRMED send — the rule 71a849a applied to three memos
                 // while this site, its own immediate predecessor, contradicted it.
