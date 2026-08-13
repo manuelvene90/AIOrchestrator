@@ -2401,9 +2401,12 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
+            var executed = false;
+
             try
             {
                 Execute_CloseImplementer(request.OrchId, request.MemberId, request.Reason);
+                executed = true;
             }
             catch (Exception)
             {
@@ -2413,7 +2416,11 @@ internal sealed class BridgeEngineModel(
             }
             finally
             {
-                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "executed");
+                // THE LABEL IS THE AUDIT TRAIL AND IT MUST NOT LIE. An unknown member id throws inside
+                // Close_Member before anything is killed, so the member is still running — filing that
+                // as "executed" records a close that never happened, in the folder that exists
+                // precisely because "who asked, and what became of it" was once unanswerable.
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, executed ? "executed" : "failed");
             }
         }
     }
@@ -2443,7 +2450,18 @@ internal sealed class BridgeEngineModel(
             if (ParkedCloseRequest_Reader.Read_OrNull(parkedPath)?.Kind != ParkedCloseKinds.Implementer)
                 continue;
 
-            Release_ParkedMemberClose(parkedPath);
+            // PER ITEM, for the reason written six lines above this method and then not honoured here:
+            // one unreadable or unwritable parked file must not take down the tick, and with it every
+            // orchestration's traffic. This sweep runs every tick and touches files another process
+            // may be moving, so it is the one most likely to meet a transient IO failure.
+            try
+            {
+                Release_ParkedMemberClose(parkedPath);
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Error(GLOBAL_ORCH_ID, $"could not release parked member close '{parkedPath}' — it stays parked and the next tick retries", ex);
+            }
         }
     }
 
@@ -2477,8 +2495,8 @@ internal sealed class BridgeEngineModel(
 
             Append_OrchestrationAppEntry(
                 orchId,
-                $"close of '{memberId}' FAILED — it may still be running",
-                $"The close did not complete ({ex.Message}). Check whether '{memberId}' is still alive before asking again.");
+                $"close of '{memberId}' FAILED — it is still running",
+                $"The close did not complete ({ex.Message}), so nothing was closed. Drop the request again, or say so if it keeps failing — do NOT go and check whether it is alive, that is the app's job and never yours.");
 
             throw;
         }

@@ -387,10 +387,14 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   - **So make sure it is finished before you drop it.** Nothing stands between the file and the kill
     now: the session tree goes down within about two seconds, and its context is gone. Get its final
     report first, as above.
-  - **You get an app entry confirming the close**, and one naming the error if it failed — in which
-    case the member may still be running, so check before asking again.
-  - **`reason` goes in the audit trail, not to the owner's phone.** It is still worth writing properly:
-    it is what answers "why is this member gone" when someone reads the channel back.
+  - **You get an app entry confirming the close**, and one naming the error if it failed. If it
+    failed, nothing was closed and the member is still running — **do not go and check**, that is the
+    liveness rule below and it has no exception here. Drop the request again, or say so if it keeps
+    failing.
+  - **`reason` REACHES THE OWNER'S PHONE, verbatim.** It is the subject line of the app entry on the
+    orchestration channel, and that channel is mirrored to their topic — so "no longer needed" is what
+    they read. Write it for them: "its deliverable is merged and nothing is queued for it". It is also
+    the audit trail that answers "why is this member gone" when someone reads the channel back.
 - **CLOSING A FINISHED MEMBER IS A RULE, NOT A JUDGEMENT CALL.** The owner, 2026-08-12: *"if an impl
   is done and the sup doesn't want to use it anymore and spawns another one, the old one stays open
   forever monitoring the channel and wasting tokens."* An idle member is not free — it holds a

@@ -14,11 +14,20 @@ namespace AIOrchestratorCoreLib.Tests.GeneralSupervision;
 /// <summary>
 /// THE WIRING, which two of us declared unpinnable and a reviewer then pinned.
 ///
-/// The feature is not the reader or the prompt — it is that a close-implementer request PARKS instead
-/// of killing a session tree. That decision lives in <c>BridgeEngineModel</c>, which is
+/// The feature is not the reader or the prompt — it is WHAT A CLOSE-IMPLEMENTER REQUEST DOES when it
+/// lands. That was "parks for the owner's tap" until 2026-08-13 and is "closes the member" since;
+/// this file kept its name and its harness across that reversal, and each case says which side of it
+/// the case belongs to. The decision lives in <c>BridgeEngineModel</c>, which is
 /// <c>internal sealed</c> with no <c>InternalsVisibleTo</c>, so it was written off as reachable only
 /// through a timing-dependent test of the kind that fails one run in seven and teaches everyone to
 /// re-run it. That was an assumption, and nobody measured it.
+///
+/// NOT COVERED HERE, stated rather than left to be discovered: the tap-refusal branch in the confirmed
+/// -close handler — the one that must NOT be deleted as unreachable, because its <c>else</c> ends the
+/// whole orchestration. Reaching it needs a live confirmation registration, which needs the Telegram
+/// client this harness deliberately does not have. It becomes testable through the injection seam
+/// imp-1 built on the R1 branch, and until then it is verified by reading the diff, which is weaker
+/// and is why it is written down here.
 ///
 /// EVERY FLAKE REASON ASSUMED HERE TURNS OUT TO BE CHECKABLE, and the reviewer checked them:
 /// <c>BridgeEngine_Factory.Create</c> takes interfaces only and the spawner fake already exists, so
@@ -173,24 +182,41 @@ public class CloseImplementerGuardProbeTests : IDisposable
     }
 
     /// <summary>
-    /// AND THE SWEEP LEAVES ORCHESTRATION CLOSES ALONE — asserted apart, because a release that did
-    /// not read the kind would satisfy the case above and silently disarm the one confirmation the
-    /// owner kept. With no Telegram client the ask fails closed and the file stays parked, which is
-    /// the stable end state this harness already relies on.
+    /// AND THE SWEEP LEAVES ORCHESTRATION CLOSES ALONE — with a POSITIVE CONTROL, because the first
+    /// version of this test asserted two ABSENCES and passed with the sweep entirely removed. Nothing
+    /// happened, and nothing happening satisfied "the orchestration close was not touched": the exact
+    /// two-routes-to-one-state defect CLAUDE.md item 20 records, written into the guard test of the
+    /// very sweep it was meant to pin. My own control table showed it staying green and I read past it.
+    ///
+    /// Both kinds are parked in the SAME tick now. The member close being released is the proof that
+    /// the sweep ran at all; only then does the orchestration close surviving mean it was SKIPPED
+    /// rather than simply never reached. With no Telegram client the ask fails closed and the parked
+    /// file stays put, which is the stable end state this harness already relies on.
     /// </summary>
     [Fact]
-    public async Task TheReleaseSweepDoesNotTouchAParkedOrchestrationClose()
+    public async Task TheReleaseSweepReleasesTheMemberCloseAndLeavesTheOrchestrationCloseParked()
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var memberId = session.Members[0].MemberId;
 
-        var parkedPath = Park_Directly(
+        var parkedMember = Park_Directly(
+            "close-member-awaiting.json",
+            $$"""{"action":"close-implementer","orchId":"{{session.OrchId}}","memberId":"{{memberId}}","reason":"asked for before the rule changed"}""");
+
+        var parkedOrchestration = Park_Directly(
             "close-orch-awaiting.json",
             $$"""{"action":"close-orchestration","orchId":"{{session.OrchId}}","reason":"the work is delivered","requester":"supervisor of {{session.OrchId}}"}""");
 
         await Tick_Once_Async();
 
-        Assert.True(File.Exists(parkedPath), "the orchestration close was released — the owner's tap was disarmed");
+        // THE POSITIVE CONTROL, first: without this the rest passes when the sweep never ran.
+        Assert.True(
+            Wait_Until(() => !File.Exists(parkedMember)),
+            "the parked MEMBER close was not released — the sweep did not run, so nothing below means anything");
+
+        Assert.True(File.Exists(parkedOrchestration), "the orchestration close was released — the owner's tap was disarmed");
         Assert.True(_store.Get_Session(session.OrchId).ClosedUtc == null, "the orchestration was closed outright");
+        Assert.True(_store.Get_Session(session.OrchId).Members[0].ClosedUtc == null, "the released member close was executed instead of released");
     }
 
     /// <summary>
@@ -238,6 +264,38 @@ public class CloseImplementerGuardProbeTests : IDisposable
         Assert.Contains(
             "close-orchestration",
             File.ReadAllText(_paths.Get_OwnerChannelFile(session.OrchId)));
+    }
+
+    /// <summary>
+    /// A CLOSE THAT FAILED IS FILED AS FAILED. The `finally` archived every request as "executed"
+    /// whichever way the `try` went, so a close that threw before anything was killed left an audit
+    /// record of an execution that never happened — in the folder that exists precisely because "who
+    /// asked, and what became of it" was once unanswerable minutes after the fact.
+    ///
+    /// An unknown member id is the reachable way in: `Close_Member` throws when no member matches,
+    /// before the session tree is touched, so the member is still running and the request is resolved.
+    /// </summary>
+    [Fact]
+    public async Task ACloseThatFailedIsArchivedAsFailedNotExecuted()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        var requestPath = Path.Combine(_paths.RequestsFolder, "close-ghost.json");
+        File.WriteAllText(
+            requestPath,
+            $$"""{"action":"close-implementer","orchId":"{{session.OrchId}}","memberId":"imp-99","reason":"a member that never existed"}""");
+
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => !File.Exists(requestPath)),
+            "the request file was never consumed — the engine never processed it");
+
+        var resolvedFolder = CloseConfirmation_Parking.Get_ResolvedFolder(_paths);
+        var archived = Directory.Exists(resolvedFolder) ? Directory.GetFiles(resolvedFolder, "*close-ghost*") : [];
+
+        Assert.Single(archived);
+        Assert.StartsWith("failed-", Path.GetFileName(archived[0]));
     }
 
     /// <summary>Writes a request straight into the awaiting folder, as parking would have left it.</summary>
