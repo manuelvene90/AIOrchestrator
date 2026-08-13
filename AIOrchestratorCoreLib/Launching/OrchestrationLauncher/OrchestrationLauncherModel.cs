@@ -253,6 +253,22 @@ internal sealed class OrchestrationLauncherModel(
     public void Respawn_Implementer(string orchId, string memberId)
     {
         var session = _store.Get_Session(orchId);
+
+        // A CLOSED MEMBER IS NOT RESPAWNED, re-read here rather than trusted from the caller's
+        // snapshot. The watchdog decides what is dead from a `Load_All` taken at the top of its tick
+        // and walks sessions doing file I/O and process lookups on the way down, while a promotion
+        // closes the solo from a different loop with no shared lock. A tick whose snapshot predates
+        // that close, reaching the solo after its process dies, asks for exactly this respawn.
+        //
+        // The store no longer re-opens the member on the pid write, so the roster stays honest either
+        // way — but without this the app would still open a terminal for a session it had retired,
+        // and the owner would find a solo alive beside the supervisor that replaced it.
+        if (session.Members.FirstOrDefault(member => member.MemberId == memberId)?.ClosedUtc != null)
+        {
+            _log.Log_Info(orchId, $"Respawn of '{memberId}' skipped — it was closed while the tick was in flight");
+            return;
+        }
+
         var pidFile = _paths.Get_ImplementerPidFile(orchId, memberId);
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
         var model = session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel;
