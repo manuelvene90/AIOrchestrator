@@ -87,12 +87,15 @@ public class ChannelCompactionStepTests : IDisposable
         var reDelivered = Collect_DeliveredEntries(tailer, polls: 4, [_channel]);
 
         // Re-anchoring is the whole reason compaction may touch a tailed file at all. The two
-        // assertions pin the VALUE from both sides, which "no truncation" alone did not: a cursor
-        // left too HIGH makes the next poll see a file shorter than its offset — the append-only
-        // protocol breaking, as far as the tailer knows — and a cursor set too LOW re-reads the
-        // kept 45 entries and mirrors the owner their own history a second time. Only the correct
-        // value satisfies both. (rev-4 found the call unpinned; rev-2 found this test pinned its
-        // direction and not its value.)
+        // assertions bracket the value from both sides, which "no truncation" alone did not: too
+        // HIGH makes the next poll see a file shorter than its offset — the append-only protocol
+        // breaking, as far as the tailer knows — and too LOW re-reads the kept entries and mirrors
+        // the owner their own history a second time.
+        //
+        // They pin a RANGE, not a single value: an offset inside the final entry also satisfies
+        // both, because the remainder parses to no complete entry. Saying "only the correct value
+        // satisfies both" was an overclaim (rev-4). The range is narrow and it excludes every
+        // failure mode anyone has actually produced here, which is what a test is for.
         Assert.NotNull(newLength);
         Assert.Empty(afterCompaction.TruncatedFiles);
         Assert.Empty(reDelivered);
@@ -110,16 +113,20 @@ public class ChannelCompactionStepTests : IDisposable
         var tailer = ChannelTailer_Factory.Create_Fresh();
         tailer.Poll([_channel, activeChannel]);
 
-        // This channel owes NOTHING — its cursor sits at EOF and no byte has arrived since. So the
-        // undelivered-entries predicate answers false in all three of its clauses, and the only
-        // thing that can hold compaction back is the fact that this poll did not include it.
-        // That is what makes this test pin THIS guard: the deferred test below cannot, because its
-        // fixture appends after the last poll and so trips the unread-bytes clause as well.
+        // This channel owes NOTHING — its cursor sits at EOF and no byte has arrived since — and it
+        // is above the compaction threshold. So of the four routes to null inside Compact_IfAllowed,
+        // three are excluded by construction and only "it was not polled" remains.
         tailer.Poll([activeChannel]);
+        var whileDropped = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
 
-        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
+        // The other half, and what makes the pin STRUCTURAL rather than historical: put the SAME
+        // channel back in the poll, change nothing else, and it compacts. A bare Assert.Null would
+        // pass for any of the four reasons; this pair says which one moved (rev-4).
+        tailer.Poll([_channel, activeChannel]);
+        var oncePolledAgain = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
 
-        Assert.Null(newLength);
+        Assert.Null(whileDropped);
+        Assert.NotNull(oncePolledAgain);
     }
 
     [Fact]

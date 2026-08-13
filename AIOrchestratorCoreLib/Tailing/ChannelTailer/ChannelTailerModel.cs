@@ -215,11 +215,14 @@ internal sealed class ChannelTailerModel : IChannelTailer
     /// compactor that reads and rewrites whole files — and it is what makes this predicate answer
     /// the question its contract asks, rather than only the part held in memory.
     /// <para>
-    /// WHEN IT CANNOT TELL, IT SAYS SO AND REFUSES. It used to answer "clear" for a file it could
-    /// not stat, which let compaction rewrite a channel on the strength of a question nobody had
-    /// managed to ask. A guard that cannot evaluate its predicate must never invent either answer:
-    /// it names the predicate that failed, and the caller logs it and holds off. Compaction is
-    /// optional and retries next tick; a lost entry does not come back.
+    /// WHEN IT CANNOT TELL, IT SAYS SO AND REFUSES — on the hazard, not on an incident. The first
+    /// draft of this clause answered "clear" for a file it could not stat, which WOULD have let
+    /// compaction rewrite a channel on the strength of a question nobody managed to ask. It never
+    /// shipped: it was caught on the branch that wrote it, and this comment does not get to borrow
+    /// the authority of a failure that never happened. The rule stands without it — a guard that
+    /// cannot evaluate its predicate must not invent either answer. It names the predicate that
+    /// failed, the caller logs that, and compaction does not run; compaction is optional and retries
+    /// next tick, while a lost entry does not come back.
     /// </para>
     /// </summary>
     static bool Has_BytesPastCursor(FileTailState state, string channelFilePath, out string? unevaluableReason)

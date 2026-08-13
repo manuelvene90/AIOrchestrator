@@ -16,13 +16,16 @@ namespace AIOrchestratorCoreLib.Tailing;
 /// discovery loop and its log line.
 /// </para>
 /// <para>
-/// WHAT THESE GUARDS DO NOT COVER, so nobody reads them as more than they are. Both are pre-existing,
-/// both are narrow, and neither is closed here:
-/// (1) an entry appended between the guard's answer and the compactor's read is seen by neither, so
-/// the rewrite keeps it and the re-anchor parks the cursor past it — the same loss the unread-bytes
-/// clause closes, in a window of microseconds rather than a whole tick phase;
+/// WHAT THESE GUARDS DO NOT COVER, so nobody reads them as more than they are. Two windows, both
+/// narrow, neither closed here, and they are NOT the same age:
+/// (1) an entry appended between the guard's answer and the compactor's read is missed by the GUARD
+/// and present in the COMPACTOR's read — so the rewrite keeps it and the re-anchor parks the cursor
+/// past it, unmirrored. This one is a residual of the unread-bytes clause rather than something older
+/// than it: that clause answers for the instant it was asked, which is microseconds before the read
+/// instead of a whole tick phase before it. Narrower, same shape;
 /// (2) an entry appended between the compactor's read and its rename-over is discarded from the FILE
-/// and not merely from the mirror, because the rewrite replaces the file that append landed in.
+/// and not merely from the mirror, because the rewrite replaces the file that append landed in. This
+/// one predates everything here and lives in Channel_Compactor.
 /// Closing either means holding channel writes off across the whole read-decide-rewrite, which
 /// nothing here does.
 /// </para>
@@ -52,17 +55,20 @@ public static class Channel_CompactionStep
         // go with it. It compacts on a later tick, once the send lands.
         var owesDelivery = tailer.Has_UndeliveredEntries(channelFilePath, out var unevaluableReason);
 
-        // A guard that could not evaluate its predicate SAYS WHICH ONE and holds off. Silence in
-        // either direction is the failure: an unexplained refusal is unactionable, and an invented
-        // "all clear" is how a rewrite proceeds on a question nobody managed to ask. The log is the
-        // right home for it — the owner cannot act on this, so it never goes to Telegram.
+        // A guard that could not evaluate its predicate SAYS WHICH ONE. Silence in either direction
+        // is the failure: an unexplained refusal is unactionable, and an invented "all clear" is how
+        // a rewrite proceeds on a question nobody managed to ask. The log is the right home for it —
+        // the owner cannot act on this, so it never goes to Telegram.
+        //
+        // It reports and FALLS THROUGH rather than returning here. An earlier version returned early,
+        // which read as the refusal but was not: the predicate already answers TRUE when it cannot
+        // evaluate, so that branch could never change the outcome and no mutation could kill it. The
+        // refusal lives in the predicate; this says why.
         if (unevaluableReason != null)
         {
             log.Log_Warning(
                 orchId,
-                $"Compaction held off — the undelivered-entries guard could not evaluate '{Path.GetFileName(channelFilePath)}': {unevaluableReason}");
-
-            return null;
+                $"Compaction held off — the undelivered-entries guard could not evaluate '{Describe_Channel(channelFilePath)}': {unevaluableReason}");
         }
 
         if (owesDelivery)
@@ -81,5 +87,19 @@ public static class Channel_CompactionStep
         tailer.Set_Offset(channelFilePath, newLength.Value);
 
         return newLength;
+    }
+
+    /// <summary>
+    /// Enough of the path to identify WHICH channel. Every member's file is called `channel.md`, so
+    /// the file name alone names all of them equally — a log line that says "could not evaluate
+    /// 'channel.md'" in a six-member orchestration has told the reader nothing they can act on.
+    /// </summary>
+    static string Describe_Channel(string channelFilePath)
+    {
+        var folder = Path.GetFileName(Path.GetDirectoryName(channelFilePath));
+
+        return string.IsNullOrEmpty(folder)
+            ? Path.GetFileName(channelFilePath)
+            : $"{folder}/{Path.GetFileName(channelFilePath)}";
     }
 }
