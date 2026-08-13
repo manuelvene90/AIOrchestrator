@@ -528,6 +528,38 @@ check "a TRUNCATING write to it is not" redirect "$(deny_reason "$(run_hook "$RE
 check "the braced variable append is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "ch=\"$SUPERVISION/$MEMBER/channel.md\"
 cat >> \"\${ch}\"")" reviewer)")"
 
+# ── THE EXEMPTION IS CHECKED ON A NORMALISED PATH ────────────────────────────────────────────────
+#
+# The test was a substring match on the raw target, so a path could satisfy it on the way through and
+# then walk back out with `..`. This is the INTEGRITY hole, not a file-safety one: it lets one member
+# append to another member's channel, and an entry's author is only the text inside it — a forged
+# report, verdict or STANDING BY marker would be indistinguishable from a real one to the supervisor
+# and to the app.
+#
+# THE THREE TRAVERSAL CASES ARE DENIED TWICE OVER, and that is written here because it was MEASURED
+# rather than assumed. Two mechanisms landed together — the path is normalised, and the remainder
+# after the folder must be a bare filename — and EITHER alone refuses these payloads, so neither
+# mutation reddens them. Removing BOTH does, which is the run that says they are not passing for some
+# third reason nobody has looked at.
+#
+# The mechanisms are pinned INDIVIDUALLY by two other cases below: the single-dot ALLOW (normalisation
+# and only it) and the descend-below DENY (containment and only it). So all five earn their place —
+# delete the single-dot case and normalisation is unpinned, delete the descend-below case and
+# containment is unpinned, delete these three and rev-6's actual finding is asserted nowhere.
+check "a traversal into another member's channel" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/$MEMBER/../imp-1/channel.md")" reviewer)")"
+check "a traversal out of the orchestration" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/$MEMBER/../../other-orch/$MEMBER/channel.md")" reviewer)")"
+check "the same traversal through tee" tee "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee -a $SUPERVISION/$MEMBER/../imp-1/channel.md")" reviewer)")"
+
+# INSIDE the folder, not merely PAST it. A path that matches and then descends is not contained by
+# what it matched, and this direction is the one a substring test cannot see at all.
+check "descending below the own folder is not inside it" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/$MEMBER/sub/evil.md")" reviewer)")"
+
+# And normalisation must not refuse the ordinary spellings of the permitted write.
+check "a single-dot segment is still the same file" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/$MEMBER/./channel.md")" reviewer)")"
+
+# The baseline clause is now the file's NAME, not a word anywhere in the path.
+check "a directory merely named watch-base" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/watch-base/evil.txt")" reviewer)")"
+
 # ── A REDIRECT TARGET THE REDUCER CANNOT RESOLVE IS UNANALYSABLE, NOT ABSENT ─────────────────────
 #
 # A target that begins with a command or process substitution is emitted as an OPERATOR, so the

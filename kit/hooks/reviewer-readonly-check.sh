@@ -504,6 +504,41 @@ def expand_variables(text, assignments):
     return text
 
 
+def normalise_path(text):
+    """Resolves `.` and `..` LEXICALLY. Never through the filesystem.
+
+    The exemption was a substring test on the raw target, so `.../<me>/../<someone-else>/channel.md`
+    matched — the test passed on the way through and the path then walked straight back out of the
+    folder it had just satisfied.
+
+    That is not a file-safety hole, it is an INTEGRITY one: it lets one member append to another
+    member's channel, and an entry's author is only the text inside it. Gating decisions are made off
+    those entries by the supervisor and by the app, so a forged report, verdict or STANDING BY marker
+    would be indistinguishable from a real one.
+
+    Lexical on purpose: the file need not exist, this process must not touch the disk to answer a
+    question about a string, and a symlink race is not something a PreToolUse hook can win anyway.
+    """
+    normalised = text.replace("\\", "/")
+    leading = "/" if normalised.startswith("/") else ""
+    resolved = []
+
+    for part in normalised.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            # A `..` with nothing to pop is kept, so it cannot silently vanish and leave a path that
+            # looks contained when it is not.
+            if resolved and resolved[-1] != "..":
+                resolved.pop()
+            else:
+                resolved.append(part)
+            continue
+        resolved.append(part)
+
+    return leading + "/".join(resolved)
+
+
 def write_target_allowed(operator, target, assignments):
     """THE one write a reviewer may make, in one place because two rules need to agree on it.
 
@@ -529,17 +564,28 @@ def write_target_allowed(operator, target, assignments):
     #
     # What this does NOT cover: a variable assigned in an earlier tool call. There is nothing in the
     # payload to resolve it from, so it denies — as both master and the pre-fix branch already did.
-    normalised = expand_variables(target, assignments).replace("\\", "/")
+    resolved = normalise_path(expand_variables(target, assignments))
 
-    own_channel = "supervision/%s/%s/" % (ORCH, MEMBER)
+    if operator != ">>":
+        # Append is the whole of the permission. Nothing below needs to say so again.
+        return False
 
-    if operator == ">>" and own_channel in normalised:
+    own_folder = "supervision/%s/%s/" % (ORCH, MEMBER)
+    position = resolved.find(own_folder)
+
+    # INSIDE the folder, not merely PAST it. Containment is checked after normalisation and the
+    # remainder must be a bare filename — a path that satisfies the test and then descends or climbs
+    # is not in the folder it matched.
+    if position != -1 and "/" not in resolved[position + len(own_folder):]:
         return True
 
-    # The watcher baseline lives beside the channel. APPEND-ONLY, like the clause above: without that
-    # requirement this clause permitted a truncating write, which is strictly worse than the write
-    # the exemption exists to allow.
-    if operator == ">>" and "watch-base" in normalised:
+    # The watcher baseline. Its NAME, not a substring of the path: `/tmp/watch-base/anything` used to
+    # satisfy this, which is a directory that merely shares the word.
+    #
+    # FILED, NOT FIXED: nothing in this repo reads or writes a `watch-base` file — the current watcher
+    # holds its baseline in memory — so this clause may be dead. Deleting a permission is a policy
+    # call, so it is tightened here and left for the supervisor to decide.
+    if resolved.rsplit("/", 1)[-1] == "watch-base":
         return True
 
     return False
