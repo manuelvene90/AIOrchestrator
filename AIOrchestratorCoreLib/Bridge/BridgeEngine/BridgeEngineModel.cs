@@ -2383,10 +2383,15 @@ internal sealed class BridgeEngineModel(
             // this file has already paid for a request whose kind and effect disagreed. The requester
             // is told which action to use, so nothing is lost but a round trip.
             //
-            // HERE AND NOT INSIDE `Execute_CloseImplementer`, and that is deliberate: basic→full
-            // promotion must close `solo-1` as part of becoming a crew. Guarding the execution would
-            // block the app's own legitimate close; guarding the REQUEST refuses only what an agent
-            // asks for, which is the untrusted input.
+            // HERE AND NOT INSIDE `Execute_CloseImplementer`, and that is deliberate: a guard belongs
+            // where untrusted input ENTERS, not where the trusted internal caller acts.
+            //
+            // BE PRECISE ABOUT WHAT IS TRUE NOW. At this sha `Execute_CloseImplementer` has exactly one
+            // caller — this loop — so guarding either place would behave identically today, and this
+            // placement buys nothing yet. It is chosen for what it keeps possible: the basic→full
+            // promotion being built on imp-2's branch closes `solo-1` through `_store.Close_Member`
+            // directly, so it passes through nothing here, and a guard inside the execution would be
+            // the thing that broke when that work lands.
             if (MemberKind_Ids.Resolve_Kind(request.MemberId) == MemberKinds.Solo)
             {
                 _log.Log_Warning(request.OrchId, $"close-implementer named the solo '{request.MemberId}' — refused, a solo close is an orchestration close");

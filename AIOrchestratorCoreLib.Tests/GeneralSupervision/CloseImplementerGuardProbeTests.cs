@@ -232,11 +232,12 @@ public class CloseImplementerGuardProbeTests : IDisposable
     /// silently, and this file has already paid for a request whose kind and effect disagreed. The
     /// requester is told which action to use instead, so nothing is lost but a round trip.
     ///
-    /// THE GUARD IS ON THE REQUEST, NOT INSIDE `Execute_CloseImplementer`, and that is the promotion
-    /// case: basic→full promotion has to close `solo-1` as part of becoming a crew. Guarding the
-    /// execution would block the app's own legitimate close; guarding the request refuses only what an
-    /// AGENT asks for, which is the untrusted input. The promotion path can still call the execution
-    /// directly when it exists.
+    /// THE GUARD IS ON THE REQUEST, NOT INSIDE `Execute_CloseImplementer`: a guard belongs where
+    /// untrusted input ENTERS, not where the trusted internal caller acts. At this sha the execution
+    /// has one caller and guarding either place would behave the same, so the placement is chosen for
+    /// what it keeps possible rather than for anything it does today — the basic→full promotion being
+    /// built on another branch closes `solo-1` through the store directly, and a guard inside the
+    /// execution is what would break when that lands.
     /// </summary>
     [Fact]
     public async Task ACloseRequestNamingASoloIsRefusedBecauseASoloIsTheOrchestration()
