@@ -99,6 +99,54 @@ internal sealed class OrchestrationLauncherModel(
         return _store.Get_Session(orchId);
     }
 
+    /// <summary>
+    /// A basic orchestration becomes a full crew: the solo ends, a supervisor takes over its channel,
+    /// and imp-1 spawns empty beside it.
+    ///
+    /// NOTHING MOVES. The solo has been writing `owner-channel.md` — the file a supervisor owns — so
+    /// the supervisor opens it and finds the entire conversation, including the handover entry the
+    /// solo had to file before it could ask. No channel migration, no history copy, and the Telegram
+    /// topic stays bound to the same orchestration, so the owner keeps reading one thread.
+    ///
+    /// imp-1 SPAWNS EMPTY, deliberately. Making the solo into imp-1 would strand its reported work in
+    /// a spoke it no longer reads, and the supervisor can brief a fresh implementer from the history
+    /// it can see.
+    ///
+    /// THE ORDER IS THE DECISION HERE, and it is chosen for what survives a failure at each step:
+    ///
+    ///   1. SUPERVISOR FIRST. Its spawn stamps `SupervisorSpawnedUtc` BEFORE the attempt, so from
+    ///      that instant the orchestration reads as promoted and the watchdog will respawn the
+    ///      supervisor if the spawn itself failed. Nothing has been destroyed yet either: if this
+    ///      throws, the solo is still running and the orchestration is exactly what it was.
+    ///   2. THEN CLOSE THE SOLO. Doing this first would mean a failed supervisor spawn leaves an
+    ///      orchestration with NOTHING running and nothing to recover it — the watchdog skips closed
+    ///      members, and a basic orchestration has no supervisor slot to protect.
+    ///   3. imp-1 LAST, because it is the only step whose failure costs nothing: the supervisor can
+    ///      ask for an implementer through the request protocol like any other.
+    ///
+    /// The window between 1 and 2 has two sessions on one channel. It is seconds, both are
+    /// append-only, and the alternative is a window in which the orchestration has no session at all.
+    /// </summary>
+    public IOrchestrationSession Promote_ToFullCrew(string orchId)
+    {
+        var session = _store.Get_Session(orchId);
+
+        Respawn_Supervisor(orchId);
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null || MemberKind_Ids.Resolve_Kind(member.MemberId) != MemberKinds.Solo)
+                continue;
+
+            _store.Close_Member(orchId, member.MemberId);
+            Termination.SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, member.MemberId));
+
+            _log.Log_Info(orchId, $"Solo session '{member.MemberId}' closed — promoted to a full crew");
+        }
+
+        return Add_Implementer(orchId);
+    }
+
     public void Respawn_Supervisor(string orchId)
     {
         var session = _store.Get_Session(orchId);
