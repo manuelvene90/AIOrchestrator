@@ -63,6 +63,37 @@ public class StallAlertClockProbeTests : IDisposable
         Directory.Delete(_tempRoot, recursive: true);
     }
 
+    /// <summary>
+    /// THE CASE THAT HAPPENED TONIGHT — rev-8's F1, and the promise this class's docstring was already
+    /// making while the code did not keep it.
+    ///
+    /// A member spawned and died at boot without ever writing: its channel holds the seed, which
+    /// contains no parseable header, so the parser sees ZERO entries. The owner sends `/resume`, which
+    /// appends one app entry to every open member channel — that one included — stamped now. Under the
+    /// last-entry clock that channel read as "quiet for ~0", and because the orchestration's span is
+    /// the MINIMUM across channels, the whole orchestration read as active no matter how long everyone
+    /// else had been silent. **The stall alert could never fire for an orchestration in which a
+    /// session died silently, which is the one case it exists for.**
+    ///
+    /// It was found by comparing `.usage.json` write times by hand — the manual check this alert exists
+    /// to replace.
+    ///
+    /// Here everything else is forty minutes stale and the dead member's channel holds exactly one app
+    /// entry stamped NOW. An app entry does not date a channel, so that one is undateable and skipped,
+    /// and the orchestration is reported.
+    /// </summary>
+    [Fact]
+    public async Task ADeadMembersResumeEntryDoesNotHoldTheWholeOrchestrationAlive()
+    {
+        Start_StalledOrchestration_WithADeadMemberCarryingOnlyAResumeEntry();
+
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0);
+
+        Assert.True(
+            alerted,
+            "no stall alert fired — one app entry on a dead member's channel dated the whole orchestration as alive");
+    }
+
     [Fact]
     public async Task TheAppsOwnWriteDoesNotConvinceTheStallDetectorTheOrchestrationIsAlive()
     {
@@ -73,6 +104,40 @@ public class StallAlertClockProbeTests : IDisposable
         Assert.True(
             alerted,
             "no stall alert reached the owner — the app's own entry in the owner channel was read as the orchestration being alive");
+    }
+
+    /// <summary>
+    /// Everything forty minutes stale, except one member that died at boot and now carries a single
+    /// `/resume` entry stamped NOW — the only thing in its channel, and the app's own write.
+    /// </summary>
+    void Start_StalledOrchestration_WithADeadMemberCarryingOnlyAResumeEntry()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        var silentSince = DateTime.Now.AddMinutes(-OLDER_THAN_THE_STALL_THRESHOLD_MINUTES);
+
+        Age_Session(session.OrchId, silentSince);
+
+        foreach (var member in session.Members)
+            File.SetLastWriteTime(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), silentSince);
+
+        // The member that spoke, long ago.
+        Write_Channel(
+            _paths.Get_ImplementerChannelFile(session.OrchId, session.Members[0].MemberId),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n\n"
+            + $"## [2] FROM implementer — {silentSince:yyyy-MM-dd HH:mm} — TASK 1 landed abc1234\nparser done\n",
+            silentSince);
+
+        // The member that died at boot: one app entry, stamped now, and nothing else ever.
+        Write_Channel(
+            _paths.Get_ImplementerChannelFile(session.OrchId, session.Members[1].MemberId),
+            $"## [1] FROM app — {DateTime.Now:yyyy-MM-dd HH:mm} — GO AHEAD — resume\npick up where you left off\n",
+            DateTime.Now);
+
+        Write_Channel(
+            _paths.Get_OwnerChannelFile(session.OrchId),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
+            silentSince);
     }
 
     void Start_StalledOrchestration_WithAFreshAppEntryInTheOwnerChannel()

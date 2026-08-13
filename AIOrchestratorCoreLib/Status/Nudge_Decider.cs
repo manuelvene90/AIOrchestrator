@@ -165,21 +165,33 @@ public static class Nudge_Decider
             && SessionDuration_Formatter.Try_ReadTrustedStamp(lastConversationEntry.DateText, now, out var spokenAt))
             return now - spokenAt;
 
-        // NO CONVERSATION TO MEASURE, SO MEASURE THE LAST ENTRY — not the file (rev-5's R9).
-        // Compaction replaces the live file by renaming a fresh temp over it, so the FILE stamp moves
-        // with nobody having spoken while every entry inside keeps the stamp it was written with. An
-        // app entry carries the app's own `DateTime.Now`, so it is both trustworthy and immune to that
-        // rewrite. This is the app-only population — the only one R9 survives the merge for, since a
-        // briefed member is already measured from its conversation above.
+        // THE CONVERSATION IS THE ONLY THING THIS COUNTS, AND THERE IS NO SECOND SOURCE (rev-8's F1).
         //
-        // It does NOT release the app-only nudge loop, and that distinction is why it is not gated
-        // behind the sentinel the way fail-noisy is: the nudge APPENDS an entry, so this clock resets
-        // on a nudge exactly as the file stamp did. Fail-noisy would instead report "past the
-        // threshold" whenever nothing can be computed — including immediately after its own nudge,
-        // which is the release.
-        if (entries.Count > 0
-            && SessionDuration_Formatter.Try_ReadTrustedStamp(entries[^1].DateText, now, out var lastEntryAt))
-            return now - lastEntryAt;
+        // A step here once measured the last ENTRY of any author when no conversation could be found.
+        // It was meant for R9 — a clock immune to compaction, since entry stamps survive a rename-over
+        // and the file's does not — and it bought that with the wrong half: on a channel holding only
+        // app entries, THE APP'S OWN WRITE BECAME THE CLOCK. Measuring the conversation is immune to
+        // compaction AND to the app, which is what R9 should have asked for.
+        //
+        // What that cost, live in this orchestration on 2026-08-13: a member that died at boot without
+        // writing has a channel of zero entries; a `/resume` gives it exactly one, FROM app, stamped
+        // now; every nudge appends another and resets this clock; and because
+        // Get_OrchestrationQuietFor takes the MINIMUM across channels, the whole orchestration read as
+        // quiet for at most 8 minutes against a 25-minute threshold. The stall alert could never fire
+        // for an orchestration in which a session died silently — the one case it exists for — and the
+        // write holding it down was the app's own.
+        //
+        // THE THROTTLE THIS REMOVES WAS NEVER DESIGNED. For app-only channels the one-nudge gate is
+        // skipped (no conversation identity to record), so the only thing preventing a nudge every
+        // tick was this clock being reset by the nudge itself — a throttle made of the defect it
+        // throttles. It moves to the gate, which is `5f3dc1f`'s sentinel plus `25060c9`; see this
+        // commit's message for the merge ordering that requires.
+        //
+        // NOT TOUCHED, DELIBERATELY: <see cref="Has_UnansweredInboundTraffic"/> still counts app
+        // entries. Two readers, two purposes, one set of entries — the clock must stop treating the
+        // app's writes as LIFE without eligibility losing them, or a nudged member falls out of the
+        // eligible set and a genuinely dead session can never escalate. Two fixes have been withdrawn
+        // for exactly that, and they reinterpreted the PREDICATE, not this.
 
         // NULL IS "CANNOT BE COMPUTED", AND EVERY CALLER MUST READ IT AS PAST THE THRESHOLD.
         //
