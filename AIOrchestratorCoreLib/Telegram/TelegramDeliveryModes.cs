@@ -35,6 +35,14 @@ public static class TelegramDeliveryMode_Glyphs
     /// </summary>
     public const string QUIET = "🤐";
 
+    /// <summary>
+    /// TERMINAL — the owner is in THIS orchestration's terminal, so nothing is pushed and nothing
+    /// blocks on a tap. It REPLACES the mode glyph rather than sitting beside it: terminal already
+    /// silences the topic, and drawing 💻 🔕 together would restate one fact twice on the title bar
+    /// — the presence/delivery conflation this mode exists to remove, rendered.
+    /// </summary>
+    public const string TERMINAL = "💻";
+
     /// <summary>Prefixes the topic name with the mode's glyph (Normal = the bare name).</summary>
     public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode)
     {
@@ -53,6 +61,28 @@ public static class TelegramDeliveryMode_Glyphs
     /// </summary>
     public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode, bool isAway, bool isQuiet)
     {
+        return Decorate_TopicName(baseName, mode, isAway, isQuiet, OwnerPresenceModes.Remote);
+    }
+
+    /// <summary>
+    /// TERMINAL presence REPLACES the delivery glyph — it already implies silence, so showing both
+    /// would say one thing twice. Away still shows: it is app-wide and about the owner's phone,
+    /// which is a different fact from where they are sitting for THIS orchestration.
+    /// </summary>
+    public static string Decorate_TopicName(
+        string baseName,
+        TelegramDeliveryModes mode,
+        bool isAway,
+        bool isQuiet,
+        OwnerPresenceModes presence)
+    {
+        if (presence == OwnerPresenceModes.Terminal)
+        {
+            var withTerminal = $"{TERMINAL} {baseName}";
+
+            return isAway ? $"{AWAY} {withTerminal}" : withTerminal;
+        }
+
         var withMode = mode switch
         {
             TelegramDeliveryModes.Normal => baseName,
@@ -86,7 +116,8 @@ public static class TelegramDeliveryMode_Glyphs
         return topicName.StartsWith(DEFERRED, StringComparison.Ordinal)
             || topicName.StartsWith(SILENCED, StringComparison.Ordinal)
             || topicName.StartsWith(AWAY, StringComparison.Ordinal)
-            || topicName.StartsWith(QUIET, StringComparison.Ordinal);
+            || topicName.StartsWith(QUIET, StringComparison.Ordinal)
+            || topicName.StartsWith(TERMINAL, StringComparison.Ordinal);
     }
 
     /// <summary>Glyphs differ in UTF-16 length (✈ is one unit, the emoji are two) — measure, don't assume.</summary>
@@ -97,6 +128,9 @@ public static class TelegramDeliveryMode_Glyphs
 
         if (topicName.StartsWith(QUIET, StringComparison.Ordinal))
             return QUIET.Length;
+
+        if (topicName.StartsWith(TERMINAL, StringComparison.Ordinal))
+            return TERMINAL.Length;
 
         if (topicName.StartsWith(SILENCED, StringComparison.Ordinal))
             return SILENCED.Length;
