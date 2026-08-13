@@ -574,6 +574,37 @@ check "...and marks nothing" ABSENT "$(rm -f "$MARKER_FILE"; run_hook "$REVIEWER
 
 rm -f "$MARKER_FILE"
 
+# ── THE COMMAND MUST REACH THE REDUCER AS THE BYTES THAT WERE SENT ───────────────────────────────
+#
+# python3 here is native Windows python, and its text-mode stdout turned every newline it wrote into
+# CRLF — including the ones INSIDE the command. The reducer received a `\r` glued to the last word of
+# every line but the last, and words are compared for equality, so `commit\r` was not a denied git
+# subcommand and `install\r` was not a denied package one. Both DENY on master, which never cared
+# where a carriage return sat; the regression arrived with the lexer that reads position.
+#
+# The verb-first cases are the control: `rm` at the start of its line was never affected, so a fix
+# that "works" without moving them is not evidence. Only the argument position was corrupted, which
+# is why this survived every multi-line case already in this file.
+check "a denied git subcommand at end of line" git "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git commit
+echo done')" reviewer)")"
+check "a denied package subcommand, same" pkg "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'npm install
+echo done')" reviewer)")"
+check "control: verb at start of line was never hit" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build
+echo done')" reviewer)")"
+check "control: a read-only git command over two lines" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git log --oneline
+echo done')" reviewer)")"
+
+# The shape that exposed it: a path built across two assignments. The carriage return landed INSIDE
+# the resolved path rather than at its end, so the exemption stopped matching and a reviewer's own
+# append was refused. Both directions, because an exemption that ignored the middle of the path would
+# satisfy the first and wave through the second.
+check "a path built from two assignments is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "base=\"$SUPERVISION\"
+ch=\"\$base/$MEMBER/channel.md\"
+printf x >> \"\$ch\"")" reviewer)")"
+check "…and the same built for another member is not" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "base=\"$SUPERVISION\"
+ch=\"\$base/imp-2/channel.md\"
+printf x >> \"\$ch\"")" reviewer)")"
+
 # ── A TRAILING COMMENT IS NOT A REASON TO STOP GUARDING ──────────────────────────────────────────
 #
 # An apostrophe in a `#` comment — "don't", "it's" — made the reducer raise on an unbalanced quote,

@@ -42,7 +42,22 @@ fi
 # The fallback is NOT being built. A grep-based reader of JSON is the bare-substring class this
 # branch has spent the night removing, and it would be a second extraction implementation competing
 # with this one. The honest shape is one extractor that either works or says it did not.
-COMMAND=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null)
+#
+# WRITTEN AS BYTES, NEVER `print`ed. python3 here is native Windows python, so its text-mode stdout
+# translates EVERY newline it writes into CRLF — including the ones inside the command. The reducer
+# then saw a `\r` glued to the last word of every line but the last, and a word is compared for
+# equality: `commit\r` is not in the denied git subcommands, `install\r` is not in the package ones.
+#
+#     git commit <newline> echo done      master DENY, this branch ALLOW
+#     npm install <newline> echo done     master DENY, this branch ALLOW
+#
+# A substring matcher never cared where the carriage return sat, which is why this arrived with the
+# rewrite that made the lexer position-sensitive, and why the bytes had to be looked at rather than
+# the string. Same family as everything else python3 does on this machine: silent, and it looks fine.
+#
+# The other hooks extract single-line values, where the trailing CRLF is removed by the command
+# substitution — checked, not assumed. This is the only extractor whose value can span lines.
+COMMAND=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; sys.stdout.buffer.write(json.load(sys.stdin).get("tool_input",{}).get("command","").encode("utf-8"))' 2>/dev/null)
 
 if [ -z "$COMMAND" ]; then
   aiorch_log_undecidable "what command is being run" "no command could be extracted from the payload"
