@@ -283,6 +283,12 @@ def split_commands(tokens):
                 if i + 1 < len(tokens) and tokens[i + 1][0] == "W":
                     target = tokens[i + 1][1]
                     i += 1
+                elif text in (">", ">>", "&>"):
+                    # A target that is a command or process substitution arrives as an OPERATOR, so
+                    # there is no word to read. That is UNANALYSABLE, not absent: reporting "no
+                    # target" here was a confident answer about something never seen, and it let an
+                    # everyday logging idiom straight through. Saying so allows and leaves a marker.
+                    raise Undecidable("a redirect target this scanner cannot resolve")
                 redirects.append((text, target))
             elif text in CMD_SEPARATORS:
                 if current:

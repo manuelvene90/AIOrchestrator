@@ -448,6 +448,24 @@ check "fd duplication is not a file write" ALLOW "$(verdict "$(run_hook "$REVIEW
 # author happened to use.
 check "a printf append with parens is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'I confirm (yes) the finding' >> $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
 
+# ── A REDIRECT TARGET THE REDUCER CANNOT RESOLVE IS UNANALYSABLE, NOT ABSENT ─────────────────────
+#
+# A target that begins with a command or process substitution is emitted as an OPERATOR, so the
+# target read as None and the redirect rule concluded there was nothing to look at — a confident
+# answer about something it had not seen. Master refused these, and it is an everyday logging idiom.
+#
+# The fix is NOT to guess. It is to say so: the reducer now reports undecidable, which allows AND
+# leaves the marker, instead of silently concluding the redirect was harmless.
+check "a redirect into a substitution is not silently allowed" PRESENT "$(rm -f "$MARKER_FILE"; run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > $(date +%F).log')" reviewer >/dev/null; flag_state "$MARKER_FILE")"
+check "a redirect into a backtick target, same" PRESENT "$(rm -f "$MARKER_FILE"; run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > `date +%F`.log')" reviewer >/dev/null; flag_state "$MARKER_FILE")"
+
+# The ordinary resolvable cases must NOT become undecidable — that would trade a silent allow for a
+# noisy one and pin nothing.
+check "an ordinary redirect is still a plain deny" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > Foo.cs')" reviewer)")"
+check "...and marks nothing" ABSENT "$(rm -f "$MARKER_FILE"; run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > Foo.cs')" reviewer >/dev/null; flag_state "$MARKER_FILE")"
+
+rm -f "$MARKER_FILE"
+
 # ── A TRAILING COMMENT IS NOT A REASON TO STOP GUARDING ──────────────────────────────────────────
 #
 # An apostrophe in a `#` comment — "don't", "it's" — made the reducer raise on an unbalanced quote,
