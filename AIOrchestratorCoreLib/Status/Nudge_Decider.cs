@@ -74,13 +74,18 @@ public static class Nudge_Decider
     ///
     /// THAT GUARANTEE HOLDS ONLY WHILE AN IDENTITY CAN BE FOUND, and stating it as an absolute is how
     /// it went wrong: a null here is not "nothing to compare", it is NO MEMORY — the caller skips the
-    /// gate and records nothing, so the loop is back. Compaction was one route to that null and is
-    /// closed below. One route remains, and it is NOT fixed here: a channel holding only app entries
-    /// and no conversation anywhere. Reachable when the app writes to a member channel before its
-    /// first brief (a `/resume` broadcast will do it) — the member is then eligible through
-    /// <see cref="Has_UnansweredInboundTraffic"/>, has no identity, and can be nudged repeatedly.
-    /// Reported rather than fixed silently: closing it means deciding what "one nudge about nothing"
-    /// should mean, which is a design call and not this fix's.
+    /// gate and records nothing, so the loop is back. There were TWO routes to that null and both are
+    /// now closed: compaction, below, and a channel holding only app entries with no conversation
+    /// anywhere — reachable with no compaction at all, when the app writes to a member channel before
+    /// its first brief (a `/resume` broadcast will do it), leaving the member eligible through
+    /// <see cref="Has_UnansweredInboundTraffic"/> with nothing to key on. That second one is answered
+    /// by <see cref="NO_CONVERSATION_YET"/> and <see cref="Identify_NudgeSubject"/>, which is what the
+    /// engine actually calls — this function may still return null, and its caller is why that is safe.
+    ///
+    /// NOTHING BELOW THIS LINE MAY SAY THE SECOND ROUTE IS OPEN. It was described as open here, and in
+    /// HANDOFF.md, for two commits after `5f3dc1f` closed it — including through a docs-only commit
+    /// whose whole job was tidying this docstring and which moved the stale paragraph instead of
+    /// deleting it. A docs-only commit is the one nobody re-reads for truth.
     ///
     /// IT IS THE RAW TEXT AND IT MUST NEVER BE THE INDEX OR THE TIMESTAMP. Both are agent-written and
     /// neither is unique: `option-lab-2` carried two `[80]`s and two `[81]`s on 2026-08-10, and one

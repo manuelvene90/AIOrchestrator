@@ -39,30 +39,62 @@ network).
 
 ## Then: the two unmerged branches
 
-### `fix/quiet-clock-ignores-app` — rebase it, do not merge it as-is
+### `fix/quiet-clock-ignores-app` — MERGED as `2110c56`. Kept because its REASONING was wrong twice more.
 
-Two commits: `11a1c1a` (the fix) and `f2485cf` (a probe that pins which clock the engine passes).
+Landed as `fix/quiet-clock-rebase` (`63465df`, `50df689`, `214265d`, `b4d5d5d`) and merged at
+`2110c56`. The code is right; what was recorded ABOUT it was not, so this section is now a correction
+notice rather than a merge plan.
 
-- **It conflicts** in `Nudge_Decider.cs`, the file the "one nudge per unanswered thing" work rewrote.
 - **It was correctly held back at the time**: on its own it made the nudge loop *faster*, 8 minutes
   to 6, because the app's own write to the channel was the only thing DELAYING the re-arm.
 - **That hazard is gone, but NOT because of where the marker gate sits.** The ordering claim that used
-  to be here was wrong: the gate is textually DOWNSTREAM of the clock check
-  (`BridgeEngineModel.cs:964` vs `:997-1002`). What closes the loop is that `_nudgedAboutEntry` is
-  written at `:1008` and never removed, so the app permanently remembers which conversation entry it
-  nudged about. Order does not enter into it.
+  to be here was wrong: the gate is textually DOWNSTREAM of the clock check. What closes the loop is
+  that `_nudgedAboutEntry` is written when a nudge is sent and **never removed** — no `.Remove` for it
+  exists anywhere — so the app permanently remembers which conversation entry it nudged about. Order
+  does not enter into it, which is why the original phrasing mattered: "upstream" is the kind of
+  sentence someone reorders code on. *Cited by symbol deliberately — the line numbers that used to sit
+  here were master's rather than the branch's, and the clock line among them was the very code the
+  merge replaced.*
 - **AND THAT MEMORY IS ONLY AS GOOD AS THE IDENTITY IT KEYS ON.** Until `fix/marker-gate-spans-archive`
   the identity was read from the LIVE FILE ALONE, so a compacted channel produced null — no memory, no
   gate, and the loop back every 8 minutes on exactly the channels running longest. CLAUDE.md item 13,
-  thirty lines from the function that already handled it. Fixed and pinned there; **one route to a null
-  identity remains open and is written up in that file's docstring** (a channel holding only app
-  entries and no conversation anywhere).
-- **A real residual the quiet clock still plugs**: an app write resets the **first** nudge's clock, so
-  a legitimate nudge can be delayed by up to 8 minutes. Bounded at one delay, not starvation — four
-  app write paths into a member channel, none on a timer.
-- **This has now been wrong FOUR times, the fourth in the paragraph correcting the third.** Reasoning
-  about this code keeps outrunning it. Nothing here should be believed without re-reading the lines it
-  cites — including this bullet.
+  thirty lines from the function that already handled it. Fixed and pinned there.
+- **The second route to a null identity is closed too — `5f3dc1f`, same branch.** A channel holding
+  only app entries and no conversation anywhere, and it needs no compaction at all: the app writes to
+  a member channel before its first brief (a `/resume` broadcast will do it), the member is then
+  eligible through `Has_UnansweredInboundTraffic`, has no identity, and is nudged forever. Keyed on a
+  sentinel now — **at most once, never none**, because a `/resume` is an app entry a respawned member
+  is genuinely supposed to act on and may be the only thing telling it to start. **Still open on
+  master until that branch lands.**
+  Note it is the same `/resume` path as the bound finding below, one layer down: **the unstick command
+  creating the condition that defeats the gate**, where below it is the unstick command postponing the
+  alarm. One story, two levels — which is the argument for reading `/resume` as a first-class writer
+  rather than an occasional owner action.
+- **THE RESIDUAL'S BOUND WAS WRONG, AND IT IS THE FIFTH TIME — one bullet below the one that counted
+  four.** What was recorded here, and what `214265d`'s commit message still says on disk, is *"bounded
+  at one delay, not starvation — four app write paths into a member channel, none on a timer"*. Both
+  halves are false.
+  - **Compaction is a fifth path**: `Compact_LongChannels` → `Channel_Compactor.Compact_IfNeeded` →
+    `Atomic_FileWriter.Write_AllText`, a rename-over, and the target carries the temp file's timestamp
+    — measured on this filesystem, not reasoned from semantics. It re-arms every 46 entries once a
+    channel passes `COMPACT_ABOVE_ENTRIES`.
+  - **But the count was never the load-bearing error — the TEST was.** *"Does any writer repeat on a
+    timer"* is the wrong question; *"can a writer recur during a single stall"* is the right one. By
+    that test `/resume` — already counted, then waved through on a property that did not bear on it —
+    has no dedupe of any kind: `Resume_AllSessions_Async` appends to every open member of every open
+    orchestration, once per command, with no memory field. **So the command the owner sends *because*
+    things are stuck was postponing the alarm for the stuck thing.**
+  - **Correct bound: 8 minutes × the number of app writes landing after the unanswered entry,
+    uncapped.** Not starvation — nothing recurs without an external cause — but not one delay either.
+    Which also means the merged fix was worth MORE than the "modest refinement" it was scaled down to,
+    not less.
+- **Two clocks read a member's channel and only one was converted.** `Measure_QuietFor`'s mtime
+  FALLBACK inherits the entire defect while its own docstring promises it fails noisy, and the
+  supervisor-nudge path still reads a member's channel by raw `File.GetLastWriteTimeUtc`. Both are
+  being fixed on a branch off `2110c56`; until it lands, "the quiet clock is fixed" is half true.
+- **Nothing here should be believed without re-reading the code it cites — including this bullet.**
+  Reasoning about this file's subject has now outrun it five times, twice inside paragraphs written to
+  correct the previous time.
 
 `f2485cf` is worth keeping either way: it catches the engine passing `UtcNow` where `Now` is meant,
 which on a machine at UTC+2 makes `quietFor` negative and **silences every nudge in the system with a
