@@ -3,6 +3,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
@@ -190,6 +191,53 @@ public class CloseImplementerGuardProbeTests : IDisposable
 
         Assert.True(File.Exists(parkedPath), "the orchestration close was released — the owner's tap was disarmed");
         Assert.True(_store.Get_Session(session.OrchId).ClosedUtc == null, "the orchestration was closed outright");
+    }
+
+    /// <summary>
+    /// A `close-implementer` REQUEST NAMING A SOLO IS REFUSED — because a solo IS the orchestration.
+    ///
+    /// `Execute_CloseImplementer` has no kind check, and member closes no longer wait for a tap, so
+    /// this route ended every session in a BASIC orchestration with nobody asked. That is exactly the
+    /// confirmation the owner kept: *"I wanted to be asked for confirmation to close the entire
+    /// orchestration session."* Removing the member tap must not smuggle in an untapped route to the
+    /// orchestration one.
+    ///
+    /// REFUSED RATHER THAN REROUTED, deliberately. Routing it would turn one request kind into another
+    /// silently, and this file has already paid for a request whose kind and effect disagreed. The
+    /// requester is told which action to use instead, so nothing is lost but a round trip.
+    ///
+    /// THE GUARD IS ON THE REQUEST, NOT INSIDE `Execute_CloseImplementer`, and that is the promotion
+    /// case: basic→full promotion has to close `solo-1` as part of becoming a crew. Guarding the
+    /// execution would block the app's own legitimate close; guarding the request refuses only what an
+    /// AGENT asks for, which is the untrusted input. The promotion path can still call the execution
+    /// directly when it exists.
+    /// </summary>
+    [Fact]
+    public async Task ACloseRequestNamingASoloIsRefusedBecauseASoloIsTheOrchestration()
+    {
+        var session = _launcher.Start_BasicOrchestration("Repo", _tempRepo);
+        var soloId = session.Members[0].MemberId;
+
+        Assert.StartsWith(MemberKind_Ids.SOLO_PREFIX, soloId);
+
+        var requestPath = Path.Combine(_paths.RequestsFolder, "close-solo.json");
+        File.WriteAllText(
+            requestPath,
+            $$"""{"action":"close-implementer","orchId":"{{session.OrchId}}","memberId":"{{soloId}}","reason":"tidying up"}""");
+
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => !File.Exists(requestPath)),
+            "the request file was never consumed — the engine never processed it");
+
+        Assert.True(
+            _store.Get_Session(session.OrchId).Members[0].ClosedUtc == null,
+            $"'{soloId}' was closed — a basic orchestration was ended with nobody asked");
+
+        Assert.Contains(
+            "close-orchestration",
+            File.ReadAllText(_paths.Get_OwnerChannelFile(session.OrchId)));
     }
 
     /// <summary>Writes a request straight into the awaiting folder, as parking would have left it.</summary>

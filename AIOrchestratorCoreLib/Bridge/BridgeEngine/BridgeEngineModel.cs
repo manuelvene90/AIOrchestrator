@@ -2373,6 +2373,34 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var request in pending.CloseImplementerRequests)
         {
+            // A SOLO IS THE ORCHESTRATION, so closing one through this action would end every session
+            // in a BASIC orchestration with nobody asked — and the whole-orchestration confirmation is
+            // the one the owner explicitly kept. `Execute_CloseImplementer` has no kind check, so
+            // before member closes stopped waiting for a tap this route was gated by accident; it is
+            // gated on purpose now.
+            //
+            // REFUSED, NOT REROUTED. Routing it would turn one request kind silently into another, and
+            // this file has already paid for a request whose kind and effect disagreed. The requester
+            // is told which action to use, so nothing is lost but a round trip.
+            //
+            // HERE AND NOT INSIDE `Execute_CloseImplementer`, and that is deliberate: basic→full
+            // promotion must close `solo-1` as part of becoming a crew. Guarding the execution would
+            // block the app's own legitimate close; guarding the REQUEST refuses only what an agent
+            // asks for, which is the untrusted input.
+            if (MemberKind_Ids.Resolve_Kind(request.MemberId) == MemberKinds.Solo)
+            {
+                _log.Log_Warning(request.OrchId, $"close-implementer named the solo '{request.MemberId}' — refused, a solo close is an orchestration close");
+
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    $"close of '{request.MemberId}' REFUSED — a solo is the whole orchestration",
+                    $"'{request.MemberId}' is the only session here, so closing it ends the orchestration — and that is the one close the owner still confirms themselves. "
+                    + "Nothing was closed. If you mean to end this orchestration, use close-orchestration and they will be asked to confirm.");
+
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "refused-solo");
+                continue;
+            }
+
             try
             {
                 Execute_CloseImplementer(request.OrchId, request.MemberId, request.Reason);
