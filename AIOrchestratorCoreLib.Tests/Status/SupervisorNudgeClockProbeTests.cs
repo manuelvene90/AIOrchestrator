@@ -28,10 +28,18 @@ namespace AIOrchestratorCoreLib.Tests.Status;
 /// old behaviour that stamp reads "quiet for ~0" and no nudge can fire, so a nudge here can only have
 /// come from reading the last conversation entry.
 ///
-/// WHAT THIS DOES NOT PIN, said plainly: the mtime FALLBACK inside
-/// <see cref="AIOrchestratorCoreLib.Status.Nudge_Decider.Measure_QuietFor"/> is untouched here and
-/// still fails silent when a stamp cannot be trusted. Fixing that is order-dependent — it must not
-/// land before the app-only sentinel is on master — and it is deliberately not this commit's.
+/// SCHEDULED AND GATED, NOT A COVERAGE GAP — and the distinction is the point. The mtime FALLBACK
+/// inside <see cref="AIOrchestratorCoreLib.Status.Nudge_Decider.Measure_QuietFor"/> still fails
+/// SILENT when a stamp cannot be trusted, against a docstring promising it fails noisy. It is
+/// reachable and it is testable, by this very harness; it is not done here because it MUST NOT LAND
+/// before the app-only sentinel is on master. Until then the fallback's 8-minute reset is the only
+/// thing throttling a channel that has no conversation identity, so removing it first releases the
+/// loop it is masking.
+///
+/// Phrased this way on purpose. An earlier draft filed the same sentence under "what this does not
+/// pin", which reads as *nobody can test this* rather than *this is next, behind a gate* — and a
+/// declared gap resting on an unexamined reason is what teaches the next reader to stop looking.
+/// That exact confusion cost another session six commits on this repo the same evening.
 /// </summary>
 public class SupervisorNudgeClockProbeTests : IDisposable
 {
