@@ -195,6 +195,13 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
+    /// <summary>
+    /// Crash-loop alerts taken from the watchdog that a silenced topic could not receive yet. The
+    /// watchdog's queue is DRAINED by the take, so without this they were simply gone — see
+    /// <see cref="Send_CrashLoopAlerts_Async"/>. Newest per orchestration, so it is bounded.
+    /// </summary>
+    readonly Dictionary<string, string> _heldCrashLoopAlerts = [];
+
     readonly HashSet<string> _stallAlertedOrchIds = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
@@ -773,18 +780,48 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>A session respawning repeatedly without coming alive is INVISIBLE from the phone — escalate it.</summary>
+    /// <summary>
+    /// A session respawning repeatedly without coming alive is INVISIBLE from the phone — escalate it.
+    /// <para>
+    /// The queue is DRAINED by <c>Take_PendingCrashLoopAlerts</c>, so a silenced topic used to lose
+    /// its alerts outright: taken, skipped, never re-queued. The tick's own comment promises the
+    /// opposite — "crash-loop alerts stay queued in the watchdog until unmute" — which is true of
+    /// app-wide DND (it returns above this) and was false of a meeting, which runs on through it
+    /// (rev-7 P6, 2026-08-13). They are held here instead, newest per orchestration, and delivered
+    /// when the topic can hear again.
+    /// </para>
+    /// </summary>
     async Task Send_CrashLoopAlerts_Async(CancellationToken cancellationToken)
     {
+        // Newest wins: what the owner needs is the CURRENT state of a crash-looping session, not a
+        // transcript of every respawn it made while they were in a meeting. Keyed by orchestration,
+        // so this cannot grow beyond the number of live orchestrations.
         foreach (var alert in _watchdog.Take_PendingCrashLoopAlerts())
+            _heldCrashLoopAlerts[alert.OrchId] = alert.AlertText;
+
+        if (_telegramClient == null)
         {
-            if (_telegramClient == null || Is_TopicSilenced(alert.OrchId))
+            // Nothing will ever deliver these, so holding them is a leak rather than a promise.
+            _heldCrashLoopAlerts.Clear();
+            return;
+        }
+
+        foreach (var orchId in _heldCrashLoopAlerts.Keys.ToList())
+        {
+            if (Is_TopicSilenced(orchId))
                 continue;
+
+            var alertText = _heldCrashLoopAlerts[orchId];
+
+            // Removed BEFORE the attempt, deliberately: a failed send stays one attempt, as it
+            // always has. Retrying every tick against a failing endpoint is how a bot earns a
+            // server-side throttle, and the failure is logged either way.
+            _heldCrashLoopAlerts.Remove(orchId);
 
             try
             {
-                var session = _store.Get_Session_OrNull(alert.OrchId);
-                await _telegramClient.Send_Message_Async(session?.TelegramTopicId, alert.AlertText, cancellationToken);
+                var session = _store.Get_Session_OrNull(orchId);
+                await _telegramClient.Send_Message_Async(session?.TelegramTopicId, alertText, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -792,7 +829,7 @@ internal sealed class BridgeEngineModel(
             }
             catch (Exception ex)
             {
-                _log.Log_Warning(alert.OrchId, $"Crash-loop alert send failed: {ex.Message}");
+                _log.Log_Warning(orchId, $"Crash-loop alert send failed: {ex.Message}");
             }
         }
     }
@@ -1219,7 +1256,9 @@ internal sealed class BridgeEngineModel(
         // answer the reports, which is work a meeting explicitly continues — kept its token, and the
         // NEXT spell, with a genuinely unanswered report in it, could not be nudged at all
         // (rev-7 P2, 2026-08-13).
-        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
+        var presence = Resolve_Presence(session.OrchId);
+
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
             return;
 
         // Once per quiet spell, not once per tick.
@@ -1231,7 +1270,8 @@ internal sealed class BridgeEngineModel(
         if (!Append_SupervisorAttention_UnlessMeeting(
                 session.OrchId,
                 $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
-                $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one."))
+                $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
+                presence))
             return;
 
         _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
@@ -1370,12 +1410,17 @@ internal sealed class BridgeEngineModel(
             // reconciled even in a meeting (lifting a block is not an interruption), while the alert
             // and its once-per-spell token are deferred. LedgerHealth_Step's own doc has the wedge
             // that the other order produces.
+            // ONE read of presence for this orchestration's whole ledger decision — the mirror loop
+            // decides here while the inbound loop can flip presence, so asking twice lets the token
+            // be committed on one answer and the append refused on the other (rev-7 P5).
+            var presence = Resolve_Presence(session.OrchId);
+
             var ledgerOutcome = LedgerHealth_Step.Reconcile(
                 _paths,
                 session.OrchId,
                 isBehind,
                 alreadyReported: _ledgerBehindReportedOrchIds.Contains(session.OrchId),
-                suppressed: OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)));
+                suppressed: OwnerPresence_Policy.Suppresses_SupervisorAttention(presence));
 
             if (ledgerOutcome.RemembersReported)
                 _ledgerBehindReportedOrchIds.Add(session.OrchId);
@@ -1386,7 +1431,8 @@ internal sealed class BridgeEngineModel(
                 && Append_SupervisorAttention_UnlessMeeting(
                     session.OrchId,
                     "PLAN.md is behind your verdicts",
-                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do."))
+                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
+                    presence))
             {
                 _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
             }
@@ -1430,7 +1476,9 @@ internal sealed class BridgeEngineModel(
         // cleared during the meeting simply re-records as empty afterwards. A tick skipped here
         // therefore cannot strand anything — which is exactly what a skipped tick DOES do to a
         // presence token (rev-7 P2) or to a flag nothing else deletes (LedgerHealth_Step).
-        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
+        var presence = Resolve_Presence(session.OrchId);
+
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
             return;
 
         var planFile = _paths.Get_PlanFile(session.OrchId);
@@ -1453,7 +1501,8 @@ internal sealed class BridgeEngineModel(
         if (!Append_SupervisorAttention_UnlessMeeting(
             session.OrchId,
             "PLAN.md has lines that cannot show progress",
-            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger."))
+            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
+            presence))
             return;
 
         _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
@@ -4339,7 +4388,8 @@ internal sealed class BridgeEngineModel(
                 if (!Append_SupervisorAttention_UnlessMeeting(
                         session.OrchId,
                         Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
-                        $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now."))
+                        $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now.",
+                        Resolve_Presence(session.OrchId)))
                 {
                     // The marker STAYS while the meeting lasts. Deleting it here would drop a
                     // standing warning about a guard that is not running, rather than defer it —
@@ -4370,7 +4420,9 @@ internal sealed class BridgeEngineModel(
             // Safe at the TOP, for the same reason as Report_LedgerShape and NOT for the reason the
             // nudge needed: the signature below is CONTENT-ADDRESSED, so any later change to who is
             // idle fires on its own and a tick skipped here strands nothing.
-            if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
+            var presence = Resolve_Presence(session.OrchId);
+
+            if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
                 continue;
 
             List<string> idle = [];
@@ -4408,7 +4460,8 @@ internal sealed class BridgeEngineModel(
             if (!Append_SupervisorAttention_UnlessMeeting(
                     session.OrchId,
                     Status.Retirement_Advisor.FLAG_SUBJECT,
-                    $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this."))
+                    $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
+                    presence))
                 continue;
 
             _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
@@ -5006,9 +5059,18 @@ internal sealed class BridgeEngineModel(
     /// presence entries themselves (one of which is the resume signal), /resume, and away mode.
     /// </para>
     /// </summary>
-    bool Append_SupervisorAttention_UnlessMeeting(string orchId, string subject, string body)
+    /// <param name="presence">
+    /// The presence the CALLER already decided on. It is a parameter rather than a second
+    /// <c>Resolve_Presence</c> because these decisions run on the mirror loop while `/pc` is handled
+    /// on the inbound loop, so a flip can land between the two reads: the caller commits its
+    /// once-per-spell token on the first value and this method then refuses on the second, spending
+    /// the token on an entry nobody receives — the exact defect the callers exist to avoid
+    /// (rev-7 P5, 2026-08-13). Passing it also keeps this the single choke point: a new site must
+    /// supply the input, and cannot quietly skip the check.
+    /// </param>
+    bool Append_SupervisorAttention_UnlessMeeting(string orchId, string subject, string body, OwnerPresenceModes presence)
     {
-        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(orchId)))
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
             return false;
 
         ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(orchId), subject, body, DateTime.Now);
@@ -5548,7 +5610,7 @@ internal sealed class BridgeEngineModel(
             if (Is_AwayMode())
             {
                 _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
-                Post_StatusEntry(session.OrchId, Build_AwayUpdateText(session));
+                Post_StatusEntry(session.OrchId, Build_AwayUpdateText(session), session.OwnerPresence);
                 continue;
             }
 
@@ -5561,7 +5623,7 @@ internal sealed class BridgeEngineModel(
             }
 
             _lastPeriodicStatusUtc[session.OrchId] = DateTime.UtcNow;
-            Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session));
+            Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session), session.OwnerPresence);
         }
 
         await Task.CompletedTask;
@@ -5909,12 +5971,15 @@ internal sealed class BridgeEngineModel(
     ///   Silenced — dropped, because the owner is reading the terminal live.
     /// Doing this by hand at each send site would have meant reimplementing all three.
     /// </summary>
-    void Post_StatusEntry(string orchId, string text)
+    void Post_StatusEntry(string orchId, string text, OwnerPresenceModes presence)
     {
         // Suppressed WITHOUT stamping during a meeting (see Push_PeriodicStatus_Async), so the first
         // tick after the owner leaves terminal mode posts a fresh status immediately — which is the
         // "what waited while we talked" summary, built by the formatter that already exists.
-        Append_SupervisorAttention_UnlessMeeting(orchId, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, text);
+        //
+        // The presence is the caller's — the one it already decided the stamp on — so the decision
+        // and the append cannot disagree about where the owner is (rev-7 P5).
+        Append_SupervisorAttention_UnlessMeeting(orchId, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, text, presence);
     }
 
     /// <summary>
