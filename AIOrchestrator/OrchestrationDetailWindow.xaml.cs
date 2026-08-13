@@ -174,30 +174,24 @@ public partial class OrchestrationDetailWindow : Window
         // file whole. Elsewhere `[-]` is legitimately invisible because it is out of the denominator;
         // here it is the thing being read, and its absence is unreadable as anything but "that task
         // was never there".
-        PlanItemsControl.ItemsSource = progress.Lines.Select(Build_PlanLine).ToList();
+        PlanItemsControl.ItemsSource = PlanLedgerRows_Builder.Build_Rows(progress).Select(Build_PlanLine).ToList();
     }
 
-    PlanLineView Build_PlanLine(PlanLedgerLine line)
+    /// <summary>
+    /// PALETTE LOOKUP AND NOTHING ELSE. Which glyph a marker gets, how dim a dropped line is, and
+    /// what stops loudly all moved to `PlanLedgerRows_Builder`, because the test project cannot
+    /// reference this one — so every decision left in here is unpinnable by construction (rev-7 L1).
+    /// What remains is the part that genuinely cannot leave: resolving a resource key to a Brush.
+    /// </summary>
+    PlanLineView Build_PlanLine(PlanLedgerRow row)
     {
-        var taskText = line.Text;
-
-        return line.Marker switch
+        return new PlanLineView
         {
-            "x" => new PlanLineView { MarkerGlyph = "✔", MarkerBrush = Find_Brush("AccentCommunicator"), TaskText = taskText, LineOpacity = 0.55 },
-            ">" => new PlanLineView { MarkerGlyph = "▶", MarkerBrush = Find_Brush("StateWorking"), TaskText = taskText, TaskWeight = FontWeights.Bold },
-            "!" => new PlanLineView { MarkerGlyph = "■", MarkerBrush = Find_Brush("StateBlocked"), TaskText = taskText, TaskWeight = FontWeights.Bold },
-            " " => new PlanLineView { MarkerGlyph = "○", MarkerBrush = Find_Brush("StateNew"), TaskText = taskText },
-
-            // NOT DOING — shown, and shown as dropped rather than as done. It is dimmer than a done
-            // line because it was never delivered, and it is present at all because a marker that
-            // removes weight from the denominator is a delete key unless somebody can see it.
-            "-" => new PlanLineView { MarkerGlyph = "⊘", MarkerBrush = Find_Brush("TextSecondary"), TaskText = taskText, LineOpacity = 0.45 },
-
-            // The parser normalises "X" to "x", so this arm is genuinely unreachable today — it is
-            // here for the SIXTH marker, whenever one is added. Throwing is right: a marker the
-            // parser accepts and this switch does not would otherwise render as a blank row, which is
-            // the silent omission being fixed, wearing a different hat.
-            _ => throw new Exception($"Unhandled plan marker '{line.Marker}' for task '{taskText}'"),
+            MarkerGlyph = row.Glyph,
+            MarkerBrush = Find_Brush(row.BrushKey),
+            TaskText = row.Text,
+            LineOpacity = row.Opacity,
+            TaskWeight = row.IsBold ? FontWeights.Bold : FontWeights.Normal,
         };
     }
 

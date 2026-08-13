@@ -45,19 +45,35 @@ public class LedgerLegendTests
     ///
     /// It is asserted by exhausting the printable ASCII the regex could plausibly carry rather than
     /// by reading the pattern back, because a test that re-derives the regex from the regex proves
-    /// nothing. `X` is excluded deliberately: the parser accepts it and normalises it to `x`, so it
-    /// is a spelling of a taught marker rather than an untaught one.
+    /// nothing.
+    ///
+    /// `X` IS SKIPPED ON A PREMISE THIS TEST NOW VERIFIES FIRST (rev-7 L3). The skip was justified in
+    /// prose — "the parser normalises it to `x`, so it is a spelling of a taught marker" — and the
+    /// test never checked that. "X normalises to a taught marker" and "X is an untaught marker we
+    /// chose to skip" were indistinguishable to it, which is decision 20's two-routes-to-one-green in
+    /// a file whose own docstring cites decision 20. Take the normalisation out and this test — whose
+    /// whole job is "no accepted marker goes untaught" — stayed green.
     /// </summary>
     [Fact]
     public void EveryParsedMarkerIsTaught()
     {
         var taught = PlanLedger_Markers.ALL.Select(entry => entry.Marker).ToHashSet();
 
+        // THE PREMISE OF THE SKIP BELOW, asserted before it is relied on. If this ever fails, `[X]`
+        // and `[x]` reach the owner as two spellings of done in one message.
+        var upperCase = PlanLedger_Parser.Parse_OrNull("- [X] a task");
+
+        Assert.True(upperCase != null, "the parser rejects `- [X]`, so the skip below hides a marker rather than a spelling");
+        Assert.Equal("x", upperCase!.Lines[0].Marker);
+
         for (var character = ' '; character <= '~'; character++)
         {
             var marker = character.ToString();
 
-            if (marker == "X" || marker == "]")
+            // Only `X` is skipped now. The old skip also listed `]`, which is dead: `]` is not in the
+            // regex class, so the null check below already handles it — and listing it made the skip
+            // look more load-bearing than it is.
+            if (marker == "X")
                 continue;
 
             if (PlanLedger_Parser.Parse_OrNull($"- [{marker}] a task") == null)
@@ -65,6 +81,24 @@ public class LedgerLegendTests
 
             Assert.True(taught.Contains(marker), $"the parser accepts `- [{marker}]` and the legend does not teach it");
         }
+    }
+
+    /// <summary>
+    /// THE LIST ITSELF, asserted literally, because four of the tests here loop over it (rev-7 L4).
+    ///
+    /// A test that reads its expected values from the same source production renders from can prove
+    /// "this copy agrees with `ALL`" and never "`ALL` is right" — and an emptied `ALL` makes those
+    /// loops iterate zero times and pass. `EveryParsedMarkerIsTaught` is a genuine oracle against
+    /// that, because the parser's regex is an independent literal, so this is belt to its braces; the
+    /// residual it closes is narrower and real: a MEANING edited in `ALL` was caught only by the bash
+    /// hook test, leaving one cross-language test load-bearing alone.
+    /// </summary>
+    [Fact]
+    public void TheMarkerListIsWhatEverythingElseAssumes()
+    {
+        Assert.Equal(
+            [(" ", "open"), (">", "in progress"), ("x", "done"), ("!", "blocked"), ("-", "not doing")],
+            PlanLedger_Markers.ALL);
     }
 
     /// <summary>
