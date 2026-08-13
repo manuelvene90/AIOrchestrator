@@ -1687,6 +1687,10 @@ internal sealed class BridgeEngineModel(
 
         foreach (var entry in mirrorableEntries)
         {
+            // Set when this entry is the answer the owner is waiting for, and ACTED ON only once the
+            // send below has succeeded. The wait is not consumed by an attempt.
+            var answersTheOwnersWait = false;
+
             // WHAT REACHES THE PHONE, owner's rule: "I answer the sup a question, and then the sup
             // doesn't disturb me anymore unless it has another question. A brief every 30 minutes
             // is fine, but not the waterfall." So a supervisor entry is pushed only when it asks
@@ -1725,10 +1729,15 @@ internal sealed class BridgeEngineModel(
                 lock (_ownerStateLock)
                 {
                     _lastSuppressedEntry.Remove(append.Channel.OrchId);
-
-                    // The owner has now had their answer; later entries are narration again.
-                    _ownerAwaitingAnswer.Remove(append.Channel.OrchId);
                 }
+
+                // The flag is deliberately NOT cleared here — it is cleared after the send below.
+                // Clearing it at this point consumed the owner's wait on an ATTEMPT: when the send
+                // then failed, the append was left unconfirmed (by design, so it retries), but the
+                // re-emitted entry now read the flag as false, re-evaluated as ordinary narration
+                // and was SUPPRESSED. The answer to a question the owner actually asked was dropped
+                // silently — they asked, the supervisor replied, and nothing ever reached them.
+                answersTheOwnersWait = true;
             }
 
             var text = MirrorText_Formatter.Format(append.Channel, entry);
@@ -1785,6 +1794,18 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var photoPath in photoPaths)
                     await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel.OrchId, cancellationToken);
+
+                // ONLY NOW is the owner's wait consumed: everything this entry had to say is on the
+                // phone, so what follows is narration again. Anything that threw above skipped this
+                // line with the flag still raised, which is what makes the retry deliver the answer
+                // instead of re-classifying it.
+                if (answersTheOwnersWait)
+                {
+                    lock (_ownerStateLock)
+                    {
+                        _ownerAwaitingAnswer.Remove(append.Channel.OrchId);
+                    }
+                }
             }
             catch (OperationCanceledException)
             {
