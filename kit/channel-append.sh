@@ -71,11 +71,30 @@ LOCK_DIR="${CHANNEL}.lock"
 OWNER_FILE="$LOCK_DIR/owner"
 HELD=0
 
+# Identifies THIS acquisition, not this process. $$ alone is not enough: pids are reused, and the
+# question at release time is "is this still the lock I took", which a pid cannot answer.
+OWNERSHIP_TOKEN="$$-$(date -u +%s)-${RANDOM}${RANDOM}"
+
 release_lock() {
-  # Only ever release a lock this process actually holds. Without the guard, a run that failed to
-  # acquire would delete the lock belonging to whoever DID hold it on its way out.
+  # Two guards, and the second one is the important one.
+  #
+  # HELD stops a run that never acquired from deleting somebody else's lock on its way out.
+  #
+  # The TOKEN stops something subtler and worse: our lock being broken as stale mid-write and
+  # re-acquired by another writer, after which deleting "$LOCK_DIR" by path would destroy THEIR
+  # lock while they are writing, and a third writer could then acquire alongside them. The stale
+  # break exists to recover from a dead holder, and without this check it arms that. The token is
+  # minted per acquire — a pid is reused and a path is reused, an acquisition is not.
   if [ "$HELD" = "1" ]; then
-    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    local held_token
+    held_token="$(grep -m1 '^token=' "$OWNER_FILE" 2>/dev/null | cut -d= -f2-)"
+
+    if [ "$held_token" = "$OWNERSHIP_TOKEN" ]; then
+      rm -rf "$LOCK_DIR" 2>/dev/null || true
+    else
+      echo "channel-append.sh: NOT releasing the lock on $(basename "$CHANNEL") — it was broken as stale and another writer holds it now; this write overran ${STALE_SECONDS}s." >&2
+    fi
+
     HELD=0
   fi
 }
@@ -152,7 +171,7 @@ acquire_lock() {
     # is not available here at an acceptable price.
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       HELD=1
-      printf 'pid=%s\nutc=%s\nrole=%s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "session" > "$OWNER_FILE"
+      printf 'pid=%s\nutc=%s\nrole=%s\ntoken=%s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "session" "$OWNERSHIP_TOKEN" > "$OWNER_FILE"
       return 0
     fi
 

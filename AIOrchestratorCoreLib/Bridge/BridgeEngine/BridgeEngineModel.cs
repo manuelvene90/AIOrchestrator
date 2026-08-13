@@ -467,6 +467,13 @@ internal sealed class BridgeEngineModel(
 
     public async Task Run_Async(CancellationToken cancellationToken)
     {
+        // The channel lock now mediates every write in the system and had no voice at all: a wedged
+        // channel was silent, a broken lock was silent, and the bool that says "this write did not
+        // happen" is discarded by almost every call site. Its failures go to the log from here on —
+        // decision 21's rule (the line goes to orchestrator.log.jsonl, which the app tails) applied
+        // to the thing every append now passes through.
+        ChannelLock_Diagnostics.Set_Sink(message => _log.Log_Warning(GLOBAL_ORCH_ID, message));
+
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
         List<Task> loops = [Run_Supervised_Async("mirror", Run_MirrorLoop_Async, cancellationToken)];

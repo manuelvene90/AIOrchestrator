@@ -9,6 +9,7 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 /// replaces — the entry is gone, with nothing anywhere recording that it existed. This pins that
 /// compaction takes the same gate the appender takes, so the two cannot overlap in this process.
 /// </summary>
+[Collection(CHANNEL_LOCK_COLLECTION.NAME)]
 public class ChannelCompactionSerialisationTests : IDisposable
 {
     readonly string _tempFolder;

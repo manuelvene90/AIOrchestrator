@@ -28,8 +28,23 @@ public static class ChannelWrite_Lock
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lock> GATES_BY_CHANNEL_PATH =
         new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>How long a channel write waits for both levels before giving up.</summary>
-    public static readonly TimeSpan DEFAULT_BUDGET = TimeSpan.FromSeconds(5);
+    /// <summary>
+    /// How long a channel write waits for both levels before giving up.
+    /// <para>
+    /// Deliberately SHORTER THAN THE MIRROR TICK (2 s). The bridge's mirror loop drives every other
+    /// piece of bridge work — the poll, the mirror, the ledger check, the status push, compaction,
+    /// the state persist — so a lock that can hold one tick's append past the next tick converts
+    /// contention on one channel into a stall of the whole bridge. Waiting is the expensive
+    /// failure here; giving up is cheap, now that giving up is logged and the owner-delivery path
+    /// puts its message back.
+    /// </para>
+    /// <para>
+    /// Honest about what this does NOT fix: the budget is still PER CALL, so a tick making several
+    /// contended appends can still exceed a tick in total. Bounding a tick's whole lock spend is a
+    /// larger change than a constant, and this is the part of it that a constant can buy.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan DEFAULT_BUDGET = TimeSpan.FromMilliseconds(1500);
 
     /// <summary>
     /// Runs <paramref name="write"/> holding BOTH levels of the gate, and returns whether it ran.

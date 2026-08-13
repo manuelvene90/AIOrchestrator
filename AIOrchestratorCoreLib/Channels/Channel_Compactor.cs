@@ -36,7 +36,7 @@ public static class Channel_Compactor
     /// Shorter than a write's budget on purpose: compaction is the one channel write nobody is
     /// waiting for, so it should yield to an append rather than make it queue.
     /// </summary>
-    static readonly TimeSpan COMPACTION_LOCK_BUDGET = TimeSpan.FromSeconds(2);
+    static readonly TimeSpan COMPACTION_LOCK_BUDGET = TimeSpan.FromSeconds(1);
 
     public static long? Compact_IfNeeded(string channelFilePath)
     {

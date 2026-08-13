@@ -9,6 +9,7 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 /// contract. The bash side is pinned against this same lock in <see cref="ChannelAppendHelperInteropTests"/>,
 /// because a protocol only one side implements correctly is not a protocol.
 /// </summary>
+[Collection(CHANNEL_LOCK_COLLECTION.NAME)]
 public class ChannelFileLockTests : IDisposable
 {
     readonly string _tempFolder;
@@ -143,6 +144,55 @@ public class ChannelFileLockTests : IDisposable
 
         Assert.True(acquired, "an abandoned metadata-less lock was never breakable — the channel would be write-dead forever");
         Assert.True(ran);
+    }
+
+    /// <summary>
+    /// Releasing by PATH alone was a correctness defect in the core primitive, and the recovery path
+    /// armed it: A acquires, A overruns STALE_SECONDS, B legitimately breaks A's lock and takes its
+    /// own, then A finishes and deletes B's lock while B is mid-write — after which C can acquire
+    /// alongside B. Every guarantee above the lock was conditional on that never happening.
+    /// <para>
+    /// The write action here does what the real world would do between acquire and release: the
+    /// lock is broken and a different holder takes it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Try_Run_WithLock_WhenOurLockWasBrokenMidWrite_DoesNotDeleteTheNewHoldersLock()
+    {
+        var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);
+
+        var acquired = ChannelFile_Lock.Try_Run_WithLock(_channelFile, TimeSpan.FromSeconds(5), () =>
+        {
+            // Our lock is broken as stale, and somebody else acquires. Their owner file carries
+            // THEIR token, which is the only thing distinguishing their lock from ours.
+            Directory.Move(lockDirectory, $"{lockDirectory}.broken.simulated");
+            Directory.CreateDirectory(lockDirectory);
+
+            File.WriteAllText(
+                Path.Combine(lockDirectory, ChannelFile_Lock.OWNER_FILE_NAME),
+                ChannelFile_Lock.Build_OwnerFileContent(999_999, DateTime.UtcNow, "session", "a-different-holders-token"));
+        }, out _);
+
+        Assert.True(acquired);
+
+        Assert.True(
+            Directory.Exists(lockDirectory),
+            "the finishing writer deleted a lock it no longer owned — the new holder is now unprotected mid-write");
+
+        // And it is still THEIR lock, not a leftover of ours.
+        Assert.Contains("a-different-holders-token", File.ReadAllText(Path.Combine(lockDirectory, ChannelFile_Lock.OWNER_FILE_NAME)));
+    }
+
+    /// <summary>
+    /// The disjoint half: an ordinary writer must still release, or the first append to a channel
+    /// would wedge it until the staleness fallback fired 60 seconds later.
+    /// </summary>
+    [Fact]
+    public void Try_Run_WithLock_WhenOurLockIsUntouched_DoesReleaseIt()
+    {
+        ChannelFile_Lock.Try_Run_WithLock(_channelFile, TimeSpan.FromSeconds(5), () => { }, out _);
+
+        Assert.False(Directory.Exists(ChannelFile_Lock.Build_LockDirectoryPath(_channelFile)));
     }
 
     void Hold_LockExternally(DateTime heldSinceUtc)

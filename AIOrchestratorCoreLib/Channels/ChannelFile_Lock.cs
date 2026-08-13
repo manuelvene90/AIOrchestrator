@@ -64,7 +64,17 @@ public static class ChannelFile_Lock
     /// </summary>
     public static string Build_OwnerFileContent(int processId, DateTime heldSinceUtc, string role)
     {
-        return $"pid={processId}\nutc={heldSinceUtc:yyyy-MM-ddTHH:mm:ssZ}\nrole={role}\n";
+        return Build_OwnerFileContent(processId, heldSinceUtc, role, Guid.NewGuid().ToString("N"));
+    }
+
+    /// <summary>
+    /// With an explicit ownership token. <paramref name="token"/> identifies THIS acquisition, not
+    /// this process: a pid is reused and a path is reused, but a token is minted per acquire, which
+    /// is what lets release tell our lock from the one a later holder took after ours was broken.
+    /// </summary>
+    public static string Build_OwnerFileContent(int processId, DateTime heldSinceUtc, string role, string token)
+    {
+        return $"pid={processId}\nutc={heldSinceUtc:yyyy-MM-ddTHH:mm:ssZ}\nrole={role}\ntoken={token}\n";
     }
 
     /// <summary>
@@ -87,7 +97,9 @@ public static class ChannelFile_Lock
 
         while (true)
         {
-            if (Try_Acquire(lockDirectory))
+            var ownershipToken = Try_Acquire(lockDirectory);
+
+            if (ownershipToken != null)
             {
                 waited = DateTime.UtcNow - startedUtc;
 
@@ -97,7 +109,7 @@ public static class ChannelFile_Lock
                 }
                 finally
                 {
-                    Release_BestEffort(lockDirectory);
+                    Release_IfStillOurs(lockDirectory, ownershipToken);
                 }
 
                 return true;
@@ -108,19 +120,52 @@ public static class ChannelFile_Lock
             waited = DateTime.UtcNow - startedUtc;
 
             if (waited >= budget)
+            {
+                ChannelLock_Diagnostics.Report(
+                    $"Channel lock: could not acquire '{Path.GetFileName(channelFilePath)}' after {waited.TotalMilliseconds:F0} ms — "
+                    + $"NOTHING WAS WRITTEN. Held by {Describe_Holder(lockDirectory)}.");
+
                 return false;
+            }
 
             Thread.Sleep(delayMilliseconds);
             delayMilliseconds = Math.Min(delayMilliseconds * 2, RETRY_MAXIMUM_MILLISECONDS);
         }
     }
 
-    static bool Try_Acquire(string lockDirectory)
+    /// <summary>
+    /// Who holds the lock, for the human reading a wedged channel. Never throws and never returns
+    /// nothing useful: "unknown" is itself the diagnosis when the metadata cannot be read.
+    /// </summary>
+    static string Describe_Holder(string lockDirectory)
+    {
+        try
+        {
+            var ownerFile = Path.Combine(lockDirectory, OWNER_FILE_NAME);
+
+            if (!File.Exists(ownerFile))
+                return "a lock directory with NO OWNER FILE (a writer killed mid-acquire)";
+
+            return File.ReadAllText(ownerFile).Replace("\n", " ").Trim();
+        }
+        catch
+        {
+            return "a holder whose owner file could not be read";
+        }
+    }
+
+    /// <summary>
+    /// Returns the ownership token written into the lock, or null if the lock was not obtained.
+    /// The token exists so release can tell OUR lock from a later holder's — see
+    /// <see cref="Release_IfStillOurs"/>.
+    /// </summary>
+    static string? Try_Acquire(string lockDirectory)
     {
         // Fill a uniquely-named directory, then move it into place. Directory.CreateDirectory on
         // the target itself would NOT do: it succeeds when the directory already exists, so two
         // writers would both believe they hold the lock. The move is the exclusive step.
         var stagingDirectory = $"{lockDirectory}.{Guid.NewGuid():N}.staging";
+        var ownershipToken = Guid.NewGuid().ToString("N");
 
         try
         {
@@ -128,16 +173,16 @@ public static class ChannelFile_Lock
 
             File.WriteAllText(
                 Path.Combine(stagingDirectory, OWNER_FILE_NAME),
-                Build_OwnerFileContent(Environment.ProcessId, DateTime.UtcNow, "app"));
+                Build_OwnerFileContent(Environment.ProcessId, DateTime.UtcNow, "app", ownershipToken));
 
             Directory.Move(stagingDirectory, lockDirectory);
-            return true;
+            return ownershipToken;
         }
         catch
         {
             // Either somebody else holds it, or the move lost the race. Both mean "not mine".
             Delete_BestEffort(stagingDirectory);
-            return false;
+            return null;
         }
     }
 
@@ -155,11 +200,19 @@ public static class ChannelFile_Lock
         if (!Is_Stale(lockDirectory))
             return;
 
+        // Captured BEFORE the move: afterwards the path is gone, and a report that cannot say whose
+        // lock was broken is not evidence of anything.
+        var holder = Describe_Holder(lockDirectory);
+
         try
         {
             // The broken lock is kept, not deleted: a lock that had to be broken is evidence about
             // a writer that died holding it, and that is worth more on disk than a tidy folder.
             Directory.Move(lockDirectory, $"{lockDirectory}.broken.{Guid.NewGuid():N}");
+
+            ChannelLock_Diagnostics.Report(
+                $"Channel lock: broke a stale lock on '{Path.GetFileName(lockDirectory)}' — it was held by {holder} "
+                + $"for more than {STALE_SECONDS}s and never released. The broken lock is kept beside the channel.");
         }
         catch
         {
@@ -205,6 +258,27 @@ public static class ChannelFile_Lock
         }
     }
 
+    /// <summary>One field out of the owner file, or null. Never throws.</summary>
+    static string? Read_OwnerField_OrNull(string ownerFile, string fieldName)
+    {
+        try
+        {
+            var prefix = $"{fieldName}=";
+
+            foreach (var line in File.ReadAllLines(ownerFile))
+            {
+                if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return line[prefix.Length..].Trim();
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     static DateTime? Read_HeldSinceUtc_OrNull(string ownerFile)
     {
         foreach (var line in File.ReadAllLines(ownerFile))
@@ -225,12 +299,40 @@ public static class ChannelFile_Lock
         return null;
     }
 
-    static void Release_BestEffort(string lockDirectory)
+    /// <summary>
+    /// Releases the lock ONLY if it is still the one this caller took.
+    /// <para>
+    /// Deleting by path alone was a correctness defect in the core primitive, and the recovery path
+    /// armed it: writer A acquires; A overruns STALE_SECONDS; writer B legitimately breaks A's lock
+    /// and acquires its own; A then finishes and deletes B's lock while B is mid-write, letting C
+    /// acquire alongside B. Every guarantee above this was conditional on that not happening.
+    /// </para>
+    /// <para>
+    /// Honest about what remains: reading the token and deleting are two operations, so a break
+    /// landing between them can still cost the new holder its lock. That window is microseconds
+    /// against the STALE_SECONDS it takes to become breakable at all, where the old one was the
+    /// entire duration of the write.
+    /// </para>
+    /// </summary>
+    static void Release_IfStillOurs(string lockDirectory, string ownershipToken)
     {
         try
         {
-            if (Directory.Exists(lockDirectory))
-                Directory.Delete(lockDirectory, recursive: true);
+            if (!Directory.Exists(lockDirectory))
+                return;
+
+            var heldToken = Read_OwnerField_OrNull(Path.Combine(lockDirectory, OWNER_FILE_NAME), "token");
+
+            if (heldToken != ownershipToken)
+            {
+                ChannelLock_Diagnostics.Report(
+                    $"Channel lock: NOT releasing '{Path.GetFileName(lockDirectory)}' — it is no longer the lock this writer took "
+                    + "(it was broken as stale and someone else holds it now). The write it protected overran STALE_SECONDS.");
+
+                return;
+            }
+
+            Directory.Delete(lockDirectory, recursive: true);
         }
         catch
         {

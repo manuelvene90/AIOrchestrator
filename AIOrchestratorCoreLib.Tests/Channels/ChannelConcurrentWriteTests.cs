@@ -13,6 +13,7 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 /// reach it — that is a different mechanism, deliberately not claimed here.
 /// </para>
 /// </summary>
+[Collection(CHANNEL_LOCK_COLLECTION.NAME)]
 public class ChannelConcurrentWriteTests : IDisposable
 {
     readonly string _tempFolder;

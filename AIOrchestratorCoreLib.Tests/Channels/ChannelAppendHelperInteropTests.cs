@@ -14,6 +14,7 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 /// nothing-wrong. That mistake produced 16 confident findings about code that was never executed.
 /// </para>
 /// </summary>
+[Collection(CHANNEL_LOCK_COLLECTION.NAME)]
 public class ChannelAppendHelperInteropTests : IDisposable
 {
     readonly string _tempFolder;
