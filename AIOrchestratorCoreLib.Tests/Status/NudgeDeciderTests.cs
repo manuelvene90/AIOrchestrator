@@ -516,13 +516,68 @@ public class NudgeDeciderTests
         var beforeTheNudge = BuildTitled(
             (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"));
 
+        // THE REAL SUBJECT, from the writer itself. This fixture used to invent one ("you stopped
+        // mid-task"), which no code path produces — and the case still passed, because both sides
+        // returned the constant sentinel and nothing about the subject was ever read. It asserts
+        // something now, and only if the text matches what the app actually writes.
         var afterTheNudge = BuildTitled(
             (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
-            (ChannelAuthors.App, "you stopped mid-task", "nothing was going to wake you"));
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"));
 
         Assert.Equal(
             Nudge_Decider.Identify_NudgeSubject(beforeTheNudge, NO_ARCHIVE),
             Nudge_Decider.Identify_NudgeSubject(afterTheNudge, NO_ARCHIVE));
+    }
+
+    /// <summary>
+    /// R1, and the half the sentinel got wrong: a SECOND `/resume` is a second unanswered thing.
+    ///
+    /// The sentinel is a constant, so once it was recorded the gate matched for ever and an app-only
+    /// channel got exactly one nudge PER PROCESS — including for the `/resume` the sentinel's own
+    /// docstring names as the reason such channels must be nudged at all. The owner's unstick command
+    /// could not unstick anything, which is the same `/resume` path as the bound finding, one layer
+    /// down.
+    ///
+    /// The subject now moves because REALITY moved. No clear, no release site, still one write site.
+    /// </summary>
+    [Fact]
+    public void ASecondResumeIsANewUnansweredThingAndEarnsItsOwnNudge()
+    {
+        var afterOneNudge = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"));
+
+        var thenAnotherResume = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"),
+            (ChannelAuthors.App, "GO AHEAD — resume", "the owner sent /resume again"));
+
+        Assert.NotEqual(
+            Nudge_Decider.Identify_NudgeSubject(afterOneNudge, NO_ARCHIVE),
+            Nudge_Decider.Identify_NudgeSubject(thenAnotherResume, NO_ARCHIVE));
+    }
+
+    /// <summary>
+    /// THE OTHER DIRECTION, and it is what stops this becoming the loop again. The respawn notice is
+    /// the app waking the member, exactly like the nudge — so it must NOT count as a new thing to be
+    /// nudged about. Escalation drops the nudged-at stamp on both its exits, so a subject that moved
+    /// here would re-arm the whole nudge-then-respawn cycle with nobody having said anything.
+    /// </summary>
+    [Fact]
+    public void TheRespawnNoticeIsTheAppsOwnWakeAndDoesNotEarnANewNudge()
+    {
+        var afterTheNudge = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"));
+
+        var thenRespawned = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"),
+            (ChannelAuthors.App, Nudge_Wording.RESPAWN_SUBJECT, "spawned a fresh session"));
+
+        Assert.Equal(
+            Nudge_Decider.Identify_NudgeSubject(afterTheNudge, NO_ARCHIVE),
+            Nudge_Decider.Identify_NudgeSubject(thenRespawned, NO_ARCHIVE));
     }
 
     /// <summary>

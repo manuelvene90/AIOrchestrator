@@ -1273,7 +1273,10 @@ internal sealed class BridgeEngineModel(
 
             ChannelAppender.Append_AppEntry(
                 _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
-                "session was orphaned and has been respawned",
+                // The constant, not the text: Nudge_Decider has to recognise this entry as the app's
+                // own wake rather than something to nudge the member about, and two copies of a string
+                // are two copies that can drift.
+                Nudge_Wording.RESPAWN_SUBJECT,
                 "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
                 DateTime.Now);
 

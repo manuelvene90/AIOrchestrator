@@ -150,16 +150,49 @@ public static class Nudge_Decider
     public const string NO_CONVERSATION_YET = "<no conversation entry in this channel>";
 
     /// <summary>
-    /// What a member is being nudged ABOUT, always answerable — the last conversation entry above, or
-    /// <see cref="NO_CONVERSATION_YET"/> when there is none anywhere. One nudge per unanswered thing,
-    /// including when the unanswered thing is an app entry with no conversation behind it.
+    /// What a member is being nudged ABOUT, always answerable — the last conversation entry above; on a
+    /// channel that has none, the last entry the app did not write while WAKING this member; and
+    /// <see cref="NO_CONVERSATION_YET"/> only when there is nothing of either kind.
     ///
     /// This is what the engine compares and records. It never returns null, and that is the point: a
     /// null identity used to skip the gate AND skip the record together, which was the loop.
+    ///
+    /// THE CONSTANT SENTINEL WAS ONE NUDGE PER PROCESS, NOT ONE PER THING (rev-5's R1). Being constant,
+    /// it matched for ever once recorded — so a second `/resume` could not earn the wake the sentinel's
+    /// own docstring promises it, and after the single orphan recovery the member stayed silent for the
+    /// life of the app run. The owner's unstick command was the one thing that could not unstick such a
+    /// member: the same `/resume` path as the delayed-nudge finding, one layer down.
+    ///
+    /// WHY NOT A CLEAR ON `/resume`, which is the obvious fix: that adds a RELEASE site — a second
+    /// place that must fire at the right moment, on a memo that today has none — and a value the engine
+    /// must remember to commit at the right moment is a value it can commit at the wrong one. This
+    /// keeps the single write site and lets the subject stop matching because REALITY MOVED.
+    ///
+    /// WHAT COUNTS AS THE APP'S OWN WAKE is <see cref="Nudge_Wording.Is_WakeSubject"/>, sharing its
+    /// constants with the code that writes them. A `/resume` is deliberately not one: it is the owner
+    /// speaking through the app and is exactly what such a member is supposed to act on.
+    ///
+    /// SKIPPING RATHER THAN TAKING THE NEWEST ENTRY is what keeps the loop closed. Any key derived from
+    /// the newest app entry moves the instant the nudge lands — the nudge IS an app entry — so the next
+    /// round reads a different key and nudges again, rebuilding the exact defect. Measured, not argued:
+    /// <c>AnAppOnlyChannelKeepsOneSubjectAsFurtherAppEntriesArrive</c> is the case that reddens.
     /// </summary>
     public static string Identify_NudgeSubject(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
     {
-        return Identify_LastConversationEntry_OrNull(entries, channelFilePath) ?? NO_CONVERSATION_YET;
+        var conversation = Identify_LastConversationEntry_OrNull(entries, channelFilePath);
+
+        if (conversation != null)
+            return conversation;
+
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            if (Nudge_Wording.Is_WakeSubject(entries[index].Subject))
+                continue;
+
+            return entries[index].RawText;
+        }
+
+        return NO_CONVERSATION_YET;
     }
 
     /// <summary>
