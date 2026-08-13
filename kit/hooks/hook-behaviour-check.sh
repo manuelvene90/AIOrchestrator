@@ -488,6 +488,42 @@ rm -rf build')" reviewer)")"
 check "a quoted << does not open a heredoc" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo "a << b"
 rm -rf build')" reviewer)")"
 
+# ── A HEREDOC BODY STARTS AT THE NEXT LINE, NOT AT THE MARKER ────────────────────────────────────
+#
+# The stripper jumped from the marker straight to the newline, so everything in between was thrown
+# away — and a command that is never seen is never classified. `cat <<EOF; rm -rf build` allowed the
+# `rm` without ever looking at it, which master denied.
+#
+# The same block also stopped reading `$((1<<3))` as a heredoc opener. That set the marker to `3`,
+# waited for a terminator that never arrived, and swallowed the rest of the command line.
+check "a command after a heredoc opener on the same line" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'cat <<EOF; rm -rf build
+text
+EOF')" reviewer)")"
+check "a redirect on the same line as the opener" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'cat <<EOF > Foo.cs
+text
+EOF')" reviewer)")"
+check "two heredocs on one line, then a verb" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'cat <<A <<B; rm -rf build
+one
+A
+two
+B')" reviewer)")"
+# THE PAYLOAD IS MULTI-LINE ON PURPOSE, and I only know that because the mutation reddened nothing.
+# On ONE line the fix above already saves it: the marker is set to `3`, no newline ever arrives, so no
+# body is consumed and the `rm` survives to be classified. It takes a following LINE for the swallow
+# to happen, so the single-line spelling is a case that cannot fail — kept below, labelled, because it
+# is the shape a person actually types.
+check "an arithmetic shift is not a heredoc" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo $((1<<3))
+rm -rf build')" reviewer)")"
+check "control: the same on one line" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo $((1<<3)); rm -rf build')" reviewer)")"
+
+# AND THE DIRECTION THE WHOLE BRANCH EXISTS FOR: the body is still prose. A reviewer's report quoting
+# a destructive command inside its own append must be allowed, or the guard silences the role it
+# governs. If the fix above ever starts classifying body lines, this is what catches it.
+check "a report body naming a verb is still allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> $SUPERVISION/$MEMBER/channel.md <<'EOF'
+rm -rf build
+git commit -m x
+EOF")" reviewer)")"
+
 # ── THE OVER-BLOCKING HALF, found by rev-4 doing real read-only work ─────────────────────────────
 #
 # Both of these are DENIED BY MASTER TOO — pre-existing false positives, not regressions. A guard that

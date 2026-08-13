@@ -202,9 +202,47 @@ def strip_comments_and_heredoc_bodies(s):
     out = []
     i, n = 0, len(s)
     at_word_start = True
+    pending_bodies = []
 
     while i < n:
         c = s[i]
+
+        # A HEREDOC BODY BEGINS AT THE NEXT LINE, so everything between the marker and that line is
+        # ordinary command text. Jumping straight from the marker to the newline threw it away:
+        # `cat <<EOF; rm -rf build` lost the `rm` entirely, and a command that is never seen is never
+        # classified. The body is consumed HERE, once the line is genuinely over, and one body per
+        # marker so `cat <<A <<B` still works.
+        if c == "\n" and pending_bodies:
+            out.append("\n")
+            i += 1
+            for marker in pending_bodies:
+                while i < n:
+                    end = s.find("\n", i)
+                    line = s[i:] if end == -1 else s[i:end]
+                    i = n if end == -1 else end + 1
+                    if line.strip() == marker:
+                        break
+            pending_bodies = []
+            at_word_start = True
+            continue
+
+        # ARITHMETIC IS NOT A REDIRECT. `$((1<<3))` carries a left SHIFT, and reading it as a heredoc
+        # opener set the marker to `3`, waited for a terminator that never came, and swallowed every
+        # command after it — `echo $((1<<3)); rm -rf build` allowed, with the `rm` never looked at.
+        # The span is copied through untouched rather than interpreted; nothing inside it is a
+        # command, so nothing inside it needs classifying.
+        if s[i:i + 3] == "$((":
+            depth, j = 0, i
+            while j < n:
+                if s[j] == "(":
+                    depth += 1
+                elif s[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+            out.append(s[i:j]); i = j; at_word_start = False; continue
 
         # A LINE CONTINUATION IS NOT AN ESCAPED CHARACTER, IT IS NOTHING. A shell deletes `\` and the
         # newline together and joins what is either side; escaping the newline instead leaves it in
@@ -263,18 +301,13 @@ def strip_comments_and_heredoc_bodies(s):
             if not marker:
                 out.append("<<"); i += 2; continue
 
-            newline = s.find("\n", k)
-            if newline == -1:
-                break
-
-            body = s[newline + 1:]
-            consumed = 0
-            for line in body.split("\n"):
-                consumed += len(line) + 1
-                if line.strip() == marker:
-                    break
-            out.append("\n")
-            i = newline + 1 + consumed
+            # The operator and its marker are kept so the scan stays in step, and the REST OF THE
+            # LINE is scanned normally — a redirect, a separator and another command may all follow
+            # a heredoc opener on the same line. The body is dropped when the newline arrives.
+            out.append(s[i:k])
+            pending_bodies.append(marker)
+            i = k
+            at_word_start = False
             continue
 
         out.append(c)
