@@ -141,7 +141,12 @@ public class PeriodicStatusSlotPlannerTests
 
     /// <summary>
     /// THE APP WAS BUSY ACROSS :30 — no tick observed it. The next push is the NEXT boundary, never
-    /// the moment the app came back, or the drift removed above comes straight back.
+    /// the moment the app came back.
+    ///
+    /// NOT because a late push would drift: the recorded slot is the BOUNDARY, so pushing at 12:41
+    /// still records 12:30 and 13:00 still fires on time either way. It is because a digest that
+    /// arrives at 12:41 is off-schedule and already stale, and the owner's complaint was as much
+    /// about WHEN these land as about their landing together.
     /// </summary>
     [Fact]
     public void ABoundaryMissedDuringAnOutageDoesNotFireOnReturn()

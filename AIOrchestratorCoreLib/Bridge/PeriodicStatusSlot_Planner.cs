@@ -57,9 +57,21 @@ public static class PeriodicStatusSlot_Planner
     /// generous enough that a slow tick still counts and small enough that a status the owner reads
     /// as "13:00" was actually sent within a minute of it.
     ///
-    /// This is what makes a MISSED boundary defer instead of firing late: an app busy or restarting
-    /// across :30 comes back at :41, is past the grace, and waits for :00 rather than pushing on
-    /// return — which would put the drift straight back.
+    /// IT IS NOT PROTECTING THE CADENCE, and an earlier version of this comment claimed it was. What
+    /// gets recorded is `SlotStart` — the BOUNDARY — never the moment of the send, so a late push
+    /// cannot move the phase: delete this window, let an outage from 12:29 to 12:41 push on return,
+    /// and 12:30 is still what gets recorded and 13:00 still fires exactly on time. There is no drift
+    /// to put back. The next person to tune this constant would have been tuning it against a reason
+    /// that was not true.
+    ///
+    /// WHAT IT ACTUALLY BUYS is the arrival time, which is the half of the complaint the slot does not
+    /// cover. The owner asked for messages AT 13:00 and 13:30; a digest delivered at 12:41 is
+    /// off-schedule and eleven minutes stale on arrival. So a status either lands on its boundary or
+    /// is skipped, and skipping is the cheap side: the next boundary is at most 30 minutes away and
+    /// this is a rolling summary, not an event that can be missed.
+    ///
+    /// The same constant decides adoption for the same reason — a boundary less than a grace away is
+    /// treated as already ours. Both uses mean "close enough to a boundary to count as being at it".
     /// </summary>
     public const int BOUNDARY_GRACE_SECONDS = 60;
 
