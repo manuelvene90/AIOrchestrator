@@ -402,6 +402,66 @@ rm -rf obj/
 That is what I am reporting on.
 EOF")" reviewer)")"
 
+# ── INDIRECT EXECUTION ───────────────────────────────────────────────────────────────────────────
+#
+# All four of these were DENIED by the crude substring matcher BY ACCIDENT — the token appeared
+# literally somewhere in the string — and a first-word reduction classifies `eval`, `bash`, `xargs`
+# and `find` instead, confidently and wrongly. Demonstrated against master, not argued.
+#
+# These are the cases that say the reduction must FOLLOW the command through indirection. Fixing them
+# by re-adding a substring scan would satisfy every one of them and re-break the whole section above,
+# so they are only meaningful next to the ALLOW cases.
+check "eval carrying rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'eval rm -rf build')" reviewer)")"
+check "eval carrying a quoted rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'eval "rm -rf build"')" reviewer)")"
+check "bash -c carrying rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'bash -c "rm -rf build"')" reviewer)")"
+check "sh -c carrying rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sh -c 'rm -rf build'")" reviewer)")"
+check "xargs carrying rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo build | xargs rm -rf')" reviewer)")"
+check "xargs with flags is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo build | xargs -n1 -I{} rm -rf {}')" reviewer)")"
+check "find -exec carrying rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'find . -name "*.tmp" -exec rm {} ;')" reviewer)")"
+check "sudo rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'sudo rm -rf build')" reviewer)")"
+
+# ── `<<` IS ONLY A HEREDOC WHEN IT IS AN OPERATOR ────────────────────────────────────────────────
+#
+# The stripper matched `<<` ANYWHERE on a line, including inside quotes: it set the marker to `b`,
+# then dropped every following line waiting for a terminator that never came. Those lines were not
+# classified as prose — they were not classified at all. The first case is the control that proves the
+# second one is about QUOTING and not about newlines.
+check "newline then rm is denied (control)" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo hi
+rm -rf build')" reviewer)")"
+check "a quoted << does not open a heredoc" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo "a << b"
+rm -rf build')" reviewer)")"
+
+# ── THE OVER-BLOCKING HALF, found by rev-4 doing real read-only work ─────────────────────────────
+#
+# Both of these are DENIED BY MASTER TOO — pre-existing false positives, not regressions. A guard that
+# blocks a reviewer's own tools gets worked around, and then it guards nothing.
+check "git worktree list is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git worktree list')" reviewer)")"
+check "git worktree add is still denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git worktree add ../wt -b x')" reviewer)")"
+check "git branch --all is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git branch --all')" reviewer)")"
+check "git branch -d is still denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git branch -d topic')" reviewer)")"
+check "a quoted > is not a redirect" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "a -> b" src/')" reviewer)")"
+check "a C# generic signature is not a redirect" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "Dictionary<string, List<int>>" src/')" reviewer)")"
+check "fd duplication is not a file write" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git log --oneline 2>&1')" reviewer)")"
+
+# A reviewer that appends with printf instead of a heredoc. The previous version refused this the
+# moment its prose contained a parenthesis, so the earlier fix worked only for the one shape its
+# author happened to use.
+check "a printf append with parens is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'I confirm (yes) the finding' >> $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
+
+# ── A HOOK THAT CANNOT EVALUATE ITS PREDICATE SAYS SO, AND ALLOWS ────────────────────────────────
+#
+# The reducer returning nothing used to be a SILENT allow, which is decision 21's exact failure:
+# allowing was never the defect, allowing with nothing anywhere recording it was. ALLOW is correct —
+# this guard advises an honest session and every session can edit it anyway — but it must say so.
+rm -f "$MARKER_FILE"
+check "an unparseable command is ALLOWED" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "grep -rn 'unbalanced src/")" reviewer)")"
+check "...and it leaves a MARKER, not silence" PRESENT "$(flag_state "$MARKER_FILE")"
+check "the marker names the reviewer hook" FOUND "$(grep -q 'reviewer-readonly-check' "$MARKER_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
+
+rm -f "$MARKER_FILE"
+check "a decidable reviewer call marks NOTHING" ABSENT "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git log --oneline')" reviewer)" >/dev/null; flag_state "$MARKER_FILE")"
+rm -f "$MARKER_FILE"
+
 check "a non-reviewer role is untouched" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build')" implementer)")"
 
 # THE GUARDS ON THE GUARDS. If any of these reports ALLOW, every ALLOW case above is meaningless —

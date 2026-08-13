@@ -57,147 +57,371 @@ deny() {
 
 # WHAT IS A COMMAND, AND WHAT IS PROSE.
 #
-# These tests used to be UNANCHORED SUBSTRING matches, and the cost landed on the one write this role
-# exists to make. `rm ` is inside "confi[rm ]the finding" and `dd ` is inside "a[dd ]tests", so an
-# ordinary English report body was read as a destructive command and refused — while anything the
-# list did not literally spell was still allowed. The matcher was simultaneously too strict and too
-# weak, and the strictness fell entirely on the reviewer's findings.
+# Three rewrites of this matcher have failed on the SAME missing capability: it could not tell shell
+# syntax from text inside quotes.
 #
-# The command is therefore reduced to the words that actually occupy a COMMAND POSITION: the first
-# word of the string, and the first word after each shell separator (`;` `|` `&` `&&` `||`, a
-# newline, and the inside of `$( )`, `( )` or backticks). Prose in a quoted argument never occupies
-# one. Heredoc BODIES are dropped first, because a heredoc body is data being written, never a
-# command — without that, a reviewer reporting on `git commit` is refused for naming its subject.
+#   - unanchored substrings found `rm ` inside "confi[rm ]the finding" and refused a reviewer's own
+#     report — the one write this role exists to make;
+#   - anchoring to command position fixed that and lost `git rm`/`git mv`, which the substring rule
+#     had been catching robustly;
+#   - the heredoc stripper matched `<<` INSIDE A QUOTED STRING, set the marker to a word that never
+#     arrived as a terminator, and silently dropped every command after it;
+#   - and the redirect rule still reads the `>` in `grep -rn "a -> b" src/` as a redirection, so
+#     ordinary read-only work is refused.
 #
-# The DENIED SET IS UNCHANGED — same tokens as before, tested properly. Anchoring is the fix;
-# extending the list is not, because a denial list that grows by exception never closes the class.
+# All four are one defect. So the reduction is done ONCE, by a quote-aware scanner, in python3 —
+# which this hook already requires absolutely (the payload above is extracted with it, and the header
+# says python3 or nothing). sed and awk cannot track quote state, which is precisely how the last two
+# versions got it wrong.
 #
-# The residual bias is deliberate and is the safe one: anything this reduction cannot classify stays
-# a command and is denied. A false denial is visible and the reviewer can report it; a false allow
-# silently lets a read-only session rewrite the tree.
+# WHAT DID NOT CHANGE: the denied set, the messages, the own-channel exemption and the advisory
+# posture. This is the same policy with a parser that can actually see the command.
+#
+# A HOOK THAT CANNOT EVALUATE ITS PREDICATE SAYS SO, AND ALLOWS (decision 21). An unparseable command
+# line — an unbalanced quote, anything the scanner cannot reduce — is logged as undecidable and
+# ALLOWED. It is deliberately NOT denied: this guard advises an honest session, every session can
+# reach and edit it anyway, and a guard that invents refusals it cannot justify is the one that gets
+# worked around. The earlier claim that "anything the reduction cannot classify stays a command and
+# is denied" was both untrue of the code and the wrong rule to want.
+VERDICT=$(AIORCH_COMMAND="$COMMAND" python3 - <<'PYEOF'
+import os, re, sys
 
-# `<<EOF`, `<<-EOF`, `<<'EOF'` and `<<"EOF"` open a body; a line equal to the marker closes it.
-strip_heredoc_bodies() {
-  awk '
-    {
-      if (marker != "") {
-        line = $0
-        sub(/^[ \t]+/, "", line)
-        sub(/[ \t]+$/, "", line)
-        if (line == marker)
-          marker = ""
-        next
-      }
+ORCH = os.environ.get("AIORCH_ID", "")
+MEMBER = os.environ.get("AIORCH_MEMBER", "")
 
-      if (match($0, /<<-?[ \t]*("[^"]+"|'\''[^'\'']+'\''|[A-Za-z_][A-Za-z0-9_]*)/)) {
-        marker = substr($0, RSTART, RLENGTH)
-        sub(/^<<-?[ \t]*/, "", marker)
-        gsub(/["'\'']/, "", marker)
-      }
+FILE_VERBS = {"rm", "rmdir", "mv", "truncate", "dd",
+              "remove-item", "set-content", "add-content", "out-file", "new-item"}
 
-      print
-    }
-  '
-}
+# Same eighteen as before plus the two a previous rewrite dropped.
+GIT_DENIED = {"commit", "add", "rm", "mv", "push", "merge", "rebase", "reset", "checkout", "switch",
+              "stash", "cherry-pick", "revert", "tag", "clean", "restore", "apply", "am"}
 
-COMMAND_POSITIONS=$(
-  printf '%s\n' "$COMMAND" \
-    | strip_heredoc_bodies \
-    | sed -E 's/&&|\|\|/\n/g; s/[;|&]/\n/g; s/\$\(/\n/g; s/[()`]/\n/g'
+# `git worktree` and `git branch` are NOT wholly state-changing, and denying them outright left a
+# reviewer with no way to list either — a guard that blocks the reviewer own tools gets worked around.
+GIT_WORKTREE_READONLY = {"list"}
+GIT_BRANCH_READONLY_FLAGS = {"-a", "--all", "-l", "--list", "-r", "--remotes", "-v", "-vv",
+                             "--verbose", "--show-current", "--contains", "--no-contains",
+                             "--merged", "--no-merged", "--sort", "--format", "--color", "--no-color"}
+
+PKG = {"npm": {"install", "ci"}, "yarn": {"add"}, "pip": {"install"}, "dotnet": {"add", "new"}}
+
+PREFIXES = {"sudo", "command", "env", "nohup", "time", "builtin", "exec"}
+SHELLS = {"bash", "sh", "zsh", "dash"}
+XARGS_FLAGS_WITH_VALUE = {"-I", "-n", "-P", "-L", "-d", "-E", "-a", "-s",
+                          "--max-args", "--max-procs", "--replace", "--delimiter"}
+
+CMD_SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "`", "$(", "\n"}
+REDIRECTS = {">", ">>", ">&", "&>", "<", "<<", "<<<"}
+
+
+class Undecidable(Exception):
+    pass
+
+
+def strip_heredoc_bodies(s):
+    """Removes heredoc BODIES, which are data being written and never commands.
+
+    `<<` only opens one when it is a real operator: the version that matched it anywhere on the line
+    treated the `<<` inside `echo "a << b"` as a heredoc, waited for a terminator named `b`, and
+    swallowed every command that followed. An UNTERMINATED heredoc really does make the rest a body
+    — that is what a shell does with it — so dropping it there is the correct reading, not a guess.
+    """
+    out = []
+    i, n = 0, len(s)
+
+    while i < n:
+        c = s[i]
+
+        if c == "\\" and i + 1 < n:
+            out.append(s[i:i + 2]); i += 2; continue
+
+        if c == "'":
+            j = s.find("'", i + 1)
+            if j == -1:
+                raise Undecidable("an unbalanced single quote")
+            out.append(s[i:j + 1]); i = j + 1; continue
+
+        if c == '"':
+            j = i + 1
+            while j < n and s[j] != '"':
+                j += 2 if s[j] == "\\" else 1
+            if j >= n:
+                raise Undecidable("an unbalanced double quote")
+            out.append(s[i:j + 1]); i = j + 1; continue
+
+        # `<<<` is a herestring, not a heredoc: it takes a word, not a body.
+        if s[i:i + 3] == "<<<":
+            out.append("<<<"); i += 3; continue
+
+        if s[i:i + 2] == "<<":
+            k = i + 2
+            if k < n and s[k] == "-":
+                k += 1
+            while k < n and s[k] in " \t":
+                k += 1
+
+            marker = ""
+            if k < n and s[k] in "\"'":
+                quote = s[k]; k += 1
+                while k < n and s[k] != quote:
+                    marker += s[k]; k += 1
+                k += 1
+            else:
+                while k < n and (s[k].isalnum() or s[k] == "_"):
+                    marker += s[k]; k += 1
+
+            if not marker:
+                out.append("<<"); i += 2; continue
+
+            newline = s.find("\n", k)
+            if newline == -1:
+                break
+
+            body = s[newline + 1:]
+            consumed = 0
+            for line in body.split("\n"):
+                consumed += len(line) + 1
+                if line.strip() == marker:
+                    break
+            out.append("\n")
+            i = newline + 1 + consumed
+            continue
+
+        out.append(c); i += 1
+
+    return "".join(out)
+
+
+def tokenize(s):
+    """Words (quotes removed) and operators, with quoted text never becoming an operator."""
+    tokens = []
+    buf = []
+    has_word = False
+    i, n = 0, len(s)
+
+    def flush():
+        nonlocal buf, has_word
+        if has_word:
+            tokens.append(("W", "".join(buf)))
+        buf = []
+        has_word = False
+
+    while i < n:
+        c = s[i]
+
+        if c == "\\" and i + 1 < n:
+            buf.append(s[i + 1]); has_word = True; i += 2; continue
+
+        if c == "'":
+            j = s.find("'", i + 1)
+            if j == -1:
+                raise Undecidable("an unbalanced single quote")
+            buf.append(s[i + 1:j]); has_word = True; i = j + 1; continue
+
+        if c == '"':
+            j = i + 1
+            while j < n and s[j] != '"':
+                if s[j] == "\\" and j + 1 < n:
+                    buf.append(s[j + 1]); j += 2; continue
+                buf.append(s[j]); j += 1
+            if j >= n:
+                raise Undecidable("an unbalanced double quote")
+            has_word = True; i = j + 1; continue
+
+        if c in " \t":
+            flush(); i += 1; continue
+
+        if c == "\n":
+            flush(); tokens.append(("O", "\n")); i += 1; continue
+
+        three = s[i:i + 3]
+        if three == "<<<":
+            flush(); tokens.append(("O", "<<<")); i += 3; continue
+
+        two = s[i:i + 2]
+        if two in ("&&", "||", ">>", "<<", ">&", "&>", "$("):
+            flush(); tokens.append(("O", two)); i += 2; continue
+
+        if c in ";|&()`<>":
+            flush(); tokens.append(("O", c)); i += 1; continue
+
+        buf.append(c); has_word = True; i += 1
+
+    flush()
+    return tokens
+
+
+def split_commands(tokens):
+    """Simple commands (word lists) plus every redirect and its target."""
+    commands, redirects, current = [], [], []
+    i = 0
+
+    while i < len(tokens):
+        kind, text = tokens[i]
+
+        if kind == "O":
+            if text in REDIRECTS:
+                target = None
+                if i + 1 < len(tokens) and tokens[i + 1][0] == "W":
+                    target = tokens[i + 1][1]
+                    i += 1
+                redirects.append((text, target))
+            elif text in CMD_SEPARATORS:
+                if current:
+                    commands.append(current)
+                    current = []
+            i += 1
+            continue
+
+        current.append(text)
+        i += 1
+
+    if current:
+        commands.append(current)
+
+    return commands, redirects
+
+
+def classify_words(words, depth):
+    if depth > 4:
+        raise Undecidable("indirection nested deeper than this scanner follows")
+
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word) or word.lower() in PREFIXES:
+            index += 1
+            continue
+        break
+
+    if index >= len(words):
+        return None
+
+    command = words[index].lower()
+    args = words[index + 1:]
+    first = args[0] if args else ""
+
+    if command in FILE_VERBS:
+        return "files"
+
+    if command in ("sed", "perl") and any(a == "-i" or a.startswith("-i") for a in args):
+        return "editor"
+
+    if command == "git":
+        if first == "worktree":
+            return None if len(args) > 1 and args[1] in GIT_WORKTREE_READONLY else "git"
+        if first == "branch":
+            flags = [a for a in args[1:] if a.startswith("-")]
+            return None if all(f.split("=")[0] in GIT_BRANCH_READONLY_FLAGS for f in flags) else "git"
+        return "git" if first in GIT_DENIED else None
+
+    if command in PKG:
+        return "pkg" if first in PKG[command] else None
+
+    if command == "nuget":
+        return "pkg"
+
+    # INDIRECTION: what these carry IS a command, so it is analysed as one. `xargs` and `find -exec`
+    # are ordinary honest idioms and are the reason this exists; `eval` and `bash -c` come free with
+    # the same machinery. The split-token evasion is deliberately NOT chased — every version of this
+    # matcher loses to it, and chasing it leads straight back to substring scanning.
+    if command == "eval":
+        return analyse(" ".join(args), depth + 1) if args else None
+
+    if command == "xargs":
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            takes_value = args[i].split("=")[0] in XARGS_FLAGS_WITH_VALUE and "=" not in args[i]
+            i += 2 if takes_value and len(args[i]) <= 2 else 1
+        return analyse(" ".join(args[i:]), depth + 1) if i < len(args) else None
+
+    if command in SHELLS and "-c" in args:
+        position = args.index("-c")
+        return analyse(args[position + 1], depth + 1) if position + 1 < len(args) else None
+
+    if command == "find":
+        for position, arg in enumerate(args):
+            if arg not in ("-exec", "-execdir"):
+                continue
+            carried = []
+            for following in args[position + 1:]:
+                if following in (";", "+"):
+                    break
+                carried.append(following)
+            found = analyse(" ".join(carried), depth + 1)
+            if found:
+                return found
+        return None
+
+    return None
+
+
+def redirect_reason(operator, target):
+    # `>&` and `2>&1` duplicate a descriptor; nothing is written to a file.
+    if operator in ("<", "<<", "<<<", ">&"):
+        return None
+    if target is None:
+        return None
+
+    normalised = target.replace("\\", "/")
+
+    if operator == ">>" and ("supervision/%s/%s/" % (ORCH, MEMBER)) in normalised:
+        return None
+
+    # The watcher baseline lives beside the channel. Scoped to the TARGET, not to the whole command:
+    # matching the word anywhere exempted every redirect in any command that merely mentioned it.
+    if "watch-base" in normalised:
+        return None
+
+    return "redirect"
+
+
+def analyse(source, depth=0):
+    commands, redirects = split_commands(tokenize(strip_heredoc_bodies(source)))
+
+    for words in commands:
+        reason = classify_words(words, depth)
+        if reason:
+            return reason
+
+    for operator, target in redirects:
+        reason = redirect_reason(operator, target)
+        if reason:
+            return reason
+
+    return None
+
+
+try:
+    verdict = analyse(os.environ.get("AIORCH_COMMAND", ""))
+except Undecidable as undecidable:
+    print("UNDECIDABLE %s" % undecidable)
+except Exception as failure:
+    print("UNDECIDABLE the command could not be reduced (%s)" % type(failure).__name__)
+else:
+    print("DENY %s" % verdict if verdict else "ALLOW")
+PYEOF
 )
 
-while IFS= read -r SEGMENT; do
-  # Drop what stands in FRONT of the command without being it: leading blanks, `VAR=value` prefixes,
-  # and wrappers like `sudo`. Without this, `sudo rm -rf x` reads as the command `sudo`.
-  while : ; do
-    SEGMENT=${SEGMENT#"${SEGMENT%%[![:space:]]*}"}
-    WORD=${SEGMENT%%[[:space:]]*}
-
-    case "$WORD" in
-      *=*|sudo|command|env|nohup|time|builtin|exec)
-        REST=${SEGMENT#"$WORD"}
-        if [ "$REST" = "$SEGMENT" ]; then
-          break
-        fi
-        SEGMENT=$REST ;;
-      *)
-        break ;;
-    esac
-  done
-
-  CMD=${SEGMENT%%[[:space:]]*}
-  REST=${SEGMENT#"$CMD"}
-  REST=${REST#"${REST%%[![:space:]]*}"}
-  ARG=${REST%%[[:space:]]*}
-
-  # PowerShell cmdlets are case-insensitive to the shell, so the test has to be too.
-  CMD_LOWER=$(printf '%s' "$CMD" | tr '[:upper:]' '[:lower:]')
-
-  case "$CMD_LOWER" in
-    rm|rmdir|mv|truncate|dd|remove-item|set-content|add-content|out-file|new-item)
-      deny "that command deletes or rewrites files." ;;
-    sed|perl)
-      case " $SEGMENT " in
-        *" -i"*) deny "that command edits files in place." ;;
-      esac ;;
-    git)
-      case "$ARG" in
-        # `rm` and `mv` are here because the first version of this reduction DROPPED them while
-        # claiming the denied set was unchanged. Master caught them robustly — a subcommand cannot be
-        # hidden from a substring matcher by quoting the way a wrapper form can — and both stage a
-        # deletion or a rename AND change the working tree, so the loss was real.
-        commit|add|rm|mv|push|merge|rebase|reset|checkout|switch|stash|cherry-pick|revert|worktree|tag|clean|restore|apply|am)
-          deny "that git command changes repository state." ;;
-        branch)
-          # `git branch` alone lists; anything with a flag can create, move or delete one.
-          case " $SEGMENT " in
-            *" -"*) deny "that git command changes repository state." ;;
-          esac ;;
-      esac ;;
-    npm)
-      case "$ARG" in
-        install|ci) deny "that command installs or scaffolds into the working tree." ;;
-      esac ;;
-    yarn)
-      case "$ARG" in
-        add) deny "that command installs or scaffolds into the working tree." ;;
-      esac ;;
-    # `pip3` is deliberately NOT here. Master denies `pip install` only, so adding it would be a
-    # widening nobody reviewed — the same reason `chmod`, `tee` and `shred` are absent. That master
-    # misses `pip3 install` is a real gap, reported separately rather than fixed in passing.
-    pip)
-      case "$ARG" in
-        install) deny "that command installs or scaffolds into the working tree." ;;
-      esac ;;
-    dotnet)
-      case "$ARG" in
-        add|new) deny "that command installs or scaffolds into the working tree." ;;
-      esac ;;
-    nuget)
-      deny "that command installs or scaffolds into the working tree." ;;
-  esac
-done <<EOF
-$COMMAND_POSITIONS
-EOF
-
-# Output redirection: allowed ONLY when it appends (>>) into this reviewer's own supervision folder
-# — that is how it files its report. Everything else redirecting into a file is a write.
-if printf '%s' "$COMMAND" | grep -Eq '(^|[^>&0-9])>{1,2}[^&]'; then
-  IS_OWN_CHANNEL_APPEND=0
-
-  if printf '%s' "$COMMAND" | grep -q '>>' \
-     && printf '%s' "$COMMAND" | grep -q "supervision/${AIORCH_ID:-__none__}/${AIORCH_MEMBER:-__none__}/"; then
-    IS_OWN_CHANNEL_APPEND=1
-  fi
-
-  # The watcher writes its own baseline file next to the channel — same folder, same allowance.
-  if printf '%s' "$COMMAND" | grep -q 'watch-base'; then
-    IS_OWN_CHANNEL_APPEND=1
-  fi
-
-  if [ "$IS_OWN_CHANNEL_APPEND" -eq 0 ]; then
-    deny "that command redirects output into a file. The only write you may make is appending (>>) to your own channel under your member folder."
-  fi
+if [ -z "$VERDICT" ]; then
+  aiorch_log_undecidable "whether this command mutates anything" "the command reducer produced no verdict"
+  exit 0
 fi
+
+case "$VERDICT" in
+  "DENY files")
+    deny "that command deletes or rewrites files." ;;
+  "DENY editor")
+    deny "that command edits files in place." ;;
+  "DENY git")
+    deny "that git command changes repository state." ;;
+  "DENY pkg")
+    deny "that command installs or scaffolds into the working tree." ;;
+  "DENY redirect")
+    deny "that command redirects output into a file. The only write you may make is appending (>>) to your own channel under your member folder." ;;
+  UNDECIDABLE*)
+    aiorch_log_undecidable "whether this command mutates anything" "${VERDICT#UNDECIDABLE }"
+    exit 0 ;;
+esac
 
 exit 0
