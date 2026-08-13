@@ -654,12 +654,14 @@ between to paper over a stale ledger.
 Your messages to the owner are for things the app cannot know: verdicts, decisions, questions,
 milestones, and anything you judge worth their attention.
 
-### OWNER REQUESTS — the second table in the same file (MANDATORY)
+## OWNER REQUESTS — what the OWNER asked for (MANDATORY, and not the ledger)
 
 The ledger above is what YOU decided to build. This table is what the OWNER ASKED FOR, in their
 words, whether or not it has become work yet. They are not the same list, and the gap between them
 is where requests die: the owner sends three things in ten minutes, you brief the third, and the
-first is now four screens up a channel nobody re-reads. Keep it in PLAN.md, below the ledger:
+first is now four screens up a channel nobody re-reads. It lives in the same PLAN.md, below the
+ledger, and it is a section of its own because a request that becomes a ledger line is one that
+survived — the ones this exists to catch are the ones that never got that far:
 
 ```
 ## OWNER REQUESTS — written the moment they arrive, in arrival order, never deleted
