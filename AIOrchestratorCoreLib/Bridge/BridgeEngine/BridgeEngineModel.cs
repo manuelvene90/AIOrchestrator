@@ -837,7 +837,13 @@ internal sealed class BridgeEngineModel(
 
         foreach (var (key, lastAttemptUtc) in _heldCrashLoopAlerts.ToList())
         {
-            if (Is_TopicSilenced(key.OrchId))
+            // The EFFECTIVE MODE, not silence alone. Gating on Is_TopicSilenced pushed this straight
+            // to the phone for a topic explicitly set to DEFERRED — bypassing the frozen cursor that
+            // deferral promises — while app-wide DND held it, because the tick returns above this
+            // line. The two DNDs behaved oppositely for the same alert, and neither behaviour was
+            // written down anywhere (rev-6 F9, 2026-08-13). Held for both now: it is the same
+            // question, and the hold above is what makes holding safe rather than lossy.
+            if (Resolve_EffectiveMode(key.OrchId) != TelegramDeliveryModes.Normal)
                 continue;
 
             // BACKOFF INSTEAD OF DROPPING. This removed the alert BEFORE the attempt, with a real
