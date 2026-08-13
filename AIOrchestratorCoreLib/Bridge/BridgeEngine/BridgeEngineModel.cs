@@ -1865,29 +1865,14 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     TelegramDeliveryModes Resolve_EffectiveMode(string orchId)
     {
-        if (orchId != ChannelDiscovery.GENERAL_ORCH_ID)
-        {
-            // PRESENCE FIRST: the owner being in this orchestration's terminal outranks every
-            // delivery setting, because it is not one — it is a statement about where they are, and
-            // pushing to a phone they are not holding is the thing it exists to stop.
-            var presenceOverride = OwnerPresence_Policy.Resolve_ModeOverride_OrNull(Resolve_Presence(orchId));
-
-            if (presenceOverride != null)
-                return presenceOverride.Value;
-
-            var topicMode = _store.Get_Session_OrNull(orchId)?.TelegramMode ?? TelegramDeliveryModes.Normal;
-
-            if (topicMode != TelegramDeliveryModes.Normal)
-                return topicMode;
-        }
-
-        if (_telegramMuted)
-            return TelegramDeliveryModes.Deferred;
-
-        if (_silenceAllTopics)
-            return TelegramDeliveryModes.Silenced;
-
-        return TelegramDeliveryModes.Normal;
+        // GATHERS, decides nothing — the ORDER of these opinions is the decision, and it is not one
+        // a reader or a test could see while it lived here (rev-4, 2026-08-13).
+        return EffectiveMode_Resolver.Resolve(
+            Resolve_Presence(orchId),
+            isGeneral: orchId == ChannelDiscovery.GENERAL_ORCH_ID,
+            topicMode: _store.Get_Session_OrNull(orchId)?.TelegramMode ?? TelegramDeliveryModes.Normal,
+            appWideDeferred: _telegramMuted,
+            appWideSilenced: _silenceAllTopics);
     }
 
     /// <summary>Silence is TOTAL for a topic: its mirrored entries AND its alerts.</summary>

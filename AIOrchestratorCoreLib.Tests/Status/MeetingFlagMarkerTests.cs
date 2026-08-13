@@ -66,8 +66,14 @@ public class MeetingFlagMarkerTests : IDisposable
         Assert.False(MeetingFlag_Marker.Sync(_paths, "arb-fix", OwnerPresenceModes.Remote));
     }
 
+    /// <summary>
+    /// This pins the LOCATION General's flag must land at — nothing more. It was named for a special
+    /// case in <c>Build_FilePath</c> and passed with that branch deleted, because
+    /// <c>GeneralFolder</c> and <c>Get_OrchestrationFolder("general")</c> build the same string; the
+    /// branch is gone and the location contract is what is left worth asserting (rev-4, 2026-08-13).
+    /// </summary>
     [Fact]
-    public void General_GetsItsFlagInItsOwnFolder_BecauseItHasNoSessionToCarryPresence()
+    public void General_GetsItsFlagInItsOwnFolder_BecauseTheWatcherLooksForItThere()
     {
         Directory.CreateDirectory(_paths.GeneralFolder);
 

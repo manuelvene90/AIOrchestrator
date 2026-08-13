@@ -1,4 +1,3 @@
-using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram;
 
@@ -31,13 +30,16 @@ public static class MeetingFlag_Marker
 {
     public const string FILE_NAME = ".meeting";
 
+    /// <summary>
+    /// General needs no special case here and had one: <c>GeneralFolder</c> is
+    /// <c>&lt;root&gt;/general</c> and <c>Get_OrchestrationFolder("general")</c> builds the same
+    /// string, so the branch was a no-op — and the test named for it passed with the branch deleted,
+    /// which means it pinned nothing (rev-4, 2026-08-13). Removed rather than commented around:
+    /// dead code that looks like a decision is how the next reader learns a rule that is not real.
+    /// </summary>
     public static string Build_FilePath(ISupervisionPaths paths, string orchId)
     {
-        var folder = orchId == ChannelDiscovery.GENERAL_ORCH_ID
-            ? paths.GeneralFolder
-            : paths.Get_OrchestrationFolder(orchId);
-
-        return Path.Combine(folder, FILE_NAME);
+        return Path.Combine(paths.Get_OrchestrationFolder(orchId), FILE_NAME);
     }
 
     /// <summary>True when this orchestration is in a meeting — the same question the watcher asks.</summary>
