@@ -2,6 +2,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions;
+using AIOrchestratorCoreLib.Sessions.OrchestrationMember;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using Xunit;
@@ -151,5 +152,50 @@ public class PromotionLifecycleTests : IDisposable
     public void TheReadinessRule(bool stamped, bool hasLiveSolo, PromotionReadiness expected)
     {
         Assert.Equal(expected, OrchestrationShape.Decide_PromotionReadiness(stamped ? DateTime.UtcNow : null, hasLiveSolo));
+    }
+
+    /// <summary>
+    /// WHICH OF THE FOUR STATES IS STILL WORTH ASKING THE OWNER ABOUT. The launcher refuses two of
+    /// them, and the bridge now uses the same rule to decide whether to put the question on the
+    /// owner's phone at all: the moot checks in front of that prompt covered an implementer close
+    /// only, so a promotion whose solo had been closed meanwhile was still offered — and the only tap
+    /// available produced "promotion FAILED after the owner confirmed it".
+    ///
+    /// INCOMPLETE is promotable on purpose. It is a promotion that stopped halfway, and finishing it
+    /// is the recovery its own failure message invites; calling it unpromotable would close that off.
+    /// </summary>
+    [Theory]
+    [InlineData(PromotionReadiness.Ready, true)]
+    [InlineData(PromotionReadiness.Incomplete, true)]
+    [InlineData(PromotionReadiness.NothingToPromote, false)]
+    [InlineData(PromotionReadiness.AlreadyACrew, false)]
+    public void WhatIsStillWorthAsking(PromotionReadiness readiness, bool expected)
+    {
+        Assert.Equal(expected, OrchestrationShape.Can_StillPromote(readiness));
+    }
+
+    /// <summary>
+    /// ONE SPELLING OF "A LIVE SOLO", now that two callers need it — the launcher deciding whether to
+    /// promote and the bridge deciding whether to ask. A second spelling is how those two come to
+    /// disagree about whether there is one.
+    ///
+    /// A CLOSED solo does not count, which is the whole point: that is the state a completed
+    /// promotion leaves behind, and it is what makes a second tap moot.
+    /// </summary>
+    [Fact]
+    public void ALiveSoloIsOneThatIsNotClosed()
+    {
+        Assert.True(OrchestrationShape.Has_LiveSolo([Member("solo-1", closed: false)]));
+        Assert.False(OrchestrationShape.Has_LiveSolo([Member("solo-1", closed: true)]));
+        Assert.False(OrchestrationShape.Has_LiveSolo([Member("imp-1", closed: false)]));
+        Assert.False(OrchestrationShape.Has_LiveSolo([]));
+
+        // A promoted orchestration: the solo is closed, imp-1 is live. Nothing left to promote.
+        Assert.False(OrchestrationShape.Has_LiveSolo([Member("solo-1", closed: true), Member("imp-1", closed: false)]));
+    }
+
+    static IOrchestrationMember Member(string memberId, bool closed)
+    {
+        return OrchestrationMember_Factory.Create(memberId, 1234, DateTime.UtcNow, closed ? DateTime.UtcNow : null);
     }
 }

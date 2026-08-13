@@ -46,7 +46,11 @@ public class PromotionPromptWordingTests
             decline,
             CloseConfirmationPrompt_Builder.Build_DecidedText(ParkedCloseKinds.Promotion, "crm-4", confirmed: true),
             CloseConfirmationPrompt_Builder.Build_DecidedText(ParkedCloseKinds.Promotion, "crm-4", confirmed: false),
-            CloseConfirmationPrompt_Builder.Describe_Subject(request),
+            CloseConfirmationPrompt_Builder.Describe_AskedFor(request),
+            CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(request, "crm-4"),
+            CloseConfirmationPrompt_Builder.Build_TapToast(ParkedCloseKinds.Promotion, confirms: true),
+            CloseConfirmationPrompt_Builder.Build_TapToast(ParkedCloseKinds.Promotion, confirms: false),
+            CloseConfirmationPrompt_Builder.Describe_NothingDone(ParkedCloseKinds.Promotion),
         ];
 
         foreach (var text in everythingThatNamesTheAction)
@@ -118,6 +122,65 @@ public class PromotionPromptWordingTests
     }
 
     /// <summary>
+    /// EVERY OTHER OWNER-VISIBLE STRING ON THIS TAP, each with a positive assertion — the lesson from
+    /// rev-6 applied forward rather than one finding at a time.
+    ///
+    /// These four were found by enumerating every site that branches on the kind or on the
+    /// confirm/decline boolean, after two of them were filed by a reviewer. The tap toast was a
+    /// kind-blind literal in the engine ("closing…" under a button reading "Make it a crew"); the
+    /// general-channel line put the MEMBER ID in the non-orchestration arm, so a declined promotion
+    /// was filed as the close of a member with no name.
+    /// </summary>
+    [Fact]
+    public void EveryPromotionOutcomeStringNamesAPromotion()
+    {
+        var request = ParkedCloseRequest_Factory.Create_ForPromotion("crm-4", "the solo", "three subsystems now", "p.json");
+
+        // What the requester is told its ask WAS, in the declined and lapsed notices. The verb travels
+        // with the phrase, so no caller can staple "close" in front of it.
+        Assert.Equal("the promotion to a full crew", CloseConfirmationPrompt_Builder.Describe_AskedFor(request));
+
+        // The same ask for the general channel, which tracks many orchestrations and must name the id.
+        var toGeneral = CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(request, "crm-4");
+        Assert.Contains("promotion", toGeneral);
+        Assert.Contains("crm-4", toGeneral);
+
+        // The flash on the phone at the instant of the tap.
+        Assert.Contains("promoting", CloseConfirmationPrompt_Builder.Build_TapToast(ParkedCloseKinds.Promotion, confirms: true));
+        Assert.Contains("one session", CloseConfirmationPrompt_Builder.Build_TapToast(ParkedCloseKinds.Promotion, confirms: false));
+
+        // And what did NOT happen, said in the promotion's own terms.
+        Assert.Equal("nothing was promoted", CloseConfirmationPrompt_Builder.Describe_NothingDone(ParkedCloseKinds.Promotion));
+    }
+
+    /// <summary>
+    /// AND WHERE THE KIND IS UNKNOWABLE, NOTHING IS INVENTED. The stale-tap and unreadable-request
+    /// paths exist because the parked file is gone, expired or corrupt — so "nothing was closed" there
+    /// is a guess, and it is wrong on the tap the owner is most confident about.
+    ///
+    /// This is the same rule `Build_DecidedText`'s fallback follows, asserted for the family rather
+    /// than for the one method that already had it.
+    /// </summary>
+    [Fact]
+    public void AnUnknownKindNamesNeitherACloseNorAPromotion()
+    {
+        string[] neutral =
+        [
+            CloseConfirmationPrompt_Builder.Describe_NothingDone(null),
+            CloseConfirmationPrompt_Builder.Build_TapToast(null, confirms: true),
+            CloseConfirmationPrompt_Builder.Build_TapToast(null, confirms: false),
+            CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(null, "crm-4"),
+        ];
+
+        foreach (var text in neutral)
+        {
+            Assert.DoesNotContain("clos", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("promot", text, StringComparison.OrdinalIgnoreCase);
+            Assert.NotEmpty(text);
+        }
+    }
+
+    /// <summary>
     /// THE CLOSE WORDING IS UNCHANGED, so this fix cannot pass by making every kind neutral. Both
     /// close kinds keep the buttons and the decided text they had.
     /// </summary>
@@ -133,6 +196,20 @@ public class PromotionPromptWordingTests
 
         Assert.Contains("Closed — you confirmed", CloseConfirmationPrompt_Builder.Build_DecidedText(kind, "crm-4", confirmed: true));
         Assert.Contains("Kept open", CloseConfirmationPrompt_Builder.Build_DecidedText(kind, "crm-4", confirmed: false));
+
+        // The four surfaces swept above, on the close side: making the promotion right must not make
+        // the close vague. This is what stops the whole sweep passing by going neutral everywhere.
+        Assert.Equal("closing…", CloseConfirmationPrompt_Builder.Build_TapToast(kind, confirms: true));
+        Assert.Equal("kept open", CloseConfirmationPrompt_Builder.Build_TapToast(kind, confirms: false));
+        Assert.Equal("nothing was closed", CloseConfirmationPrompt_Builder.Describe_NothingDone(kind));
+        Assert.Contains("close of", CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(Request_Of(kind), "crm-4"));
+    }
+
+    static IParkedCloseRequest Request_Of(ParkedCloseKinds kind)
+    {
+        return kind == ParkedCloseKinds.Implementer
+            ? ParkedCloseRequest_Factory.Create_ForImplementer("crm-4", "imp-2", "the solo", "done", "p.json")
+            : ParkedCloseRequest_Factory.Create_ForOrchestration("crm-4", "the solo", "done", "p.json");
     }
 
     /// <summary>

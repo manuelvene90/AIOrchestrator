@@ -124,6 +124,38 @@ public static class OrchestrationShape
     }
 
     /// <summary>
+    /// The same question from a roster, for the two callers that hold one: the launcher deciding
+    /// whether to promote, and the bridge deciding whether the promotion is still worth ASKING about.
+    ///
+    /// It was a lambda inside the launcher. The second caller is exactly the moment to move it rather
+    /// than copy it — a second spelling of "a live solo" is how the ask and the execution come to
+    /// disagree about whether there is one.
+    /// </summary>
+    public static bool Has_LiveSolo(IEnumerable<OrchestrationMember.IOrchestrationMember> members)
+    {
+        return members.Any(member =>
+            member.ClosedUtc == null && MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Solo);
+    }
+
+    /// <summary>
+    /// Whether a promotion can still DO anything — asked before the owner is shown a prompt, not only
+    /// before it executes.
+    ///
+    /// The moot checks in front of that prompt covered an implementer close only, so a promotion whose
+    /// solo had been closed meanwhile was still offered. Nothing was damaged — the launcher re-checks
+    /// readiness — but the owner was handed a question with exactly one possible outcome: they tap
+    /// "✅ Make it a crew", it refuses, and their channel says "promotion FAILED after the owner
+    /// confirmed it". A tap that can only fail should not be offered.
+    ///
+    /// INCOMPLETE counts as promotable here for the same reason the launcher finishes it: a promotion
+    /// that stopped halfway is a retry the failure message explicitly invites.
+    /// </summary>
+    public static bool Can_StillPromote(PromotionReadiness readiness)
+    {
+        return readiness is PromotionReadiness.Ready or PromotionReadiness.Incomplete;
+    }
+
+    /// <summary>
     /// Why the member was refused, in words the owner reads in a dialog and an agent reads in a
     /// channel — naming the SUPPORTED path rather than only the refusal. "Not allowed" tells somebody
     /// they are stuck; this tells them what to do instead.

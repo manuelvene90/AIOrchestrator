@@ -151,15 +151,14 @@ internal sealed class OrchestrationLauncherModel(
     {
         var session = _store.Get_Session(orchId);
 
-        var hasLiveSolo = session.Members.Any(member =>
-            member.ClosedUtc == null && MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Solo);
-
         // ASKED AT THE MOMENT OF EFFECT, because the park-time check can be twelve hours old. Two
         // requests can both pass it while neither has executed, and a `set-model` can change the shape
         // underneath it — so the decision that matters is this one.
-        var readiness = OrchestrationShape.Decide_PromotionReadiness(session.SupervisorSpawnedUtc, hasLiveSolo);
+        var readiness = OrchestrationShape.Decide_PromotionReadiness(
+            session.SupervisorSpawnedUtc,
+            OrchestrationShape.Has_LiveSolo(session.Members));
 
-        if (readiness == PromotionReadiness.AlreadyACrew || readiness == PromotionReadiness.NothingToPromote)
+        if (!OrchestrationShape.Can_StillPromote(readiness))
         {
             _log.Log_Warning(orchId, $"Promotion skipped — {readiness}");
             return session;

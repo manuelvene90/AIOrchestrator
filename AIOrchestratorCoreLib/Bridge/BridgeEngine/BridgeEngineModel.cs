@@ -2669,11 +2669,13 @@ internal sealed class BridgeEngineModel(
 
         if (orchId == null || _store.Get_Session_OrNull(orchId) == null)
         {
-            _log.Log_Warning(GLOBAL_ORCH_ID, $"A close request {what} and no orchestration could be named to tell: {parkedPath}");
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"A parked request {what} and no orchestration could be named to tell: {parkedPath}");
             return;
         }
 
-        Append_OrchestrationAppEntry(orchId, $"close request {what} — nothing was closed", advice);
+        // NEUTRAL: this is only reached for a request that could not be parsed, so its kind is
+        // unknown and naming a close would be inventing one.
+        Append_OrchestrationAppEntry(orchId, $"your request {what} — nothing was done", advice);
     }
 
     void Archive_ResolvedRequest_BestEffort(string requestFilePath, string outcome)
@@ -2779,7 +2781,7 @@ internal sealed class BridgeEngineModel(
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Parked close request is unreadable — archived unexecuted: {parkedPath}");
             Archive_ResolvedRequest_BestEffort(parkedPath, "unreadable");
-            Report_UnhonouredCloseRequest(parkedPath, "could not be read", "It was archived unexecuted and nothing was closed. Drop a fresh, valid request if the close is still wanted.");
+            Report_UnhonouredCloseRequest(parkedPath, "could not be read", "It was archived unexecuted and nothing was done. Drop a fresh, valid request if you still want it.");
             return;
         }
 
@@ -2794,12 +2796,32 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        // Same reasoning one level down: a member that is already retired cannot be retired again,
-        // and a prompt offering to would invite a tap that kills nothing while reading as if it had.
-        if (request.Kind == ParkedCloseKinds.Implementer
-            && session.Members.FirstOrDefault(member => member.MemberId == request.MemberId)?.ClosedUtc != null)
+        // Same reasoning one level down, PER KIND: a question whose answer can no longer change
+        // anything must not be asked. It covered the implementer close only — a two-armed guard
+        // written when there were two kinds — so a promotion whose solo had been closed meanwhile was
+        // still offered, and the only tap available led to "promotion FAILED after the owner
+        // confirmed it".
+        //
+        // A switch rather than another `if` chain: the arms are the enum, so a fourth kind arrives
+        // here as an unhandled case to answer rather than as silence that happens to read as "ask".
+        var mootBecause = request.Kind switch
         {
-            _log.Log_Info(request.OrchId, $"Parked close request is moot — '{request.MemberId}' is already closed");
+            ParkedCloseKinds.Implementer
+                when session.Members.FirstOrDefault(member => member.MemberId == request.MemberId)?.ClosedUtc != null
+                => $"'{request.MemberId}' is already closed",
+
+            ParkedCloseKinds.Promotion
+                when !OrchestrationShape.Can_StillPromote(OrchestrationShape.Decide_PromotionReadiness(
+                    session.SupervisorSpawnedUtc,
+                    OrchestrationShape.Has_LiveSolo(session.Members)))
+                => "there is nothing left to promote",
+
+            _ => null,
+        };
+
+        if (mootBecause != null)
+        {
+            _log.Log_Info(request.OrchId, $"Parked request is moot — {mootBecause}");
             Archive_ResolvedRequest_BestEffort(parkedPath, "moot");
             return;
         }
@@ -2917,9 +2939,13 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
+                // NEUTRAL ON PURPOSE, and this is the one branch where it cannot be otherwise: it
+                // runs because the parked file is gone or expired, so the kind is unknowable and
+                // "nothing closed" would be a guess — wrong on the tap the owner most wants to
+                // believe, where they tapped "✅ Make it a crew".
                 await client.Answer_CallbackQuery_Async(
                     tap.CallbackQueryId,
-                    stillParked ? "expired — nothing closed" : "already resolved — nothing closed",
+                    $"{(stillParked ? "expired" : "already resolved")} — {CloseConfirmationPrompt_Builder.Describe_NothingDone(null)}",
                     cancellationToken);
             }
             catch (OperationCanceledException)
@@ -2933,7 +2959,7 @@ internal sealed class BridgeEngineModel(
 
             _log.Log_Warning(
                 confirmation.OrchId,
-                $"A close confirmation was tapped after it {(stillParked ? "expired" : "was already resolved")} — NOTHING was closed ({confirmation.ParkedPath})");
+                $"A confirmation was tapped after it {(stillParked ? "expired" : "was already resolved")} — NOTHING was done ({confirmation.ParkedPath})");
 
             if (expired && stillParked)
                 Expire_CloseConfirmation(confirmation.ParkedPath);
@@ -2941,9 +2967,18 @@ internal sealed class BridgeEngineModel(
             return true;
         }
 
+        // READ ONCE, used by the toast and by the post-tap edit below. Both describe the same tap, so
+        // reading the file twice would let them disagree if it were archived in between — and the
+        // toast was a kind-blind literal: the owner tapped "✅ Make it a crew" and their phone
+        // flashed "closing…". That was the third owner-visible string on this one tap.
+        var tappedKind = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath)?.Kind;
+
         try
         {
-            await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, confirmation.Confirms ? "closing…" : "kept open", cancellationToken);
+            await client.Answer_CallbackQuery_Async(
+                tap.CallbackQueryId,
+                CloseConfirmationPrompt_Builder.Build_TapToast(tappedKind, confirmation.Confirms),
+                cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -2966,7 +3001,7 @@ internal sealed class BridgeEngineModel(
             // yields neutral wording rather than the close wording: guessing "closed" is how a record
             // comes to say the opposite of what happened.
             var decided = CloseConfirmationPrompt_Builder.Build_DecidedText(
-                ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath)?.Kind,
+                tappedKind,
                 confirmation.OrchId,
                 confirmation.Confirms);
 
@@ -3014,7 +3049,7 @@ internal sealed class BridgeEngineModel(
         {
             _log.Log_Warning(
                 confirmation.OrchId,
-                $"A confirmed close had no readable request — NOTHING was closed, left parked to be re-asked ({confirmation.ParkedPath})");
+                $"A confirmed request could not be read — NOTHING was done, left parked to be re-asked ({confirmation.ParkedPath})");
 
             // NOT archived. A sharing violation at tap time is transient, and archiving would throw
             // away a close the owner had already approved with no way back. Left parked, this heals
@@ -3024,13 +3059,23 @@ internal sealed class BridgeEngineModel(
             //
             // Told to the REQUESTER, in its own channel, because that is where this guard promised
             // an answer either way — the general channel cannot be read by the session waiting.
+            // NEUTRAL, because the file this branch exists for is the one that could not be read —
+            // so the kind is unknowable and "close" would be a guess in front of a solo that had
+            // asked to be promoted.
             Append_OrchestrationAppEntry(
                 confirmation.OrchId,
-                "close NOT executed — the request could not be read just now",
-                "The owner's tap arrived, but your request file could not be read at that moment, so nothing was closed. It has been left in place and they will be asked again shortly. Do not re-drop it.");
+                "NOT executed — your request could not be read just now",
+                "The owner's tap arrived, but your request file could not be read at that moment, so nothing was done. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
             return;
         }
+
+        // WHAT THE TAP ACTUALLY AUTHORISED, set by the arm that runs rather than derived from the
+        // kind afterwards. It was `Kind == Promotion ? "promoted" : "closed"` — which archived the
+        // UNKNOWN-KIND arm, the one that deliberately does nothing, under the label "closed". The
+        // comment three lines below said a wrong label leaves an audit trail saying the opposite of
+        // what happened, and the arm that produced one was added in the same commit as the comment.
+        var archiveLabel = "unexecuted";
 
         try
         {
@@ -3045,14 +3090,17 @@ internal sealed class BridgeEngineModel(
             // can produce, from the one tap they were most confident about.
             if (request.Kind == ParkedCloseKinds.Implementer)
             {
+                archiveLabel = "closed";
                 Execute_CloseImplementer(confirmation.OrchId, request.MemberId!, request.Reason);
             }
             else if (request.Kind == ParkedCloseKinds.Promotion)
             {
+                archiveLabel = "promoted";
                 Execute_ConfirmedPromotion(confirmation.OrchId, request.Reason);
             }
             else if (request.Kind == ParkedCloseKinds.Orchestration)
             {
+                archiveLabel = "closed";
                 Execute_Close(
                     confirmation.OrchId,
                     request.Reason,
@@ -3078,12 +3126,10 @@ internal sealed class BridgeEngineModel(
         }
         finally
         {
-            // The label names what the tap actually authorised. "closed" on a promotion would leave
-            // an audit trail saying the opposite of what happened to an orchestration that is still
-            // running.
-            Archive_ResolvedRequest_BestEffort(
-                confirmation.ParkedPath,
-                request.Kind == ParkedCloseKinds.Promotion ? "promoted" : "closed");
+            // "closed" on a promotion would leave an audit trail saying the opposite of what happened
+            // to an orchestration that is still running — and so would "closed" on a kind this build
+            // could not execute at all, which is what the ternary here used to produce.
+            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, archiveLabel);
         }
     }
 
@@ -3129,16 +3175,21 @@ internal sealed class BridgeEngineModel(
     {
         var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
 
-        // "a close request" while the file is unreadable, and the exact subject when it is not. The
-        // requester is told which of its asks was refused; it may have more than one thing running.
-        var subject = request == null ? "what you asked to close" : CloseConfirmationPrompt_Builder.Describe_Subject(request);
+        // THE VERB COMES WITH THE PHRASE. This read "You asked to close {subject}" and the subject for
+        // a promotion is "the promotion to a full crew" — so a solo whose promotion the owner refused
+        // was told it had asked to CLOSE the promotion. The requester is told which of its asks was
+        // refused; it may have more than one thing running.
+        var askedFor = request == null
+            ? "what you asked for"
+            : CloseConfirmationPrompt_Builder.Describe_AskedFor(request);
 
-        _log.Log_Info(confirmation.OrchId, "The owner declined a close request");
+        _log.Log_Info(confirmation.OrchId, "The owner declined a parked request");
 
         Append_OrchestrationAppEntry(
             confirmation.OrchId,
-            "close DECLINED by the owner — keep working",
-            $"You asked to close {subject} ({request?.Reason ?? "no reason recorded"}) and the owner said no. Nothing was closed and every session is still running.\n\n"
+            $"{askedFor} — DECLINED by the owner, keep working",
+            $"You asked for {askedFor} ({request?.Reason ?? "no reason recorded"}) and the owner said no — "
+            + $"{CloseConfirmationPrompt_Builder.Describe_NothingDone(request?.Kind)}, and every session is still running.\n\n"
             + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
 
         Report_CloseOutcome_ToGeneral(confirmation.OrchId, "declined by the owner", request);
@@ -3160,12 +3211,13 @@ internal sealed class BridgeEngineModel(
         // A MEMBER close names the member, because "close of 'orch' declined" for a one-member ask
         // reads as the whole orchestration having been up for closure — the general supervisor
         // tracks orchestrations, and it would file the wrong fact.
-        var what = request == null || request.Kind == ParkedCloseKinds.Orchestration
-            ? $"'{orchId}'"
-            : $"'{request.MemberId}' in '{orchId}'";
-
+        //
+        // It used to ask `Kind == Orchestration` and put the MEMBER ID in the other arm: a two-armed
+        // test over three values, and a promotion carries no member id by construction — so a
+        // declined promotion was filed as the close of a member with no name, in the one channel the
+        // general supervisor reads to know what is running.
         Append_GeneralAppEntry(
-            $"close of {what} {outcome} — nothing was closed",
+            $"{CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(request, orchId)} — {outcome}, {CloseConfirmationPrompt_Builder.Describe_NothingDone(request?.Kind)}",
             $"Asked by: {request?.Requester ?? "unrecorded"}. Reason given: {request?.Reason ?? "none recorded"}. Its sessions are all still running.");
     }
 
@@ -3181,13 +3233,16 @@ internal sealed class BridgeEngineModel(
 
         if (request != null)
         {
-            _log.Log_Info(request.OrchId, $"A close request lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h");
+            _log.Log_Info(request.OrchId, $"A parked request lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h");
 
+            // Same fix as the declined notice: the phrase brings its own verb, so this can no longer
+            // render as "close of the promotion to a full crew LAPSED".
             Append_OrchestrationAppEntry(
                 request.OrchId,
-                $"close of {CloseConfirmationPrompt_Builder.Describe_Subject(request)} LAPSED — the owner never answered",
-                $"Your close request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and nothing was closed. "
-                + "It is not carried over: a close must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
+                $"{CloseConfirmationPrompt_Builder.Describe_AskedFor(request)} LAPSED — the owner never answered",
+                $"Your request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and "
+                + $"{CloseConfirmationPrompt_Builder.Describe_NothingDone(request.Kind)}. "
+                + "It is not carried over: a decision must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
 
             Report_CloseOutcome_ToGeneral(request.OrchId, $"lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h", request);
         }

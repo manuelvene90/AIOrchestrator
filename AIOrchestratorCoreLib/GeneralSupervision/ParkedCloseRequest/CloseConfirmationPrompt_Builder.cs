@@ -75,23 +75,96 @@ public static class CloseConfirmationPrompt_Builder
     }
 
     /// <summary>
-    /// WHAT a close would end, in the middle of a sentence — "close of X was declined", "X lapsed".
+    /// THE WHOLE ASK, verb included — "the close of 'imp-1'", "the promotion to a full crew" — for the
+    /// held / declined / lapsed / failed notices that report what became of a request.
     ///
-    /// One wording, because the held / declined / lapsed / failed notices all name it and they are
-    /// written in four different places. Four copies of "this orchestration" is how the message that
-    /// retires one member comes to say the whole thing is ending, which is the same fact carried
-    /// twice that this repo keeps paying for.
+    /// It used to name only the OBJECT ("this orchestration", "the promotion to a full crew") and every
+    /// caller stapled its own verb in front. That is fine while every request is a close and breaks the
+    /// day one is not: the declined notice read *"You asked to close the promotion to a full crew"* and
+    /// the lapse notice read *"close of the promotion to a full crew LAPSED"*. The branch here was
+    /// right; the sentence around it was never a variable.
+    ///
+    /// So the verb comes from the same switch as the object. A caller cannot get it wrong because it no
+    /// longer supplies it.
     /// </summary>
-    public static string Describe_Subject(IParkedCloseRequest request)
+    public static string Describe_AskedFor(IParkedCloseRequest request)
     {
         return request.Kind switch
         {
-            ParkedCloseKinds.Orchestration => "this orchestration",
-            ParkedCloseKinds.Implementer => $"'{request.MemberId}'",
+            ParkedCloseKinds.Orchestration => "the close of this orchestration",
+            ParkedCloseKinds.Implementer => $"the close of '{request.MemberId}'",
             ParkedCloseKinds.Promotion => "the promotion to a full crew",
-            _ => throw new ArgumentOutOfRangeException(nameof(request), $"unhandled close kind '{request.Kind}'"),
+            _ => "the request you filed",
         };
     }
+
+    /// <summary>
+    /// The same ask for the GENERAL channel, which tracks many orchestrations and cannot read "this
+    /// orchestration" — it needs the id said out loud.
+    ///
+    /// Two audiences, one fact, deliberately two methods: the general supervisor reading "the close of
+    /// this orchestration" has no way to know which, and the requester reading its own id in its own
+    /// channel is being told something it already knows. Said here so the pair does not read as the
+    /// duplication this branch has spent the evening removing.
+    ///
+    /// It replaces a ternary that asked `Kind == Orchestration` and put the MEMBER ID in the other
+    /// arm — over a three-valued enum, with a promotion carrying no member id by construction. A
+    /// declined promotion was reported to the general supervisor as the close of a member with no name.
+    /// </summary>
+    public static string Describe_AskedFor_ToGeneral(IParkedCloseRequest? request, string orchId)
+    {
+        return request?.Kind switch
+        {
+            ParkedCloseKinds.Orchestration => $"the close of '{orchId}'",
+            ParkedCloseKinds.Implementer => $"the close of '{request!.MemberId}' in '{orchId}'",
+            ParkedCloseKinds.Promotion => $"the promotion of '{orchId}' to a full crew",
+            _ => $"a request against '{orchId}'",
+        };
+    }
+
+    /// <summary>
+    /// The two-word flash Telegram shows the instant the button is tapped, before anything has run.
+    ///
+    /// It was `Confirms ? "closing…" : "kept open"` — a kind-blind literal in the engine, and the THIRD
+    /// owner-visible string on that tap after the buttons and the post-tap edit. The owner taps
+    /// "✅ Make it a crew" and their phone flashes "closing…".
+    ///
+    /// A null kind means the request could not be read, and it says only that the tap arrived. Guessing
+    /// the verb is the failure this whole family keeps producing.
+    /// </summary>
+    public static string Build_TapToast(ParkedCloseKinds? kind, bool confirms)
+    {
+        return kind switch
+        {
+            ParkedCloseKinds.Promotion => confirms ? "promoting…" : "kept as one session",
+            ParkedCloseKinds.Orchestration or ParkedCloseKinds.Implementer => confirms ? "closing…" : "kept open",
+            _ => confirms ? "working on it…" : "nothing changed",
+        };
+    }
+
+    /// <summary>
+    /// "nothing was closed" is a CLAIM, and on the stale-tap and unreadable-request paths it is one
+    /// this code cannot make: those branches exist precisely because the request file is gone,
+    /// expired or corrupt, so the kind is unknowable and reaching for it would be a guess.
+    ///
+    /// The neutral form is the honest one there, and it is the rule `Build_DecidedText`'s fallback
+    /// already follows. Where the kind IS known, the specific form says what did not happen.
+    /// </summary>
+    public static string Describe_NothingDone(ParkedCloseKinds? kind)
+    {
+        return kind switch
+        {
+            ParkedCloseKinds.Promotion => "nothing was promoted",
+            ParkedCloseKinds.Orchestration or ParkedCloseKinds.Implementer => "nothing was closed",
+            _ => "nothing was done",
+        };
+    }
+
+    // `Describe_Subject` was here: the verb-less object phrase, "this orchestration" / "'imp-2'" /
+    // "the promotion to a full crew". `Describe_AskedFor` above replaces it outright rather than
+    // sitting beside it. Its two production callers are the two sentences it broke, and no prompt body
+    // ever called it — so keeping it would have left a second phrase-maker for one fact, alive on
+    // tests alone, and it is the one that requires the caller to supply the verb that went wrong.
 
     static string Build_ForOrchestration(IParkedCloseRequest request, string? unresolvedLedger)
     {
