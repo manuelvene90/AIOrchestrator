@@ -46,12 +46,23 @@ Two commits: `11a1c1a` (the fix) and `f2485cf` (a probe that pins which clock th
 - **It conflicts** in `Nudge_Decider.cs`, the file the "one nudge per unanswered thing" work rewrote.
 - **It was correctly held back at the time**: on its own it made the nudge loop *faster*, 8 minutes
   to 6, because the app's own write to the channel was the only thing DELAYING the re-arm.
-- **That hazard is now gone** — the marker gate on master sits upstream of the clock — and there is a
-  real residual it still plugs: an app write to a channel resets the **first** nudge's quiet clock,
-  so a legitimate nudge can be delayed by up to 8 minutes.
-- **But that last paragraph is reasoning, not measurement.** Reasoning about this exact code was
-  wrong three separate times in one evening, twice by the people being most careful about it. Resolve
-  the conflict, pin the behaviour with a test, and have a reviewer attack it.
+- **That hazard is gone, but NOT because of where the marker gate sits.** The ordering claim that used
+  to be here was wrong: the gate is textually DOWNSTREAM of the clock check
+  (`BridgeEngineModel.cs:964` vs `:997-1002`). What closes the loop is that `_nudgedAboutEntry` is
+  written at `:1008` and never removed, so the app permanently remembers which conversation entry it
+  nudged about. Order does not enter into it.
+- **AND THAT MEMORY IS ONLY AS GOOD AS THE IDENTITY IT KEYS ON.** Until `fix/marker-gate-spans-archive`
+  the identity was read from the LIVE FILE ALONE, so a compacted channel produced null — no memory, no
+  gate, and the loop back every 8 minutes on exactly the channels running longest. CLAUDE.md item 13,
+  thirty lines from the function that already handled it. Fixed and pinned there; **one route to a null
+  identity remains open and is written up in that file's docstring** (a channel holding only app
+  entries and no conversation anywhere).
+- **A real residual the quiet clock still plugs**: an app write resets the **first** nudge's clock, so
+  a legitimate nudge can be delayed by up to 8 minutes. Bounded at one delay, not starvation — four
+  app write paths into a member channel, none on a timer.
+- **This has now been wrong FOUR times, the fourth in the paragraph correcting the third.** Reasoning
+  about this code keeps outrunning it. Nothing here should be believed without re-reading the lines it
+  cites — including this bullet.
 
 `f2485cf` is worth keeping either way: it catches the engine passing `UtcNow` where `Now` is meant,
 which on a machine at UTC+2 makes `quietFor` negative and **silences every nudge in the system with a

@@ -994,7 +994,7 @@ internal sealed class BridgeEngineModel(
                     // as long as nobody needs it: the moment anyone writes, the conversation moves,
                     // the nudge fires and the probe runs six minutes later. Detected when it matters
                     // rather than polled forever.
-                    var conversationIdentity = Nudge_Decider.Identify_LastConversationEntry_OrNull(entries);
+                    var conversationIdentity = Nudge_Decider.Identify_LastConversationEntry_OrNull(entries, channelFile);
 
                     if (conversationIdentity != null
                         && _nudgedAboutEntry.TryGetValue(memberKey, out var alreadyNudgedAbout)

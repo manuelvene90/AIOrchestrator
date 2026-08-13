@@ -23,6 +23,22 @@ public static class ChannelHistory_Counter
             + Count_In(Channel_Compactor.Build_ArchiveFilePath(channelFilePath), author);
     }
 
+    /// <summary>
+    /// The entries compaction has already moved out of the live file — OLDER than everything still
+    /// live, by construction, because the compactor only ever moves from the front. Empty when nothing
+    /// has been archived yet, which is the ordinary case.
+    ///
+    /// Here rather than at the call site because this class is the one place that knows a channel is
+    /// two files. Counting was simply the first question anyone asked of that fact; "what was the last
+    /// conversation entry" turned out to be the second, and it had been answered from the live file
+    /// alone — which restarted a nudge loop on every channel long enough to compact.
+    /// </summary>
+    public static IReadOnlyList<IChannelEntry> Read_ArchivedEntries(string channelFilePath)
+    {
+        return ChannelEntry_Parser.Parse_All(
+            UsageTotals_Reader.Read_Text_Safe(Channel_Compactor.Build_ArchiveFilePath(channelFilePath)));
+    }
+
     static int Count_In(string filePath, ChannelAuthors author)
     {
         var count = 0;

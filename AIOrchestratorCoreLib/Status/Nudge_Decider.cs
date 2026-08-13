@@ -72,6 +72,16 @@ public static class Nudge_Decider
     /// writes never change the last CONVERSATION entry, so nothing the app says can ever qualify a
     /// member for another nudge. One nudge per unanswered thing.
     ///
+    /// THAT GUARANTEE HOLDS ONLY WHILE AN IDENTITY CAN BE FOUND, and stating it as an absolute is how
+    /// it went wrong: a null here is not "nothing to compare", it is NO MEMORY — the caller skips the
+    /// gate and records nothing, so the loop is back. Compaction was one route to that null and is
+    /// closed below. One route remains, and it is NOT fixed here: a channel holding only app entries
+    /// and no conversation anywhere. Reachable when the app writes to a member channel before its
+    /// first brief (a `/resume` broadcast will do it) — the member is then eligible through
+    /// <see cref="Has_UnansweredInboundTraffic"/>, has no identity, and can be nudged repeatedly.
+    /// Reported rather than fixed silently: closing it means deciding what "one nudge about nothing"
+    /// should mean, which is a design call and not this fix's.
+    ///
     /// IT IS THE RAW TEXT AND IT MUST NEVER BE THE INDEX OR THE TIMESTAMP. Both are agent-written and
     /// neither is unique: `option-lab-2` carried two `[80]`s and two `[81]`s on 2026-08-10, and one
     /// evening's traffic produced two duplicate indices in a single channel. A genuinely NEW entry
@@ -81,12 +91,36 @@ public static class Nudge_Decider
     /// the other mask. The next person to touch this will reach for the index because it is smaller;
     /// this paragraph is why they should not.
     ///
-    /// Null when the channel holds nothing but app entries: there is no conversation to be nudged
-    /// about, and the caller treats that as "no memory", which nudges rather than suppresses.
+    /// IT SPANS THE ARCHIVE, AND READING ONLY THE LIVE FILE WAS THE WHOLE LOOP COMING BACK — CLAUDE.md
+    /// item 13, thirty lines from <see cref="Has_BeenBriefed"/>, which already gets this right.
+    /// <see cref="Channel_Compactor"/> moves older entries into a sibling archive, so once the last
+    /// conversation entry is compacted out, a live-only read returns null. Null means "no memory": the
+    /// caller skips the gate AND records nothing, so it nudges — and that nudge becomes the next
+    /// round's unanswered thing. Every 8 minutes, forever, needing nobody, on exactly the channels that
+    /// have been running longest.
+    ///
+    /// Measured, not feared: `ai-orchestrator-3/imp-1` ends at entry [395] whose body reads *"Entry
+    /// [394] FROM app has been waiting 8 min with no reply from you"* — the app nudging a member about
+    /// its own previous nudge. Two `da-vinci-fintech-suite-5` channels show the same shape.
+    ///
+    /// The previous docstring called the null case harmless and named only "a channel holding nothing
+    /// but app entries". That case is real and still returns null — but it was never the only route to
+    /// one, and the other route restarted the defect this gate exists to end.
+    ///
+    /// LIVE WINS OVER ARCHIVE, because the compactor only ever moves from the front: anything archived
+    /// is older than anything live. Preferring the archive would pin every member to an ancient entry
+    /// and stop a genuinely new brief from earning its own nudge — the mute switch, from the far side.
     /// </summary>
-    public static string? Identify_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
+    public static string? Identify_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
     {
-        return MemberState_Resolver.Find_LastConversationEntry_OrNull(entries)?.RawText;
+        var live = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
+
+        if (live != null)
+            return live.RawText;
+
+        return MemberState_Resolver
+            .Find_LastConversationEntry_OrNull(ChannelHistory_Counter.Read_ArchivedEntries(channelFilePath))
+            ?.RawText;
     }
 
     /// <summary>

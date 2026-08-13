@@ -251,6 +251,109 @@ public class NudgeDeciderTests
     }
 
     /// <summary>
+    /// CLAUDE.md ITEM 13 AGAIN, THIRTY LINES FROM THE FUNCTION THAT GETS IT RIGHT. The nudge marker —
+    /// the thing that makes a member nudged ONCE per unanswered thing — read only the live file. Once
+    /// compaction moves the last conversation entry into the archive it returned null, and null means
+    /// "no memory": the caller skips the gate AND records nothing, so the member is nudged again, and
+    /// that nudge becomes the next round's unanswered thing. Every 8 minutes, forever, needing nobody.
+    ///
+    /// It is not hypothetical. `ai-orchestrator-3/imp-1` ends at entry [395] whose body reads "Entry
+    /// [394] FROM app has been waiting 8 min with no reply from you" — the app nudging a member about
+    /// its own previous nudge. Two `da-vinci-fintech-suite-5` channels show the same shape.
+    ///
+    /// Real files, because the defect is entirely about which file is read.
+    /// </summary>
+    [Fact]
+    public void TheThingAMemberWasNudgedAboutSurvivesCompactionToTheArchive()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-marker-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            // What a compacted channel looks like mid-loop: every conversation entry archived, and
+            // only the app's own nudges left in the live file.
+            File.WriteAllText(channelFile, "## [394] FROM app — 2026-08-12 03:00 — you stopped mid-task\nnothing was going to wake you\n");
+            File.WriteAllText(
+                Channel_Compactor.Build_ArchiveFilePath(channelFile),
+                "## [1] FROM supervisor — 2026-08-11 22:00 — the brief\ndo the work\n");
+
+            var live = ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile));
+
+            var identity = Nudge_Decider.Identify_LastConversationEntry_OrNull(live, channelFile);
+
+            Assert.NotNull(identity);
+            Assert.Contains("the brief", identity);
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>
+    /// THE LIVE FILE STILL WINS, asserted apart. The archive holds the OLDER entries, so a reader that
+    /// simply preferred the archive would pin every member to an ancient entry and never let a genuinely
+    /// new brief earn its own nudge — the mute-switch failure, reached from the other side.
+    /// </summary>
+    [Fact]
+    public void AConversationEntryInTheLiveFileBeatsTheArchive()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-marker-live-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            File.WriteAllText(channelFile, "## [40] FROM supervisor — 2026-08-12 09:00 — the NEW brief\nthe next thing\n");
+            File.WriteAllText(
+                Channel_Compactor.Build_ArchiveFilePath(channelFile),
+                "## [1] FROM supervisor — 2026-08-11 22:00 — the OLD brief\ndo the work\n");
+
+            var live = ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile));
+
+            var identity = Nudge_Decider.Identify_LastConversationEntry_OrNull(live, channelFile);
+
+            Assert.NotNull(identity);
+            Assert.Contains("the NEW brief", identity);
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>
+    /// And a channel with no conversation ANYWHERE is still null — the genuine case the old docstring
+    /// described, now the only one that produces it. Without this, a fix that returned some placeholder
+    /// would satisfy both cases above and suppress the first nudge a real brief earns.
+    /// </summary>
+    [Fact]
+    public void AChannelHoldingOnlyAppEntriesEverywhereStillHasNoIdentity()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-marker-none-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            File.WriteAllText(channelFile, "## [3] FROM app — 2026-08-12 03:00 — you stopped mid-task\nnothing here\n");
+
+            var live = ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile));
+
+            Assert.Null(Nudge_Decider.Identify_LastConversationEntry_OrNull(live, channelFile));
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>
     /// The SUBJECT is deliberately not the body. An earlier version passed one string as both, so a
     /// marker matcher reading Subject instead of RawText — or Body instead of either — would have
     /// been invisible here: every field said the same thing, so every implementation agreed. That
@@ -350,8 +453,8 @@ public class NudgeDeciderTests
             (ChannelAuthors.App, "you stopped mid-task", "nothing was going to wake you"));
 
         Assert.Equal(
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(beforeTheNudge),
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(afterTheNudge));
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(beforeTheNudge, NO_ARCHIVE),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(afterTheNudge, NO_ARCHIVE));
     }
 
     /// <summary>
@@ -372,8 +475,8 @@ public class NudgeDeciderTests
             (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Model.cs", "still going"));
 
         Assert.NotEqual(
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(before),
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(after));
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(before, NO_ARCHIVE),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(after, NO_ARCHIVE));
     }
 
     /// <summary>
@@ -394,9 +497,19 @@ public class NudgeDeciderTests
         var second = Stamped((ChannelAuthors.Implementer, "a completely different thing", "2026-08-12 19:30"));
 
         Assert.NotEqual(
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(first),
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(second));
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(first, NO_ARCHIVE),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(second, NO_ARCHIVE));
     }
+
+    /// <summary>
+    /// A channel path with no file behind it, so the cases above read the LIVE LIST ALONE.
+    ///
+    /// Deliberate rather than convenient: each of them pins something about the entries themselves —
+    /// that an app entry does not change the identity, that a new member entry does, that the identity
+    /// is the raw text — and an archive sitting behind them would give every assertion a second route
+    /// to its result. The archive has its own cases, above, with real files.
+    /// </summary>
+    static readonly string NO_ARCHIVE = Path.Combine(Path.GetTempPath(), $"nudge-no-archive-{Guid.NewGuid():N}", "channel.md");
 
     static IReadOnlyList<IChannelEntry> Stamped(params (ChannelAuthors Author, string Subject, string DateText)[] entries)
     {
