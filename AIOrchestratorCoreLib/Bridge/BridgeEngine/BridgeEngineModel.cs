@@ -153,6 +153,10 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>Channels whose pre-existing malformed headers have been absorbed as history.</summary>
     readonly HashSet<string> _channelsShapeBaselined = [];
+
+    /// <summary>The same pair for the index screen — say a crossing once, and absorb the ones already there.</summary>
+    readonly HashSet<string> _screenedIndexCrossings = [];
+    readonly HashSet<string> _channelsIndexBaselined = [];
     readonly Lock _buttonLock = new();
     long _buttonSequence;
     long _buttonGroupSequence;
@@ -1122,6 +1126,51 @@ internal sealed class BridgeEngineModel(
             // On the OWNER channel the loss is the owner's: the content never reached their phone.
             if (channel.IsOwnerChannel)
                 await Alert_MalformedOwnerEntries_Async(channel.OrchId, unreported.Count, cancellationToken);
+        }
+
+        Screen_ChannelIndexSequences();
+    }
+
+    /// <summary>
+    /// THE OTHER HALF of the shape check above: header lines that parse PERFECTLY and should not be
+    /// entries at all. A header quoted inside another entry's body is the case — it parses, so
+    /// `Find_MalformedHeaders` skips it by design, and the app then reads the quotation as a real
+    /// entry, attributing a body to whoever was quoted and consuming an index a later entry collides
+    /// with. It happened here on 2026-08-13, twice in one evening, to two different members — the
+    /// second time inside the entry reporting the first.
+    ///
+    /// LOG ONLY. Not a channel entry and not Telegram: an index that runs backwards is a diagnostic
+    /// the owner cannot act on (decision 15), and the actionable half already owns the channel-entry
+    /// path directly above. It is also a SCREEN — roughly half its hits are legitimate crossings where
+    /// two authors allocated one index in the same minute — so it must never post as if it had found
+    /// a defect.
+    /// </summary>
+    void Screen_ChannelIndexSequences()
+    {
+        foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
+        {
+            var crossings = ChannelIndexSequence_Screen.Find_Crossings(
+                ChannelIndexSequence_Screen.Read_Headers(
+                    UsageTotals_Reader.Read_Text_Safe(Channel_Compactor.Build_ArchiveFilePath(channel.FilePath)),
+                    UsageTotals_Reader.Read_Text_Safe(channel.FilePath)));
+
+            if (crossings.Count == 0)
+                continue;
+
+            // Same two-set discipline as the malformed sweep, and for its reason: everything already
+            // in a file when the app starts is HISTORY, recorded silently. A channel carrying an old
+            // legitimate crossing would otherwise re-log the same pair on every sweep for as long as
+            // the app runs — the waterfall this system exists to prevent, in the log instead of the
+            // owner's phone.
+            var isFirstSight = _channelsIndexBaselined.Add(channel.FilePath);
+
+            foreach (var crossing in crossings)
+            {
+                var isNew = _screenedIndexCrossings.Add($"{channel.FilePath}|{ChannelIndexSequence_Screen.Build_DedupeKey(crossing)}");
+
+                if (isNew && !isFirstSight)
+                    _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {ChannelIndexSequence_Screen.Describe_Crossing(crossing)}");
+            }
         }
     }
 

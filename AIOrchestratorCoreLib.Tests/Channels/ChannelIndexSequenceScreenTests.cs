@@ -1,0 +1,243 @@
+using AIOrchestratorCoreLib.Channels;
+using Xunit;
+
+namespace AIOrchestratorCoreLib.Tests.Channels;
+
+/// <summary>
+/// The screen for header lines that PARSE and should not be entries — a header quoted inside another
+/// entry's body being the case that produced it.
+///
+/// It is the other half of <see cref="ChannelShape_Validator"/>: that one finds lines that look like
+/// headers and do not parse, so a quoted header — which parses perfectly — walks straight past it. The
+/// app then reads the quotation as a real entry, attributes a body to whoever was quoted, and burns an
+/// index that a later entry collides with.
+///
+/// The fixtures below are the two real hits from `imp-2`'s own channel on 2026-08-13, and they are
+/// used deliberately, because **one is a defect and one is not**: a quoted header at line 2671, and a
+/// legitimate crossing at 14:44/15:07 where two authors allocated an index in the same minute. Nothing
+/// mechanical separates them — which is the whole reason this is a screen and its output says so.
+/// </summary>
+public class ChannelIndexSequenceScreenTests
+{
+    /// <summary>
+    /// THE DEFECT IT WAS BUILT FOR: a well-formed header sitting inside another entry's body. It
+    /// parses, so the malformed-header validator is blind to it by design.
+    /// </summary>
+    [Fact]
+    public void AQuotedHeaderIsFound()
+    {
+        var crossings = Screen(
+            """
+            ## [107] FROM implementer — 2026-08-13 21:34 — reporting an invisible entry
+
+            At rest, right now:
+
+            ## [106] FROM supervisor — 2026-08-13 21:33 — the entry I am quoting
+
+            ...which proves the header is fine.
+
+            ## [108] FROM implementer — 2026-08-13 21:35 — next entry
+            """);
+
+        var crossing = Assert.Single(crossings);
+
+        Assert.Equal(106, crossing.Later.Index);
+        Assert.Equal(107, crossing.Earlier.Index);
+    }
+
+    /// <summary>
+    /// AND THE MALFORMED-HEADER VALIDATOR CANNOT SEE IT — asserted rather than asserted about, because
+    /// "the two are complementary" is the entire argument for this class existing. If that validator
+    /// ever did catch it, this screen would be a second copy of it.
+    /// </summary>
+    [Fact]
+    public void TheMalformedHeaderValidatorIsBlindToTheSameLine()
+    {
+        const string QUOTED = "## [106] FROM supervisor — 2026-08-13 21:33 — the entry I am quoting";
+
+        Assert.True(ChannelEntry_Parser.Is_HeaderLine(QUOTED));
+        Assert.Empty(ChannelShape_Validator.Find_MalformedHeaders(QUOTED));
+    }
+
+    /// <summary>
+    /// BOTH LINES ARE PRINTED WITH THEIR LINE NUMBERS, AND NEITHER IS ACCUSED.
+    ///
+    /// This test failed when it was first written, and the failure was the design being wrong rather
+    /// than the expectation: the class labelled the EARLIER line the suspect, which is true when a
+    /// higher-numbered header is quoted and FALSE for the case that actually happened here — where the
+    /// quotation is the later of the two. See <see cref="TheIntruderIsTheLaterLineWhenAnOlderHeaderIsQuoted"/>
+    /// and <see cref="TheIntruderIsTheEarlierLineWhenAHigherHeaderIsQuoted"/>: the two shapes put the
+    /// intruder on opposite sides, so naming one would mislead about half the time.
+    /// </summary>
+    [Fact]
+    public void BothLinesAreNamedAndNeitherIsAccused()
+    {
+        var crossing = Assert.Single(Screen(
+            """
+            ## [107] FROM implementer — 2026-08-13 21:34 — real
+
+            ## [106] FROM supervisor — 2026-08-13 21:33 — quoted
+
+            ## [108] FROM implementer — 2026-08-13 21:35 — real
+            """));
+
+        // Line 1 is the real entry, line 3 the quotation inside its body.
+        Assert.Equal(1, crossing.Earlier.LineNumber);
+        Assert.Equal(3, crossing.Later.LineNumber);
+
+        var text = ChannelIndexSequence_Screen.Describe_Crossing(crossing);
+
+        Assert.Contains("line 1", text);
+        Assert.Contains("line 3", text);
+
+        // It never claims to have found a defect, and never singles one line out.
+        Assert.Contains("SCREEN, not a verdict", text);
+        Assert.DoesNotContain("SUSPECT", text);
+    }
+
+    /// <summary>
+    /// SHAPE ONE — quoting an OLDER header, which is what happened on this machine: the intruder is
+    /// the LATER line of the pair.
+    /// </summary>
+    [Fact]
+    public void TheIntruderIsTheLaterLineWhenAnOlderHeaderIsQuoted()
+    {
+        var crossing = Assert.Single(Screen("## [107] FROM a — d — real\n## [106] FROM b — d — QUOTED\n## [108] FROM a — d — real"));
+
+        Assert.Contains("QUOTED", crossing.Later.Line);
+    }
+
+    /// <summary>
+    /// SHAPE TWO — quoting a higher or foreign index: the intruder is the EARLIER line. Same screen,
+    /// opposite side, which is the whole reason it accuses nobody.
+    /// </summary>
+    [Fact]
+    public void TheIntruderIsTheEarlierLineWhenAHigherHeaderIsQuoted()
+    {
+        var crossing = Assert.Single(Screen("## [94] FROM a — d — real\n## [200] FROM b — d — QUOTED\n## [95] FROM a — d — real"));
+
+        Assert.Contains("QUOTED", crossing.Earlier.Line);
+    }
+
+    /// <summary>
+    /// A HIGHER-numbered intruder is caught too, by the next real entry falling back below it. This
+    /// was measured before the class was written, against a claim that it would sail through.
+    /// </summary>
+    [Fact]
+    public void AnIntruderWithAHigherIndexIsAlsoCaught()
+    {
+        var crossing = Assert.Single(Screen(
+            """
+            ## [94] FROM implementer — 2026-08-13 20:42 — real
+
+            ## [200] FROM supervisor — 2026-08-13 20:41 — quoted from somewhere else
+
+            ## [95] FROM implementer — 2026-08-13 20:43 — real
+            """));
+
+        Assert.Equal(200, crossing.Earlier.Index);
+        Assert.Equal(95, crossing.Later.Index);
+    }
+
+    /// <summary>
+    /// THE LIMIT, pinned so nobody mistakes it for coverage: a quoted header that is still the LAST
+    /// header in the file is invisible, because nothing has followed it to fall back. The window
+    /// closes the moment anybody appends.
+    /// </summary>
+    [Fact]
+    public void AQuotedHeaderAtTheEndOfTheFileIsNotYetVisible()
+    {
+        Assert.Empty(Screen(
+            """
+            ## [94] FROM implementer — 2026-08-13 20:42 — real
+
+            ## [200] FROM supervisor — 2026-08-13 20:41 — quoted, nothing follows it
+            """));
+    }
+
+    /// <summary>
+    /// A HEALTHY CHANNEL IS SILENT. Without this the screen could "work" by reporting everything, and
+    /// a screen that always fires is a screen nobody reads.
+    /// </summary>
+    [Fact]
+    public void AnOrdinaryChannelProducesNothing()
+    {
+        Assert.Empty(Screen(
+            """
+            ## [1] FROM supervisor — 2026-08-13 09:00 — brief
+
+            ## [2] FROM implementer — 2026-08-13 09:05 — report
+
+            ## [3] FROM supervisor — 2026-08-13 09:10 — accepted
+            """));
+    }
+
+    /// <summary>
+    /// DECISION 13: the archive comes first and the sequence spans both files. Read live-only, a
+    /// COMPACTED channel looks like a file that starts at index 84 — and every compaction boundary
+    /// reads as a hole. This is the failure that once told an owner their message was unanswered long
+    /// after it had been answered.
+    /// </summary>
+    [Fact]
+    public void TheArchiveIsReadFirstAndTheSequenceSpansBoth()
+    {
+        var headers = ChannelIndexSequence_Screen.Read_Headers(
+            archiveText: "## [1] FROM supervisor — 2026-08-13 09:00 — old\n\n## [2] FROM implementer — 2026-08-13 09:05 — old",
+            liveText: "## [3] FROM supervisor — 2026-08-13 09:10 — live\n\n## [4] FROM implementer — 2026-08-13 09:15 — live");
+
+        Assert.Equal([1, 2, 3, 4], headers.Select(header => header.Index));
+        Assert.Equal(ChannelIndexSequence_Screen.ARCHIVE_SOURCE, headers[0].Source);
+        Assert.Equal(ChannelIndexSequence_Screen.LIVE_SOURCE, headers[3].Source);
+
+        // No crossing: a compacted channel is healthy, and reading it live-only would invent one.
+        Assert.Empty(ChannelIndexSequence_Screen.Find_Crossings(headers));
+    }
+
+    /// <summary>
+    /// A crossing ACROSS the boundary is still found — the archive's last entry against the live
+    /// file's first.
+    /// </summary>
+    [Fact]
+    public void ACrossingAtTheArchiveBoundaryIsFound()
+    {
+        var crossing = Assert.Single(ChannelIndexSequence_Screen.Find_Crossings(
+            ChannelIndexSequence_Screen.Read_Headers(
+                archiveText: "## [9] FROM supervisor — 2026-08-13 09:00 — old",
+                liveText: "## [8] FROM implementer — 2026-08-13 09:05 — quoted into the live file")));
+
+        Assert.Equal(ChannelIndexSequence_Screen.ARCHIVE_SOURCE, crossing.Earlier.Source);
+        Assert.Equal(ChannelIndexSequence_Screen.LIVE_SOURCE, crossing.Later.Source);
+    }
+
+    /// <summary>
+    /// THE DE-DUPE KEY IS STABLE AS THE CHANNEL GROWS, which is what stops a permanent old crossing
+    /// re-logging on every sweep for as long as the app runs. Appending further entries does not
+    /// change the pair, so the key does not change.
+    /// </summary>
+    [Fact]
+    public void TheDedupeKeySurvivesLaterAppends()
+    {
+        var first = Assert.Single(Screen("## [7] FROM s — d — a\n## [6] FROM s — d — quoted\n## [8] FROM s — d — b"));
+        var second = Assert.Single(Screen("## [7] FROM s — d — a\n## [6] FROM s — d — quoted\n## [8] FROM s — d — b\n## [9] FROM s — d — c"));
+
+        Assert.Equal(ChannelIndexSequence_Screen.Build_DedupeKey(first), ChannelIndexSequence_Screen.Build_DedupeKey(second));
+    }
+
+    /// <summary>And two DIFFERENT crossings are not collapsed into one key.</summary>
+    [Fact]
+    public void TwoDifferentCrossingsKeepDifferentKeys()
+    {
+        var crossings = Screen("## [7] FROM s — d — a\n## [6] FROM s — d — quoted\n## [8] FROM s — d — b\n## [2] FROM s — d — another quote\n## [9] FROM s — d — c");
+
+        Assert.Equal(2, crossings.Count);
+        Assert.NotEqual(
+            ChannelIndexSequence_Screen.Build_DedupeKey(crossings[0]),
+            ChannelIndexSequence_Screen.Build_DedupeKey(crossings[1]));
+    }
+
+    static IReadOnlyList<ChannelIndexCrossing> Screen(string liveText)
+    {
+        return ChannelIndexSequence_Screen.Find_Crossings(
+            ChannelIndexSequence_Screen.Read_Headers(archiveText: "", liveText: liveText));
+    }
+}
