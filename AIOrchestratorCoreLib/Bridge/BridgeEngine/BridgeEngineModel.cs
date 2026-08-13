@@ -749,6 +749,15 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
         {
+            // A channel the poll SKIPPED has a frozen cursor — Find_ActiveChannels drops deferred
+            // topics and held owner channels precisely so their offsets freeze and everything they
+            // produced replays as a catch-up burst. Compaction visits every discovered channel, so
+            // without this it re-anchored that frozen cursor to EOF and the burst the owner is
+            // promised in writing arrived empty. Discovery is wider than the poll: only what was
+            // actually polled may be rewritten.
+            if (!_tailer.Was_PolledInLastPoll(channel.FilePath))
+                continue;
+
             // A channel that still owes Telegram a delivery must not be rewritten underneath the
             // tailer: compaction re-anchors the offset to the new file, and the entries waiting to
             // be retried would go with it. It compacts on a later tick, once the send lands.

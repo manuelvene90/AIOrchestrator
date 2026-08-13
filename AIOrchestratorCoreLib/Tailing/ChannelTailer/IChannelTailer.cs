@@ -34,6 +34,14 @@ public interface IChannelTailer
     bool Has_UndeliveredEntries(string channelFilePath);
 
     /// <summary>
+    /// Whether this file was among the channels handed to the LAST <see cref="Poll"/>. A file the
+    /// poll skipped has a frozen cursor — a deferred topic, an owner channel held mid-composition —
+    /// and everything it produced is owed to the owner as a catch-up burst. Nothing may re-anchor a
+    /// cursor that did not move: compaction must ask this first.
+    /// </summary>
+    bool Was_PolledInLastPoll(string channelFilePath);
+
+    /// <summary>
     /// Current offsets snapshot, persisted by the bridge so restarts do not re-mirror. Unconfirmed
     /// entries are excluded, so a restart re-reads and re-sends what the previous process failed to.
     /// </summary>

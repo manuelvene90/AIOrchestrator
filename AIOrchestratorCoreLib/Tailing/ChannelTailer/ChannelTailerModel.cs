@@ -28,6 +28,12 @@ internal sealed class ChannelTailerModel : IChannelTailer
 
     readonly Dictionary<string, FileTailState> _states = [];
 
+    /// <summary>
+    /// The channels handed to the last <see cref="Poll"/>. Keyed exactly like <see cref="_states"/>,
+    /// so a path that finds its state also finds its poll record — the two must never disagree.
+    /// </summary>
+    readonly HashSet<string> _lastPolledFiles = [];
+
     public ChannelTailerModel(IReadOnlyDictionary<string, long> persistedOffsets)
     {
         foreach (var pair in persistedOffsets)
@@ -42,6 +48,14 @@ internal sealed class ChannelTailerModel : IChannelTailer
         List<ICompletedChannelAppend> completedAppends = [];
         List<string> truncatedFiles = [];
         List<string> unreadableFiles = [];
+
+        // Recorded BEFORE the work, and rebuilt from scratch every poll: a channel that drops out of
+        // the active set (deferred topic, held owner channel, closed member) must stop counting as
+        // polled on the very next tick, or its frozen cursor is fair game for compaction again.
+        _lastPolledFiles.Clear();
+
+        foreach (var channel in channels)
+            _lastPolledFiles.Add(channel.FilePath);
 
         foreach (var channel in channels)
         {
@@ -140,6 +154,11 @@ internal sealed class ChannelTailerModel : IChannelTailer
         // visible, recoverable — for a delivery that disappears silently. Header-less noise does not
         // stick: it is cleared after the quiet-poll window.
         return state.Unconfirmed.Length > 0 || state.Pending.Length > 0;
+    }
+
+    public bool Was_PolledInLastPoll(string channelFilePath)
+    {
+        return _lastPolledFiles.Contains(channelFilePath);
     }
 
     static void Rewind_Unconfirmed(FileTailState state)
