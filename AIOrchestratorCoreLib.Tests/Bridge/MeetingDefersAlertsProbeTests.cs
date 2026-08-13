@@ -191,6 +191,43 @@ public class MeetingDefersAlertsProbeTests : IDisposable
             "the tick died on the failed append — nothing after it ran, including the state persist");
     }
 
+    /// <summary>
+    /// A DEFERRED CHANNEL MUST NOT BE COMPACTED. Deferred means held and replayed; the owner is given
+    /// that promise in writing. But a deferred channel is never POLLED, so the tailer holds no state
+    /// for it and <c>Has_UnconfirmedEntries</c> answers false — "owes nothing" is indistinguishable
+    /// from "never looked at" — after which compaction rewrote the file and moved the cursor to the
+    /// END of it. Un-deferring then delivered nothing at all, permanently.
+    /// <para>
+    /// This asserts the FILE, not the guard: the live channel must still hold every entry and no
+    /// <c>.archive.md</c> may appear beside it. Any future route to compacting a frozen channel
+    /// reddens it, wherever the check is placed.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ADeferredChannelOverTheCompactionThreshold_IsNotCompacted()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        // Above Channel_Compactor.COMPACT_ABOVE_ENTRIES (90), so a compaction really is on offer —
+        // a fixture below the threshold would pass for the wrong reason.
+        var entries = new System.Text.StringBuilder();
+
+        for (var index = 1; index <= 95; index++)
+            entries.Append($"## [{index}] FROM supervisor — 2026-08-13 10:00 — entry {index}\nbody {index}\n\n");
+
+        File.WriteAllText(ownerChannel, entries.ToString());
+
+        var lengthBefore = new FileInfo(ownerChannel).Length;
+
+        _store.Set_TelegramMode(session.OrchId, TelegramDeliveryModes.Deferred);
+
+        await Tick_Once_Async();
+
+        Assert.Equal(lengthBefore, new FileInfo(ownerChannel).Length);
+        Assert.False(File.Exists(Path.ChangeExtension(ownerChannel, null) + ".archive.md"), "the frozen channel was compacted — its held backlog is gone");
+    }
+
     /// <summary>A briefed member that went silent twenty minutes ago, with a report nobody answered.</summary>
     (string OrchId, string MemberChannel) Start_WithDormantMember()
     {

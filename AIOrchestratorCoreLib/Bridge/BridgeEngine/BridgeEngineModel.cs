@@ -777,6 +777,22 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
         {
+            // A FROZEN channel must not be compacted, and asking the tailer does not cover this: a
+            // deferred channel is never POLLED, so the tailer holds no state for it and
+            // Has_UnconfirmedEntries answers false — "owes nothing" is indistinguishable from "never
+            // looked at". Compaction then rewrote the file and Set_Offset moved the cursor to the END
+            // of it, so un-deferring delivered NOTHING: not a burst, not a partial one. The kept 45
+            // entries were skipped along with the archived ones, and the archive is agent memory that
+            // nothing mirrors. The owner got the Silenced outcome without choosing it, permanently
+            // (rev-6 F2, 2026-08-13).
+            //
+            // Same predicate as the poll, deliberately: "this cursor is deliberately frozen" is ONE
+            // rule, and a second copy of it here would drift from the first.
+            if (EffectiveMode_Resolver.Freezes_Offsets(
+                    Resolve_EffectiveMode(channel.OrchId),
+                    _store.Get_Session_OrNull(channel.OrchId)?.TelegramMode ?? TelegramDeliveryModes.Normal))
+                continue;
+
             // A channel that still owes Telegram a delivery must not be rewritten underneath the
             // tailer: compaction re-anchors the offset to the new file, and the entries waiting to
             // be retried would go with it. It compacts on a later tick, once the send lands.
