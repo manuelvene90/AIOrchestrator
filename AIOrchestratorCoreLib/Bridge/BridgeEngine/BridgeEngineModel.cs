@@ -1260,6 +1260,13 @@ internal sealed class BridgeEngineModel(
             if (unreported.Count == 0)
                 continue;
 
+            // THE BYTES, to the log only — nobody with a phone can act on a hex dump (decision 15).
+            // Logged BEFORE the append, so the evidence survives an append that fails: without this
+            // the only record of an occurrence was the report itself, and twice tonight that report
+            // could not settle the question its own subject was sitting on.
+            foreach (var entry in unreported)
+                _log.Log_Warning(channel.OrchId, $"Malformed header — {Path.GetFileName(channel.FilePath)} line {entry.LineNumber} — {ChannelShape_Validator.Diagnose(entry.Line)}");
+
             // CONSULT THE RETURN VALUE. This block used to rely on the append THROWING past it, and
             // said so — "the append above either wrote the report or threw past this line". Nine
             // minutes later the safe wrapper made that false: it catches, logs and returns false, so
