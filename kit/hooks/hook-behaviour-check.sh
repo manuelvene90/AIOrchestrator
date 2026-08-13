@@ -536,6 +536,28 @@ check "a quoted > is not a redirect" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOO
 check "a C# generic signature is not a redirect" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "Dictionary<string, List<int>>" src/')" reviewer)")"
 check "fd duplication is not a file write" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git log --oneline 2>&1')" reviewer)")"
 
+# ── TWO MORE SPELLINGS THE LEXER READ AS SOMETHING ELSE ──────────────────────────────────────────
+#
+# `>|` was not in the operator table, so it tokenised as `>` followed by a pipe: the `>` found no word
+# to take and a plain truncating write reported itself as an unreadable target. `>&` was exempted
+# outright as descriptor duplication, which is what `2>&1` is — but `>& out.log` is the csh spelling
+# of "both streams into this FILE", so the operator alone never decided it; the TARGET does.
+check "the noclobber-override spelling of >" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x >| Foo.cs')" reviewer)")"
+check "the csh spelling, into a file" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x >& out.log')" reviewer)")"
+
+# The same operator with a DESCRIPTOR target writes nothing and must stay allowed — this is the pair
+# that stops the fix above from becoming "deny every >&", which would refuse ordinary `2>&1` work.
+check "…but the same operator onto a descriptor" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x >&2')" reviewer)")"
+check "…and closing a descriptor" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x 2>&-')" reviewer)")"
+
+# `$'…'` is ANSI-C quoting: the `$` is syntax and the word is what the quotes hold. Keeping it made
+# the command reduce to `$rm`, which is in no denied set — an answer about a word the shell never sees.
+check "an ANSI-C quoted verb is the verb" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "\$'rm' -rf build")" reviewer)")"
+check "…and an ANSI-C quoted read-only command is not" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "\$'echo' hello")" reviewer)")"
+
+# Quoted, so not an operator at all — the over-blocking direction for the new spelling.
+check "a quoted >| is not a redirect" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "a >| b" src/')" reviewer)")"
+
 # A reviewer that appends with printf instead of a heredoc. The previous version refused this the
 # moment its prose contained a parenthesis, so the earlier fix worked only for the one shape its
 # author happened to use.

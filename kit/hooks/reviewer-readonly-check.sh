@@ -159,7 +159,13 @@ XARGS_FLAGS_WITH_VALUE = {"-I", "-n", "-P", "-L", "-d", "-E", "-a", "-s",
                           "--max-args", "--max-procs", "--replace", "--delimiter"}
 
 CMD_SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "`", "$(", "\n"}
-REDIRECTS = {">", ">>", ">&", "&>", "<", "<<", "<<<"}
+REDIRECTS = {">", ">>", ">&", "&>", ">|", "<", "<<", "<<<"}
+
+# The redirect operators that WRITE A FILE. `>|` is `>` with noclobber overridden — it was not in the
+# operator table at all, so it tokenised as `>` followed by a pipe, the `>` found no word to take, and
+# a plain truncating write reported itself as an unreadable target. `>&` is here too because its
+# target decides what it is: a DESCRIPTOR duplicates (`2>&1`, nothing written), a NAME is a file.
+WRITING_REDIRECTS = {">", ">>", "&>", ">|", ">&"}
 
 
 class Undecidable(Exception):
@@ -343,6 +349,14 @@ def tokenize(s):
         if c == "\\" and i + 1 < n:
             buf.append(s[i + 1]); has_word = True; i += 2; continue
 
+        # `$'…'` IS ANSI-C QUOTING AND `$"…"` IS LOCALE TRANSLATION: in both the `$` is syntax, and
+        # the word is what the quotes contain. Keeping it made `$'rm' -rf build` reduce to a command
+        # called `$rm`, which is in no denied set — the guard was answering about a word the shell
+        # never sees. The `$` is dropped here rather than in the stripper because this is where words
+        # are built; the stripper only needs to know where the quoted span ends.
+        if c in "'\"" and buf and buf[-1] == "$":
+            buf.pop()
+
         if c == "'":
             j = s.find("'", i + 1)
             if j == -1:
@@ -373,7 +387,7 @@ def tokenize(s):
             flush(); tokens.append(("O", "<<<")); i += 3; continue
 
         two = s[i:i + 2]
-        if two in ("&&", "||", ">>", "<<", ">&", "&>", "$("):
+        if two in ("&&", "||", ">>", "<<", ">&", "&>", ">|", "$("):
             flush(); tokens.append(("O", two)); i += 2; continue
 
         if c in ";|&()`<>":
@@ -399,7 +413,7 @@ def split_commands(tokens):
                 if i + 1 < len(tokens) and tokens[i + 1][0] == "W":
                     target = tokens[i + 1][1]
                     i += 1
-                elif text in (">", ">>", "&>"):
+                elif text in WRITING_REDIRECTS:
                     # A target that is a command or process substitution arrives as an OPERATOR, so
                     # there is no word to read. That is UNANALYSABLE, not absent: reporting "no
                     # target" here was a confident answer about something never seen, and it let an
@@ -668,10 +682,17 @@ def write_target_allowed(operator, target, assignments):
 
 
 def redirect_reason(operator, target, assignments):
-    # `>&` and `2>&1` duplicate a descriptor; nothing is written to a file.
-    if operator in ("<", "<<", "<<<", ">&"):
+    # Reading a file is not writing one.
+    if operator in ("<", "<<", "<<<"):
         return None
     if target is None:
+        return None
+
+    # `>&` IS DECIDED BY ITS TARGET. `2>&1` and `>&2` duplicate a descriptor and write no file, which
+    # is why this operator was exempted outright — but `>& out.log` is the csh spelling of "send both
+    # streams to this FILE", and the blanket exemption waved it through. A descriptor is digits, or
+    # `-` for closing the stream; anything else is a name.
+    if operator == ">&" and target is not UNRESOLVED and (target.isdigit() or target == "-"):
         return None
 
     # Handed straight back to `analyse`, which decides what it means once every command has been
