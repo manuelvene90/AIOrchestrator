@@ -385,7 +385,7 @@ def classify_words(words, depth):
     return None
 
 
-def redirect_reason(operator, target):
+def redirect_reason(operator, target, source):
     # `>&` and `2>&1` duplicate a descriptor; nothing is written to a file.
     if operator in ("<", "<<", "<<<", ">&"):
         return None
@@ -394,13 +394,28 @@ def redirect_reason(operator, target):
 
     normalised = target.replace("\\", "/")
 
-    if operator == ">>" and ("supervision/%s/%s/" % (ORCH, MEMBER)) in normalised:
+    own_channel = "supervision/%s/%s/" % (ORCH, MEMBER)
+
+    if operator == ">>" and own_channel in normalised:
         return None
 
     # The watcher baseline lives beside the channel. Scoped to the TARGET, not to the whole command:
     # matching the word anywhere exempted every redirect in any command that merely mentioned it.
     if "watch-base" in normalised:
         return None
+
+    # A TARGET NAMED BY A VARIABLE CANNOT BE RESOLVED HERE, and refusing it silences the role. The
+    # reviewer role command shows exactly this shape — the channel path is put in a variable and the
+    # append uses the variable — so a token-only test refuses the one write a reviewer is allowed to
+    # make, with a refusal telling it to do what it just tried. The original matched the exemption
+    # substring ANYWHERE in the command, which covered this; that fallback is restored for precisely
+    # the unresolvable case, leaving the tightened token test in force for literal targets.
+    if "$" in target or "`" in target:
+        whole = source.replace("\\", "/")
+        if operator == ">>" and own_channel in whole:
+            return None
+        if "watch-base" in whole:
+            return None
 
     return "redirect"
 
@@ -414,7 +429,7 @@ def analyse(source, depth=0):
             return reason
 
     for operator, target in redirects:
-        reason = redirect_reason(operator, target)
+        reason = redirect_reason(operator, target, source)
         if reason:
             return reason
 

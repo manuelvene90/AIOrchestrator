@@ -460,6 +460,21 @@ check "a printf append with parens is allowed" ALLOW "$(verdict "$(run_hook "$RE
 # hid this regression from my first comparison.
 check "a crafted path cannot satisfy an empty id" DENY "$(verdict "$(MEMBER=""; run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> /tmp/supervision/$ORCH//../../etc/foo")" reviewer)")"
 check "a real own-channel append still works" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
+
+# THE SHAPE THE ROLE COMMAND ACTUALLY SHOWS, and the reason every own-channel case above is not
+# enough: they all spell the path out. A reviewer following its own instructions names the channel in
+# a VARIABLE first, and at reduction time the redirect target is that variable, which contains no
+# path. Refusing it does not degrade the role, it silences it — the first reviewer to file anything
+# is told to do the very thing it just tried. Both directions, because an exemption that matched any
+# variable at all would satisfy the first of these and wave through every write in the tree.
+check "the role command's variable append is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "ch=\"$SUPERVISION/$MEMBER/channel.md\"
+cat >> \"\$ch\" <<'EOF'
+## [3] FROM reviewer — findings
+EOF")" reviewer)")"
+check "a variable naming NO own channel is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "ch=/tmp/elsewhere.txt
+echo x >> \"\$ch\"")" reviewer)")"
+check "a variable naming ANOTHER member is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "ch=\"$SUPERVISION/imp-2/channel.md\"
+echo x >> \"\$ch\"")" reviewer)")"
 check "another member's channel is still denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/imp-2/channel.md")" reviewer)")"
 
 # ── A REDIRECT TARGET THE REDUCER CANNOT RESOLVE IS UNANALYSABLE, NOT ABSENT ─────────────────────
