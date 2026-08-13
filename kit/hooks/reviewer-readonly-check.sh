@@ -142,7 +142,11 @@ while IFS= read -r SEGMENT; do
       esac ;;
     git)
       case "$ARG" in
-        commit|add|push|merge|rebase|reset|checkout|switch|stash|cherry-pick|revert|worktree|tag|clean|restore|apply|am)
+        # `rm` and `mv` are here because the first version of this reduction DROPPED them while
+        # claiming the denied set was unchanged. Master caught them robustly — a subcommand cannot be
+        # hidden from a substring matcher by quoting the way a wrapper form can — and both stage a
+        # deletion or a rename AND change the working tree, so the loss was real.
+        commit|add|rm|mv|push|merge|rebase|reset|checkout|switch|stash|cherry-pick|revert|worktree|tag|clean|restore|apply|am)
           deny "that git command changes repository state." ;;
         branch)
           # `git branch` alone lists; anything with a flag can create, move or delete one.
@@ -158,7 +162,10 @@ while IFS= read -r SEGMENT; do
       case "$ARG" in
         add) deny "that command installs or scaffolds into the working tree." ;;
       esac ;;
-    pip|pip3)
+    # `pip3` is deliberately NOT here. Master denies `pip install` only, so adding it would be a
+    # widening nobody reviewed — the same reason `chmod`, `tee` and `shred` are absent. That master
+    # misses `pip3 install` is a real gap, reported separately rather than fixed in passing.
+    pip)
       case "$ARG" in
         install) deny "that command installs or scaffolds into the working tree." ;;
       esac ;;

@@ -350,6 +350,25 @@ REV_CHANNEL="$SUPERVISION/$MEMBER/channel.md"
 check "rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build')" reviewer)")"
 check "git commit is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git commit -m fix')" reviewer)")"
 check "sed -i is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'sed -i s/a/b/ Foo.cs')" reviewer)")"
+
+# ONE CASE PER DENIED GIT SUBCOMMAND, AND THE READ-ONLY HALF TOO.
+#
+# There was exactly ONE git case before this, which is how a rewrite dropped the file-removal and
+# file-move subcommands and stayed green. Unlike the wrapper forms, quoting cannot hide a subcommand
+# from a substring matcher, so the old matcher caught those two ROBUSTLY and the loss was real: both
+# stage a change AND touch the working tree. "Let me just take this stale file out of the index" is a
+# sentence a reviewer actually thinks.
+#
+# Driven off a list so that a token in the hook with no case here reads as an omission rather than
+# hiding behind a green run. The ALLOW half is not decoration: a matcher that denied everything would
+# satisfy every line of the loop above it.
+for git_subcommand in commit add rm mv push merge rebase reset checkout switch stash cherry-pick revert worktree tag clean restore apply am; do
+  check "git $git_subcommand is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "git $git_subcommand Foo.cs")" reviewer)")"
+done
+
+for git_readonly in "log --oneline" "diff HEAD" "status --short" "show HEAD" "blame Foo.cs"; do
+  check "git $git_readonly is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "git $git_readonly")" reviewer)")"
+done
 check "npm install is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'npm install')" reviewer)")"
 check "redirection into a file is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > Foo.cs')" reviewer)")"
 
