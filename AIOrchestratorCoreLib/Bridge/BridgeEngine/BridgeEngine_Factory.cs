@@ -24,10 +24,6 @@ public static class BridgeEngine_Factory
         IOrchestrationLauncher launcher,
         IOrchestrationLog log)
     {
-        // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
-        var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
-        var tailer = ChannelTailer_Factory.Create(fileOffsets);
-
         var startupConfig = configProvider.Get_Current();
         ITelegramApiClient? telegramClient = null;
 
@@ -40,6 +36,34 @@ public static class BridgeEngine_Factory
 
             telegramClient = TelegramApiClient_Factory.Create(botToken, supergroupChatId);
         }
+
+        return Create_WithTelegramClient(paths, configProvider, store, launcher, log, telegramClient);
+    }
+
+    /// <summary>
+    /// THE ENGINE-LEVEL TELEGRAM TEST SEAM — not a production mode. Every production caller uses the
+    /// overload above, which builds the real client from config; this one exists so a test can hand
+    /// in a fake and drive the mirror path with a send that FAILS.
+    ///
+    /// WHY IT HAD TO EXIST: `Mirror_Append_Async` returns early when the client is null, ABOVE the
+    /// owner-push logic, so every test running in file-only mode passes straight over that code. The
+    /// defect where a failed send dropped the owner's answer (R1) was unreachable from a test until
+    /// this seam existed. `BridgeEngineModel` is internal and this repo has twice refused
+    /// `InternalsVisibleTo`, so an additive public overload is the in-idiom alternative.
+    ///
+    /// A null client here means the same thing it means in production: file-only mode, no phone.
+    /// </summary>
+    public static IBridgeEngine Create_WithTelegramClient(
+        ISupervisionPaths paths,
+        IOrchestratorConfigProvider configProvider,
+        IOrchestrationSessionStore store,
+        IOrchestrationLauncher launcher,
+        IOrchestrationLog log,
+        ITelegramApiClient? telegramClient)
+    {
+        // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
+        var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
+        var tailer = ChannelTailer_Factory.Create(fileOffsets);
 
         var watchdog = SessionWatchdog_Factory.Create(paths, store, launcher, log);
         var translator = Translation.MessageTranslator.MessageTranslator_Factory.Create(log);
