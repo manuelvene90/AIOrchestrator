@@ -168,12 +168,19 @@ internal sealed class ChannelTailerModel : IChannelTailer
         }
     }
 
-    public bool Has_UndeliveredEntries(string channelFilePath)
+    public bool Has_UndeliveredEntries(string channelFilePath, out string? unevaluableReason)
     {
         lock (_statesLock)
         {
+            unevaluableReason = null;
+
             if (!_states.TryGetValue(channelFilePath, out var state))
+            {
+                // A REAL answer, not a silent fail-open: no state means this tailer has never read
+                // this file, so it is owed nothing by it. The caller's own poll guard has already
+                // refused anything the last poll skipped.
                 return false;
+            }
 
             // PENDING COUNTS TOO, and testing Unconfirmed alone was a silent-loss bug: every poll
             // starts by draining Unconfirmed back into Pending (Rewind_Unconfirmed), and bytes read
@@ -199,7 +206,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
             // compaction then kept the new entry among the newest 45, returned EOF, and Set_Offset
             // parked the cursor past it. Gone from Telegram, intact on disk, and invisible to the
             // log — the per-entry log line lives inside the mirror send that never happened.
-            return Has_BytesPastCursor(state, channelFilePath);
+            return Has_BytesPastCursor(state, channelFilePath, out unevaluableReason);
         }
     }
 
@@ -207,16 +214,40 @@ internal sealed class ChannelTailerModel : IChannelTailer
     /// Runs with <see cref="_statesLock"/> HELD. Costs one stat per channel per tick, against a
     /// compactor that reads and rewrites whole files — and it is what makes this predicate answer
     /// the question its contract asks, rather than only the part held in memory.
+    /// <para>
+    /// WHEN IT CANNOT TELL, IT SAYS SO AND REFUSES. It used to answer "clear" for a file it could
+    /// not stat, which let compaction rewrite a channel on the strength of a question nobody had
+    /// managed to ask. A guard that cannot evaluate its predicate must never invent either answer:
+    /// it names the predicate that failed, and the caller logs it and holds off. Compaction is
+    /// optional and retries next tick; a lost entry does not come back.
+    /// </para>
     /// </summary>
-    static bool Has_BytesPastCursor(FileTailState state, string channelFilePath)
+    static bool Has_BytesPastCursor(FileTailState state, string channelFilePath, out string? unevaluableReason)
     {
-        var fileLength = Get_FileLength_OrNull(channelFilePath);
+        unevaluableReason = null;
 
-        // A file that is SHORTER than the cursor is the append-only protocol breaking, not a delivery
-        // owed: the next poll reports it as truncated and re-anchors. Nothing to hold compaction for.
+        long? fileLength;
+
+        try
+        {
+            fileLength = Get_FileLength_OrNull(channelFilePath);
+        }
+        catch (Exception ex)
+        {
+            unevaluableReason = $"could not stat the channel file — {ex.GetType().Name}: {ex.Message}";
+            return true;
+        }
+
         if (fileLength == null)
-            return false;
+        {
+            // The file is GONE while this tailer still holds a cursor into it. Whether it owed a
+            // delivery is now unanswerable, and a channel file vanishing is worth a line of its own.
+            unevaluableReason = "the channel file does not exist, so what it still owed cannot be determined";
+            return true;
+        }
 
+        // A file SHORTER than the cursor is the append-only protocol breaking rather than a delivery
+        // owed: the next poll reports it as truncated and re-anchors.
         return fileLength.Value > state.Offset;
     }
 

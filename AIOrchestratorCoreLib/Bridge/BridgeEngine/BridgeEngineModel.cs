@@ -753,7 +753,7 @@ internal sealed class BridgeEngineModel(
             // Guards, archive and re-anchor all live in the step, which the suite can execute — this
             // engine cannot be constructed from a test, and a guard that only exists here is a guard
             // whose only proof is a copy of itself in a test file.
-            var newLength = Channel_CompactionStep.Compact_IfAllowed(_tailer, channel.FilePath);
+            var newLength = Channel_CompactionStep.Compact_IfAllowed(_tailer, channel.FilePath, _log, channel.OrchId);
 
             if (newLength == null)
                 continue;

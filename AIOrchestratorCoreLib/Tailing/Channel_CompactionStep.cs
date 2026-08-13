@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 
 namespace AIOrchestratorCoreLib.Tailing;
@@ -22,7 +23,11 @@ public static class Channel_CompactionStep
     /// Returns the new file length, or null when nothing was done — the channel was not eligible,
     /// or it was too short to compact.
     /// </summary>
-    public static long? Compact_IfAllowed(IChannelTailer tailer, string channelFilePath)
+    public static long? Compact_IfAllowed(
+        IChannelTailer tailer,
+        string channelFilePath,
+        IOrchestrationLog log,
+        string orchId)
     {
         // A channel the poll SKIPPED has a frozen cursor — Find_ActiveChannels drops deferred topics
         // and held owner channels precisely so their offsets freeze and everything they produced
@@ -34,7 +39,22 @@ public static class Channel_CompactionStep
         // A channel that still owes Telegram a delivery must not be rewritten underneath the tailer:
         // compaction re-anchors the offset to the new file, and the entries waiting to be sent would
         // go with it. It compacts on a later tick, once the send lands.
-        if (tailer.Has_UndeliveredEntries(channelFilePath))
+        var owesDelivery = tailer.Has_UndeliveredEntries(channelFilePath, out var unevaluableReason);
+
+        // A guard that could not evaluate its predicate SAYS WHICH ONE and holds off. Silence in
+        // either direction is the failure: an unexplained refusal is unactionable, and an invented
+        // "all clear" is how a rewrite proceeds on a question nobody managed to ask. The log is the
+        // right home for it — the owner cannot act on this, so it never goes to Telegram.
+        if (unevaluableReason != null)
+        {
+            log.Log_Warning(
+                orchId,
+                $"Compaction held off — the undelivered-entries guard could not evaluate '{Path.GetFileName(channelFilePath)}': {unevaluableReason}");
+
+            return null;
+        }
+
+        if (owesDelivery)
             return null;
 
         var newLength = Channel_Compactor.Compact_IfNeeded(channelFilePath);

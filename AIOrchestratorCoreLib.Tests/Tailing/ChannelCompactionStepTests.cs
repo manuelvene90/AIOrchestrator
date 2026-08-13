@@ -2,6 +2,8 @@ using System.Text;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
 using AIOrchestratorCoreLib.Tailing;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using Xunit;
@@ -46,7 +48,7 @@ public class ChannelCompactionStepTests : IDisposable
         tailer.Poll([_channel]);
 
         var lengthBefore = new FileInfo(_channelFile).Length;
-        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile);
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
 
         Assert.NotNull(newLength);
         Assert.True(newLength < lengthBefore, $"the live file should have shrunk: {lengthBefore} -> {newLength}");
@@ -60,7 +62,7 @@ public class ChannelCompactionStepTests : IDisposable
         var tailer = ChannelTailer_Factory.Create_Fresh();
         tailer.Poll([_channel]);
 
-        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile);
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
         var afterCompaction = tailer.Poll([_channel]);
         var reDelivered = Collect_DeliveredEntries(tailer, polls: 4, [_channel]);
 
@@ -95,7 +97,7 @@ public class ChannelCompactionStepTests : IDisposable
         // fixture appends after the last poll and so trips the unread-bytes clause as well.
         tailer.Poll([activeChannel]);
 
-        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile);
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
 
         Assert.Null(newLength);
     }
@@ -113,7 +115,7 @@ public class ChannelCompactionStepTests : IDisposable
         // window has not elapsed — so the bytes are owed to Telegram and held in Pending alone.
         tailer.Poll([_channel]);
 
-        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile);
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
         var delivered = Collect_DeliveredEntries(tailer, polls: 4, [_channel]);
 
         Assert.Null(newLength);
@@ -133,7 +135,7 @@ public class ChannelCompactionStepTests : IDisposable
         // it holds says they exist — Pending is empty and the channel looks perfectly clear.
         File.AppendAllText(_channelFile, Build_Entry(ENTRIES_ABOVE_THRESHOLD + 1, "written after the poll"));
 
-        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile);
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
         var delivered = Collect_DeliveredEntries(tailer, polls: 4, [_channel]);
 
         // Compacting here keeps this entry in the file — among the newest 45 — and returns EOF, so
@@ -165,7 +167,7 @@ public class ChannelCompactionStepTests : IDisposable
         for (var i = 0; i < 3; i++)
         {
             tailer.Poll([activeChannel]);
-            compactionResults.Add(Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile));
+            compactionResults.Add(Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x"));
         }
 
         var delivered = Collect_DeliveredEntries(tailer, polls: 4, [_channel, activeChannel]);
@@ -178,6 +180,64 @@ public class ChannelCompactionStepTests : IDisposable
         // deferred across compaction ticks delivers its catch-up burst intact when it comes back.
         Assert.All(compactionResults, result => Assert.Null(result));
         Assert.Equal("while you were away", Assert.Single(delivered).Subject);
+    }
+
+    [Fact]
+    public void ChannelThatCannotBeEvaluated_IsNotCompacted_AndSaysWhichGuardFailed()
+    {
+        Write_LongChannel(_channelFile);
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        // The tailer still holds a cursor into this file and the file is now gone. Whether it owed a
+        // delivery is unanswerable — and answering "clear" anyway is how a rewrite proceeds on a
+        // question nobody managed to ask.
+        File.Delete(_channelFile);
+
+        var log = new RecordingLog();
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, log, "orch-x");
+
+        Assert.Null(newLength);
+
+        var warning = Assert.Single(log.Warnings);
+        Assert.Contains("undelivered-entries guard", warning, StringComparison.Ordinal);
+        Assert.Contains("does not exist", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChannelWhoseStatThrows_IsNotCompacted_AndSaysWhichGuardFailed()
+    {
+        // A path the filesystem cannot even be asked about: FileInfo throws rather than answering.
+        // Poll records it as polled before it fails, and Set_Offset gives the tailer a cursor for it,
+        // so the step reaches the guard — which must refuse rather than invent either answer.
+        var unstatablePath = Path.Combine(_tempFolder, "chan\0nel.md");
+        var unstatableChannel = DiscoveredChannel_Factory.Create_ForImplementer("orch-x", "imp-9", unstatablePath);
+
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var pollResult = tailer.Poll([unstatableChannel]);
+        tailer.Set_Offset(unstatablePath, 0);
+
+        var log = new RecordingLog();
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, unstatablePath, log, "orch-x");
+
+        Assert.NotEmpty(pollResult.UnreadableFiles);
+        Assert.Null(newLength);
+        Assert.Contains("could not stat", Assert.Single(log.Warnings), StringComparison.Ordinal);
+    }
+
+    sealed class RecordingLog : IOrchestrationLog
+    {
+        public List<string> Warnings { get; } = [];
+
+        public void Log_Info(string orchId, string message) { }
+        public void Log_Warning(string orchId, string message) => Warnings.Add(message);
+        public void Log_Error(string orchId, string message, Exception? exception) { }
+
+        public event Action<IOrchestrationLogEntry>? EntryLogged
+        {
+            add { }
+            remove { }
+        }
     }
 
     static void Write_LongChannel(string channelFilePath)

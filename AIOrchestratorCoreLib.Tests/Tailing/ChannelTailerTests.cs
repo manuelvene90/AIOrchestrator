@@ -189,7 +189,8 @@ public class ChannelTailerTests : IDisposable
         var readPoll = tailer.Poll([_channel]);
 
         Assert.Empty(readPoll.CompletedAppends);
-        Assert.True(tailer.Has_UndeliveredEntries(_channelFile));
+        Assert.True(tailer.Has_UndeliveredEntries(_channelFile, out var unevaluableReason));
+        Assert.Null(unevaluableReason);
     }
 
     [Fact]

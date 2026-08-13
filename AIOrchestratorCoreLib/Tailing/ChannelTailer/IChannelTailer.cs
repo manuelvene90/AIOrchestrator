@@ -32,12 +32,18 @@ public interface IChannelTailer
     /// a poll's rewind), and bytes on disk PAST THE CURSOR that no poll has read yet. The bridge
     /// must not rewrite such a file meanwhile.
     /// <para>
-    /// The third is the one that is easy to forget and was the last silent-loss hole: the mirror
-    /// tick appends entries after its own poll, so a channel can owe a delivery that exists nowhere
-    /// in this object's memory. It therefore stats the file rather than trusting its buffers.
+    /// The third is the one that is easy to forget: the mirror tick appends entries after its own
+    /// poll, so a channel can owe a delivery that exists nowhere in this object's memory. It
+    /// therefore stats the file rather than trusting its buffers.
+    /// </para>
+    /// <para>
+    /// When it CANNOT tell — the file cannot be stat'ed, or has vanished under the cursor — it
+    /// returns true and sets <paramref name="unevaluableReason"/> to the predicate that failed. The
+    /// caller must log that line and hold off rather than let a rewrite proceed on an unasked
+    /// question. A null reason means the answer was actually computed.
     /// </para>
     /// </summary>
-    bool Has_UndeliveredEntries(string channelFilePath);
+    bool Has_UndeliveredEntries(string channelFilePath, out string? unevaluableReason);
 
     /// <summary>
     /// Whether this file was among the channels handed to the LAST <see cref="Poll"/>. A file the
