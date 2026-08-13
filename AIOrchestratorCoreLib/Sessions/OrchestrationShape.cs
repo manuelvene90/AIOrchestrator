@@ -42,4 +42,46 @@ public static class OrchestrationShape
     {
         return supervisorSpawnedUtc == null;
     }
+
+    /// <summary>
+    /// May this orchestration take a new member of this kind? A BASIC one takes only its solo, and a
+    /// CREW takes anything but a solo.
+    ///
+    /// THIS IS THE ENFORCEMENT BEHIND THE PROMOTION GATE, and without it the gate had a door beside
+    /// it. The desktop's "+ Implementer" button calls straight into the launcher, so a click on a
+    /// basic card produced a solo plus an implementer and NO supervisor: no request, no handover
+    /// entry, no owner tap — the three things the promotion path spends a request, a park, a prompt
+    /// and a tap to enforce. Worse, nothing stamps `SupervisorSpawnedUtc` on that path, so the
+    /// orchestration still reads as basic, the watchdog never spawns a supervisor, and the new
+    /// implementer sits on its spoke waiting for a brief that cannot come from anywhere.
+    ///
+    /// Decision 21 is why it lives HERE rather than in the button's visibility: a session or a click
+    /// can only ask, and the enforcement that must actually hold belongs at the point of effect. The
+    /// UI may still hide the button — that is a courtesy, not the guard.
+    ///
+    /// PROMOTION PASSES THIS UNAIDED, which is not a coincidence and is worth stating: the supervisor
+    /// is spawned FIRST, so the stamp exists by the time `Promote_ToFullCrew` adds imp-1, and the same
+    /// rule that refuses the button admits the promotion. If that ordering is ever changed, this rule
+    /// is what will stop it.
+    /// </summary>
+    public static bool Can_AddMember(DateTime? supervisorSpawnedUtc, MemberKinds kind)
+    {
+        return Is_BasicOrchestration(supervisorSpawnedUtc)
+            ? kind == MemberKinds.Solo
+            : kind != MemberKinds.Solo;
+    }
+
+    /// <summary>
+    /// Why the member was refused, in words the owner reads in a dialog and an agent reads in a
+    /// channel — naming the SUPPORTED path rather than only the refusal. "Not allowed" tells somebody
+    /// they are stuck; this tells them what to do instead.
+    /// </summary>
+    public static string Describe_AddMemberRefusal(DateTime? supervisorSpawnedUtc, MemberKinds kind)
+    {
+        return Is_BasicOrchestration(supervisorSpawnedUtc)
+            ? $"This is a BASIC orchestration — one session, no supervisor — so a {kind.ToString().ToLowerInvariant()} cannot be added to it. "
+              + "An implementer here would wait for a brief from a supervisor that does not exist and cannot be created. "
+              + "To get a crew, the session itself asks for a promotion (it files a handover entry first) and you confirm it with a tap."
+            : $"This orchestration already has a supervisor, so a {kind.ToString().ToLowerInvariant()} cannot be added to it — a solo exists only in a basic orchestration.";
+    }
 }

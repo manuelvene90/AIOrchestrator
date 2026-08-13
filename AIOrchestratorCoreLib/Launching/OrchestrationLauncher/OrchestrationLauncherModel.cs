@@ -89,6 +89,19 @@ internal sealed class OrchestrationLauncherModel(
 
     public IOrchestrationSession Add_Member(string orchId, MemberKinds kind)
     {
+        // THE SHAPE GATE, and it is here rather than in the button because a click can only ask.
+        // The desktop's "+ Implementer" reaches this method directly, so before this a click on a
+        // basic card spawned an implementer beside the solo with NO supervisor and no stamp — the
+        // orchestration still read as basic, the watchdog never made a supervisor, and the new
+        // session waited on a brief that could not come. That bypassed the request, the handover
+        // entry and the owner's tap in one click.
+        //
+        // It throws rather than returning quietly: every caller is either a UI handler that shows
+        // the message or a request processor that reports it, and a silent no-op here would spend a
+        // click and look like it worked.
+        if (!OrchestrationShape.Can_AddMember(_store.Get_Session(orchId).SupervisorSpawnedUtc, kind))
+            throw new Exception(OrchestrationShape.Describe_AddMemberRefusal(_store.Get_Session(orchId).SupervisorSpawnedUtc, kind));
+
         var session = _store.Add_Member(orchId, kind);
         var newMember = session.Members[session.Members.Count - 1];
 
