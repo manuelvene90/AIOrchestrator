@@ -54,6 +54,28 @@ public class IdleFlagKeyTests
     }
 
     /// <summary>
+    /// A DIFFERENT member, at the SAME count, is a different key — and every case above missed this,
+    /// which rev-6 found by mutating the key to `memberIds.Count.ToString()` and watching all four
+    /// pass.
+    ///
+    /// The gap was structural rather than careless: each existing case varied membership and
+    /// cardinality TOGETHER, so a key built from the count alone satisfied every one of them. This is
+    /// the two-routes-to-green shape at the level of a test suite instead of a single assertion.
+    ///
+    /// What it costs live: imp-1 goes idle while imp-2 works, then imp-1 resumes and imp-2 falls
+    /// idle. The set changed completely, the count did not, and the supervisor is never told that a
+    /// DIFFERENT member is now the one worth closing.
+    /// </summary>
+    [Fact]
+    public void ADifferentMemberAtTheSameCountIsADifferentKey()
+    {
+        var first = Idle(("imp-1", "45 min"));
+        var second = Idle(("imp-2", "45 min"));
+
+        Assert.NotEqual(Retirement_Advisor.Build_FlagKey(first), Retirement_Advisor.Build_FlagKey(second));
+    }
+
+    /// <summary>
     /// The same members reported in a different order are the same set. Member order comes from the
     /// session roster, and a reordering there is not something to wake the supervisor about.
     /// </summary>

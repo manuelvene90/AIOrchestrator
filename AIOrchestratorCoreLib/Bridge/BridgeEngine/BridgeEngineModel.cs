@@ -236,9 +236,17 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _statusLineTextByOrchId = [];
 
     /// <summary>
-    /// Which members have already been flagged as idle, per orchestration, so the reminder is written
-    /// ONCE per quiet spell rather than every tick. Cleared when the set changes, which is what makes
-    /// a member becoming idle — or stopping — say something exactly once.
+    /// The idle member SET last flagged, per orchestration, so the reminder is written ONCE per quiet
+    /// spell rather than every tick.
+    ///
+    /// It is REPLACED on every change, never cleared — and the difference is the whole mechanism. The
+    /// EMPTY set is stored like any other, which is what resets this when everyone goes back to work
+    /// and makes the next idle spell news again. A reader who took "cleared when the set changes"
+    /// literally — as the earlier wording here said — would move or drop that store and silently
+    /// suppress every second idle spell for the life of the process.
+    ///
+    /// The value is the member set, NEVER the rendered line: a duration inside the key changes every
+    /// minute and never matches itself, which produced 151 flags in six hours on 2026-08-13.
     /// </summary>
     readonly Dictionary<string, string> _flaggedIdleMembersByOrchId = [];
 
@@ -4263,6 +4271,10 @@ internal sealed class BridgeEngineModel(
             if (signature == (lastSignature ?? ""))
                 continue;
 
+            // STORED BEFORE THE EARLY RETURN, and that order is load-bearing. The empty set must be
+            // recorded too: it is what resets the memory when everyone goes back to work, so the NEXT
+            // idle spell is news again. Storing after the append instead means the empty tick returns
+            // first, the stale key survives, and every second idle spell is suppressed forever.
             _flaggedIdleMembersByOrchId[session.OrchId] = signature;
 
             if (idle.Count == 0)

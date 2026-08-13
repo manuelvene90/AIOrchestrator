@@ -116,6 +116,57 @@ public class IdleFlagKeyProbeTests : IDisposable
     }
 
     /// <summary>
+    /// A SECOND idle spell is news again — the case that is swallowed FOREVER if the memory is stored
+    /// after the append instead of before it.
+    ///
+    /// With the store after the append, the empty-set tick returns early and never records that the
+    /// set emptied, so the stale key survives; the next spell computes the same key, matches it, and
+    /// is suppressed. Every second idle spell, for the life of the process, silently.
+    ///
+    /// rev-6 found this by moving one line, and all six existing cases stayed green: none of them ever
+    /// let a member stop being idle. A dedup that is only ever tested while the condition HOLDS cannot
+    /// see a reset that never happens.
+    /// </summary>
+    [Fact]
+    public async Task AMemberThatGoesBusyAndIdlesAgainIsFlaggedAgain()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var memberId = session.Members[0].MemberId;
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        Declare_Idle_Since(session.OrchId, memberId, DateTime.Now.AddMinutes(-31));
+        await Tick_Once_Async();
+
+        Assert.True(Wait_Until(() => Count_IdleFlags(ownerChannel) >= 1), "the first idle spell was never flagged");
+
+        // Back to work: the declaration is no longer the member's last word, so it leaves the idle set.
+        Declare_Working(session.OrchId, memberId);
+        await Tick_Once_Async();
+
+        // And idle again — a new spell, and the supervisor has not been told about THIS one.
+        Declare_Idle_Since(session.OrchId, memberId, DateTime.Now.AddMinutes(-31));
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => Count_IdleFlags(ownerChannel) >= 2),
+            "a second idle spell was swallowed — the dedup memory was never reset when the member went back to work");
+    }
+
+    /// <summary>
+    /// The member's last word is a report rather than a declaration, so it is not idle. Written whole
+    /// for the same reason as the declaration below.
+    /// </summary>
+    void Declare_Working(string orchId, string memberId)
+    {
+        var stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+
+        File.WriteAllText(
+            _paths.Get_ImplementerChannelFile(orchId, memberId),
+            $"## [1] FROM supervisor — {stamp} — brief\nimplement the parser\n\n"
+            + $"## [2] FROM implementer — {stamp} — TASK 1 committed abc1234\nback at work on the next one\n");
+    }
+
+    /// <summary>
     /// A briefed member that has DECLARED, long enough ago to be an accumulation rather than a pause.
     /// Written as a whole file each time so the stamp can move backwards; the app never rewrites a
     /// channel, but a fixture may.
