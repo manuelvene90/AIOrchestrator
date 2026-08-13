@@ -1163,6 +1163,16 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Nudge_IdleSupervisor(IOrchestrationSession session)
     {
+        // DEFERRED, NOT DROPPED — and it has to be here rather than at the append. The nudge fires
+        // once per quiet spell and records that it did; consulting the meeting only at the append
+        // spends that token while the entry goes nowhere, so the nudge is destroyed rather than
+        // held. Bailing leaves the token untouched and the nudge arrives after the meeting.
+        //
+        // Nothing is reconciled below this line — unlike the ledger check, where the same bail in the
+        // same place wedges the session (see LedgerHealth_Step).
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
+            return;
+
         var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
         if (Is_SessionMidTurn(supervisorUsageFile))
@@ -1340,21 +1350,30 @@ internal sealed class BridgeEngineModel(
                 lastVerdictUtc = Read_LedgerDebtStamp_OrDefault(session.OrchId);
 
             var isBehind = LedgerHealth_Tracker.Is_LedgerBehind(_paths, session.OrchId, lastVerdictUtc == default ? null : lastVerdictUtc);
-            LedgerHealth_Tracker.Sync_Flag(_paths, session.OrchId, isBehind);
 
-            if (!isBehind)
-            {
+            // The ORDER of the two halves is the correctness here, so the step owns it: the flag is
+            // reconciled even in a meeting (lifting a block is not an interruption), while the alert
+            // and its once-per-spell token are deferred. LedgerHealth_Step's own doc has the wedge
+            // that the other order produces.
+            var ledgerOutcome = LedgerHealth_Step.Reconcile(
+                _paths,
+                session.OrchId,
+                isBehind,
+                alreadyReported: _ledgerBehindReportedOrchIds.Contains(session.OrchId),
+                suppressed: OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)));
+
+            if (ledgerOutcome.RemembersReported)
+                _ledgerBehindReportedOrchIds.Add(session.OrchId);
+            else
                 _ledgerBehindReportedOrchIds.Remove(session.OrchId);
-            }
-            else if (_ledgerBehindReportedOrchIds.Add(session.OrchId))
+
+            if (ledgerOutcome.ShouldAppendAlert
+                && Append_SupervisorAttention_UnlessMeeting(
+                    session.OrchId,
+                    "PLAN.md is behind your verdicts",
+                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do."))
             {
-                if (Append_SupervisorAttention_UnlessMeeting(
-                        session.OrchId,
-                        "PLAN.md is behind your verdicts",
-                        "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do."))
-                {
-                    _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
-                }
+                _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
             }
 
             Report_LedgerShape(session);
@@ -1387,6 +1406,12 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Report_LedgerShape(IOrchestrationSession session)
     {
+        // Above the FINGERPRINT, not at the append: recording the offending set while suppressed
+        // marks this shape as already reported, and the complaint never comes back after the
+        // meeting. Nothing is reconciled below this line (contrast LedgerHealth_Step).
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
+            return;
+
         var planFile = _paths.Get_PlanFile(session.OrchId);
 
         if (!File.Exists(planFile))
@@ -4297,6 +4322,12 @@ internal sealed class BridgeEngineModel(
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
+                continue;
+
+            // Above the SIGNATURE, not at the append: storing it while suppressed marks this exact
+            // set of idle members as already flagged, and the flag never returns after the meeting.
+            // Nothing is reconciled below this line (contrast LedgerHealth_Step).
+            if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
                 continue;
 
             List<string> idle = [];
