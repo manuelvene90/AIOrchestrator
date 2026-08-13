@@ -30,20 +30,31 @@ namespace AIOrchestratorCoreLib.Planning;
 public static class LedgerTranslation_Verifier
 {
     /// <summary>
-    /// Same number of lines, and the same marker on each one, in the same order. Everything else is
-    /// prose and is free to change — that is what was being asked for.
+    /// WHAT changed about the ledger's shape, or null if nothing did: same number of lines, and the
+    /// same marker on each one, in the same order. Everything else is prose and is free to change —
+    /// that is what was being asked for.
     ///
-    /// PER INDEX, not as a tally: rows regrouped by state keep every count identical, and a set
-    /// comparison would call that preserved while the owner's document had been rearranged.
+    /// IT NAMES THE CHANGE RATHER THAN ANSWERING YES OR NO, and that is not decoration. Rule 15
+    /// correctly forbids telling the owner about a fallback they cannot act on, which makes the log
+    /// line the ENTIRE diagnostic surface for the one failure this exists to detect. A bare bool
+    /// leaves that line unable to say whether a row vanished or a marker was rewritten, and rule 21
+    /// names that shape exactly: "hook error" is the silence again.
+    ///
+    /// PER INDEX, not as a tally: rows regrouped ACROSS marker groups keep every count identical, and
+    /// a set comparison would call that preserved while the owner's document had been rearranged.
+    /// **Two rows carrying the SAME marker that swap places are not caught** — their markers match at
+    /// both indexes — and the earlier wording of this comment claimed the rearrangement case outright.
+    /// Prose is not checked by anything, so an overstated guarantee here survives until someone
+    /// re-derives it; what is actually guaranteed is the marker SEQUENCE, not the row order.
     ///
     /// "No marker" is itself a shape and is checked like any other. The heading carries none, so it
     /// may be translated freely — and a heading that comes back WEARING one means the model read the
     /// list and wrote another row into it.
     /// </summary>
-    public static bool Is_ShapePreserved(string original, string translated)
+    public static string? Describe_ShapeChange_OrNull(string original, string translated)
     {
         if (string.IsNullOrWhiteSpace(translated))
-            return false;
+            return "the answer came back empty";
 
         // Trailing whitespace is not structure. The translator trims its own output and a subprocess
         // may append a newline; treating that as a shape change would fall back to English on every
@@ -52,15 +63,22 @@ public static class LedgerTranslation_Verifier
         var translatedLines = translated.TrimEnd().Split('\n');
 
         if (originalLines.Length != translatedLines.Length)
-            return false;
+            return $"{originalLines.Length} lines came back as {translatedLines.Length}";
 
         for (var index = 0; index < originalLines.Length; index++)
         {
-            if (Read_Marker_OrEmpty(originalLines[index]) != Read_Marker_OrEmpty(translatedLines[index]))
-                return false;
+            var originalMarker = Read_Marker_OrEmpty(originalLines[index]);
+            var translatedMarker = Read_Marker_OrEmpty(translatedLines[index]);
+
+            if (originalMarker == translatedMarker)
+                continue;
+
+            // The line NUMBER, because "a marker changed" in a forty-row ledger is the same silence
+            // one level down.
+            return $"line {index + 1}: marker '{originalMarker}' came back as '{translatedMarker}'";
         }
 
-        return true;
+        return null;
     }
 
     /// <summary>

@@ -39,7 +39,7 @@ public class LedgerTranslationVerifierTests
             "[x] verifica R2–R8\n" +
             "[-] riscrivi il mirror loop — superato";
 
-        Assert.True(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, italian));
+        Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, italian));
     }
 
     /// <summary>
@@ -50,7 +50,7 @@ public class LedgerTranslationVerifierTests
     [Fact]
     public void TheUntranslatedOriginalIsAccepted()
     {
-        Assert.True(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, ENGLISH));
+        Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, ENGLISH));
     }
 
     /// <summary>
@@ -67,14 +67,14 @@ public class LedgerTranslationVerifierTests
             "[ ] rebase su master\n" +
             "[x] verifica R2–R8";
 
-        Assert.False(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, missingTheDroppedLine));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, missingTheDroppedLine));
     }
 
     /// <summary>A row INVENTED, or one wrapped onto two lines, is refused for the same reason.</summary>
     [Fact]
     public void AnExtraRowIsRefused()
     {
-        Assert.False(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, ENGLISH + "\n[ ] una riga in più"));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, ENGLISH + "\n[ ] una riga in più"));
     }
 
     /// <summary>
@@ -92,7 +92,7 @@ public class LedgerTranslationVerifierTests
         var lines = ENGLISH.Split('\n');
         lines[3] = mangledRow;
 
-        Assert.False(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, string.Join('\n', lines)));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, string.Join('\n', lines)));
     }
 
     /// <summary>
@@ -109,7 +109,7 @@ public class LedgerTranslationVerifierTests
             "[ ] rebase onto master\n" +
             "[-] rewrite the mirror loop";
 
-        Assert.False(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, reordered));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, reordered));
     }
 
     /// <summary>
@@ -123,23 +123,39 @@ public class LedgerTranslationVerifierTests
         var lines = ENGLISH.Split('\n');
         lines[0] = "una intestazione completamente diversa";
 
-        Assert.True(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, string.Join('\n', lines)));
+        Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, string.Join('\n', lines)));
 
         lines[0] = "[>] una intestazione completamente diversa";
 
-        Assert.False(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, string.Join('\n', lines)));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, string.Join('\n', lines)));
     }
 
     /// <summary>
     /// An empty answer is refused rather than sent. A subprocess that returns nothing is the one case
     /// where the owner would be shown a blank message in place of their ledger.
+    ///
+    /// AGAINST A SINGLE-LINE ORIGINAL, and that is the whole correction. The five-line fixture this
+    /// used reached green by TWO routes — the emptiness guard and, independently, the line count
+    /// (1 != 5) — so it pinned neither, and deleting the guard left it green. Item 20: never assert on
+    /// a state with two routes to it.
+    ///
+    /// The single-line shape is not hypothetical; it is most of what this path really carries.
+    /// "no open orchestrations", "no orchestration is bound to this topic" and the /tasks
+    /// out-of-topic hint are all one line. Without the guard, `Describe_ShapeChange_OrNull("no open
+    /// orchestrations", "")` finds one line each and no marker on either, answers "unchanged", and the
+    /// empty string goes to the chunker — which yields ZERO chunks for empty input, so the send loop
+    /// iterates nothing and the owner receives NOTHING. The guard is load-bearing on exactly the shape
+    /// the old fixture could not see.
     /// </summary>
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
     public void AnEmptyTranslationIsRefused(string translated)
     {
-        Assert.False(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, translated));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull("no open orchestrations", translated));
+
+        // The multi-line case too, so the guard is pinned without losing the coverage it had.
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, translated));
     }
 
     /// <summary>
@@ -150,8 +166,8 @@ public class LedgerTranslationVerifierTests
     [Fact]
     public void TrailingWhitespaceIsNotAShapeChange()
     {
-        Assert.True(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH, ENGLISH + "\n"));
-        Assert.True(LedgerTranslation_Verifier.Is_ShapePreserved(ENGLISH + "\n", ENGLISH));
+        Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, ENGLISH + "\n"));
+        Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH + "\n", ENGLISH));
     }
 
     /// <summary>
@@ -164,13 +180,62 @@ public class LedgerTranslationVerifierTests
     {
         const string english = "  x the delivered thing\n  · the open one\n  ! the blocked one";
 
-        Assert.True(LedgerTranslation_Verifier.Is_ShapePreserved(english, "  x la cosa consegnata\n  · quella aperta\n  ! quella bloccata"));
+        Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(english, "  x la cosa consegnata\n  · quella aperta\n  ! quella bloccata"));
 
         // The marker rewritten, with the row and the count intact.
-        Assert.False(LedgerTranslation_Verifier.Is_ShapePreserved(english, "  x la cosa consegnata\n  - quella aperta\n  ! quella bloccata"));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(english, "  x la cosa consegnata\n  - quella aperta\n  ! quella bloccata"));
 
         // And the indent dropped, which is the same row stripped of its state.
-        Assert.False(LedgerTranslation_Verifier.Is_ShapePreserved(english, "  x la cosa consegnata\nquella aperta\n  ! quella bloccata"));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(english, "  x la cosa consegnata\nquella aperta\n  ! quella bloccata"));
+    }
+
+    /// <summary>
+    /// THE ONLY CASE COUPLED TO THE RENDERERS, and the gap the verifier's own comment admitted: "if a
+    /// renderer's prefix ever changes without this changing with it, the check quietly weakens to the
+    /// line count instead of failing". Every other fixture here is hand-typed, so nothing detected
+    /// that drift — the component's contract IS these two renderers' output, and none of it was
+    /// tested against them.
+    ///
+    /// Change `Describe_FullFormPrefix` to emit `[x]` instead of `x` and `Read_Marker_OrEmpty` stops
+    /// recognising a /tasks row: both sides read as prose, every marker comparison trivially matches,
+    /// and the production path silently falls back to a bare line count while all the hand-typed
+    /// cases stay green. That is item 20 again — a guard certifying the absence of the thing it
+    /// stopped testing.
+    ///
+    /// The stripped row is what makes it bite: it can only be REFUSED if the verifier recognises the
+    /// vocabulary the formatter actually emits. Built through the real parser and the real formatters
+    /// in the real message shape, interior blank line included, so no fixture stands between them.
+    /// </summary>
+    [Fact]
+    public void TheMarkersItRecognisesAreTheOnesTheFormattersEmit()
+    {
+        var progress = PlanLedger_Parser.Parse_OrNull(string.Join('\n', new[]
+        {
+            "- [>] the running one",
+            "- [ ] the open one",
+            "- [x] the delivered thing",
+            "- [-] the superseded thing",
+            "- [!] the blocked one",
+        }))!;
+
+        var counts = PlanProgress_Formatter.Describe_Counts(progress);
+
+        string[] realMessages =
+        [
+            $"{counts}\n{PlanProgress_Formatter.Describe_Ledger(progress)}",
+            $"{counts}\n\n{PlanProgress_Formatter.Describe_EveryLine(progress)}",
+        ];
+
+        foreach (var message in realMessages)
+        {
+            Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(message, message));
+
+            var lines = message.Split('\n');
+            var rowIndex = lines.Length - 1;
+            lines[rowIndex] = lines[rowIndex][4..];
+
+            Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(message, string.Join('\n', lines)));
+        }
     }
 
     /// <summary>
@@ -180,8 +245,34 @@ public class LedgerTranslationVerifierTests
     [Fact]
     public void APlainProseAnswerStillTranslates()
     {
-        Assert.True(LedgerTranslation_Verifier.Is_ShapePreserved(
+        Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(
             "CRM: no task ledger yet — the supervisor writes PLAN.md once you approve a direction",
             "CRM: nessun elenco attività — il supervisore scrive PLAN.md quando approvi una direzione"));
+    }
+
+    /// <summary>
+    /// THE DESCRIPTION IS THE DIAGNOSTIC, so it is asserted rather than merely non-null. Rule 15
+    /// correctly keeps this off the owner's phone, which makes one log line the entire surface for
+    /// the failure this component exists to detect — and "the shape changed" in a forty-row ledger
+    /// is the silence rule 21 names, one level down.
+    ///
+    /// Both kinds, because they are the two things that can go wrong and a reader needs to know
+    /// WHICH: a count, and a marker at a named line.
+    /// </summary>
+    [Fact]
+    public void TheChangeIsNamedPreciselyEnoughToDiagnose()
+    {
+        Assert.Equal(
+            "5 lines came back as 4",
+            LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, string.Join('\n', ENGLISH.Split('\n')[..4])));
+
+        var lines = ENGLISH.Split('\n');
+        lines[3] = "[-] verifica R2–R8";
+
+        Assert.Equal(
+            "line 4: marker '[x] ' came back as '[-] '",
+            LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, string.Join('\n', lines)));
+
+        Assert.Equal("the answer came back empty", LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, ""));
     }
 }

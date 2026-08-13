@@ -3274,11 +3274,18 @@ internal sealed class BridgeEngineModel(
             await client.Set_MyCommands_Async(
                 [
                     ("status", "What every session of this orchestration is doing"),
-                    // NOT "what's LEFT" any more, since 2026-08-13: the command prints the whole
-                    // ledger, done and dropped rows included. Same class as the kit line that told
-                    // supervisors it would shorten a long ledger for them — text promising the old
-                    // behaviour, in the one place the owner reads before running the command.
-                    ("progress", "The task ledger here, every row (all orchestrations in General)"),
+                    // NOT "what's LEFT" any more, since 2026-08-13: in a topic the command prints the
+                    // whole ledger, done and dropped rows included. Same class as the kit line that
+                    // told supervisors it would shorten a long ledger for them — text promising the
+                    // old behaviour, in the one place the owner reads BEFORE running the command.
+                    //
+                    // BOTH SCOPES, and the first attempt at this string got that wrong. "every row"
+                    // is true in a topic and false in General, where Build_ProgressReportText emits
+                    // one counts line per open orchestration and no rows at all. The phrasing it
+                    // replaced — "what's LEFT to do" — happened to be true in both, because a count
+                    // IS an answer to what is left. A correction has to be checked in every scope the
+                    // thing it corrects runs in, or it is the same defect with a newer date.
+                    ("progress", "This topic's task ledger, every row — in General, one line per orchestration"),
                     ("left", "The task ledger — same as /progress"),
                     ("tasks", "The FULL ledger of this orchestration, done lines included"),
                     ("cost", "What this has cost, per session, and the burn rate"),
@@ -3339,7 +3346,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var text = await Translate_LedgerText_Async(Build_ProgressReportText(messageThreadId), cancellationToken);
+        var text = await Translate_LedgerText_Async(Build_ProgressReportText(messageThreadId), "progress", messageThreadId, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -3362,7 +3369,7 @@ internal sealed class BridgeEngineModel(
     /// THE FALLBACK IS NOT ANNOUNCED TO THE OWNER (rule 15): they cannot act on it, and the English
     /// text arriving in place of Italian is the signal. The log line is for us.
     /// </summary>
-    async Task<string> Translate_LedgerText_Async(string englishText, CancellationToken cancellationToken)
+    async Task<string> Translate_LedgerText_Async(string englishText, string command, long? messageThreadId, CancellationToken cancellationToken)
     {
         if (!_configProvider.Get_Current().TelegramItalianLayer)
             return englishText;
@@ -3371,12 +3378,30 @@ internal sealed class BridgeEngineModel(
 
         // The translator returns the ORIGINAL on failure or timeout, by contract, so that case passes
         // the check rather than tripping a fallback for a translation that never happened.
-        if (Planning.LedgerTranslation_Verifier.Is_ShapePreserved(englishText, translated))
+        var shapeChange = Planning.LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(englishText, translated);
+
+        if (shapeChange == null)
             return translated;
 
-        _log.Log_Warning(GLOBAL_ORCH_ID, "The Italian layer changed the ledger's shape — sending the English original rather than a rearranged ledger");
+        // WHICH command, WHICH orchestration, and WHAT changed. This line is the whole diagnostic
+        // surface for the failure the verifier exists to detect, because rule 15 correctly keeps it
+        // off the owner's phone — so an unattributable "shape changed" would mean reproducing it by
+        // hand to learn anything. In General there is no orchestration to name, and the global id is
+        // then the truth rather than a placeholder.
+        _log.Log_Warning(
+            Find_OrchIdForTopic_OrGlobal(messageThreadId),
+            $"/{command}: the Italian layer changed the ledger's shape ({shapeChange}) — sending the English original rather than a rearranged ledger");
 
         return englishText;
+    }
+
+    /// <summary>The orchestration a topic belongs to, or the global id for General and for a topic bound to nothing.</summary>
+    string Find_OrchIdForTopic_OrGlobal(long? messageThreadId)
+    {
+        if (messageThreadId == null)
+            return GLOBAL_ORCH_ID;
+
+        return _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value)?.OrchId ?? GLOBAL_ORCH_ID;
     }
 
     /// <summary>
@@ -3386,7 +3411,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_TaskListReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var text = await Translate_LedgerText_Async(Build_TaskListText(messageThreadId), cancellationToken);
+        var text = await Translate_LedgerText_Async(Build_TaskListText(messageThreadId), "tasks", messageThreadId, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -4084,10 +4109,16 @@ internal sealed class BridgeEngineModel(
             if (action == Telegram.TopicStatusActions.None)
                 continue;
 
-            // WHETHER THE OLD MESSAGE IS ALREADY GONE, which every failure path below has to know.
-            // Once the delete has succeeded the stored id names nothing, so ANY later failure must
-            // forget it — otherwise a quiet orchestration, whose text never changes, never attempts
-            // the edit that would discover the dead id, and loses its status line for good.
+            // WHETHER THE OLD MESSAGE IS ALREADY GONE. Once the delete has succeeded the stored id
+            // names nothing, so a later failure must forget it — otherwise a quiet orchestration,
+            // whose text never changes, never attempts the edit that would discover the dead id, and
+            // loses its status line for good.
+            //
+            // WHICH HANDLERS HONOUR IT, precisely — the earlier wording claimed "every failure path
+            // below", and two of the four do not. `Is_MessageGone` forgets the id anyway, so it needs
+            // nothing; the not-modified catch and the generic catch each check it below; and the
+            // cancellation rethrow deliberately does not, because the app is stopping and the id in
+            // session.json is discovered dead by the first edit after the restart.
             var oldStatusMessageDeleted = false;
 
             try
@@ -4190,7 +4221,22 @@ internal sealed class BridgeEngineModel(
                 // Sync_TopicNames_BestEffort_Async fixed this exact case 150 lines above and its
                 // comment says a real failure still must not spin. I took the shape of that catch and
                 // inverted its conclusion.
-                _statusLineTextByOrchId[session.OrchId] = text;
+                //
+                // UNLESS THE OLD MESSAGE IS ALREADY DELETED, which is the worst combination in this
+                // method and the reason the check is here rather than argued away: advancing the cache
+                // while the id is dead makes Decide answer None on every later tick, so no edit is
+                // ever attempted, the dead id is never discovered, and the topic holds ZERO status
+                // lines permanently — the precise failure the flag exists to close, through the one
+                // door that did not check it.
+                //
+                // UNREACHABLE TODAY: "message is not modified" is an editMessageText error and this
+                // branch is only reached after a send. It is written anyway because the guarantee then
+                // rests on the code rather than on Telegram's choice of wording, which nothing here
+                // controls and no test can see.
+                if (oldStatusMessageDeleted)
+                    Forget_StatusLineMessage(session.OrchId);
+                else
+                    _statusLineTextByOrchId[session.OrchId] = text;
             }
             catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_MessageGone(exception.Message))
             {
