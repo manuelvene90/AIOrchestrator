@@ -240,4 +240,96 @@ public class ChannelTailerTests : IDisposable
 
         Assert.Equal("report", Assert.Single(reEmitted).Subject);
     }
+
+    /// <summary>
+    /// THE DEFECT, pinned as it behaves rather than as it ought to. A last entry whose file has no
+    /// trailing newline PARSES and then sits in Pending forever: the quiet flush is its only exit and
+    /// that flush requires the line break.
+    /// </summary>
+    [Fact]
+    public void Poll_LastEntryWithoutATrailingNewline_IsNeverEmitted()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        // No terminating newline — the whole defect is that one absent character.
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green");
+
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+        var quietPoll2 = tailer.Poll([_channel]);
+
+        Assert.Empty(quietPoll2.CompletedAppends);
+    }
+
+    /// <summary>
+    /// And the tailer SAYS SO. It will not flush — content cannot tell a complete entry from one
+    /// still being written, and flushing early would emit a truncated entry and then drop its
+    /// remainder as headerless noise — but the silence itself is the harm, so the condition travels
+    /// back to the bridge to be logged.
+    /// </summary>
+    [Fact]
+    public void Poll_AHeldTrailingEntry_IsREPORTED_SoTheSilenceIsVisible()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green");
+
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+        var quietPoll2 = tailer.Poll([_channel]);
+
+        Assert.Contains(_channelFile, quietPoll2.HeldTrailingEntryFiles);
+    }
+
+    /// <summary>
+    /// A TERMINATED channel is never reported. Without this the warning would fire for every healthy
+    /// channel on every quiet tick, which is the noise that makes a log unreadable — and it is the
+    /// case that would pass vacuously if the report were simply "quiet".
+    /// </summary>
+    [Fact]
+    public void Poll_ATerminatedChannel_IsNotReportedAsHeld()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green\n");
+
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+        var quietPoll2 = tailer.Poll([_channel]);
+
+        Assert.Empty(quietPoll2.HeldTrailingEntryFiles);
+        Assert.Single(quietPoll2.CompletedAppends);
+    }
+
+    /// <summary>
+    /// Nothing is LOST — the held entry emits intact as soon as any header follows it. That is what
+    /// makes a visible delay the right trade against emitting a half-written entry and silently
+    /// discarding its tail.
+    /// </summary>
+    [Fact]
+    public void Poll_AHeldEntry_EmitsIntactAsSoonAsAHeaderFollowsIt()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green");
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "\n\n## [2] FROM supervisor — d — verdict\n\nnoted\n");
+
+        var afterHeader = tailer.Poll([_channel]);
+
+        var append = Assert.Single(afterHeader.CompletedAppends);
+        Assert.Equal("report", append.Entries[0].Subject);
+        Assert.Equal("all green", append.Entries[0].Body);
+    }
 }
