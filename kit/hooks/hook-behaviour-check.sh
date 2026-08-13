@@ -502,6 +502,31 @@ check "a variable naming ANOTHER member is denied" DENY "$(verdict "$(run_hook "
 echo x >> \"\$ch\"")" reviewer)")"
 check "another member's channel is still denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/imp-2/channel.md")" reviewer)")"
 
+# ── THE EXEMPTION IS A PROPERTY OF THE TARGET, NOT TEXT ANYWHERE IN THE COMMAND ──────────────────
+#
+# The fix for the CRITICAL above fell back to the original whole-command match whenever the target
+# could not be read as a literal, and inherited the original's breadth with it: the exempting text
+# only had to appear SOMEWHERE. A trailing comment was enough, and the second clause did not even
+# require an append, so it permitted a TRUNCATING write to an arbitrary target.
+#
+# The variable is now resolved from the command line's own assignments instead, so these deny while
+# every legitimate shape above still passes. Asserted through deny_reason: "it denies" would also be
+# green if `echo` were somehow classified as a verb, and it is the REDIRECT rule that must catch these.
+check "the exempt path in a comment does not exempt" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo pwned >> \$T   # $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
+check "…nor does the baseline word in a comment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo pwned > $T   # watch-base')" reviewer)")"
+
+# An assignment is only an assignment in LEADING position. After a command word it is an argument,
+# and if this case ever allows, `echo ch=<exempt path> >> $ch` is a general write primitive.
+check "an assignment-shaped argument cannot exempt" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo ch=$SUPERVISION/$MEMBER/channel.md >> \$ch")" reviewer)")"
+
+# The baseline clause, both directions. Append is the whole of what any exemption here grants.
+check "an append to the watcher baseline is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo 1 >> $TEMP_HOME/watch-base")" reviewer)")"
+check "a TRUNCATING write to it is not" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo 1 > $TEMP_HOME/watch-base")" reviewer)")"
+
+# The brace spelling of the same variable — one substitution form working is not the other working.
+check "the braced variable append is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "ch=\"$SUPERVISION/$MEMBER/channel.md\"
+cat >> \"\${ch}\"")" reviewer)")"
+
 # ── A REDIRECT TARGET THE REDUCER CANNOT RESOLVE IS UNANALYSABLE, NOT ABSENT ─────────────────────
 #
 # A target that begins with a command or process substitution is emitted as an OPERATOR, so the

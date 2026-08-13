@@ -409,7 +409,47 @@ def classify_words(words, depth):
     return None
 
 
-def redirect_reason(operator, target, source):
+ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
+VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def leading_assignments(commands):
+    """Variables assigned in this command line, read ONLY from the leading run of a simple command.
+
+    That is where a shell assignment actually is, and the restriction is the security property, not
+    tidiness: collecting `name=value` from anywhere would let `echo ch=<exempt path> >> $ch` define
+    the mapping that exempts its own write. In leading position it is an assignment because the shell
+    would treat it as one; after a command word it is an argument and is ignored here too.
+    """
+    assignments = {}
+
+    for words in commands:
+        for word in words:
+            match = ASSIGNMENT.match(word)
+            if not match:
+                break
+            assignments[match.group(1)] = match.group(2)
+
+    return assignments
+
+
+def expand_variables(text, assignments):
+    """Substitutes `$name` and `${name}` from this command line's own assignments.
+
+    Bounded passes, and unknown names are left standing rather than guessed at — an unresolved `$`
+    in a target means the exemption simply does not match, which denies.
+    """
+    for _ in range(5):
+        expanded = VARIABLE.sub(
+            lambda match: assignments.get(match.group(1) or match.group(2), match.group(0)), text)
+        if expanded == text:
+            break
+        text = expanded
+
+    return text
+
+
+def redirect_reason(operator, target, assignments):
     # `>&` and `2>&1` duplicate a descriptor; nothing is written to a file.
     if operator in ("<", "<<", "<<<", ">&"):
         return None
@@ -421,36 +461,42 @@ def redirect_reason(operator, target, source):
     if target is UNRESOLVED:
         return UNRESOLVED
 
-    normalised = target.replace("\\", "/")
+    # A TARGET NAMED BY A VARIABLE IS RESOLVED, NOT SEARCHED FOR. The reviewer role command shows the
+    # channel path put in a variable and the append using the variable, so a token-only test refuses
+    # the one write a reviewer is allowed to make — that was the CRITICAL. The first fix for it fell
+    # back to the original behaviour, matching the exemption substring ANYWHERE in the command, and
+    # inherited the original's breadth along with its coverage: the exempting text could sit in a
+    # trailing comment while the write went somewhere else entirely.
+    #
+    #   echo pwned >> $T   # <exempt path>      allowed a write to $T
+    #   echo pwned >  $T   # watch-base         allowed a TRUNCATING one
+    #
+    # Resolving the variable from this command line's own assignments makes the exemption a property
+    # of the TARGET again, which is the only thing it was ever meant to be about. The CRITICAL case
+    # still passes because the assignment is right there in the same command line; text that is not
+    # the target — a comment, an argument, a heredoc body — can no longer exempt anything.
+    #
+    # What this does NOT cover: a variable assigned in an earlier tool call. There is nothing in the
+    # payload to resolve it from, so it denies — as both master and the pre-fix branch already did.
+    normalised = expand_variables(target, assignments).replace("\\", "/")
 
     own_channel = "supervision/%s/%s/" % (ORCH, MEMBER)
 
     if operator == ">>" and own_channel in normalised:
         return None
 
-    # The watcher baseline lives beside the channel. Scoped to the TARGET, not to the whole command:
-    # matching the word anywhere exempted every redirect in any command that merely mentioned it.
-    if "watch-base" in normalised:
+    # The watcher baseline lives beside the channel. APPEND-ONLY, like the clause above: without that
+    # requirement this clause permitted a truncating write, which is strictly worse than the write
+    # the exemption exists to allow.
+    if operator == ">>" and "watch-base" in normalised:
         return None
-
-    # A TARGET NAMED BY A VARIABLE CANNOT BE RESOLVED HERE, and refusing it silences the role. The
-    # reviewer role command shows exactly this shape — the channel path is put in a variable and the
-    # append uses the variable — so a token-only test refuses the one write a reviewer is allowed to
-    # make, with a refusal telling it to do what it just tried. The original matched the exemption
-    # substring ANYWHERE in the command, which covered this; that fallback is restored for precisely
-    # the unresolvable case, leaving the tightened token test in force for literal targets.
-    if "$" in target or "`" in target:
-        whole = source.replace("\\", "/")
-        if operator == ">>" and own_channel in whole:
-            return None
-        if "watch-base" in whole:
-            return None
 
     return "redirect"
 
 
 def analyse(source, depth=0):
     commands, redirects = split_commands(tokenize(strip_comments_and_heredoc_bodies(source)))
+    assignments = leading_assignments(commands)
 
     for words in commands:
         reason = classify_words(words, depth)
@@ -464,7 +510,7 @@ def analyse(source, depth=0):
     unresolved = False
 
     for operator, target in redirects:
-        reason = redirect_reason(operator, target, source)
+        reason = redirect_reason(operator, target, assignments)
         if reason is UNRESOLVED:
             unresolved = True
             continue
