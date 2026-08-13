@@ -1183,7 +1183,19 @@ internal sealed class BridgeEngineModel(
             if (!Nudge_Decider.Owes_MemberAVerdict(entries))
                 continue;
 
-            if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile)).TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+            // ONE READER FOR BOTH CLOCKS. This path used to measure the member's channel by its FILE
+            // stamp while the member-nudge path above measured the conversation — so the same channel
+            // was "quiet for 20 minutes" to one and "quiet for 0" to the other, and the quiet-clock
+            // fix looked complete while the half that reports to the supervisor still reset on every
+            // app write. A compaction is the sharpest case: its rename-over advances the stamp with
+            // NOBODY having spoken, so a report owed for twenty minutes went unreported. `/resume`
+            // did it too, unboundedly, having no dedupe.
+            //
+            // LOCAL `now`, and it must stay local — Measure_QuietFor reads agent stamps and the file
+            // stamp, both local wall time. The UtcNow this line used to pass was correct only because
+            // it was paired with GetLastWriteTimeUtc; handing UtcNow to the shared reader on this
+            // machine (UTC+2) would make the span NEGATIVE and silence the path completely.
+            if (Nudge_Decider.Measure_QuietFor(entries, channelFile, DateTime.Now).TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
                 continue;
 
             waitingMembers.Add(member.MemberId);
