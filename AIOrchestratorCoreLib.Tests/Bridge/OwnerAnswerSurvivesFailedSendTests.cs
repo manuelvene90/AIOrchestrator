@@ -53,6 +53,12 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
     /// These two ASK something, so they push on their own merits. That is deliberate: the timeout and
     /// shutdown cases are about the catch filter and must not depend on the waiting flag at all.
     /// </summary>
+    /// <summary>
+    /// Ordinary progress, sent AFTER the answer landed. Nothing about it asks for anything, so once
+    /// the wait is spent it must not reach the phone at all.
+    /// </summary>
+    const string NARRATION_TEXT = "The branch is rebased and still building green.";
+
     const string TIMEOUT_TEXT = "Did the timed-out send still get its backoff?";
     const string SHUTDOWN_TEXT = "Is the shutdown path still a rethrow?";
 
@@ -140,6 +146,17 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
             "THE DEFECT: the failed send consumed the owner's wait, so on the re-emission the answer "
             + "re-evaluated as narration and was suppressed — the owner never got the answer to the "
             + "question they asked");
+
+        // 4 — AND THE WAIT IS NOW SPENT. Without this the suite cannot see the opposite regression:
+        // delete the clear entirely and everything above still passes, because a flag that is never
+        // cleared also delivers the answer. It just delivers EVERYTHING afterwards too, which is the
+        // waterfall the push policy exists to stop.
+        Append_SupervisorEntry(session.OrchId, 2, "progress", NARRATION_TEXT);
+
+        Assert.False(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 12_000),
+            "the answer was delivered but the owner's wait was never consumed, so ordinary narration "
+            + "is still being pushed to their phone");
     }
 
     /// <summary>
