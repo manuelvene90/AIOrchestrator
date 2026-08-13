@@ -136,6 +136,40 @@ public class MeetingDefersAlertsProbeTests : IDisposable
         Assert.True(Wait_Until(() => Count_Nudges(ownerChannel) == 1), "the nudge held during the meeting never arrived");
     }
 
+    /// <summary>
+    /// ONE BAD APPEND MUST NOT COST THE WHOLE TICK. ChannelAppender throws on failure, and these
+    /// calls sit on the mirror tick with nothing around them — so a single throw escaped to the
+    /// loop's catch, was logged as the generic "Mirror tick failed", and skipped everything after
+    /// it: the poll, the mirror, the ledger check, compaction, the state persist.
+    /// <para>
+    /// The trigger is ordinary concurrency rather than a disaster: <c>File.AppendAllText</c> opens
+    /// the target deny-write, so a second appender throws rather than interleaving, and this app
+    /// runs two loops that both append. The exclusive lock below is that collision, made
+    /// deterministic.
+    /// </para>
+    /// <para>
+    /// It asserts the tick's LAST statement (<c>Persist_BridgeState</c>, which writes
+    /// <c>.bridge-state.json</c>), because that is the thing that only exists if the tick ran all
+    /// the way through — an assertion about the append itself would pass just as well on a tick that
+    /// died immediately afterwards.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AnAppendThatTHROWS_DoesNotTakeTheRestOfTheTickWithIt()
+    {
+        var (orchId, _) = Start_WithDormantMember();
+        var ownerChannel = _paths.Get_OwnerChannelFile(orchId);
+
+        // The nudge is about to append here, and it cannot: another writer holds it deny-write.
+        using var collision = File.Open(ownerChannel, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => File.Exists(_paths.BridgeStateFile)),
+            "the tick died on the failed append — nothing after it ran, including the state persist");
+    }
+
     /// <summary>A briefed member that went silent twenty minutes ago, with a report nobody answered.</summary>
     (string OrchId, string MemberChannel) Start_WithDormantMember()
     {

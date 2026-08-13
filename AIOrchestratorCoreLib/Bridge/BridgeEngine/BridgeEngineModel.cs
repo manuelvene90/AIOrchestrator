@@ -1165,7 +1165,7 @@ internal sealed class BridgeEngineModel(
             if (unreported.Count == 0)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
+            Append_AppEntry_Safe(
                 channel.FilePath,
                 $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
                 ChannelShape_Validator.Build_ReportBody(unreported),
@@ -1330,7 +1330,7 @@ internal sealed class BridgeEngineModel(
                 lastEntry.Author.ToString().ToLowerInvariant(),
                 SessionDuration_Formatter.Describe(quietFor));
 
-        ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
+        Append_AppEntry_Safe(channelFile, subject, body, DateTime.Now);
 
         var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
         _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
@@ -1361,7 +1361,7 @@ internal sealed class BridgeEngineModel(
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(session.OrchId, memberId));
             _launcher.Respawn_Implementer(session.OrchId, memberId);
 
-            ChannelAppender.Append_AppEntry(
+            Append_AppEntry_Safe(
                 _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
                 "session was orphaned and has been respawned",
                 "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
@@ -3149,7 +3149,7 @@ internal sealed class BridgeEngineModel(
 
     void Append_GeneralAppEntry(string subject, string body)
     {
-        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, subject, body, DateTime.Now);
+        Append_AppEntry_Safe(_paths.GeneralChannelFile, subject, body, DateTime.Now);
         Raise_OrchestrationActivity(ChannelDiscovery.GENERAL_ORCH_ID);
     }
 
@@ -3163,7 +3163,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        ChannelAppender.Append_AppEntry(ownerChannel, subject, body, DateTime.Now);
+        Append_AppEntry_Safe(ownerChannel, subject, body, DateTime.Now);
         Raise_OrchestrationActivity(orchId);
     }
 
@@ -4001,7 +4001,7 @@ internal sealed class BridgeEngineModel(
             ? _paths.GeneralChannelFile
             : _paths.Get_OwnerChannelFile(orchId);
 
-        ChannelAppender.Append_AppEntry(channelFile, subject, text, DateTime.Now);
+        Append_AppEntry_Safe(channelFile, subject, text, DateTime.Now);
         Raise_OrchestrationActivity(orchId);
     }
 
@@ -4171,7 +4171,7 @@ internal sealed class BridgeEngineModel(
 
             wokenOrchestrations++;
 
-            ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), SUBJECT, body, DateTime.Now);
+            Append_AppEntry_Safe(_paths.Get_OwnerChannelFile(session.OrchId), SUBJECT, body, DateTime.Now);
             wokenSessions++;
 
             foreach (var member in session.Members)
@@ -4179,7 +4179,7 @@ internal sealed class BridgeEngineModel(
                 if (member.ClosedUtc != null)
                     continue;
 
-                ChannelAppender.Append_AppEntry(
+                Append_AppEntry_Safe(
                     _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), SUBJECT, body, DateTime.Now);
 
                 wokenSessions++;
@@ -4189,7 +4189,7 @@ internal sealed class BridgeEngineModel(
         }
 
         // The general supervisor too — it has the same problem and its own channel.
-        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, SUBJECT, body, DateTime.Now);
+        Append_AppEntry_Safe(_paths.GeneralChannelFile, SUBJECT, body, DateTime.Now);
         wokenSessions++;
 
         _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — woke {wokenSessions} session(s) across {wokenOrchestrations} orchestration(s)");
@@ -5094,7 +5094,13 @@ internal sealed class BridgeEngineModel(
         if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
             return false;
 
-        ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(orchId), subject, body, DateTime.Now);
+        // The return value means "an entry is on disk", so a failed append must answer FALSE. It
+        // used to be an unconditional true because the append could only throw; now that a throw is
+        // caught, saying true would be the same defect this file spent the evening fixing — a
+        // caller logging a success for something that never landed.
+        if (!Append_AppEntry_Safe(_paths.Get_OwnerChannelFile(orchId), subject, body, DateTime.Now))
+            return false;
+
         Raise_OrchestrationActivity(orchId);
         return true;
     }
@@ -5150,6 +5156,65 @@ internal sealed class BridgeEngineModel(
             _log.Log_Info(orchId, $"Meeting flag {(presence == OwnerPresenceModes.Terminal ? "raised" : "cleared")} — this session's watcher goes {(presence == OwnerPresenceModes.Terminal ? "silent" : "live")}");
 
         return changed;
+    }
+
+    /// <summary>
+    /// EVERY append this engine makes goes through here, and the reason is a whole tick rather than
+    /// one entry.
+    ///
+    /// <para>
+    /// <c>ChannelAppender</c> throws on failure, and these calls sit on the mirror tick with no
+    /// try around them — so one throw escapes to <see cref="Run_MirrorLoop_Async"/>, is logged as the
+    /// generic "Mirror tick failed", and skips **the entire rest of that tick**: the poll, the
+    /// mirror, the ledger check, the status push, compaction, <c>Persist_BridgeState</c>. A failed
+    /// Telegram send loses one alert; a failed local append loses one alert AND everything downstream
+    /// of it, with one line in the log that names neither the file nor the operation.
+    /// </para>
+    /// <para>
+    /// AND THE TRIGGER IS REAL, NOT THEORETICAL: <c>File.AppendAllText</c> opens the target
+    /// deny-write, so two concurrent appenders do not interleave — the second throws. This app runs
+    /// two loops that both append. `imp-9` measured 40 parallel appends producing 13 IOExceptions.
+    /// </para>
+    /// <para>
+    /// This is HALF a fix and must not be read as the whole one. It stops a throw taking the tick
+    /// down and names what failed; it does NOT stop the throw. `imp-9`'s <c>ChannelWrite_Lock</c>
+    /// removes the trigger inside the app, and the two are needed together: without the lock this
+    /// still drops entries (loudly, one at a time), and without this a single unlucky append still
+    /// costs a tick. Neither branch is sufficient alone.
+    /// </para>
+    /// </summary>
+    bool Append_AppEntry_Safe(string channelFilePath, string subject, string body, DateTime nowLocal)
+    {
+        try
+        {
+            ChannelAppender.Append_AppEntry(channelFilePath, subject, body, nowLocal);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            // Decision 21: name WHICH operation failed and on WHICH path. "Append failed" would be
+            // the same silence in different words, and this entry is now lost — nothing retries it.
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"Channel append FAILED and the entry is lost — '{subject}' to '{channelFilePath}' — {exception.GetType().Name}: {exception.Message}");
+
+            return false;
+        }
+    }
+
+    /// <summary>The owner's own words, same protection and the same lost-entry warning.</summary>
+    void Append_OwnerEntry_Safe(string channelFilePath, string messageText, DateTime nowLocal)
+    {
+        try
+        {
+            ChannelAppender.Append_OwnerEntry(channelFilePath, messageText, nowLocal);
+        }
+        catch (Exception exception)
+        {
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"OWNER message append FAILED and the message is lost — '{channelFilePath}' — {exception.GetType().Name}: {exception.Message}");
+        }
     }
 
     void Raise_AwaitingAnswerFlag(string orchId)
@@ -5405,7 +5470,7 @@ internal sealed class BridgeEngineModel(
             // supervisor answered THIS message.
             var supervisorEntryCountBefore = Count_SupervisorEntries(delivery.Key);
 
-            ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now);
+            Append_OwnerEntry_Safe(delivery.Key, deliveryText, DateTime.Now);
             _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
             Raise_OrchestrationActivity(target.OrchId);
 
@@ -5739,7 +5804,7 @@ internal sealed class BridgeEngineModel(
             _lastVerbosityNudgeUtc[orchId] = DateTime.UtcNow;
         }
 
-        ChannelAppender.Append_AppEntry(
+        Append_AppEntry_Safe(
             _paths.Get_OwnerChannelFile(orchId),
             "that message was too long for a phone",
             Brevity_Policy.Build_NudgeBody(mirroredText),
@@ -5760,7 +5825,7 @@ internal sealed class BridgeEngineModel(
 
         if (newMode == TelegramDeliveryModes.Deferred)
         {
-            ChannelAppender.Append_AppEntry(
+            Append_AppEntry_Safe(
                 _paths.Get_OwnerChannelFile(orchId),
                 "the owner switched this topic to Do-Not-Disturb — treat it as AWAY",
                 "They set DND deliberately, so this is not a guess: they are away and nothing you write reaches them "
@@ -5777,7 +5842,7 @@ internal sealed class BridgeEngineModel(
 
         if (previousMode == TelegramDeliveryModes.Deferred && newMode == TelegramDeliveryModes.Normal)
         {
-            ChannelAppender.Append_AppEntry(
+            Append_AppEntry_Safe(
                 _paths.Get_OwnerChannelFile(orchId),
                 "Do-Not-Disturb is off — the owner is back",
                 "Normal mode. Re-ask ONLY what still matters, rewritten against the CURRENT state, and drop what "
@@ -5809,7 +5874,7 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(orchId, $"QUIET — {AwayMode_Policy.QUIET_THRESHOLD} unanswered messages; supervisor told to hold further questions");
 
-        ChannelAppender.Append_AppEntry(
+        Append_AppEntry_Safe(
             _paths.Get_OwnerChannelFile(orchId),
             "HOLD — the owner has not answered your last messages",
             $"{AwayMode_Policy.QUIET_THRESHOLD} of your messages are unanswered. They may simply be mid-task, so nothing is being "
@@ -5861,7 +5926,7 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE ON (app-wide) — owner unresponsive; every supervisor told to proceed without questions");
 
-        ChannelAppender.Append_AppEntry(
+        Append_AppEntry_Safe(
             _paths.GeneralChannelFile,
             "AWAY MODE ON — the owner is not reading",
             "Every orchestration has been told directly; you do not need to relay it. Ask them nothing until the "
@@ -5873,7 +5938,7 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
+            Append_AppEntry_Safe(
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 "AWAY MODE ON — the owner is not reading",
                 "They have not answered. Assume they are unavailable, NOT ignoring you.\n\n"
@@ -5897,7 +5962,7 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE OFF (app-wide) — owner is back");
 
-        ChannelAppender.Append_AppEntry(
+        Append_AppEntry_Safe(
             _paths.GeneralChannelFile,
             "AWAY MODE OFF — the owner is back",
             "Every orchestration has been told directly.",
@@ -5908,7 +5973,7 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
+            Append_AppEntry_Safe(
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 "AWAY MODE OFF — the owner is back",
                 "Normal mode: they are reading and can answer within a short time.\n\n"
@@ -6306,7 +6371,7 @@ internal sealed class BridgeEngineModel(
 
             pending.Nudged = true;
 
-            ChannelAppender.Append_AppEntry(
+            Append_AppEntry_Safe(
                 ownerChannel,
                 "the owner is still waiting for your reply",
                 "Your turn ended without answering the owner's message above. Reply now, even one line (what you are doing / what you are waiting on). The owner is looking at an unanswered receipt.",
