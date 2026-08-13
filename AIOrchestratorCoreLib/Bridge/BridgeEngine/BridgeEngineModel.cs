@@ -1099,11 +1099,7 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
         {
-            // ONE read, used for both the check and the index. Reading twice would let the file change
-            // between them and report a next-index that never went with the lines being reported.
-            var channelText = UsageTotals_Reader.Read_Text_Safe(channel.FilePath);
-
-            var malformed = ChannelShape_Validator.Find_MalformedHeaders(channelText);
+            var malformed = ChannelShape_Validator.Find_MalformedHeaders(UsageTotals_Reader.Read_Text_Safe(channel.FilePath));
 
             if (malformed.Count == 0)
                 continue;
@@ -1130,7 +1126,7 @@ internal sealed class BridgeEngineModel(
             ChannelAppender.Append_AppEntry(
                 channel.FilePath,
                 $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
-                ChannelShape_Validator.Build_ReportBody(unreported, ChannelEntry_Parser.Get_NextIndex(channelText)),
+                ChannelShape_Validator.Build_ReportBody(unreported),
                 DateTime.Now);
 
             _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} malformed entry header(s) — those entries were never mirrored");

@@ -180,9 +180,9 @@ public class GuardNotInForceMarkerTests
 
         var lines = File.ReadAllLines(hookScript);
 
-        var writeLine = Assert.Single(lines.Where(line =>
+        var writeLine = Assert.Single(lines, line =>
             line.Contains("printf", StringComparison.Ordinal)
-            && line.Contains(GuardNotInForce_Marker.FILE_NAME, StringComparison.Ordinal)));
+            && line.Contains(GuardNotInForce_Marker.FILE_NAME, StringComparison.Ordinal));
 
         // The fields reach the WRITE — an argument list, not a mention anywhere in the file.
         Assert.Contains("\"$member\"", writeLine);

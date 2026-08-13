@@ -106,7 +106,7 @@ public class ChannelShapeValidatorTests
     [Fact]
     public void ReportBody_NamesTheOffendingLines_AndTheOnlyAcceptedFormat()
     {
-        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")], nextFreeIndex: 3);
+        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")]);
 
         Assert.Contains("line 7", body);
         Assert.Contains("## [2b] FROM supervisor", body);
@@ -137,7 +137,7 @@ public class ChannelShapeValidatorTests
     [Fact]
     public void ReportBody_ClaimsNoDeliveryConsequencesItDidNotMeasure()
     {
-        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")], nextFreeIndex: 3);
+        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")]);
 
         Assert.DoesNotContain("never mirrored", body);
         Assert.DoesNotContain("never counted", body);
@@ -148,16 +148,24 @@ public class ChannelShapeValidatorTests
     }
 
     /// <summary>
-    /// The one consequence the validator CAN compute, so it is the one it is allowed to state. It is
-    /// also the actionable half — a writer re-appending needs the number, and guessing it is how two
-    /// entries end up sharing an index.
+    /// IT MUST NOT NAME AN INDEX. The report is appended through Channel_Appender, which computes
+    /// Get_NextIndex itself and TAKES that index for this very entry — so an advised "[3]" was filed
+    /// as [3], and a writer following it collided with the report that gave it.
+    ///
+    /// The replacement is not silence: it states the rule the protocol already requires, which is
+    /// correct whenever it is read rather than only at the instant it was written. The positive
+    /// assertion carries that, since a body naming no index and saying nothing else would satisfy the
+    /// negative alone.
     /// </summary>
     [Fact]
-    public void ReportBody_StatesTheMeasuredNextFreeIndex()
+    public void ReportBody_AdvisesAFreshReadRatherThanAStaleIndex()
     {
-        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")], nextFreeIndex: 12);
+        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")]);
 
-        Assert.Contains("12", body);
+        Assert.Contains("FRESH READ", body);
+
+        // The shape of the old advice, in the wording that made it specific enough to follow.
+        Assert.DoesNotContain("next unused index", body);
     }
 
     [Fact]

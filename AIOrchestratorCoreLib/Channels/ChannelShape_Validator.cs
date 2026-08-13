@@ -96,11 +96,25 @@ public static partial class ChannelShape_Validator
     /// evening and the same subsystem: that one invented a CAUSE, this one invented CONSEQUENCES.
     /// Decision 21's rule for guards, applied to reports — never state an answer you did not compute.
     ///
-    /// The next free index IS computed, by the caller, from the same text this was found in — so it
-    /// is stated. It is also the actionable half: a writer re-appending needs that number, and
-    /// guessing it is how two entries end up sharing an index.
+    /// IT NAMES NO INDEX, and that is a correction rather than a retreat. An earlier version stated
+    /// "the next unused index is [n]", computed from the same text — the one consequence that looked
+    /// cheaply measurable. It is not measurable HERE, for three reasons that compound:
+    ///
+    ///   - The measurement is invalidated by the act of reporting it. This report is appended through
+    ///     <see cref="ChannelAppender"/>, which computes `Get_NextIndex` itself and TAKES that index
+    ///     for this very entry. The advice said [3] and was then filed as [3], so a writer following
+    ///     it collided with the report that gave it. Deterministically, every time.
+    ///   - Correcting it by adding one would encode the appender's behaviour in this component's
+    ///     prose — right until either side changes, and wrong silently when it does.
+    ///   - Any number here is a PREDICTION about a file that other writers are appending to
+    ///     concurrently. It is stale the moment it is read, and the more specific it is the more
+    ///     confidently it misleads.
+    ///
+    /// So it states the RULE the protocol already requires — take the index from a fresh read
+    /// immediately before appending — which is correct whenever it is read, by anyone, however long
+    /// the report has been sitting there.
     /// </summary>
-    public static string Build_ReportBody(IReadOnlyList<(int LineNumber, string Line)> malformed, int nextFreeIndex)
+    public static string Build_ReportBody(IReadOnlyList<(int LineNumber, string Line)> malformed)
     {
         var lines = malformed.Select(m => $"  line {m.LineNumber}: {m.Line}");
 
@@ -108,7 +122,7 @@ public static partial class ChannelShape_Validator
             $"These lines look like entry headers but do not parse as one:\n\n"
             + string.Join('\n', lines)
             + $"\n\nThe only header the app recognises is:\n\n  {CANONICAL_FORMAT}\n\n"
-            + $"The index must be a plain number, the author word must follow FROM, and both separators must be em-dashes. The next unused index on this channel is [{nextFreeIndex}]. "
-            + "Re-append anything important above as a NEW, correctly-formed entry — never edit the malformed line, the channel is append-only.";
+            + "The index must be a plain number, the author word must follow FROM, and both separators must be em-dashes. "
+            + "Re-append anything important above as a NEW, correctly-formed entry, taking its index from a FRESH READ of this file's last header — never edit the malformed line, the channel is append-only.";
     }
 }
