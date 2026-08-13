@@ -2,9 +2,6 @@
 
 namespace AIOrchestratorCoreLib.Bridge;
 
-/// <summary>Whether to send the runaway-cost alert, and whether to remember having sent it.</summary>
-public readonly record struct BudgetAlertOutcome(bool ShouldSend, bool RemembersAlerted);
-
 /// <summary>
 /// The runaway-cost alert fires ONCE per orchestration, and that once must be spent on an alert that
 /// actually went out.
@@ -24,25 +21,35 @@ public readonly record struct BudgetAlertOutcome(bool ShouldSend, bool Remembers
 /// the meeting that justified it.
 /// </para>
 /// <para>
-/// No release is needed once the order is right: usage only grows, so an orchestration that has
-/// passed its ceiling stays past it, and the alert is genuinely once per orchestration per run.
+/// AND IT DECIDES ONLY WHETHER TO SEND. It used to return a "remember this" half as well, which the
+/// engine committed BEFORE the send — so a thrown send (Telegram briefly unreachable, a rate limit)
+/// spent the token on an alert that never went out, and with no release anywhere that alert was dead
+/// for the life of the process. That half is gone rather than reordered: the memo is now written at
+/// exactly one place, after a confirmed send, so there is no longer a value the engine could commit
+/// early (rev-6, 2026-08-13). It is the same rule as "the owner's answer survives a failed Telegram
+/// send", which this repo fixed once already and did not carry across.
+/// </para>
+/// <para>
+/// No release is needed and none exists: usage only grows, so an orchestration past its ceiling stays
+/// past it, and the alert is genuinely once per orchestration per run — once per run that was SENT.
 /// </para>
 /// </summary>
 public static class BudgetAlert_Planner
 {
-    public static BudgetAlertOutcome Decide(
+    public static bool Should_Send(
         long tokensUsed,
         long budgetTokens,
         bool alreadyAlerted,
         TelegramDeliveryModes effectiveMode)
     {
         if (tokensUsed < budgetTokens)
-            return new BudgetAlertOutcome(ShouldSend: false, RemembersAlerted: alreadyAlerted);
+            return false;
 
-        // DEFERRED, NOT DROPPED — and the memo is returned UNCHANGED, which is the whole fix.
-        if (effectiveMode != TelegramDeliveryModes.Normal)
-            return new BudgetAlertOutcome(ShouldSend: false, RemembersAlerted: alreadyAlerted);
+        if (alreadyAlerted)
+            return false;
 
-        return new BudgetAlertOutcome(ShouldSend: !alreadyAlerted, RemembersAlerted: true);
+        // DEFERRED, NOT DROPPED: nothing is recorded on this path, so the alert comes back on the
+        // first tick that can deliver it.
+        return effectiveMode == TelegramDeliveryModes.Normal;
     }
 }

@@ -862,7 +862,12 @@ internal sealed class BridgeEngineModel(
             if (Is_AnySessionMidTurn(session))
                 continue;
 
-            if (!_stallAlertedOrchIds.Add(session.OrchId))
+            // SAME SHAPE AS THE BUDGET ALERT, found by sweeping the file for it rather than by a
+            // review: this took the token first, so both a meeting and a thrown send spent it on an
+            // alert nobody received. It is less severe only because it has a release above (traffic
+            // resuming clears it), so the loss is confined to the current stall rather than the
+            // process — the token is now taken after a confirmed send, like the other two.
+            if (_stallAlertedOrchIds.Contains(session.OrchId))
                 continue;
 
             if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
@@ -873,6 +878,9 @@ internal sealed class BridgeEngineModel(
             try
             {
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
+
+                // After a CONFIRMED send, so a failed one retries next tick.
+                _stallAlertedOrchIds.Add(session.OrchId);
                 _log.Log_Warning(session.OrchId, alertText);
             }
             catch (OperationCanceledException)
@@ -1138,12 +1146,20 @@ internal sealed class BridgeEngineModel(
 
             List<(int LineNumber, string Line)> unreported = [];
 
+            // Third instance of tonight's shape, found by sweeping rather than by a review: the memo
+            // was COMMITTED here, before the append that reports these entries. An append that
+            // throws left them permanently marked as reported — and this memo has no release at all,
+            // so those entries stay invisible for the life of the process, which is exactly what the
+            // report exists to prevent.
             foreach (var entry in malformed)
             {
-                var isNew = _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
+                if (_reportedMalformedHeaders.Contains($"{channel.FilePath}|{entry.Line}"))
+                    continue;
 
-                if (isNew && !isFirstSight)
+                if (!isFirstSight)
                     unreported.Add(entry);
+                else
+                    _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
             }
 
             if (unreported.Count == 0)
@@ -1154,6 +1170,10 @@ internal sealed class BridgeEngineModel(
                 $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
                 ChannelShape_Validator.Build_ReportBody(unreported),
                 DateTime.Now);
+
+            // Recorded only now: the append above either wrote the report or threw past this line.
+            foreach (var entry in unreported)
+                _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
 
             _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} malformed entry header(s) — those entries were never mirrored");
             Raise_OrchestrationActivity(channel.OrchId);
@@ -1523,18 +1543,14 @@ internal sealed class BridgeEngineModel(
 
             var (_, tokens) = UsageTotals_Reader.Build_OrchestrationTotals(_paths, session);
 
-            // The token is spent only on an alert that actually goes out — this took it BEFORE
-            // consulting the mode, and nothing anywhere releases it (rev-7 P1).
-            var outcome = BudgetAlert_Planner.Decide(
-                tokens,
-                budgetTokens.Value,
-                alreadyAlerted: _budgetAlertedOrchIds.Contains(session.OrchId),
-                Resolve_EffectiveMode(session.OrchId));
-
-            if (outcome.RemembersAlerted)
-                _budgetAlertedOrchIds.Add(session.OrchId);
-
-            if (!outcome.ShouldSend)
+            // The token is spent only on an alert that actually WENT OUT — this took it before
+            // consulting the mode (rev-7 P1), and then before the send itself (rev-6). Nothing
+            // anywhere releases it, so either order lost the alert for the life of the process.
+            if (!BudgetAlert_Planner.Should_Send(
+                    tokens,
+                    budgetTokens.Value,
+                    alreadyAlerted: _budgetAlertedOrchIds.Contains(session.OrchId),
+                    Resolve_EffectiveMode(session.OrchId)))
                 continue;
 
             var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} used — past the {UsageTotals_Reader.Format_Tokens(budgetTokens.Value)} budget you set.";
@@ -1542,6 +1558,11 @@ internal sealed class BridgeEngineModel(
             try
             {
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
+
+                // THE ONLY WRITE. After a CONFIRMED send, so a failure retries on the next tick
+                // instead of being remembered as delivered — the rule from "the owner's answer
+                // survives a failed Telegram send", which this file had not carried across.
+                _budgetAlertedOrchIds.Add(session.OrchId);
                 _log.Log_Warning(session.OrchId, alertText);
             }
             catch (OperationCanceledException)
