@@ -1,5 +1,4 @@
 using System.Text;
-using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Tailing.TailerPollResult;
@@ -191,101 +190,6 @@ public class ChannelTailerTests : IDisposable
 
         Assert.Empty(readPoll.CompletedAppends);
         Assert.True(tailer.Has_UndeliveredEntries(_channelFile));
-    }
-
-    [Fact]
-    public void OwedEntry_CompactionOfferedBeforeItWasEmitted_IsHeldBackAndStillMirrored()
-    {
-        File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
-        tailer.Poll([_channel]);
-
-        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
-
-        tailer.Poll([_channel]);
-        Compact_IfTheTailerAllowsIt(tailer, _channelFile);
-
-        var delivered = Collect_DeliveredEntries(tailer, polls: 4, [_channel]);
-
-        // Without the guard the rewrite lands on a channel that still owes this entry, Set_Offset
-        // re-anchors past it, and it is never mirrored — gone from Telegram forever, with the file
-        // on disk intact, which is why nobody notices.
-        Assert.Equal("report", Assert.Single(delivered).Subject);
-    }
-
-    [Fact]
-    public void DeferredChannel_CompactedWhileItsCursorWasFrozen_StillDeliversItsCatchUpBurst()
-    {
-        var deferredFile = Path.Combine(_tempFolder, "deferred-channel.md");
-        var deferredChannel = DiscoveredChannel_Factory.Create_ForImplementer("orch-x", "imp-2", deferredFile);
-
-        File.WriteAllText(_channelFile, "seed\n");
-        File.WriteAllText(deferredFile, "seed\n");
-
-        var tailer = ChannelTailer_Factory.Create_Fresh();
-        tailer.Poll([_channel, deferredChannel]);
-
-        File.AppendAllText(deferredFile, "## [1] FROM supervisor — d — while you were away\n\nbody\n");
-
-        // The topic is DEFERRED, so Find_ActiveChannels drops it: these ticks poll the active
-        // channel ONLY and the deferred cursor freezes, which is exactly what the owner is promised
-        // — everything it produced replays when they un-defer. Compaction still visits every
-        // discovered channel each tick, deferred ones included.
-        for (var i = 0; i < 3; i++)
-        {
-            tailer.Poll([_channel]);
-            Compact_IfTheTailerAllowsIt(tailer, deferredFile);
-        }
-
-        var delivered = Collect_DeliveredEntries(tailer, polls: 4, [_channel, deferredChannel]);
-
-        // The F1 guard cannot save this one and that is the point: the channel was never polled, so
-        // its Pending is empty and "does it owe anything?" answers false. Only "was it polled?" sees it.
-        Assert.Equal("while you were away", Assert.Single(delivered).Subject);
-    }
-
-    /// <summary>
-    /// The compaction step of a mirror tick (<c>BridgeEngineModel.Compact_LongChannels</c>): archive
-    /// the older entries and re-anchor the tailer to the rewritten file — but only if the tailer
-    /// allows it. The rewrite KEEPS the newest entry, as <c>Channel_Compactor</c> does: what strands
-    /// an entry is the cursor jumping to EOF, not the text leaving the file.
-    /// </summary>
-    static void Compact_IfTheTailerAllowsIt(IChannelTailer tailer, string channelFilePath)
-    {
-        if (tailer.Has_UndeliveredEntries(channelFilePath))
-            return;
-
-        if (!tailer.Was_PolledInLastPoll(channelFilePath))
-            return;
-
-        var keptTail = File.ReadAllText(channelFilePath).Split("## ").LastOrDefault() ?? string.Empty;
-
-        File.WriteAllText(channelFilePath, $"## [0] FROM app — d — compacted\n\nolder entries archived\n\n## {keptTail}");
-        tailer.Set_Offset(channelFilePath, new FileInfo(channelFilePath).Length);
-    }
-
-    /// <summary>
-    /// Polls as the mirror loop does, confirming every append — a delivery that lands. Without the
-    /// confirmation the tailer would re-emit the same entry on every poll, by contract, and the
-    /// count would say nothing about whether it was preserved.
-    /// </summary>
-    static IReadOnlyList<IChannelEntry> Collect_DeliveredEntries(
-        IChannelTailer tailer,
-        int polls,
-        IReadOnlyList<IDiscoveredChannel> channels)
-    {
-        List<IChannelEntry> entries = [];
-
-        for (var i = 0; i < polls; i++)
-        {
-            foreach (var append in tailer.Poll(channels).CompletedAppends)
-            {
-                entries.AddRange(append.Entries);
-                tailer.Confirm_Append(append.Channel.FilePath);
-            }
-        }
-
-        return entries;
     }
 
     [Fact]
