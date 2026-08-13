@@ -248,6 +248,27 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
+    /// AND THE WINDOW IS TWO MINUTES — the one number the owner actually specified, asserted with
+    /// LITERAL seconds because the case above cannot see it.
+    ///
+    /// F2, rev-1: every other test passes `REPOST_AFTER_QUIET_SECONDS` symbolically, so they pin the
+    /// ARITHMETIC around the constant and never its VALUE. Set the constant to 0 and all of them stay
+    /// green — `AddSeconds(-(0 - 1))` is a stamp one second in the FUTURE, which holds, and
+    /// `AddSeconds(0)` is due. A repost would then fire the instant any message buried the line: a
+    /// notification in the middle of the owner's own sentence, which is the waterfall item 14 exists
+    /// to prevent, arriving with a green suite.
+    ///
+    /// 119 and 120 pin it exactly rather than approximately: 30 alone would allow anything above 30.
+    /// </summary>
+    [Fact]
+    public void TheQuietWindowIsTwoMinutes()
+    {
+        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(30).Action);
+        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(119).Action);
+        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(120).Action);
+    }
+
+    /// <summary>
     /// THE ONE THAT DECIDES WHETHER THE FEATURE WORKS AT ALL. A buried status line is USUALLY
     /// unchanged text — a quiet orchestration says the same thing minute after minute — and the
     /// identical-text rule answers None to exactly that. If the repost sat behind that rule it would
@@ -400,6 +421,15 @@ public class TopicStatusLinePlannerTests
 
         Assert.Equal("", plan.Text);
         Assert.Equal(TopicStatusActions.None, plan.Action);
+    }
+
+    /// <summary>A buried line in a topic that has been quiet for exactly this many seconds.</summary>
+    static TopicStatusLine_Planner.TopicStatusPlan Plan_AfterQuietSeconds(int quietSeconds)
+    {
+        return Plan(
+            existingMessageId: STATUS_ID,
+            lastWrittenText: "an older line",
+            newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddSeconds(-quietSeconds)));
     }
 
     static TopicStatusLine_Planner.TopicNewestMessage Newest(long messageId, DateTime arrivedAt)
