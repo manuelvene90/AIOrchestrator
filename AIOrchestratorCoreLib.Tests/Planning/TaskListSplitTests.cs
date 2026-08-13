@@ -47,7 +47,37 @@ public class TaskListSplitTests
         Assert.Contains("the delivered thing", PlanProgress_Formatter.Describe_EveryLine(progress));
 
         Assert.Equal("[x] the delivered thing\n[ ] the open one", PlanProgress_Formatter.Describe_Ledger(progress));
-        Assert.Equal("  · the open one\n  x the delivered thing", PlanProgress_Formatter.Describe_EveryLine(progress));
+        Assert.Equal("  x the delivered thing\n  · the open one", PlanProgress_Formatter.Describe_EveryLine(progress));
+    }
+
+    /// <summary>
+    /// /tasks USED TO DROP EVERY DROPPED ROW, while its own comment called it "THE WHOLE LEDGER, line
+    /// by line". It looped four of the five buckets — there was no fifth to loop, because the parser
+    /// only counted `[-]` lines — so the command that exists to show everything was the one omitting
+    /// rows silently. That is not a missing feature; it is a comment that was not true.
+    ///
+    /// It also picks up the ledger's own ORDER from the same fix, since it now reads the same one
+    /// list /progress does rather than re-deriving a sequence from five buckets. Two commands, two
+    /// vocabularies, ONE reading — which is one reading fewer than before.
+    /// </summary>
+    [Fact]
+    public void TheFullFormShowsDroppedRowsAndKeepsTheLedgersOrder()
+    {
+        var progress = Parse(
+            "- [x] the delivered thing",
+            "- [-] the superseded thing",
+            "- [ ] the open one",
+            "- [!] the blocked one — blocked on: a decision")!;
+
+        Assert.Equal(
+            string.Join('\n', new[]
+            {
+                "  x the delivered thing",
+                "  - the superseded thing",
+                "  · the open one",
+                "  ! the blocked one — blocked on: a decision",
+            }),
+            PlanProgress_Formatter.Describe_EveryLine(progress));
     }
 
     /// <summary>

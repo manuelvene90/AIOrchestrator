@@ -75,27 +75,45 @@ public static class PlanProgress_Formatter
     ///
     /// Deliberately NOT capped. It exists because somebody asked for everything, and a "full" view
     /// that silently truncates is worse than either shape on its own.
+    ///
+    /// AND IT WAS NOT THE WHOLE LEDGER UNTIL 2026-08-13, which is the point worth keeping. It looped
+    /// four of the five states and dropped every `[-]` row, because there was no fifth bucket to loop
+    /// — the parser counted those lines without keeping their words. So the command whose entire
+    /// purpose is to omit nothing was omitting rows, silently, under a comment that said otherwise.
+    ///
+    /// That is the same failure as `NoDoneLineIsEverPrinted`, which documented its rule as
+    /// STRUCTURALLY unbreakable — true when written, false once /tasks needed `DoneTasks` — and so
+    /// went unexamined for exactly as long as it read like a guarantee. A rule or a contract stated as
+    /// impossible is one nobody re-reads, and both of these were wrong in the comment long before
+    /// anybody noticed in the behaviour.
+    ///
+    /// Reading `Lines` fixes both at once: every state is present, in the file's order, and the
+    /// second derivation of a sequence from five buckets is GONE rather than extended by a fifth loop.
+    /// One reading of the ledger, two vocabularies — /progress prints the ledger's own markers, this
+    /// prints the indented ones it has always used.
     /// </summary>
     public static string Describe_EveryLine(IPlanProgress progress)
     {
-        List<string> lines = [];
-
-        foreach (var task in progress.InProgressTasks)
-            lines.Add($"  > {task}");
-
-        foreach (var task in progress.BlockedTasks)
-            lines.Add($"  ! {task}");
-
-        foreach (var task in progress.OpenTasks)
-            lines.Add($"  · {task}");
-
-        foreach (var task in progress.DoneTasks)
-            lines.Add($"  x {task}");
-
-        if (lines.Count == 0)
+        if (progress.Lines.Count == 0)
             return "the ledger is empty";
 
-        return string.Join('\n', lines);
+        return string.Join('\n', progress.Lines.Select(line => $"  {Describe_FullFormPrefix(line.Marker)} {line.Text}"));
+    }
+
+    /// <summary>
+    /// This view's own prefix for a ledger marker. It is NOT the `[x]` vocabulary /progress uses, and
+    /// keeping them different is deliberate: the two commands answer different questions off one
+    /// parse, and two renderings that converge to the same string have silently become one command.
+    ///
+    /// OPEN is the only marker that changes: a space cannot be a prefix. Every other marker is its
+    /// own, INCLUDING one this method has never heard of — an unknown marker shows as itself rather
+    /// than falling through to `·`, which would render it as an open task and misreport the ledger to
+    /// hide a mapping gap. The parser can only emit five, so that branch is unreachable today; it is
+    /// written this way so that adding a sixth cannot quietly mean "open" here.
+    /// </summary>
+    static string Describe_FullFormPrefix(string marker)
+    {
+        return marker == " " ? "·" : marker;
     }
 
     /// <summary>
