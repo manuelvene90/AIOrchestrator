@@ -9,11 +9,18 @@ namespace AIOrchestratorCoreLib.Tailing;
 /// decision and the re-anchoring belong together: every caller that archives a channel must ask the
 /// same two questions first, in the same order.
 /// <para>
-/// It lives here, outside <c>BridgeEngineModel</c>, so the suite can execute the real decision. The
-/// engine is internal, sealed, eleven dependencies deep and unreachable from a test, so the guards
-/// used to be verified through a hand-written replica of this sequence — a green that certified a
-/// copy of the code and not the code (found by rev-3, 2026-08-13). What remains in the engine is the
-/// discovery loop and its log line.
+/// It lives here, outside <c>BridgeEngineModel</c>, so the decision can be exercised directly rather
+/// than through a hand-written replica of this sequence — a green that certified a copy of the code
+/// and not the code (found by rev-3, 2026-08-13). What remains in the engine is the discovery loop
+/// and its log line.
+/// <para>
+/// THE ENGINE IS NOT UNREACHABLE FROM A TEST, and this docstring said it was. `BridgeEngine_Factory.Create`
+/// is public and five test files were already driving the engine when that sentence was written;
+/// `ChannelCompactionLoopProbeTests` now covers the discovery loop the same way. The claim was
+/// true-shaped and narrow to begin with — nothing covered `Compact_LongChannels` — and was carried
+/// outward as a fact about the type until it read as an instruction not to try. Extraction is still
+/// right, for the replica reason above; it was never right for this one.
+/// </para>
 /// </para>
 /// <para>
 /// WHAT THESE GUARDS DO NOT COVER, so nobody reads them as more than they are. Two windows, both
