@@ -2575,47 +2575,43 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var parkedPath in CloseConfirmation_Parking.Find_Parked(_paths))
         {
-            if (Is_BeingResolved(parkedPath))
-                continue;
-
-            if (CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow))
+            if (Decide_ParkedAction(parkedPath) == ParkedConfirmationActions.Expire)
                 Expire_CloseConfirmation(parkedPath);
         }
+    }
+
+    /// <summary>
+    /// What this tick should do with a parked request — read from the ONE table both sweeps share.
+    ///
+    /// They used to carry a guard chain each, and that is how they came to disagree about which
+    /// requests were live: a dropped `continue` in this one let the ask sweep post fresh buttons every
+    /// two seconds for a request that had already lapsed. The order those guards must run in encodes
+    /// four production failures and now lives in `ParkedConfirmation_Planner`, where the suite can ask
+    /// about it — this method is left with the three facts and none of the reasoning.
+    /// </summary>
+    ParkedConfirmationActions Decide_ParkedAction(string parkedPath)
+    {
+        bool alreadyAsked;
+
+        lock (_closeConfirmationLock)
+            alreadyAsked = _closeConfirmations.Values.Any(confirmation => confirmation.ParkedPath == parkedPath);
+
+        return ParkedConfirmation_Planner.Decide(
+            Is_BeingResolved(parkedPath),
+            CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow),
+            alreadyAsked);
     }
 
     async Task Resolve_CloseConfirmations_Async(CancellationToken cancellationToken)
     {
         foreach (var parkedPath in CloseConfirmation_Parking.Find_Parked(_paths))
         {
-            // A request the tap handler is part-way through resolving is NOT unasked. Its
-            // registrations are already gone (dropped under the lock the moment the owner tapped)
-            // but its file is not archived until two awaited Telegram calls later, and "already
-            // asked" keys on registrations alone — so this tick used to post a SECOND prompt with
-            // fresh buttons for a decision the owner had just made. Those duplicate registrations
-            // then pointed at an archived path that only the file scan can clear, so nothing ever
-            // cleared them, and a tap on that immortal button closed an orchestration the owner had
-            // explicitly refused to close.
-            if (Is_BeingResolved(parkedPath))
-                continue;
-
-            // An expired request is never re-asked, even if lapsing it failed. Splitting expiry into
-            // its own pass dropped the `continue` that used to guarantee this: if the lapse cleared
-            // the registrations and then BOTH the archive and its fallback failed, the file stayed
-            // parked with nothing registered, and this loop posted a fresh prompt with live buttons
-            // to the owner's phone every two seconds. The old single loop produced repeated channel
-            // entries; this produced a waterfall (CLAUDE.md item 14).
-            if (CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow))
-                continue;
-
-            bool alreadyAsked;
-
-            lock (_closeConfirmationLock)
-                alreadyAsked = _closeConfirmations.Values.Any(confirmation => confirmation.ParkedPath == parkedPath);
-
-            if (alreadyAsked)
-                continue;
-
-            await Ask_OwnerToConfirmClose_Async(parkedPath, cancellationToken);
+            // The three guards this loop used to carry — being resolved, expired, already asked —
+            // are one decision now, shared with the expiry sweep. Each of them was written after a
+            // live failure and their ORDER is what mattered; both the reasoning and the ordering are
+            // in `ParkedConfirmation_Planner`, and tested there.
+            if (Decide_ParkedAction(parkedPath) == ParkedConfirmationActions.Ask)
+                await Ask_OwnerToConfirmClose_Async(parkedPath, cancellationToken);
         }
     }
 
