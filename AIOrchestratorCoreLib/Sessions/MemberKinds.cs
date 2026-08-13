@@ -50,20 +50,9 @@ public static class MemberKind_Ids
         return MemberKinds.Implementer;
     }
 
-    /// <summary>
-    /// A BASIC orchestration is one with a solo member: no supervisor was ever spawned, so nothing
-    /// may go looking for one (the watchdog would respawn a supervisor forever). Derived from the
-    /// members rather than stored, exactly like the member kinds — session.json needs no migration
-    /// and an orchestration cannot end up disagreeing with itself about what it is.
-    /// </summary>
-    public static bool Is_BasicOrchestration(IEnumerable<string> memberIds)
-    {
-        foreach (var memberId in memberIds)
-        {
-            if (Resolve_Kind(memberId) == MemberKinds.Solo)
-                return true;
-        }
-
-        return false;
-    }
+    // Is_BasicOrchestration USED TO LIVE HERE and now lives in OrchestrationShape, because it stopped
+    // being a question about member ids. It read "some member id starts with solo-", which cannot
+    // express a PROMOTED orchestration: member folders are audit trail and never leave the roster, so
+    // a promoted one reads as basic for ever and its supervisor is never respawned. See that class
+    // for why filtering closed members does not fix it either.
 }
