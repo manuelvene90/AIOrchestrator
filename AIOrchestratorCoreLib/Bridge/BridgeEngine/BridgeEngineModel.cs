@@ -194,14 +194,27 @@ internal sealed class BridgeEngineModel(
         public long? PromptMessageId { get; init; }
     }
 
-    /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
     /// <summary>
-    /// Crash-loop alerts taken from the watchdog that a silenced topic could not receive yet. The
-    /// watchdog's queue is DRAINED by the take, so without this they were simply gone — see
-    /// <see cref="Send_CrashLoopAlerts_Async"/>. Newest per orchestration, so it is bounded.
+    /// Crash-loop alerts taken from the watchdog that could not be delivered yet, and when each was
+    /// last attempted. The watchdog's queue is DRAINED by the take, so without this they were simply
+    /// gone — see <see cref="Send_CrashLoopAlerts_Async"/>.
+    /// <para>
+    /// KEYED ON THE ALERT, NOT THE ORCHESTRATION. It was keyed on the orchestration for one release,
+    /// which collapsed siblings: one watchdog pass checks the supervisor AND every member, each
+    /// registering its own respawn, and what tells them apart — "supervisor of X" versus "imp-2 of
+    /// X" — lives in the TEXT that "newest wins" overwrote. A machine-wide cause (a binary off PATH,
+    /// a machine that cannot fork) crash-loops every session in lockstep and reaches the threshold on
+    /// the same pass, so that is the common case rather than the exotic one, and it is unrecoverable:
+    /// the watchdog emits at <c>count != CRASH_LOOP_THRESHOLD</c> — exactly once — and the counter
+    /// resets only when that slot comes alive (rev-6 F1, 2026-08-13).
+    /// </para>
     /// </summary>
-    readonly Dictionary<string, string> _heldCrashLoopAlerts = [];
+    readonly Dictionary<(string OrchId, string AlertText), DateTime> _heldCrashLoopAlerts = [];
 
+    /// <summary>
+    /// One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only). Both are
+    /// written ONLY after a confirmed send, so an alert nobody received never marks itself delivered.
+    /// </summary>
     readonly HashSet<string> _stallAlertedOrchIds = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
@@ -793,11 +806,11 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_CrashLoopAlerts_Async(CancellationToken cancellationToken)
     {
-        // Newest wins: what the owner needs is the CURRENT state of a crash-looping session, not a
-        // transcript of every respawn it made while they were in a meeting. Keyed by orchestration,
-        // so this cannot grow beyond the number of live orchestrations.
+        // TryAdd, not assignment: an identical repeat is the same alert, while a SIBLING session's
+        // alert differs in its text and must survive alongside it. Bounded because the watchdog
+        // emits each one exactly once, at the threshold.
         foreach (var alert in _watchdog.Take_PendingCrashLoopAlerts())
-            _heldCrashLoopAlerts[alert.OrchId] = alert.AlertText;
+            _heldCrashLoopAlerts.TryAdd((alert.OrchId, alert.AlertText), default);
 
         if (_telegramClient == null)
         {
@@ -806,22 +819,30 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        foreach (var orchId in _heldCrashLoopAlerts.Keys.ToList())
+        foreach (var (key, lastAttemptUtc) in _heldCrashLoopAlerts.ToList())
         {
-            if (Is_TopicSilenced(orchId))
+            if (Is_TopicSilenced(key.OrchId))
                 continue;
 
-            var alertText = _heldCrashLoopAlerts[orchId];
+            // BACKOFF INSTEAD OF DROPPING. This removed the alert BEFORE the attempt, with a real
+            // reason: retrying every tick against a failing endpoint earns a server-side throttle.
+            // That reasoning does not survive the watchdog's ONE-SHOT semantics — it emits at
+            // CRASH_LOOP_THRESHOLD and the counter resets only when the slot comes alive — so a
+            // single 502 meant the owner was never told at all. Holding with a backoff answers the
+            // throttle concern without paying for it in lost alerts (rev-6 F3, 2026-08-13).
+            if (lastAttemptUtc != default && DateTime.UtcNow - lastAttemptUtc < TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS))
+                continue;
 
-            // Removed BEFORE the attempt, deliberately: a failed send stays one attempt, as it
-            // always has. Retrying every tick against a failing endpoint is how a bot earns a
-            // server-side throttle, and the failure is logged either way.
-            _heldCrashLoopAlerts.Remove(orchId);
+            _heldCrashLoopAlerts[key] = DateTime.UtcNow;
 
             try
             {
-                var session = _store.Get_Session_OrNull(orchId);
-                await _telegramClient.Send_Message_Async(session?.TelegramTopicId, alertText, cancellationToken);
+                var session = _store.Get_Session_OrNull(key.OrchId);
+                await _telegramClient.Send_Message_Async(session?.TelegramTopicId, key.AlertText, cancellationToken);
+
+                // Dropped only after a CONFIRMED send — the rule 71a849a applied to three memos
+                // while this site, its own immediate predecessor, contradicted it.
+                _heldCrashLoopAlerts.Remove(key);
             }
             catch (OperationCanceledException)
             {
@@ -829,7 +850,7 @@ internal sealed class BridgeEngineModel(
             }
             catch (Exception ex)
             {
-                _log.Log_Warning(orchId, $"Crash-loop alert send failed: {ex.Message}");
+                _log.Log_Warning(key.OrchId, $"Crash-loop alert send failed, holding it for retry: {ex.Message}");
             }
         }
     }
@@ -1254,17 +1275,6 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        // DEFERRED, NOT DROPPED — and BELOW the release above, which is reconciliation rather than
-        // attention, exactly as Sync_Flag is in the ledger check. An earlier version of this bail sat
-        // at the top of the method with a comment claiming nothing was reconciled below it; that line
-        // IS the reconciliation, and it is the only release this key has (the member-scoped sites key
-        // on "orchId/memberId", a disjoint namespace, and the stored timestamp is never read, so
-        // nothing else and no expiry can heal it).
-        //
-        // What that cost: a spell that ENDED during a meeting — the owner directs the supervisor to
-        // answer the reports, which is work a meeting explicitly continues — kept its token, and the
-        // NEXT spell, with a genuinely unanswered report in it, could not be nudged at all
-        // (rev-7 P2, 2026-08-13).
         // DEFERRED, NOT DROPPED — and BELOW the release above, which is reconciliation rather than
         // attention, exactly as Sync_Flag is in the ledger check. An earlier version of this bail sat
         // at the top of the method with a comment claiming nothing was reconciled below it; that line
