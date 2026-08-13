@@ -1163,16 +1163,6 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Nudge_IdleSupervisor(IOrchestrationSession session)
     {
-        // DEFERRED, NOT DROPPED — and it has to be here rather than at the append. The nudge fires
-        // once per quiet spell and records that it did; consulting the meeting only at the append
-        // spends that token while the entry goes nowhere, so the nudge is destroyed rather than
-        // held. Bailing leaves the token untouched and the nudge arrives after the meeting.
-        //
-        // Nothing is reconciled below this line — unlike the ledger check, where the same bail in the
-        // same place wedges the session (see LedgerHealth_Step).
-        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
-            return;
-
         var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
         if (Is_SessionMidTurn(supervisorUsageFile))
@@ -1206,6 +1196,31 @@ internal sealed class BridgeEngineModel(
             _nudgedMemberUtc.Remove(session.OrchId);
             return;
         }
+
+        // DEFERRED, NOT DROPPED — and BELOW the release above, which is reconciliation rather than
+        // attention, exactly as Sync_Flag is in the ledger check. An earlier version of this bail sat
+        // at the top of the method with a comment claiming nothing was reconciled below it; that line
+        // IS the reconciliation, and it is the only release this key has (the member-scoped sites key
+        // on "orchId/memberId", a disjoint namespace, and the stored timestamp is never read, so
+        // nothing else and no expiry can heal it).
+        //
+        // What that cost: a spell that ENDED during a meeting — the owner directs the supervisor to
+        // answer the reports, which is work a meeting explicitly continues — kept its token, and the
+        // NEXT spell, with a genuinely unanswered report in it, could not be nudged at all
+        // (rev-7 P2, 2026-08-13).
+        // DEFERRED, NOT DROPPED — and BELOW the release above, which is reconciliation rather than
+        // attention, exactly as Sync_Flag is in the ledger check. An earlier version of this bail sat
+        // at the top of the method with a comment claiming nothing was reconciled below it; that line
+        // IS the reconciliation, and it is the only release this key has (the member-scoped sites key
+        // on "orchId/memberId", a disjoint namespace, and the stored timestamp is never read, so
+        // nothing else and no expiry can heal it).
+        //
+        // What that cost: a spell that ENDED during a meeting — the owner directs the supervisor to
+        // answer the reports, which is work a meeting explicitly continues — kept its token, and the
+        // NEXT spell, with a genuinely unanswered report in it, could not be nudged at all
+        // (rev-7 P2, 2026-08-13).
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
+            return;
 
         // Once per quiet spell, not once per tick.
         if (_nudgedMemberUtc.ContainsKey(session.OrchId))
@@ -1407,8 +1422,14 @@ internal sealed class BridgeEngineModel(
     void Report_LedgerShape(IOrchestrationSession session)
     {
         // Above the FINGERPRINT, not at the append: recording the offending set while suppressed
-        // marks this shape as already reported, and the complaint never comes back after the
-        // meeting. Nothing is reconciled below this line (contrast LedgerHealth_Step).
+        // marks this shape as already reported, and the complaint never comes back after the meeting.
+        //
+        // Safe at the TOP here, unlike the nudge above, and for a reason worth stating rather than
+        // asserting: the memo below is CONTENT-ADDRESSED, not a one-shot token. Any later change to
+        // the offending set differs from what is remembered and fires on its own, and a set that
+        // cleared during the meeting simply re-records as empty afterwards. A tick skipped here
+        // therefore cannot strand anything — which is exactly what a skipped tick DOES do to a
+        // presence token (rev-7 P2) or to a flag nothing else deletes (LedgerHealth_Step).
         if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
             return;
 
@@ -4341,7 +4362,10 @@ internal sealed class BridgeEngineModel(
 
             // Above the SIGNATURE, not at the append: storing it while suppressed marks this exact
             // set of idle members as already flagged, and the flag never returns after the meeting.
-            // Nothing is reconciled below this line (contrast LedgerHealth_Step).
+            //
+            // Safe at the TOP, for the same reason as Report_LedgerShape and NOT for the reason the
+            // nudge needed: the signature below is CONTENT-ADDRESSED, so any later change to who is
+            // idle fires on its own and a tick skipped here strands nothing.
             if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(session.OrchId)))
                 continue;
 
