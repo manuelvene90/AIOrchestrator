@@ -23,6 +23,58 @@ public static class CloseConfirmationPrompt_Builder
     }
 
     /// <summary>
+    /// THE TWO WORDS THE OWNER ACTUALLY TAPS. They were hard-coded "✅ Close it" / "✋ Keep it open"
+    /// while the prompt above them was already kind-aware, so a promotion asked "Turn 'X' into a full
+    /// crew?" over a button reading CLOSE IT.
+    ///
+    /// That is worse than a cosmetic mismatch and worse than the wrong archive label this same class
+    /// already guards against. Reading those buttons, the safe-looking tap is "Keep it open" — which
+    /// records a DECLINED promotion, tells the solo the owner refused and not to ask again, and
+    /// leaves nobody aware that the question asked was never the question answered.
+    ///
+    /// They live here, beside the prompt they belong to, for the reason this whole class exists: the
+    /// engine is unreachable from the suite, and the sentence the owner reads at the one moment they
+    /// decide is not something to leave untestable.
+    /// </summary>
+    public static (string Confirm, string Decline) Build_ButtonLabels(ParkedCloseKinds kind)
+    {
+        return kind switch
+        {
+            ParkedCloseKinds.Promotion => ("✅ Make it a crew", "✋ Keep one session"),
+            ParkedCloseKinds.Orchestration => ("✅ Close it", "✋ Keep it open"),
+            ParkedCloseKinds.Implementer => ("✅ Close it", "✋ Keep it open"),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), $"unhandled close kind '{kind}'"),
+        };
+    }
+
+    /// <summary>
+    /// What the prompt is rewritten to say once they have tapped, so the topic carries the decision
+    /// rather than the question. It was unconditionally "Close 'X'? … Closed — you confirmed", which
+    /// left a promoted orchestration's topic permanently reading that it had been closed.
+    ///
+    /// An UNREADABLE request falls back to neutral wording rather than to the close wording. Guessing
+    /// "closed" is how the record comes to say the opposite of what happened, and this method exists
+    /// because that already happened once at the archive label.
+    /// </summary>
+    public static string Build_DecidedText(ParkedCloseKinds? kind, string orchId, bool confirmed)
+    {
+        return kind switch
+        {
+            ParkedCloseKinds.Promotion => confirmed
+                ? $"⚙️ Turn '{orchId}' into a full crew?\n\n✅ Promoted — you confirmed. The supervisor is taking over this conversation."
+                : $"⚙️ Turn '{orchId}' into a full crew?\n\n✋ Left as one session — you declined. It keeps working exactly as it was.",
+
+            ParkedCloseKinds.Orchestration or ParkedCloseKinds.Implementer => confirmed
+                ? $"⚠️ Close '{orchId}'?\n\n✅ Closed — you confirmed."
+                : $"⚠️ Close '{orchId}'?\n\n✋ Kept open — you declined. Its sessions keep running.",
+
+            _ => confirmed
+                ? $"'{orchId}' — ✅ you confirmed."
+                : $"'{orchId}' — ✋ you declined. Nothing was changed.",
+        };
+    }
+
+    /// <summary>
     /// WHAT a close would end, in the middle of a sentence — "close of X was declined", "X lapsed".
     ///
     /// One wording, because the held / declined / lapsed / failed notices all name it and they are
@@ -53,14 +105,6 @@ public static class CloseConfirmationPrompt_Builder
     }
 
     /// <summary>
-    /// NO LEDGER LINE HERE, and that is a decision. The ledger belongs to the orchestration, so its
-    /// unresolved count says nothing about whether THIS member is safe to retire — showing it beside
-    /// a one-member close would read as "these lines die with it", which is false and would push the
-    /// owner toward keeping sessions alive for a reason that does not apply.
-    ///
-    /// What the owner needs instead is the scope: the rest keeps running.
-    /// </summary>
-    /// <summary>
     /// THE ONE PROMPT THAT ASKS FOR MORE RATHER THAN LESS, so it names the cost first: this is the
     /// owner agreeing to spend a supervisor and an implementer indefinitely, in place of one session.
     ///
@@ -83,6 +127,14 @@ public static class CloseConfirmationPrompt_Builder
             + "Treat it as one-way: there is no going back to a single session without closing the orchestration. Nothing happens unless you tap.";
     }
 
+    /// <summary>
+    /// NO LEDGER LINE HERE, and that is a decision. The ledger belongs to the orchestration, so its
+    /// unresolved count says nothing about whether THIS member is safe to retire — showing it beside
+    /// a one-member close would read as "these lines die with it", which is false and would push the
+    /// owner toward keeping sessions alive for a reason that does not apply.
+    ///
+    /// What the owner needs instead is the scope: the rest keeps running.
+    /// </summary>
     static string Build_ForImplementer(IParkedCloseRequest request)
     {
         return

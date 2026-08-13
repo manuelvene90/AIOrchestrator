@@ -2790,10 +2790,16 @@ internal sealed class BridgeEngineModel(
 
         try
         {
+            // THE BUTTONS FOLLOW THE KIND, like the prompt above them. They were hard-coded "Close
+            // it" / "Keep it open" while the prompt already said "Turn 'X' into a full crew?" — so
+            // the owner would have confirmed a crew by tapping CLOSE, and the safe-looking tap would
+            // have declined a promotion nobody knew had been misread.
+            var (confirmLabel, declineLabel) = CloseConfirmationPrompt_Builder.Build_ButtonLabels(request.Kind);
+
             var messageId = await _telegramClient.Send_MessageWithButtons_Async(
                 session.TelegramTopicId,
                 text,
-                [(confirmData, "✅ Close it"), (declineData, "✋ Keep it open")],
+                [(confirmData, confirmLabel), (declineData, declineLabel)],
                 cancellationToken);
 
             Remember_TopicMessage(session.TelegramTopicId, messageId);
@@ -2909,9 +2915,17 @@ internal sealed class BridgeEngineModel(
         // an edit sent afterwards would have nowhere to land.
         if (tap.MessageId != null)
         {
-            var decided = confirmation.Confirms
-                ? $"⚠️ Close '{confirmation.OrchId}'?\n\n✅ Closed — you confirmed."
-                : $"⚠️ Close '{confirmation.OrchId}'?\n\n✋ Kept open — you declined. Its sessions keep running.";
+            // WHAT THE TOPIC IS LEFT SAYING, and it followed the close wording unconditionally — so a
+            // promoted orchestration's topic read "Closed — you confirmed" for ever, about something
+            // that had just gained two sessions.
+            //
+            // The kind comes from the FILE, like every other decision on this path. An unreadable one
+            // yields neutral wording rather than the close wording: guessing "closed" is how a record
+            // comes to say the opposite of what happened.
+            var decided = CloseConfirmationPrompt_Builder.Build_DecidedText(
+                ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath)?.Kind,
+                confirmation.OrchId,
+                confirmation.Confirms);
 
             try
             {
