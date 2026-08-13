@@ -25,7 +25,7 @@ public class TaskListSplitTests
             "- [ ] the open one")!;
 
         Assert.NotEqual(
-            PlanProgress_Formatter.Describe_Remaining(progress),
+            PlanProgress_Formatter.Describe_Ledger(progress),
             PlanProgress_Formatter.Describe_EveryLine(progress));
     }
 
@@ -43,10 +43,10 @@ public class TaskListSplitTests
     {
         var progress = Parse("- [x] the delivered thing", "- [ ] the open one")!;
 
-        Assert.Contains("the delivered thing", PlanProgress_Formatter.Describe_Remaining(progress));
+        Assert.Contains("the delivered thing", PlanProgress_Formatter.Describe_Ledger(progress));
         Assert.Contains("the delivered thing", PlanProgress_Formatter.Describe_EveryLine(progress));
 
-        Assert.Equal("[x] the delivered thing\n[ ] the open one", PlanProgress_Formatter.Describe_Remaining(progress));
+        Assert.Equal("[x] the delivered thing\n[ ] the open one", PlanProgress_Formatter.Describe_Ledger(progress));
         Assert.Equal("  · the open one\n  x the delivered thing", PlanProgress_Formatter.Describe_EveryLine(progress));
     }
 
@@ -68,9 +68,9 @@ public class TaskListSplitTests
 
         var progress = Parse([.. lines])!;
 
-        Assert.Contains("open 39", PlanProgress_Formatter.Describe_Remaining(progress));
+        Assert.Contains("open 39", PlanProgress_Formatter.Describe_Ledger(progress));
         Assert.Contains("open 39", PlanProgress_Formatter.Describe_EveryLine(progress));
-        Assert.Equal(40, PlanProgress_Formatter.Describe_Remaining(progress).Split('\n').Length);
+        Assert.Equal(40, PlanProgress_Formatter.Describe_Ledger(progress).Split('\n').Length);
     }
 
     static AIOrchestratorCoreLib.Planning.PlanProgress.IPlanProgress? Parse(params string[] lines)

@@ -3395,10 +3395,13 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>Full ledger for one orchestration — the raw '- [x]' lines are the point of the command.</summary>
     /// <summary>
-    /// WHAT IS LEFT first, then the counts — the owner asked for "a slash command that lets me know
-    /// what's left to do", and this used to answer with up to forty raw ledger lines including
-    /// everything already finished. On a 207-line ledger that is a message nobody reads, and their
-    /// rule all evening has been that a long message is a useless one.
+    /// The counts, then the ledger as written — every row, in the file's own order.
+    ///
+    /// It began as "what's left to do" and answered with up to forty raw lines including everything
+    /// finished, which on a 207-line ledger is a message nobody reads. The answer to that was to hide
+    /// rows; the owner overruled it on 2026-08-13 — "I want to see all the rows, it must not be
+    /// truncated" — because hiding them hides the ledger author's failure to group into 7-8 macro
+    /// tasks. Short message, short LEDGER: the length is the supervisor's problem, upstream of here.
     /// </summary>
     string Build_OrchestrationLedgerText(string orchId, string displayName)
     {
@@ -3407,7 +3410,11 @@ internal sealed class BridgeEngineModel(
         if (progress == null)
             return $"{displayName}: no task ledger yet — the supervisor writes PLAN.md once you approve a direction";
 
-        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n\nLEFT:\n{Planning.PlanProgress_Formatter.Describe_Remaining(progress)}";
+        // NO `LEFT:` HEADER, since 2026-08-13: the block underneath now carries `[x]` and `[-]` rows
+        // by the owner's own directive, so a header announcing what is left contradicts its own
+        // content — and they would read that as a bug in the same breath as the fix they asked for.
+        // The counts line above already says how much is left, in numbers.
+        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{Planning.PlanProgress_Formatter.Describe_Ledger(progress)}";
     }
 
     string Build_OrchestrationCountsLine(string orchId, string displayName)

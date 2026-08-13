@@ -51,8 +51,12 @@ public static class PlanProgress_Formatter
     ///
     /// The ledger's own line structure was always one line per deliverable. Nothing here decides
     /// anything; it stopped flattening it on the way out.
+    ///
+    /// NAMED Describe_Ledger, not Describe_Remaining. The old name was accurate for a renderer that
+    /// showed unfinished work alone, and survived one directive past the point where it described
+    /// the output — a stale name outlives the reader who knows it is stale.
     /// </summary>
-    public static string Describe_Remaining(IPlanProgress progress)
+    public static string Describe_Ledger(IPlanProgress progress)
     {
         if (progress.Lines.Count == 0)
             return "the ledger is empty";

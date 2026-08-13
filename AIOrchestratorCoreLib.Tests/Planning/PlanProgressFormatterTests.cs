@@ -61,7 +61,7 @@ public class PlanProgressFormatterTests
 
     /// <summary>THE SHAPE, exactly — one line per task, each carrying the ledger's own marker.</summary>
     [Fact]
-    public void Describe_Remaining_IsOneLinePerTaskCarryingItsLedgerMarker()
+    public void Describe_Ledger_IsOneLinePerTaskCarryingItsLedgerMarker()
     {
         var progress = Parse(
             "- [>] fix R1 — clear the awaiting-answer flag only after a confirmed send",
@@ -79,7 +79,7 @@ public class PlanProgressFormatterTests
                 "[x] audit R2–R8 against current master",
                 "[-] rewrite the mirror loop — superseded",
             }),
-            PlanProgress_Formatter.Describe_Remaining(progress));
+            PlanProgress_Formatter.Describe_Ledger(progress));
     }
 
     /// <summary>
@@ -91,7 +91,7 @@ public class PlanProgressFormatterTests
     /// A joined line is not equal to any of them, so it cannot pass.
     /// </summary>
     [Fact]
-    public void Describe_Remaining_NeverPutsTwoTasksOnOneLine()
+    public void Describe_Ledger_NeverPutsTwoTasksOnOneLine()
     {
         string[] tasks =
         [
@@ -107,7 +107,7 @@ public class PlanProgressFormatterTests
             $"- [x] {tasks[2]}",
             $"- [-] {tasks[3]}")!;
 
-        var lines = PlanProgress_Formatter.Describe_Remaining(progress).Split('\n');
+        var lines = PlanProgress_Formatter.Describe_Ledger(progress).Split('\n');
 
         Assert.Equal(tasks.Length, lines.Length);
 
@@ -117,9 +117,9 @@ public class PlanProgressFormatterTests
 
     /// <summary>EVERY line opens with one of the ledger's five markers, over a mixed ledger.</summary>
     [Fact]
-    public void Describe_Remaining_OpensEveryLineWithALedgerMarker()
+    public void Describe_Ledger_OpensEveryLineWithALedgerMarker()
     {
-        var lines = PlanProgress_Formatter.Describe_Remaining(Mixed(blocked: 2, inProgress: 3, open: 4, done: 5, notDoing: 6)).Split('\n');
+        var lines = PlanProgress_Formatter.Describe_Ledger(Mixed(blocked: 2, inProgress: 3, open: 4, done: 5, notDoing: 6)).Split('\n');
 
         foreach (var line in lines)
             Assert.Contains(line[..3], new[] { "[!]", "[>]", "[ ]", "[x]", "[-]" });
@@ -134,11 +134,11 @@ public class PlanProgressFormatterTests
     /// rows would have hidden the ledger author's failure to group them.
     /// </summary>
     [Fact]
-    public void Describe_Remaining_PrintsEveryLineHoweverBigTheLedgerIs()
+    public void Describe_Ledger_PrintsEveryLineHoweverBigTheLedgerIs()
     {
         var progress = Mixed(blocked: 9, inProgress: 40, open: 36, done: 178, notDoing: 29);
 
-        Assert.Equal(292, PlanProgress_Formatter.Describe_Remaining(progress).Split('\n').Length);
+        Assert.Equal(292, PlanProgress_Formatter.Describe_Ledger(progress).Split('\n').Length);
     }
 
     /// <summary>
@@ -147,9 +147,9 @@ public class PlanProgressFormatterTests
     /// which a renderer that printed 291 rows plus a "+1 more" would otherwise satisfy.
     /// </summary>
     [Fact]
-    public void Describe_Remaining_NeverCollapsesARemainderIntoACount()
+    public void Describe_Ledger_NeverCollapsesARemainderIntoACount()
     {
-        var text = PlanProgress_Formatter.Describe_Remaining(Mixed(open: 40));
+        var text = PlanProgress_Formatter.Describe_Ledger(Mixed(open: 40));
 
         Assert.DoesNotContain("more", text);
         Assert.Contains("[ ] open 39", text);
@@ -162,9 +162,9 @@ public class PlanProgressFormatterTests
     /// and the owner has taken responsibility for grouping it. Dropped rows stay for the same reason.
     /// </summary>
     [Fact]
-    public void Describe_Remaining_ShowsDoneAndDroppedRows()
+    public void Describe_Ledger_ShowsDoneAndDroppedRows()
     {
-        var text = PlanProgress_Formatter.Describe_Remaining(Mixed(inProgress: 3, done: 2, notDoing: 1));
+        var text = PlanProgress_Formatter.Describe_Ledger(Mixed(inProgress: 3, done: 2, notDoing: 1));
 
         Assert.Contains("[x] done 0", text);
         Assert.Contains("[-] not doing 0", text);
@@ -179,7 +179,7 @@ public class PlanProgressFormatterTests
     /// first, or done last, produces a different sequence from this one.
     /// </summary>
     [Fact]
-    public void Describe_Remaining_KeepsTheLedgersOwnOrder()
+    public void Describe_Ledger_KeepsTheLedgersOwnOrder()
     {
         var progress = Parse(
             "- [x] first, and finished",
@@ -197,7 +197,7 @@ public class PlanProgressFormatterTests
                 "[x] fourth, also finished",
                 "[>] fifth, and running",
             }),
-            PlanProgress_Formatter.Describe_Remaining(progress));
+            PlanProgress_Formatter.Describe_Ledger(progress));
     }
 
     /// <summary>
@@ -206,18 +206,18 @@ public class PlanProgressFormatterTests
     /// both spellings in front of the owner inside a single message.
     /// </summary>
     [Fact]
-    public void Describe_Remaining_NormalisesTheDoneMarkerToOneSpelling()
+    public void Describe_Ledger_NormalisesTheDoneMarkerToOneSpelling()
     {
-        var text = PlanProgress_Formatter.Describe_Remaining(Parse("- [X] shouted", "- [x] quiet")!);
+        var text = PlanProgress_Formatter.Describe_Ledger(Parse("- [X] shouted", "- [x] quiet")!);
 
         Assert.Equal("[x] shouted\n[x] quiet", text);
     }
 
     /// <summary>A ledger with no lines to render says so rather than printing an empty message.</summary>
     [Fact]
-    public void Describe_Remaining_SaysSoWhenThereIsNothingToRender()
+    public void Describe_Ledger_SaysSoWhenThereIsNothingToRender()
     {
-        Assert.Equal("the ledger is empty", PlanProgress_Formatter.Describe_Remaining(Build(done: 3, total: 3)));
+        Assert.Equal("the ledger is empty", PlanProgress_Formatter.Describe_Ledger(Build(done: 3, total: 3)));
     }
 
     /// <summary>

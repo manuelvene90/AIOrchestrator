@@ -96,9 +96,11 @@ public class LedgerNotDoingTests
     }
 
     /// <summary>
-    /// THE OWNER'S COMPLAINT, in numbers from their own ledger: 53 running, 4 blocked, 36 open.
-    /// Naming all 53 is the wall they said they would not read; naming the 4 is the thing they can
-    /// act on. Detail is a function of COUNT, not of category.
+    /// The owner's own ledger, in numbers: 53 running, 2 blocked, 36 open — 91 lines, 91 printed.
+    ///
+    /// This docstring used to end "detail is a function of COUNT, not of category", which was the
+    /// rule that collapsed the 53 to a number and named the 2. See the comment in the body for what
+    /// replaced it and what survived of it.
     /// </summary>
     [Fact]
     public void ALedgerOfNinetyOneLinesPrintsNinetyOneLines()
@@ -114,7 +116,7 @@ public class LedgerNotDoingTests
         for (var index = 0; index < 36; index++)
             lines.Add($"- [ ] open {index}");
 
-        var remaining = PlanProgress_Formatter.Describe_Remaining(Parse([.. lines])!);
+        var ledger = PlanProgress_Formatter.Describe_Ledger(Parse([.. lines])!);
 
         // REVERSED BY THE OWNER, 2026-08-13. This case used to assert the opposite of every line
         // below: the 53 collapsed to "in progress   53", the open ones showed three names and
@@ -125,13 +127,13 @@ public class LedgerNotDoingTests
         // The complaint the old shape answered is still real and still theirs — a 91-line ledger IS
         // unreadable on a phone. It is now answered by writing a 7-8 line ledger, upstream of here,
         // which is the supervisor's job. This function's job is to not lie about what the ledger says.
-        Assert.Equal(91, remaining.Split('\n').Length);
+        Assert.Equal(91, ledger.Split('\n').Length);
 
-        Assert.Contains("[>] running 0", remaining);
-        Assert.Contains("[>] running 52", remaining);
-        Assert.Contains("[!] migrate the state file — blocked on: your call about the 125% scaling", remaining);
-        Assert.Contains("[ ] open 35", remaining);
-        Assert.DoesNotContain("more", remaining);
+        Assert.Contains("[>] running 0", ledger);
+        Assert.Contains("[>] running 52", ledger);
+        Assert.Contains("[!] migrate the state file — blocked on: your call about the 125% scaling", ledger);
+        Assert.Contains("[ ] open 35", ledger);
+        Assert.DoesNotContain("more", ledger);
     }
 
     /// <summary>
@@ -148,7 +150,7 @@ public class LedgerNotDoingTests
     [Fact]
     public void EveryStateIsPrinted_DoneIncluded()
     {
-        var remaining = PlanProgress_Formatter.Describe_Remaining(Parse(
+        var ledger = PlanProgress_Formatter.Describe_Ledger(Parse(
             "- [x] the finished thing",
             "- [>] the running one",
             "- [ ] the open one",
@@ -156,7 +158,7 @@ public class LedgerNotDoingTests
 
         Assert.Equal(
             "[x] the finished thing\n[>] the running one\n[ ] the open one\n[-] the dropped one",
-            remaining);
+            ledger);
     }
 
     /// <summary>
@@ -167,7 +169,7 @@ public class LedgerNotDoingTests
     [Fact]
     public void AFinishedLedgerStillShowsItsRows()
     {
-        Assert.Equal("[x] a\n[-] b", PlanProgress_Formatter.Describe_Remaining(Parse("- [x] a", "- [-] b")!));
+        Assert.Equal("[x] a\n[-] b", PlanProgress_Formatter.Describe_Ledger(Parse("- [x] a", "- [-] b")!));
     }
 
     /// <summary>The close names what it is ending mid-flight — it does not veto it.</summary>
