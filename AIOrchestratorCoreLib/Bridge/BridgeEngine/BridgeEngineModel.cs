@@ -742,9 +742,20 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Archives the old tail of long channels so respawned sessions boot cheaply. Runs AFTER the
-    /// mirror poll and re-anchors the tailer's offset to the rewritten file — otherwise the
-    /// shrink reads as a protocol anomaly and the whole file is re-mirrored to Telegram.
+    /// DISCOVERS the channels and hands each to <see cref="Channel_CompactionStep.Compact_IfAllowed"/>.
+    /// It no longer archives anything itself and no longer re-anchors the cursor — both moved into
+    /// the step, along with the guards, so the suite drives the same code the tick does.
+    ///
+    /// <para>
+    /// What stays true here: it runs AFTER the mirror poll, and discovery is deliberately WIDER than
+    /// the poll — which is exactly why the step's first guard exists, since a channel the poll
+    /// skipped has a frozen cursor that must not be re-anchored to a rewritten file.
+    /// </para>
+    /// <para>
+    /// The archive-and-re-anchor reasoning lives with the code that does it. This docstring described
+    /// this method's old body for two commits after that body moved (rev-7, 2026-08-13) — the same
+    /// prose-outliving-code shape the comment inside the loop already had to correct once.
+    /// </para>
     /// </summary>
     void Compact_LongChannels()
     {

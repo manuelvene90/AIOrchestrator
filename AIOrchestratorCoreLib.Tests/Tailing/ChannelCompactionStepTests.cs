@@ -248,11 +248,41 @@ public class ChannelCompactionStepTests : IDisposable
         var log = new RecordingLog();
         var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, log, "orch-x");
 
+        // THE NULL HERE HAS TWO ROUTES and pins neither on its own: the guard refusing, or
+        // Compact_IfNeeded's own `if (!File.Exists) return null`. It is kept because it is true, but
+        // the WARNING is what discriminates — and
+        // AMissingChannelNobodyHasReadYet_IsNotCompacted_AndWarnsAboutNothing is the positive control
+        // that proves it, by reaching the same null with no cursor and producing no warning at all
+        // (rev-7 T2, 2026-08-13).
         Assert.Null(newLength);
 
         var warning = Assert.Single(log.Warnings);
         Assert.Contains("undelivered-entries guard", warning, StringComparison.Ordinal);
         Assert.Contains("does not exist", warning, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE POSITIVE CONTROL for the test above. Same missing file, same null — but this tailer never
+    /// read it, so the predicate answers honestly (no state means it is owed nothing) and the refusal
+    /// never happens: the null comes from the compactor's own existence check instead.
+    /// <para>
+    /// No warning is therefore the assertion that matters. It is what makes the warning above
+    /// evidence of the GUARD rather than evidence of a missing file.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AMissingChannelNobodyHasReadYet_IsNotCompacted_AndWarnsAboutNothing()
+    {
+        // Polled — so the first guard passes — but the file does not exist, so the poll records it
+        // without ever giving the tailer state for it.
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        var log = new RecordingLog();
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, log, "orch-x");
+
+        Assert.Null(newLength);
+        Assert.Empty(log.Warnings);
     }
 
     [Fact]
