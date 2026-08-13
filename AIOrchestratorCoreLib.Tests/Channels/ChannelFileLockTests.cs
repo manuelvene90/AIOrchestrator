@@ -195,6 +195,56 @@ public class ChannelFileLockTests : IDisposable
         Assert.False(Directory.Exists(ChannelFile_Lock.Build_LockDirectoryPath(_channelFile)));
     }
 
+    /// <summary>
+    /// Staleness is <c>now - held &gt; STALE_SECONDS</c>. A stamp in the FUTURE makes that difference
+    /// negative, so it never exceeds the threshold, so the lock is never stale — and if its holder
+    /// is dead the channel is permanently write-dead. Same wedge as the metadata-less lock, by a
+    /// second route, and it needs nothing more exotic than clock skew between a session and the app
+    /// on a file two languages write.
+    /// <para>
+    /// A future stamp is therefore UNUSABLE metadata rather than fresh metadata, and falls through
+    /// to the directory-age fallback that already covers "the owner file cannot be trusted".
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Try_Run_WithLock_WhenTheOwnerStampIsInTheFutureAndTheDirectoryIsOld_BreaksItAnyway()
+    {
+        var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);
+        Directory.CreateDirectory(lockDirectory);
+
+        File.WriteAllText(
+            Path.Combine(lockDirectory, ChannelFile_Lock.OWNER_FILE_NAME),
+            ChannelFile_Lock.Build_OwnerFileContent(4242, DateTime.UtcNow.AddHours(10), "session", "dead-holder"));
+
+        Directory.SetLastWriteTimeUtc(lockDirectory, DateTime.UtcNow.AddSeconds(-(ChannelFile_Lock.STALE_SECONDS + 30)));
+
+        var ran = false;
+        var acquired = ChannelFile_Lock.Try_Run_WithLock(_channelFile, TimeSpan.FromSeconds(5), () => ran = true, out _);
+
+        Assert.True(acquired, "a lock stamped in the future was unbreakable — that channel is write-dead forever");
+        Assert.True(ran);
+    }
+
+    /// <summary>
+    /// The disjoint half: a future stamp on a FRESH directory is still respected. Treating every
+    /// future stamp as breakable would let one skewed clock break live locks continuously, which is
+    /// worse than the wedge it fixes.
+    /// </summary>
+    [Fact]
+    public void Try_Run_WithLock_WhenTheOwnerStampIsInTheFutureButTheDirectoryIsNew_StillRespectsIt()
+    {
+        var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);
+        Directory.CreateDirectory(lockDirectory);
+
+        File.WriteAllText(
+            Path.Combine(lockDirectory, ChannelFile_Lock.OWNER_FILE_NAME),
+            ChannelFile_Lock.Build_OwnerFileContent(4242, DateTime.UtcNow.AddHours(10), "session", "live-holder"));
+
+        var acquired = ChannelFile_Lock.Try_Run_WithLock(_channelFile, TimeSpan.FromMilliseconds(600), () => { }, out _);
+
+        Assert.False(acquired);
+    }
+
     void Hold_LockExternally(DateTime heldSinceUtc)
     {
         var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);

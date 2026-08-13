@@ -241,7 +241,7 @@ public static class ChannelFile_Lock
             // So fall back to the DIRECTORY's own age. A live acquire is microseconds old; anything
             // older than the same STALE_SECONDS had a holder that is not coming back.
             if (!File.Exists(ownerFile))
-                return (DateTime.UtcNow - Directory.GetLastWriteTimeUtc(lockDirectory)).TotalSeconds > STALE_SECONDS;
+                return Is_DirectoryOlderThanStale(lockDirectory);
 
             var heldSinceUtc = Read_HeldSinceUtc_OrNull(ownerFile);
 
@@ -249,7 +249,19 @@ public static class ChannelFile_Lock
             // holder is dead, so it does not get to claim that it is. A false "alive" costs a wait;
             // a false "dead" breaks a live lock and corrupts the file the lock was protecting.
             if (heldSinceUtc == null)
-                return false;
+                return Is_DirectoryOlderThanStale(lockDirectory);
+
+            // A stamp in the FUTURE is unusable metadata, not fresh metadata. Staleness is
+            // now - held, so a future stamp makes that negative, it never exceeds the threshold, the
+            // lock is never stale — and a dead holder then wedges the channel permanently. Clock
+            // skew between a session and the app is enough, on a file two languages write.
+            //
+            // This is the same defect that once rendered "on task under a minute" for hours: a
+            // future stamp turning a duration into a number that means nothing. There the fix was to
+            // refuse to display it; here it is to stop trusting it and fall through to the age of
+            // the directory, which is the one clock this process can actually vouch for.
+            if (heldSinceUtc.Value > DateTime.UtcNow)
+                return Is_DirectoryOlderThanStale(lockDirectory);
 
             return (DateTime.UtcNow - heldSinceUtc.Value).TotalSeconds > STALE_SECONDS;
         }
@@ -257,6 +269,16 @@ public static class ChannelFile_Lock
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// The one recovery path for "the owner file cannot be trusted", whatever the reason — absent,
+    /// unparseable, or stamped in the future. The directory's own age is the only clock this process
+    /// can vouch for, and a live acquire is microseconds old.
+    /// </summary>
+    static bool Is_DirectoryOlderThanStale(string lockDirectory)
+    {
+        return (DateTime.UtcNow - Directory.GetLastWriteTimeUtc(lockDirectory)).TotalSeconds > STALE_SECONDS;
     }
 
     /// <summary>One field out of the owner file, or null. Never throws.</summary>

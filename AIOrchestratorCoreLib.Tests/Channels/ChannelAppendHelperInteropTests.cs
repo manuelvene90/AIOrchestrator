@@ -318,6 +318,56 @@ public class ChannelAppendHelperInteropTests : IDisposable
         Assert.Equal("83", run.StandardOutput.Trim());
     }
 
+    /// <summary>
+    /// The bash half of the future-stamp guard. Both sides must agree here or one of them wedges on
+    /// a lock the other walks past — and the stamp that causes it is written by whichever language
+    /// happened to acquire, so the skew is not hypothetical.
+    /// </summary>
+    [Fact]
+    public void Helper_BreaksALockStampedInTheFuture()
+    {
+        var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);
+        Directory.CreateDirectory(lockDirectory);
+
+        File.WriteAllText(
+            Path.Combine(lockDirectory, ChannelFile_Lock.OWNER_FILE_NAME),
+            ChannelFile_Lock.Build_OwnerFileContent(4242, DateTime.UtcNow.AddHours(10), "app", "dead-holder"));
+
+        Directory.SetLastWriteTimeUtc(lockDirectory, DateTime.UtcNow.AddSeconds(-(ChannelFile_Lock.STALE_SECONDS + 30)));
+
+        var bodyFile = Path.Combine(_tempFolder, "body.txt");
+        File.WriteAllText(bodyFile, "written after breaking a future-stamped lock\n");
+
+        var run = Run_Helper(
+            $"--channel \"{To_BashPath(_channelFile)}\" --author implementer --subject \"after future stamp\" "
+            + $"--body-file \"{To_BashPath(bodyFile)}\" --budget-seconds 10");
+
+        Assert.True(run.ExitCode == 0, $"the helper could not break a future-stamped lock: {run.StandardError}");
+        Assert.Single(ChannelEntry_Parser.Parse_All(File.ReadAllText(_channelFile)));
+    }
+
+    /// <summary>The disjoint half, on the bash side: a future stamp on a FRESH lock is respected.</summary>
+    [Fact]
+    public void Helper_RespectsAFreshLockStampedInTheFuture()
+    {
+        var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);
+        Directory.CreateDirectory(lockDirectory);
+
+        File.WriteAllText(
+            Path.Combine(lockDirectory, ChannelFile_Lock.OWNER_FILE_NAME),
+            ChannelFile_Lock.Build_OwnerFileContent(4242, DateTime.UtcNow.AddHours(10), "app", "live-holder"));
+
+        var bodyFile = Path.Combine(_tempFolder, "body.txt");
+        File.WriteAllText(bodyFile, "must not be written\n");
+
+        var run = Run_Helper(
+            $"--channel \"{To_BashPath(_channelFile)}\" --author implementer --subject \"blocked\" "
+            + $"--body-file \"{To_BashPath(bodyFile)}\" --budget-seconds 1");
+
+        Assert.Equal(3, run.ExitCode);
+        Assert.Empty(ChannelEntry_Parser.Parse_All(File.ReadAllText(_channelFile)));
+    }
+
     readonly record struct HelperRun(int ExitCode, string StandardOutput, string StandardError);
 
     static HelperRun Run_Helper(string arguments)

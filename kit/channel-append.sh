@@ -114,21 +114,39 @@ lock_is_stale() {
   # session on exit, which does not run the EXIT trap below) would wedge the channel forever.
   # So fall back to the DIRECTORY's own age.
   if [ ! -f "$OWNER_FILE" ]; then
-    held_epoch="$(date -u -r "$LOCK_DIR" +%s 2>/dev/null)" || return 1
-    [ -n "$held_epoch" ] || return 1
-    now_epoch="$(date -u +%s)"
-    [ $((now_epoch - held_epoch)) -gt "$STALE_SECONDS" ]
+    directory_is_older_than_stale
     return $?
   fi
 
   stamp="$(grep -m1 '^utc=' "$OWNER_FILE" 2>/dev/null | cut -d= -f2-)"
-  [ -n "$stamp" ] || return 1
+  [ -n "$stamp" ] || { directory_is_older_than_stale; return $?; }
 
-  held_epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" || return 1
-  [ -n "$held_epoch" ] || return 1
+  held_epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" || { directory_is_older_than_stale; return $?; }
+  [ -n "$held_epoch" ] || { directory_is_older_than_stale; return $?; }
   now_epoch="$(date -u +%s)"
 
+  # A stamp in the FUTURE is unusable metadata, not fresh metadata. Staleness is now - held, so a
+  # future stamp makes that negative, it never exceeds the threshold, the lock is never stale, and a
+  # dead holder wedges the channel permanently. Clock skew between a session and the app is enough,
+  # on a file two languages write. Fall through to the directory's age, which is the one clock this
+  # script can vouch for.
+  if [ "$held_epoch" -gt "$now_epoch" ]; then
+    directory_is_older_than_stale
+    return $?
+  fi
+
   [ $((now_epoch - held_epoch)) -gt "$STALE_SECONDS" ]
+}
+
+# The one recovery path for "the owner file cannot be trusted", whatever the reason — absent,
+# unparseable, or stamped in the future. A live acquire is microseconds old.
+directory_is_older_than_stale() {
+  local dir_epoch now_epoch
+  dir_epoch="$(date -u -r "$LOCK_DIR" +%s 2>/dev/null)" || return 1
+  [ -n "$dir_epoch" ] || return 1
+  now_epoch="$(date -u +%s)"
+
+  [ $((now_epoch - dir_epoch)) -gt "$STALE_SECONDS" ]
 }
 
 # Breaking is a RENAME, never a delete. Two writers can both judge the same lock stale; if both
