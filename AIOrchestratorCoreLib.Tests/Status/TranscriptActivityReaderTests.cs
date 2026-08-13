@@ -171,16 +171,30 @@ public class TranscriptActivityReaderTests
     }
 
     [Fact]
-    public void A_half_read_first_line_is_dropped_when_the_window_started_mid_file()
+    public void A_half_read_first_line_is_dropped_even_when_it_still_parses()
     {
+        // A byte-offset seek cuts a line, and we cannot tell a truncated line from a complete one —
+        // so the first line goes, always. The stakes are not cosmetic: here it is the ONLY activity
+        // record, so misreading it turns "we do not know" into a verdict that may kill a session.
+        //
+        // The fixture must be VALID JSON. An unparseable fragment would be skipped by the malformed
+        // -line path whether or not this rule existed — two routes to one state, pinning neither,
+        // which is exactly what the first version of this test did (caught by control M6 reddening
+        // nothing).
         var text = Join(
-            """rue,"timestamp":"2026-08-13T09:00:00.000Z"}""",
-            Activity("2026-08-13T13:04:53.337Z"),
-            QueueOp("2026-08-13T13:41:12.021Z", "enqueue"));
+            Activity("2026-08-13T13:00:00.000Z"),
+            QueueOp("2026-08-13T13:01:00.000Z", "enqueue"),
+            QueueOp("2026-08-13T13:10:00.000Z", "enqueue"));
 
-        var activity = TranscriptActivity_Reader.Parse_Tail(text, startedMidFile: true);
+        var dropped = TranscriptActivity_Reader.Parse_Tail(text, startedMidFile: true);
+        var kept = TranscriptActivity_Reader.Parse_Tail(text, startedMidFile: false);
 
-        Assert.Equal(Utc("2026-08-13T13:04:53.337Z"), activity.LastActivityUtc);
+        Assert.False(dropped.SawActivity);
+        Assert.False(TranscriptActivity_Reader.Is_DeafToWakes(dropped, Utc("2026-08-13T17:00:00.000Z"), 14));
+
+        // Same bytes read from the START of a file: the record is real and the verdict is available.
+        Assert.True(kept.SawActivity);
+        Assert.True(TranscriptActivity_Reader.Is_DeafToWakes(kept, Utc("2026-08-13T17:00:00.000Z"), 14));
     }
 
     [Fact]
