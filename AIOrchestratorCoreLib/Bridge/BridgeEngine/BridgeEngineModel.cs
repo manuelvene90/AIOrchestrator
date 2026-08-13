@@ -4052,6 +4052,12 @@ internal sealed class BridgeEngineModel(
             if (action == Telegram.TopicStatusActions.None)
                 continue;
 
+            // WHETHER THE OLD MESSAGE IS ALREADY GONE, which every failure path below has to know.
+            // Once the delete has succeeded the stored id names nothing, so ANY later failure must
+            // forget it — otherwise a quiet orchestration, whose text never changes, never attempts
+            // the edit that would discover the dead id, and loses its status line for good.
+            var oldStatusMessageDeleted = false;
+
             try
             {
                 // The id re-checked rather than asserted through .Value: the decider guarantees it,
@@ -4068,29 +4074,58 @@ internal sealed class BridgeEngineModel(
                     // up for as long as the second call takes, and leaves two of them up FOREVER if it
                     // fails, which is the precise defect this feature was built to prevent.
                     //
-                    // A FAILED DELETE THEREFORE MUST NOT POST. It throws, the catches below take it,
-                    // the old message and its id are kept untouched, and the next tick tries again
-                    // behind the backoff. If the message is simply gone, Is_MessageGone forgets the id
-                    // and the next tick posts a fresh line.
+                    // A FAILED DELETE THEREFORE MUST NOT POST, and none of the three ways it can fail
+                    // does: a REFUSAL latches this topic and returns, just below; a message already
+                    // GONE reaches Is_MessageGone, which forgets the id so the next tick posts fresh;
+                    // anything else reaches the generic catch, which keeps the message and its id
+                    // untouched and retries behind the backoff.
                     if (action == Telegram.TopicStatusActions.Repost && session.StatusLineMessageId != null)
-                        await _telegramClient.Delete_Message_Async(session.StatusLineMessageId.Value, cancellationToken);
+                    {
+                        // THE REFUSAL IS CAUGHT AROUND THE DELETE ITSELF, not around the whole
+                        // attempt. Guarding the outer catch on `action == Repost` instead read as
+                        // "this action does a delete, so a refusal wording must have come from it" —
+                        // and `not enough rights` is wording Telegram also emits on the SEND. A repost
+                        // whose delete SUCCEEDED and whose send then threw it would latch the topic
+                        // while the stored id pointed at a message that had just been deleted: the
+                        // exact hazard the null-return branch below already guards, entered by the
+                        // door beside it. Which CALL threw is a fact; which action was attempted is an
+                        // inference, and the inference was wrong.
+                        try
+                        {
+                            await _telegramClient.Delete_Message_Async(session.StatusLineMessageId.Value, cancellationToken);
+                        }
+                        catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_DeleteRefused(exception.Message))
+                        {
+                            // REFUSED, not failed: this message can never be deleted, so it can never
+                            // be moved. Retrying is the loop rev-1 found, and the loop starves the
+                            // EDIT with it because the repost overrides the decider. Latch it and the
+                            // topic goes back to editing in place — master's behaviour.
+                            //
+                            // The message is STILL UP and its id is still good, so nothing is
+                            // forgotten here, and no backoff is stamped: there is nothing to retry,
+                            // and stamping one would delay the very edit this falls back to.
+                            _repostImpossibleOrchIds.Add(session.OrchId);
+                            _log.Log_Warning(session.OrchId, $"Topic status line cannot be moved — it will be edited in place from now on ({exception.Message})");
+                            continue;
+                        }
+
+                        // Everything else the delete can throw — transient, or a message already gone
+                        // — deliberately propagates to the outer catches, which know how to clear an
+                        // id and how to back off.
+                        oldStatusMessageDeleted = true;
+                    }
 
                     var messageId = await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
 
                     if (messageId == null)
                     {
-                        // A REPOST HAS ALREADY DELETED THE OLD MESSAGE by the time it gets here, so
-                        // keeping its id would leave the topic pointing at nothing — and a quiet
-                        // orchestration's text never changes, so the edit that would discover the dead
-                        // id is never attempted and the topic loses its status line for good. Forget
-                        // the id AND the remembered text (which would otherwise silence the fresh post
-                        // as identical) and let the next tick start over. On a first POST there is
-                        // nothing to undo, which is why this is not unconditional.
-                        if (action == Telegram.TopicStatusActions.Repost)
-                        {
-                            _store.Clear_StatusLineMessageId(session.OrchId);
-                            _statusLineTextByOrchId.Remove(session.OrchId);
-                        }
+                        // The old message is already deleted by now, so keeping its id would leave the
+                        // topic pointing at nothing. Forget the id AND the remembered text (which
+                        // would otherwise silence the fresh post as identical) and let the next tick
+                        // start over. On a first POST there is nothing to undo, which is why this is
+                        // not unconditional.
+                        if (oldStatusMessageDeleted)
+                            Forget_StatusLineMessage(session.OrchId);
 
                         continue;
                     }
@@ -4132,8 +4167,7 @@ internal sealed class BridgeEngineModel(
                 // session.json. Retrying could never succeed, so the id is FORGOTTEN and the next tick
                 // posts a fresh line. Without this the orchestration never gets a status line again
                 // for the life of the machine.
-                _store.Clear_StatusLineMessageId(session.OrchId);
-                _statusLineTextByOrchId.Remove(session.OrchId);
+                Forget_StatusLineMessage(session.OrchId);
 
                 // The latch belonged to the message that has just stopped existing: a 48-hour window
                 // dies with it, so the fresh line posted next tick deserves its one attempt.
@@ -4141,31 +4175,40 @@ internal sealed class BridgeEngineModel(
 
                 _log.Log_Warning(session.OrchId, $"Topic status message is gone — posting a new one next tick ({exception.Message})");
             }
-            catch (Exception exception) when (action == Telegram.TopicStatusActions.Repost && Telegram.TopicStatusLine_Decider.Is_DeleteRefused(exception.Message))
-            {
-                // REFUSED, not failed: this message can never be deleted, so it can never be moved.
-                // Retrying is the loop rev-1 found — and the loop starves the EDIT too, because the
-                // repost overrides the decider. Latch it and the topic goes back to editing in place.
-                //
-                // NO BACKOFF STAMP, deliberately: there is nothing to retry, and stamping one would
-                // delay the very edit this is falling back to.
-                //
-                // The guard is on the ACTION rather than on which call threw. A refusal wording can
-                // only come from the delete in practice; if a send ever produced one, the effect is
-                // to stop moving this topic's line while it stays current — the safe direction.
-                _repostImpossibleOrchIds.Add(session.OrchId);
-                _log.Log_Warning(session.OrchId, $"Topic status line cannot be moved — it will be edited in place from now on ({exception.Message})");
-            }
             catch (Exception exception)
             {
                 // Never fatal: a status line that cannot be drawn must not stop the mirror. The
                 // remembered text is deliberately NOT updated, so the next tick retries — but BACKED
                 // OFF, because a 429 answered at the tick rate inverts the cadence from once a minute
                 // to thirty times a minute per topic and sustains the throttling that caused it.
+                //
+                // UNLESS THE OLD MESSAGE IS ALREADY GONE. A repost deletes before it sends, so a send
+                // that throws here leaves the stored id naming a deleted message — and retrying an
+                // EDIT against it is not the recovery it looks like: a quiet orchestration's text
+                // never changes, so the edit is never attempted and the id is never discovered dead.
+                // Forgetting it costs one extra post; keeping it costs the status line permanently.
+                if (oldStatusMessageDeleted)
+                    Forget_StatusLineMessage(session.OrchId);
+
                 _statusLineFailedAtByOrchId[session.OrchId] = DateTime.Now;
                 _log.Log_Warning(session.OrchId, $"Topic status line could not be updated — {exception.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// Drops everything remembered about a topic's status message, for when the message it refers to
+    /// no longer exists.
+    ///
+    /// BOTH HALVES, ALWAYS, which is why this is one method and not two lines repeated three times:
+    /// clearing the id without the remembered text leaves the next tick comparing the same text
+    /// against itself, answering None, and never posting the replacement — the id is forgotten and
+    /// the line never comes back, which is the failure this is supposed to prevent.
+    /// </summary>
+    void Forget_StatusLineMessage(string orchId)
+    {
+        _store.Clear_StatusLineMessageId(orchId);
+        _statusLineTextByOrchId.Remove(orchId);
     }
 
 
