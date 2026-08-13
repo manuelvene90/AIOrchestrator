@@ -659,6 +659,16 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   name). One task per line, this exact convention:
   `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked` · `- [-] not doing`
   Short imperative task texts; headers/notes are ignored by the parser.
+- **DONE MEANS READY TO MERGE (owner directive, 2026-08-13).** `- [x]` is: built, reviewed by
+  someone who did NOT write it, and no open blocking finding against it. **Not landed on the default
+  branch** — *"the merge doesn't count, it's not work, it's just a merge"*. Holding finished work at
+  `[>]` until it lands makes the bar read as nothing while the work is done, and makes it go
+  BACKWARDS every time a review adds a line: a metric that punishes discovery and ignores completion
+  is wrong twice.
+  **It is a real bar in the other direction, and this half is the one that gets gamed.** An
+  implementer's own "done" is NOT ready-to-merge — nobody reviews their own work, so their report is
+  a claim, not a clearance. Neither is "reviewed, with open HIGHs". If no independent reader has
+  cleared it, it is `[>]`, however finished it feels.
 - **A ledger line is a DELIVERABLE, not an EVENT.** It must be something that can be FINISHED:
   "fix the limits staleness bug" is a line, "imp-1: audit, 22 findings" is a diary entry. An event
   can never be marked done, so it sits in the denominator forever and drags the percentage down for
@@ -674,8 +684,10 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
 - **Blocked lines should say what they are blocked ON**: `- [!] migrate the state file — blocked on:
   owner decision on the schema`. The owner reads these verbatim in `/left`, and "blocked" without a
   reason tells them nothing they can act on.
-- **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
-  the owner → `[!]`. A stale ledger is worse than none — the owner can pull it up at any moment
+- **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified **and cleared by a
+  reviewer who did not write it** → `[x]`; waiting on the owner → `[!]`. A report you have accepted
+  at your own boundary but nobody independent has read is still `[>]` — your acceptance is not the
+  clearance, and the merge that follows is not the completion. A stale ledger is worse than none — the owner can pull it up at any moment
   from their phone with `/progress` (or `/left`), which the APP answers straight from this file — it
   leads with what is LEFT, so a ledger full of finished lines still gives them a short answer.
 - Re-read it as your fast resume point after a respawn — it beats replaying the whole channel
