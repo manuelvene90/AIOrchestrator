@@ -5584,6 +5584,12 @@ internal sealed class BridgeEngineModel(
             _lastVerbosityNudgeUtc[orchId] = DateTime.UtcNow;
         }
 
+        // Return deliberately discarded, and this one is safe for a reason the memo sites are not:
+        // the state recorded above is a COOLDOWN, not a record that the work is done. It expires by
+        // itself after NUDGE_COOLDOWN_MINUTES, so a lost nudge costs at most one un-nudged message
+        // rather than suppressing the nudge forever. Recording it after the append instead would
+        // reopen the double-nudge race the lock above exists to close — a worse trade for a smaller
+        // problem. The lock's own diagnostics report the failure either way.
         ChannelAppender.Append_AppEntry(
             _paths.Get_OwnerChannelFile(orchId),
             "that message was too long for a phone",
@@ -5603,6 +5609,18 @@ internal sealed class BridgeEngineModel(
         if (newMode == previousMode)
             return;
 
+        // THE MODE-TRANSITION ANNOUNCEMENTS DISCARD THE RETURN, AND A BOOL CHECK CANNOT FIX THEM.
+        // These fire on the EDGE: the guard above returns early once newMode == previousMode, so by
+        // the time the append runs the transition is already recorded in the mode state itself. There
+        // is no memo here to withhold — withholding one would mean not changing the mode, which is
+        // not ours to refuse. A lost entry means the supervisor is never told the owner went away and
+        // keeps asking them questions, which is precisely what away mode exists to stop.
+        //
+        // Closing it properly needs a pending-announcement queue that survives to the next tick, which
+        // is a mechanism rather than a return check, so it is NOT done here and is reported as an open
+        // gap rather than left to look finished. The same applies to the quiet, away-on and away-off
+        // announcements below. The lock's diagnostics name the channel and the wait on every failure,
+        // so none of these is silent — only unretried.
         if (newMode == TelegramDeliveryModes.Deferred)
         {
             ChannelAppender.Append_AppEntry(
@@ -5839,6 +5857,11 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Post_StatusEntry(string orchId, string text)
     {
+        // Return deliberately discarded: this is the periodic status, and a dropped one is SUPERSEDED
+        // rather than lost — the next carries the current state, and the Deferred path already
+        // collapses queued statuses to the newest for the same reason. Retrying it would deliver a
+        // stale snapshot the following tick is about to replace. Nothing records it as done, so
+        // nothing is left claiming work that did not happen.
         ChannelAppender.Append_AppEntry(
             _paths.Get_OwnerChannelFile(orchId),
             MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
