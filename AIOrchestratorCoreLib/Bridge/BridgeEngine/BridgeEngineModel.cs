@@ -3335,13 +3335,44 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var text = Build_ProgressReportText(messageThreadId);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+        var text = await Translate_LedgerText_Async(Build_ProgressReportText(messageThreadId), cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    /// <summary>
+    /// The Italian layer, with the ledger's SHAPE checked on the way back — and the English original
+    /// sent instead if it did not survive.
+    ///
+    /// This is the last step on the owner's directive path and was the only one with no guarantee:
+    /// the whole message went through a `claude -p` subprocess and nothing compared what returned. A
+    /// model handed forty rows, several near-identical, is being invited to summarise — and rule 11
+    /// makes the Italian layer persisted and the owner's normal mode, so this is the production path
+    /// rather than an edge case.
+    ///
+    /// The DECISION is in Planning.LedgerTranslation_Verifier, where the suite can reach it. This
+    /// method is left with the call and the fallback, deliberately: two findings in a row landed
+    /// inside this class, which is internal sealed and unreachable from the tests.
+    ///
+    /// THE FALLBACK IS NOT ANNOUNCED TO THE OWNER (rule 15): they cannot act on it, and the English
+    /// text arriving in place of Italian is the signal. The log line is for us.
+    /// </summary>
+    async Task<string> Translate_LedgerText_Async(string englishText, CancellationToken cancellationToken)
+    {
+        if (!_configProvider.Get_Current().TelegramItalianLayer)
+            return englishText;
+
+        var translated = await _translator.Translate_ToItalian_Async(englishText, cancellationToken);
+
+        // The translator returns the ORIGINAL on failure or timeout, by contract, so that case passes
+        // the check rather than tripping a fallback for a translation that never happened.
+        if (Planning.LedgerTranslation_Verifier.Is_ShapePreserved(englishText, translated))
+            return translated;
+
+        _log.Log_Warning(GLOBAL_ORCH_ID, "The Italian layer changed the ledger's shape — sending the English original rather than a rearranged ledger");
+
+        return englishText;
     }
 
     /// <summary>
@@ -3351,10 +3382,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_TaskListReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var text = Build_TaskListText(messageThreadId);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+        var text = await Translate_LedgerText_Async(Build_TaskListText(messageThreadId), cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
