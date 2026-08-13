@@ -994,18 +994,20 @@ internal sealed class BridgeEngineModel(
                     // as long as nobody needs it: the moment anyone writes, the conversation moves,
                     // the nudge fires and the probe runs six minutes later. Detected when it matters
                     // rather than polled forever.
-                    var conversationIdentity = Nudge_Decider.Identify_LastConversationEntry_OrNull(entries, channelFile);
+                    // ALWAYS ANSWERABLE, and the two null guards that used to be here were the second
+                    // route back into the loop: a null skipped the gate AND skipped the record, so a
+                    // channel with no conversation entry was nudged forever. It is now keyed on a
+                    // sentinel — see Nudge_Decider.NO_CONVERSATION_YET, including why it cannot be
+                    // one of the channel's own entries.
+                    var conversationIdentity = Nudge_Decider.Identify_NudgeSubject(entries, channelFile);
 
-                    if (conversationIdentity != null
-                        && _nudgedAboutEntry.TryGetValue(memberKey, out var alreadyNudgedAbout)
+                    if (_nudgedAboutEntry.TryGetValue(memberKey, out var alreadyNudgedAbout)
                         && alreadyNudgedAbout == conversationIdentity)
                         continue;
 
                     await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, dormantMidWork, cancellationToken);
                     _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
-
-                    if (conversationIdentity != null)
-                        _nudgedAboutEntry[memberKey] = conversationIdentity;
+                    _nudgedAboutEntry[memberKey] = conversationIdentity;
 
                     continue;
                 }

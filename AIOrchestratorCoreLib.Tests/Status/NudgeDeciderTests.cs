@@ -502,6 +502,63 @@ public class NudgeDeciderTests
     }
 
     /// <summary>
+    /// THE PROPERTY THAT KILLS THE SECOND LOOP, and the one a "key on the last entry" fix fails.
+    ///
+    /// A channel with no conversation entry still has an unanswered thing — an app entry a respawned
+    /// member is supposed to act on — so it gets ONE nudge, not none. For that to be one and not
+    /// forever, the thing remembered must not move when the nudge lands. The nudge IS an app entry, so
+    /// any key taken from the newest entry changes the instant it is written, the next round reads a
+    /// different key, and it nudges again — the exact loop, rebuilt by the obvious fix.
+    /// </summary>
+    [Fact]
+    public void AnAppOnlyChannelKeepsOneSubjectAsFurtherAppEntriesArrive()
+    {
+        var beforeTheNudge = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"));
+
+        var afterTheNudge = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, "you stopped mid-task", "nothing was going to wake you"));
+
+        Assert.Equal(
+            Nudge_Decider.Identify_NudgeSubject(beforeTheNudge, NO_ARCHIVE),
+            Nudge_Decider.Identify_NudgeSubject(afterTheNudge, NO_ARCHIVE));
+    }
+
+    /// <summary>
+    /// And it is not a mute switch either: the moment a real conversation entry exists, that is a
+    /// different unanswered thing and earns its own nudge. Asserted apart, because a subject that was
+    /// always the sentinel would satisfy the case above and silence the member permanently.
+    /// </summary>
+    [Fact]
+    public void AConversationEntryArrivingIsADifferentSubjectFromNoConversationAtAll()
+    {
+        var appOnly = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"));
+
+        var thenBriefed = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"));
+
+        Assert.NotEqual(
+            Nudge_Decider.Identify_NudgeSubject(appOnly, NO_ARCHIVE),
+            Nudge_Decider.Identify_NudgeSubject(thenBriefed, NO_ARCHIVE));
+    }
+
+    /// <summary>
+    /// The sentinel cannot be mistaken for an entry. A real identity is a whole entry and always opens
+    /// `## [`, so no channel content can ever compare equal to it and suppress a nudge it earned.
+    /// </summary>
+    [Fact]
+    public void TheNoConversationSentinelCannotCollideWithARealEntry()
+    {
+        var briefed = BuildTitled((ChannelAuthors.Supervisor, "brief", "implement the parser"));
+
+        Assert.StartsWith("## [", Nudge_Decider.Identify_NudgeSubject(briefed, NO_ARCHIVE));
+        Assert.DoesNotContain("## [", Nudge_Decider.NO_CONVERSATION_YET);
+    }
+
+    /// <summary>
     /// A channel path with no file behind it, so the cases above read the LIVE LIST ALONE.
     ///
     /// Deliberate rather than convenient: each of them pins something about the entries themselves —

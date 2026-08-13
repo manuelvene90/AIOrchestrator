@@ -111,6 +111,37 @@ public static class Nudge_Decider
     /// is older than anything live. Preferring the archive would pin every member to an ancient entry
     /// and stop a genuinely new brief from earning its own nudge — the mute switch, from the far side.
     /// </summary>
+    /// <summary>
+    /// What a member is being nudged ABOUT, always answerable — the last conversation entry, or this
+    /// when there is none anywhere. One nudge per unanswered thing, including when the unanswered
+    /// thing is an app entry with no conversation behind it.
+    ///
+    /// AT MOST ONCE, NOT NEVER (owner-facing ruling 2026-08-13). "Never nudge an app-only channel"
+    /// was the tempting rule and it drops the one wake that matters: a `/resume` broadcast is an app
+    /// entry a respawned member is genuinely supposed to act on, and it may be the only thing telling
+    /// it to start. So the channel gets its one nudge, remembered, and never a second.
+    ///
+    /// IT IS A SENTINEL RATHER THAN AN ENTRY'S TEXT, AND THAT IS FORCED — the brief asked for the raw
+    /// text the gate already uses, and for app-only channels there is none that holds still. Keying on
+    /// the LAST entry is the obvious reading and it rebuilds the exact loop being fixed: the nudge is
+    /// itself an app entry, so the last entry changes the moment the nudge lands, the next round reads
+    /// a different key, and it nudges again forever. Any key derived from "the newest app entry" has
+    /// that property. The state being remembered is not an entry, it is "this channel had nothing to
+    /// be nudged about when I nudged it", so the sentinel says exactly that and stops moving.
+    ///
+    /// It cannot collide with a real identity: those are whole entries and always begin `## [`.
+    /// </summary>
+    public const string NO_CONVERSATION_YET = "<no conversation entry in this channel>";
+
+    /// <summary>
+    /// The identity to remember and compare, never null. See <see cref="NO_CONVERSATION_YET"/> for
+    /// what a channel with no conversation is keyed on and why it is not one of its entries.
+    /// </summary>
+    public static string Identify_NudgeSubject(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
+    {
+        return Identify_LastConversationEntry_OrNull(entries, channelFilePath) ?? NO_CONVERSATION_YET;
+    }
+
     public static string? Identify_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
     {
         var live = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
