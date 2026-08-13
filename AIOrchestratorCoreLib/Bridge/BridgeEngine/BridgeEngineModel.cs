@@ -2471,13 +2471,21 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// The orchestration's owner channel, parsed — the file the solo writes and the supervisor
-    /// inherits. Empty when it cannot be read, which the caller treats as "no handover entry": a
-    /// channel this app cannot read is not evidence that the solo wrote one.
+    /// The orchestration's owner channel across its WHOLE history — the file the solo writes and the
+    /// supervisor inherits, plus the archive compaction has moved older entries into. Empty when it
+    /// cannot be read, which the caller treats as "no handover entry": a channel this app cannot read
+    /// is not evidence that the solo wrote one.
+    ///
+    /// A LIVE-FILE READ WAS A DIRECT HIT ON DECISION 13. `Channel_Compactor` moves all but the newest
+    /// 45 entries out once a channel passes 90, and `owner-channel.md` is on its list — so a solo that
+    /// filed its handover, was declined or lapsed once, and kept working would eventually be told to
+    /// "file your HANDOVER entry first", instructing it to do the thing it had already done. That is
+    /// the option-lab-2 shape the decision was written from, and the repo already ships the helper
+    /// that spans both files.
     /// </summary>
     IReadOnlyList<Channels.ChannelEntry.IChannelEntry> Read_OwnerChannelEntries(string orchId)
     {
-        return ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(orchId)));
+        return ChannelHistory_Counter.Read_Entries(_paths.Get_OwnerChannelFile(orchId));
     }
 
     void Process_CloseImplementerRequests(IPendingRequests pending)
