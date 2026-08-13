@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Planning;
+using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -118,15 +119,23 @@ public partial class OrchestrationDetailWindow : Window
 
         if (progress != null)
         {
-            var percent = progress.Total == 0 ? 0 : progress.Done * 100 / progress.Total;
-
-            chips.Add(new StatChipView { Label = "PROGRESS", Value = $"{percent}%  ({progress.Done}/{progress.Total})", ValueBrush = Find_Brush("AccentCommunicator") });
+            // The percentage comes from the shared rule. The copy here computed the identical
+            // expression and so never disagreed with Telegram — a duplicated formula rather than a
+            // live defect — but the next edit to either is where a second copy earns its keep.
+            chips.Add(new StatChipView { Label = "PROGRESS", Value = $"{PlanProgress_Formatter.Percent(progress)}%  ({progress.Done}/{progress.Total})", ValueBrush = Find_Brush("AccentCommunicator") });
 
             if (progress.InProgress > 0)
                 chips.Add(new StatChipView { Label = "IN PROGRESS", Value = progress.InProgress.ToString(), ValueBrush = Find_Brush("StateWorking") });
 
             if (progress.Blocked > 0)
                 chips.Add(new StatChipView { Label = "BLOCKED", Value = progress.Blocked.ToString(), ValueBrush = Find_Brush("StateBlocked") });
+
+            // A percentage that reached 100% by DROPPING the remainder must say so on the same
+            // screen. `IPlanProgress` states the rule in its own words — a marker that removes weight
+            // is a delete key unless it is visible — and this chip row showed the percentage without
+            // it, which is the same omission as the missing rows arriving through the numbers.
+            if (progress.NotDoing > 0)
+                chips.Add(new StatChipView { Label = "NOT DOING", Value = progress.NotDoing.ToString(), ValueBrush = Find_Brush("TextSecondary") });
         }
 
         if (tokens > 0)
@@ -142,8 +151,7 @@ public partial class OrchestrationDetailWindow : Window
 
     void Refresh_Ledger(IOrchestrationSession session)
     {
-        var planText = SafeFile_Reader.Read_Text_Safe(_paths.Get_PlanFile(session.OrchId));
-        var progress = PlanLedger_Parser.Parse_OrNull(planText);
+        var progress = PlanLedger_Parser.Parse_OrNull(SafeFile_Reader.Read_Text_Safe(_paths.Get_PlanFile(session.OrchId)));
 
         if (progress == null)
         {
@@ -154,34 +162,42 @@ public partial class OrchestrationDetailWindow : Window
         }
 
         NoLedgerText.Visibility = Visibility.Collapsed;
-        LedgerCountsText.Text = $"{progress.Done}/{progress.Total} done";
 
-        List<PlanLineView> lines = [];
+        // THE SHARED WORDING, which carries "· N not doing" — the thing this screen was missing. It
+        // said `{Done}/{Total} done` in its own words, so the one surface that shows the ledger in
+        // full was also the one that never admitted anything had been dropped from the denominator.
+        LedgerCountsText.Text = PlanProgress_Formatter.Describe_Counts(progress);
 
-        foreach (var rawLine in planText.Split('\n'))
-        {
-            var line = rawLine.TrimEnd('\r').Trim();
-
-            var match = System.Text.RegularExpressions.Regex.Match(line, @"^-\s*\[(x|X| |>|!)\]\s*(.*)$");
-
-            if (!match.Success)
-                continue;
-
-            lines.Add(Build_PlanLine(match.Groups[1].Value, match.Groups[2].Value.Trim()));
-        }
-
-        PlanItemsControl.ItemsSource = lines;
+        // THE SHARED PARSER, for the rows too. This method already called it for the count above and
+        // then re-parsed the same text with its own regex — one screen, two parsers, and the local
+        // one was missing `[-]`, so every dropped line vanished from the only view that shows the
+        // file whole. Elsewhere `[-]` is legitimately invisible because it is out of the denominator;
+        // here it is the thing being read, and its absence is unreadable as anything but "that task
+        // was never there".
+        PlanItemsControl.ItemsSource = progress.Lines.Select(Build_PlanLine).ToList();
     }
 
-    PlanLineView Build_PlanLine(string marker, string taskText)
+    PlanLineView Build_PlanLine(PlanLedgerLine line)
     {
-        return marker switch
+        var taskText = line.Text;
+
+        return line.Marker switch
         {
-            "x" or "X" => new PlanLineView { MarkerGlyph = "✔", MarkerBrush = Find_Brush("AccentCommunicator"), TaskText = taskText, LineOpacity = 0.55 },
+            "x" => new PlanLineView { MarkerGlyph = "✔", MarkerBrush = Find_Brush("AccentCommunicator"), TaskText = taskText, LineOpacity = 0.55 },
             ">" => new PlanLineView { MarkerGlyph = "▶", MarkerBrush = Find_Brush("StateWorking"), TaskText = taskText, TaskWeight = FontWeights.Bold },
             "!" => new PlanLineView { MarkerGlyph = "■", MarkerBrush = Find_Brush("StateBlocked"), TaskText = taskText, TaskWeight = FontWeights.Bold },
             " " => new PlanLineView { MarkerGlyph = "○", MarkerBrush = Find_Brush("StateNew"), TaskText = taskText },
-            _ => throw new Exception($"Unhandled plan marker '{marker}' for task '{taskText}'"),
+
+            // NOT DOING — shown, and shown as dropped rather than as done. It is dimmer than a done
+            // line because it was never delivered, and it is present at all because a marker that
+            // removes weight from the denominator is a delete key unless somebody can see it.
+            "-" => new PlanLineView { MarkerGlyph = "⊘", MarkerBrush = Find_Brush("TextSecondary"), TaskText = taskText, LineOpacity = 0.45 },
+
+            // The parser normalises "X" to "x", so this arm is genuinely unreachable today — it is
+            // here for the SIXTH marker, whenever one is added. Throwing is right: a marker the
+            // parser accepts and this switch does not would otherwise render as a blank row, which is
+            // the silent omission being fixed, wearing a different hat.
+            _ => throw new Exception($"Unhandled plan marker '{line.Marker}' for task '{taskText}'"),
         };
     }
 
