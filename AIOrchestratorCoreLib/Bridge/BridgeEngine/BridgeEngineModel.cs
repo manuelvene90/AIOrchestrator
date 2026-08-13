@@ -3395,8 +3395,7 @@ internal sealed class BridgeEngineModel(
         // WHICH command, WHICH orchestration, and WHAT changed. This line is the whole diagnostic
         // surface for the failure the verifier exists to detect, because rule 15 correctly keeps it
         // off the owner's phone — so an unattributable "shape changed" would mean reproducing it by
-        // hand to learn anything. In General there is no orchestration to name, and the global id is
-        // then the truth rather than a placeholder.
+        // hand to learn anything. The General topic names itself: see Resolve_LogScope_ForTopic.
         _log.Log_Warning(
             Resolve_LogScope_ForTopic(messageThreadId),
             $"/{command}: the Italian layer changed the ledger's shape ({shapeChange}) — sending the English original rather than a rearranged ledger");

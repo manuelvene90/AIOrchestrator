@@ -205,6 +205,20 @@ public class LedgerTranslationVerifierTests
     /// The stripped row is what makes it bite: it can only be REFUSED if the verifier recognises the
     /// vocabulary the formatter actually emits. Built through the real parser and the real formatters
     /// in the real message shape, interior blank line included, so no fixture stands between them.
+    ///
+    /// WHICH LINES ARE ROWS IS DECIDED BY THE FIXTURE, NOT BY THE COMPONENT, and the first version of
+    /// this test got that exactly backwards. It skipped a line when
+    /// `Describe_ShapeChange_OrNull(...)` returned null for it — asking the component under test
+    /// whether to test the component. Apply the very mutation this docstring names and the reader
+    /// stops recognising `/tasks` rows, so the inner call returns null for every one, every iteration
+    /// skips, and the message contributes ZERO assertions while the test passes green. Make the reader
+    /// return empty unconditionally and the whole loop asserts nothing at all, with the verifier
+    /// entirely dead.
+    ///
+    /// I wrote the warning in the paragraph above and then wrote the guard it warns about, in the same
+    /// file. The row indexes come from the fixture now — the test built the message and knows where
+    /// the counts line and the blank separator are — and the count of rows actually exercised is
+    /// ASSERTED, which is the clause that makes the failure impossible to repeat silently.
     /// </summary>
     [Fact]
     public void TheMarkersItRecognisesAreTheOnesTheFormattersEmit()
@@ -218,38 +232,46 @@ public class LedgerTranslationVerifierTests
             "- [!] the blocked one",
         }))!;
 
+        const int LEDGER_ROWS = 5;
+
         var counts = PlanProgress_Formatter.Describe_Counts(progress);
 
-        string[] realMessages =
+        // The first ROW index is fixture knowledge: /progress is the counts line then the rows,
+        // /tasks is the counts line, a blank separator, then the rows. Stated here so the loop below
+        // never has to ask the component what it is looking at.
+        (string Message, int FirstRowIndex)[] realMessages =
         [
-            $"{counts}\n{PlanProgress_Formatter.Describe_Ledger(progress)}",
-            $"{counts}\n\n{PlanProgress_Formatter.Describe_EveryLine(progress)}",
+            ($"{counts}\n{PlanProgress_Formatter.Describe_Ledger(progress)}", 1),
+            ($"{counts}\n\n{PlanProgress_Formatter.Describe_EveryLine(progress)}", 2),
         ];
 
-        foreach (var message in realMessages)
+        foreach (var (message, firstRowIndex) in realMessages)
         {
             Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(message, message));
 
-            // EVERY row, not just the last. Stripping one exercises one marker, and the single remap
-            // `Describe_FullFormPrefix` performs — the open-task prefix — is not necessarily the one
-            // you happen to land on. rev-4: closing this costs nothing.
             var lines = message.Split('\n');
 
-            for (var index = 0; index < lines.Length; index++)
-            {
-                if (lines[index].Length < 4)
-                    continue;
+            // The fixture is what this test thinks it is — asserted, so a renderer that changed its
+            // preamble fails HERE rather than quietly shifting which lines get stripped.
+            Assert.Equal(LEDGER_ROWS, lines.Length - firstRowIndex);
 
+            var rowsExercised = 0;
+
+            // EVERY row, not just the last. Stripping one exercises one marker, and the single remap
+            // `Describe_FullFormPrefix` performs — the open-task prefix — is not necessarily the one
+            // you happen to land on.
+            for (var index = firstRowIndex; index < lines.Length; index++)
+            {
                 var stripped = (string[])lines.Clone();
                 stripped[index] = stripped[index][4..];
 
-                var change = LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(message, string.Join('\n', stripped));
-
-                // A line that carried no marker is prose, and stripping four characters off prose is
-                // not a shape change — those are the counts line and the blank separator.
-                if (LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(lines[index], stripped[index]) != null)
-                    Assert.NotNull(change);
+                Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(message, string.Join('\n', stripped)));
+                rowsExercised++;
             }
+
+            // THE CLAUSE THAT MAKES IT UNREPEATABLE: a loop that asserted nothing is a failure, not a
+            // pass. Without this, any future skip condition can empty the loop and stay green.
+            Assert.Equal(LEDGER_ROWS, rowsExercised);
         }
     }
 
