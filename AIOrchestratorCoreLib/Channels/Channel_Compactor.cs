@@ -39,47 +39,57 @@ public static class Channel_Compactor
             if (!File.Exists(channelFilePath))
                 return null;
 
-            var text = Read_Text_Safe(channelFilePath);
-            var entries = ChannelEntry_Parser.Parse_All(text);
-
-            if (entries.Count <= COMPACT_ABOVE_ENTRIES)
-                return null;
-
-            var archivedCount = entries.Count - KEEP_RECENT_ENTRIES;
-
-            var archivedEntries = entries.Take(archivedCount).ToList();
-            var keptEntries = entries.Skip(archivedCount).ToList();
-
-            var archiveFile = Build_ArchiveFilePath(channelFilePath);
-
-            // Order is the whole point: the entries about to leave the live file must be PROVEN to
-            // exist elsewhere before the live file is rewritten. A half-written archive plus a
-            // rewritten live file is permanent data loss; channel files are the audit trail and the
-            // agents' memory, and nothing regenerates them.
-            if (!Try_Append_ToArchive_Verified(archiveFile, $"{Build_Block(archivedEntries)}\n"))
-                return null;
-
-            var header =
-                $"> Entries 1–{archivedEntries[^1].Index} are archived in '{Path.GetFileName(archiveFile)}' "
-                + $"(read it only if you need older context). This file keeps the most recent {keptEntries.Count}.\n\n";
-
-            // Rename-over, never truncate-then-write: the live file is either the old one or the
-            // new one. If this throws, the archive already holds a copy of the entries that are
-            // still in the live file, and the next pass appends that same block again — a duplicate
-            // block in the append-only history a human reads is survivable; a lost entry is not.
-            Atomic_FileWriter.Write_AllText(channelFilePath, $"{header}{Build_Block(keptEntries)}\n");
-
-            return new FileInfo(channelFilePath).Length;
+            // Read-then-rewrite is only safe if nothing appends in between: an entry landing after
+            // the read is written to content the rename below discards, and nothing anywhere
+            // records that it existed. The gate makes the pair indivisible against this process's
+            // appenders — session processes are outside its reach, see ChannelWrite_Lock.
+            return ChannelWrite_Lock.Run_Serialised(channelFilePath, () => Compact_Gated(channelFilePath));
         }
         catch
         {
             // Broad by design: a channel being written right now, a locked file, a full disk — all
             // mean the same thing here, "not this pass". Safe to swallow only because of the order
-            // above: the archive is verified before the live file is touched, and the live rewrite
+            // inside: the archive is verified before the live file is touched, and the live rewrite
             // is a rename, so it either happened completely or not at all. The live file therefore
             // still holds every entry, and returning null tells the caller its offset is unchanged.
             return null;
         }
+    }
+
+    /// <summary>Runs with the channel's write gate held; the caller owns the try/catch.</summary>
+    static long? Compact_Gated(string channelFilePath)
+    {
+        var text = Read_Text_Safe(channelFilePath);
+        var entries = ChannelEntry_Parser.Parse_All(text);
+
+        if (entries.Count <= COMPACT_ABOVE_ENTRIES)
+            return null;
+
+        var archivedCount = entries.Count - KEEP_RECENT_ENTRIES;
+
+        var archivedEntries = entries.Take(archivedCount).ToList();
+        var keptEntries = entries.Skip(archivedCount).ToList();
+
+        var archiveFile = Build_ArchiveFilePath(channelFilePath);
+
+        // Order is the whole point: the entries about to leave the live file must be PROVEN to
+        // exist elsewhere before the live file is rewritten. A half-written archive plus a
+        // rewritten live file is permanent data loss; channel files are the audit trail and the
+        // agents' memory, and nothing regenerates them.
+        if (!Try_Append_ToArchive_Verified(archiveFile, $"{Build_Block(archivedEntries)}\n"))
+            return null;
+
+        var header =
+            $"> Entries 1–{archivedEntries[^1].Index} are archived in '{Path.GetFileName(archiveFile)}' "
+            + $"(read it only if you need older context). This file keeps the most recent {keptEntries.Count}.\n\n";
+
+        // Rename-over, never truncate-then-write: the live file is either the old one or the
+        // new one. If this throws, the archive already holds a copy of the entries that are
+        // still in the live file, and the next pass appends that same block again — a duplicate
+        // block in the append-only history a human reads is survivable; a lost entry is not.
+        Atomic_FileWriter.Write_AllText(channelFilePath, $"{header}{Build_Block(keptEntries)}\n");
+
+        return new FileInfo(channelFilePath).Length;
     }
 
     /// <summary>

@@ -92,6 +92,24 @@ public class ChannelEntryParserTests
         Assert.Equal(3, ChannelEntry_Parser.Get_NextIndex(TWO_ENTRY_CHANNEL));
     }
 
+    /// <summary>
+    /// Once a collision has happened the file is no longer sorted, and numbering from the LAST
+    /// entry walks straight back into indices that already exist: a writer that read [71] late
+    /// leaves 71, 72, 73, 72 — and the next index taken from the tail is 73, which is taken.
+    /// The highest index used is the only safe basis.
+    /// </summary>
+    [Fact]
+    public void Get_NextIndex_AfterAnOutOfOrderEntry_ContinuesFromTheHighestIndexUsed()
+    {
+        var channelText =
+            "## [71] FROM supervisor — d — brief\n\nbody\n\n"
+            + "## [72] FROM implementer — d — report\n\nbody\n\n"
+            + "## [73] FROM implementer — d — second report\n\nbody\n\n"
+            + "## [72] FROM app — d — late arrival\n\nbody\n";
+
+        Assert.Equal(74, ChannelEntry_Parser.Get_NextIndex(channelText));
+    }
+
     [Fact]
     public void Is_HeaderLine_DistinguishesHeadersFromBodyText()
     {
