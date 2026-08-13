@@ -144,25 +144,31 @@ deny_reason() {
 # cases passing silently in a sea of green. The probe converts that into a VOID run instead, because
 # a suite that cannot evaluate its subject must not report on it.
 #
-# IT ESTABLISHES ITS OWN PRECONDITION, and that is not tidiness. The probe expects a DENY that the
-# await hook only produces while `.awaiting-answer` is up — an UNSTATED precondition, which the suite
-# removes at line 359 for the cases that follow. Called after that point the probe returned ALLOW and
-# announced "the environment cannot evaluate these hooks", which was a confident wrong diagnosis of a
-# flag it had itself failed to check: exactly the detached-copy failure this file already documents,
-# the right answer for the wrong stated reason, in the function whose job is to stop the suite lying.
+# IT HAS NO PRECONDITION, AND IT MUTATES NOTHING. Both properties were learned the hard way.
 #
-# So it raises the flag, probes, and restores whatever state it found. ALLOW can now mean only one
-# thing, which is what lets it be called anywhere — including after the last case, where the run
-# spends most of its life.
+# The probe used to expect a DENY that the await hook only produces while `.awaiting-answer` is up —
+# an UNSTATED precondition, which this file takes down for the cases that follow it. Called after that
+# point the probe returned ALLOW and announced "the environment cannot evaluate these hooks": a
+# confident wrong diagnosis of a flag it had itself failed to check, in the function whose whole job
+# is to stop this suite from lying. Two routes to one state, reported as one cause.
+#
+# The first fix raised the flag around the probe and restored it. That works and it is the wrong shape:
+# an instrument that mutates the state it measures around. Not hypothetical — a mutation run of that
+# version removed the raise and kept the restore, so the probe DELETED a flag the suite had raised and
+# the entire PreToolUse block went red.
+#
+# So the probe is now a denial with no precondition anywhere: the reviewer hook refuses a destructive
+# verb unconditionally, with no flag, no orchestration folder and no state of any kind. It can be
+# called from any point in the file, which is the property that lets it sit after the LAST case.
+#
+# It is also the better canary. This payload drives the full python reducer — the heaviest path in
+# these hooks and the one that actually dies when the machine cannot fork — where the old Write
+# payload exercised only the lighter extraction. The probe that missed a dying machine tonight was
+# measuring the cheaper thing.
 assert_environment_can_evaluate() {
-  local when="$1" result flag="$SUPERVISION/.awaiting-answer" was_raised=no
+  local when="$1" result
 
-  [ -f "$flag" ] && was_raised=yes
-  touch "$flag"
-
-  result=$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")")
-
-  [ "$was_raised" = "no" ] && rm -f "$flag"
+  result=$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build')" reviewer)")
 
   if [ "$result" = "DENY" ]; then
     return 0
