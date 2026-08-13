@@ -5,10 +5,16 @@ namespace AIOrchestratorCoreLib.Tests.Planning;
 
 /// <summary>
 /// /progress and /tasks are one parse, two renderings — and since 2026-08-13 they carry the SAME
-/// rows. What separates them is order and vocabulary: /progress prints the ledger as written with
-/// the ledger's own markers, /tasks groups nothing and prints the indented ones it has always used.
+/// rows, in the SAME order. **Only the vocabulary separates them**: /progress prints the ledger's own
+/// markers (`[x] row`), /tasks the indented ones it has always used (`  x row`).
 ///
-/// THIS DOCSTRING SAID THE OPPOSITE UNTIL rev-3 CAUGHT IT, and the file itself disproved it twice
+/// ORDER WAS IN THAT SENTENCE UNTIL rev-4 CAUGHT IT, one commit after rev-3 caught the sentence
+/// before it. Both renderings read `progress.Lines` in the same direction (`PlanProgress_Formatter`
+/// :64 and :100), so order has separated nothing since `Describe_EveryLine` stopped walking the five
+/// buckets — and the test named `TheFullFormShowsDroppedRowsAndKeepsTheLedgersOrder`, forty lines
+/// below, says so in its own name.
+///
+/// THE FIRST VERSION SAID SOMETHING ELSE FALSE AND rev-3 CAUGHT THAT, and the file disproved it twice
 /// forty lines below. It claimed /progress answers "what is LEFT" while /tasks shows everything, and
 /// that the short form exists because 683 lines do not fit a phone — the capping model the owner
 /// overruled ("I want to see all the rows, it must not be truncated"). A maintainer opening this file
@@ -46,8 +52,11 @@ public class TaskListSplitTests
     /// line, and it is kept, inverted, because the two commands answering the same question in
     /// different words is now the live risk rather than a hypothetical one.
     ///
-    /// What still separates them is ORDER and VOCABULARY: /progress prints the ledger as written,
-    /// with the ledger's own markers; /tasks groups by state with its own prefixes.
+    /// What still separates them is the VOCABULARY, and only that: /progress prints the ledger's own
+    /// markers, /tasks its indented ones. **This sentence used to say "ORDER and VOCABULARY" and that
+    /// /tasks "groups by state"** — untrue from the moment `Describe_EveryLine` started reading
+    /// `Lines` instead of walking the five buckets, which happened in the very commit that wrote it.
+    /// The assertions directly below print both renderings in identical row order and disprove it.
     /// </summary>
     [Fact]
     public void BothFormsShowDoneLines_AndStillReadDifferently()

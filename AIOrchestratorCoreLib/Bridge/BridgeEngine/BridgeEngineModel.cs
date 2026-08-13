@@ -3389,17 +3389,32 @@ internal sealed class BridgeEngineModel(
         // hand to learn anything. In General there is no orchestration to name, and the global id is
         // then the truth rather than a placeholder.
         _log.Log_Warning(
-            Find_OrchIdForTopic_OrGlobal(messageThreadId),
+            Resolve_LogScope_ForTopic(messageThreadId),
             $"/{command}: the Italian layer changed the ledger's shape ({shapeChange}) — sending the English original rather than a rearranged ledger");
 
         return englishText;
     }
 
-    /// <summary>The orchestration a topic belongs to, or the global id for General and for a topic bound to nothing.</summary>
-    string Find_OrchIdForTopic_OrGlobal(long? messageThreadId)
+    /// <summary>
+    /// Which log scope a message sent in this topic belongs to. Named for the QUESTION it answers
+    /// rather than for the lookup it performs: the same `Find_ByTelegramTopicId_OrNull` appears
+    /// inline all over this file answering "which session is this", and this one answers "where does
+    /// a line ABOUT it get written" — which has a different answer when there is no session.
+    ///
+    /// GENERAL IS NOT GLOBAL, and the first version of this got that wrong. `GLOBAL_ORCH_ID` is the
+    /// EMPTY string, and `OrchestrationLogModel` writes a per-orchestration file only for a non-empty
+    /// id while the app's log panel renders an empty one as no scope at all — so a diagnostic about
+    /// the General topic reached neither the general log nor the eye, in exactly the scope the
+    /// commit beside it exists to police. `ChannelDiscovery.GENERAL_ORCH_ID` is "general", it has a
+    /// real folder, and the launcher and the watchdog already log General-scope lines under it.
+    ///
+    /// A topic bound to NO session keeps the global id, and that is not the same oversight: an
+    /// unrecognised topic genuinely has no orchestration to name, where General has one.
+    /// </summary>
+    string Resolve_LogScope_ForTopic(long? messageThreadId)
     {
         if (messageThreadId == null)
-            return GLOBAL_ORCH_ID;
+            return ChannelDiscovery.GENERAL_ORCH_ID;
 
         return _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value)?.OrchId ?? GLOBAL_ORCH_ID;
     }
@@ -5131,12 +5146,16 @@ internal sealed class BridgeEngineModel(
         return session == null ? null : _paths.Get_OwnerChannelFile(session.OrchId);
     }
 
+    /// <summary>
+    /// The log scope for an owner message, which is the topic question with the thread id already in
+    /// hand. A THIN ADAPTER, not a second implementation: this method and the one used by the ledger
+    /// translator answered the identical question forty lines apart and DISAGREED on the General
+    /// branch — one returned "general", the other the empty string, and the empty one silently lost
+    /// its diagnostic. Rule 12 is what makes that possible; one body is what closes it.
+    /// </summary>
     string Describe_MessageOrch(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message)
     {
-        if (message.MessageThreadId == null)
-            return ChannelDiscovery.GENERAL_ORCH_ID;
-
-        return _store.Find_ByTelegramTopicId_OrNull(message.MessageThreadId.Value)?.OrchId ?? GLOBAL_ORCH_ID;
+        return Resolve_LogScope_ForTopic(message.MessageThreadId);
     }
 
     async Task Route_OwnerMessage_Async(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
