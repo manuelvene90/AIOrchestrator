@@ -3274,8 +3274,12 @@ internal sealed class BridgeEngineModel(
             await client.Set_MyCommands_Async(
                 [
                     ("status", "What every session of this orchestration is doing"),
-                    ("progress", "What's LEFT to do here (all orchestrations in General)"),
-                    ("left", "What's left to do — same as /progress"),
+                    // NOT "what's LEFT" any more, since 2026-08-13: the command prints the whole
+                    // ledger, done and dropped rows included. Same class as the kit line that told
+                    // supervisors it would shorten a long ledger for them — text promising the old
+                    // behaviour, in the one place the owner reads before running the command.
+                    ("progress", "The task ledger here, every row (all orchestrations in General)"),
+                    ("left", "The task ledger — same as /progress"),
                     ("tasks", "The FULL ledger of this orchestration, done lines included"),
                     ("cost", "What this has cost, per session, and the burn rate"),
                     ("tokens", "Token and usage totals"),

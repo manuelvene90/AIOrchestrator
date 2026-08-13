@@ -100,7 +100,17 @@ public class TaskListSplitTests
 
         Assert.Contains("open 39", PlanProgress_Formatter.Describe_Ledger(progress));
         Assert.Contains("open 39", PlanProgress_Formatter.Describe_EveryLine(progress));
+
+        // THE COUNT ON BOTH, which this case claimed and only half did. `Contains("open 39")` is
+        // satisfied by a TAIL cap — `Lines.TakeLast(8)` keeps row 39 and drops thirty-two others —
+        // so the full form was guarded by an assertion a truncating renderer passes. The other two
+        // fixtures in this file are 4 and 2 rows, small enough for an 8-row cap to be invisible
+        // there too, so nothing anywhere caught it.
+        //
+        // A guard whose docstring claims coverage it does not have is worse than no guard: the
+        // maintainer auditing it ticks it off.
         Assert.Equal(40, PlanProgress_Formatter.Describe_Ledger(progress).Split('\n').Length);
+        Assert.Equal(40, PlanProgress_Formatter.Describe_EveryLine(progress).Split('\n').Length);
     }
 
     static AIOrchestratorCoreLib.Planning.PlanProgress.IPlanProgress? Parse(params string[] lines)
