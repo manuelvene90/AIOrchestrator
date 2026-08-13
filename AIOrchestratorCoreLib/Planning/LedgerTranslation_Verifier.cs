@@ -69,8 +69,22 @@ public static class LedgerTranslation_Verifier
             var originalMarker = Read_Marker_OrEmpty(originalLines[index]);
             var translatedMarker = Read_Marker_OrEmpty(translatedLines[index]);
 
-            if (originalMarker == translatedMarker)
+            // A ROW THAT LOST ALL ITS TEXT KEEPS ITS MARKER, and that hole was opened by the fix
+            // above it. Letting the trailing space be optional made `[x] the delivered thing` and a
+            // bare `[x]` yield the same marker — which is right for a placeholder row and wrong for a
+            // row whose words the model dropped: the count is unchanged, the marker matches, and the
+            // verifier calls a gutted ledger preserved.
+            //
+            // So the presence of TEXT is compared as well as the marker. A row that had words and
+            // came back without them is a shape change; a placeholder that was empty in both is not.
+            if (originalMarker == translatedMarker
+                && Has_TextAfterMarker(originalLines[index]) == Has_TextAfterMarker(translatedLines[index]))
+            {
                 continue;
+            }
+
+            if (originalMarker == translatedMarker)
+                return $"line {index + 1}: '{originalMarker}' came back with no text";
 
             // The line NUMBER, because "a marker changed" in a forty-row ledger is the same silence
             // one level down.
@@ -99,6 +113,17 @@ public static class LedgerTranslation_Verifier
             : $" (blank separators {originalBlanks} → {translatedBlanks})";
 
         return $"{originalLines.Length} lines came back as {translatedLines.Length}{blankPart}";
+    }
+
+    /// <summary>
+    /// Does this line carry words after its marker? Only meaningful for a line that HAS a marker —
+    /// prose answers true and is never compared on this, since two prose lines always agree.
+    /// </summary>
+    static bool Has_TextAfterMarker(string line)
+    {
+        const int MARKER_LENGTH = 4;
+
+        return line.Length > MARKER_LENGTH && !string.IsNullOrWhiteSpace(line[MARKER_LENGTH..]);
     }
 
     static int Count_BlankLines(string[] lines)

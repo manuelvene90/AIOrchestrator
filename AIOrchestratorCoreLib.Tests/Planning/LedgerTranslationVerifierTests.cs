@@ -321,6 +321,36 @@ public class LedgerTranslationVerifierTests
     }
 
     /// <summary>
+    /// A ROW THAT LOSES ALL ITS TEXT IS REFUSED — the hole the placeholder fix opened, found by rev-2
+    /// on the commit that made it.
+    ///
+    /// Letting the trailing space be optional was right for `- [ ]`, and it made `[x] the delivered
+    /// thing` and a bare `[x]` yield the same marker. So a row whose WORDS the model dropped kept its
+    /// marker, the line count was unchanged, and the verifier called a gutted ledger preserved: the
+    /// exact failure it exists to catch, reached through its own fix.
+    ///
+    /// Both directions, because the placeholder case must still survive: a row that was empty on both
+    /// sides is not a change, and a row that GAINS text is one.
+    /// </summary>
+    [Fact]
+    public void ARowThatCameBackWithNoTextIsRefused()
+    {
+        const string english = "[x] the delivered thing\n[ ] the open one";
+
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(english, "[x]\n[ ] quella aperta"));
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(english, "[x] la cosa consegnata\n[ ] "));
+
+        // The placeholder row still survives losing its trailing space, which is what the previous
+        // fix was for — this cannot be closed by reverting that.
+        Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull("[ ] \n[x] done", "[ ]\n[x] fatto"));
+
+        // And the message says what happened rather than naming a marker that did not change.
+        Assert.Equal(
+            "line 1: '[x]' came back with no text",
+            LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(english, "[x]\n[ ] quella aperta"));
+    }
+
+    /// <summary>
     /// THE DIAGNOSTIC TELLS A LOST ROW FROM A REFLOWED SEPARATOR. Every topic-scope /progress carries
     /// an interior blank line by construction, so a model that merely closes the gap was reported as
     /// "5 lines came back as 4" — indistinguishable from a vanished ledger row, in the one line that
