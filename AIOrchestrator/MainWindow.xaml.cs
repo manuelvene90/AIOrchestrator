@@ -336,6 +336,13 @@ public partial class MainWindow : Window
             OrchId = session.OrchId,
             Title = session.DisplayName ?? session.OrchId,
             RepoName = session.RepoName,
+
+            // A basic orchestration has no supervisor, so an implementer added here would wait for a
+            // brief that cannot come. The launcher refuses it either way — this stops the owner being
+            // offered it at all.
+            AddMemberButtonVisibility = AIOrchestratorCoreLib.Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc)
+                ? Visibility.Collapsed
+                : Visibility.Visible,
             SummaryText = $"{orchIdSuffix}· {Describe_OpenMembers(session)} · {ranWord} {Describe_Duration(age)}{Build_UsageTotalText(session)}",
             IsClosed = session.ClosedUtc != null,
             ClosedLabel = session.ClosedUtc == null ? "" : $"CLOSED {session.ClosedUtc.Value.ToLocalTime():dd/MM HH:mm}",

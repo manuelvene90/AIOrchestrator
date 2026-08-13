@@ -24,6 +24,18 @@ public class OrchestrationCardView
     /// <summary>The exact inverse: buttons that belong ONLY to the general supervisor's card.</summary>
     public System.Windows.Visibility GeneralButtonsVisibility { get; init; } = System.Windows.Visibility.Collapsed;
 
+    /// <summary>
+    /// Collapsed on a BASIC orchestration's card, which has no supervisor to brief an implementer.
+    /// Its own visibility rather than the shared one, so hiding it here cannot take the silence and
+    /// close buttons with it.
+    ///
+    /// THIS IS THE COURTESY, NOT THE GUARD. The enforcement is in `Add_Member`, at the point of
+    /// effect, because a layout change can undo a hidden button silently and every other caller of the
+    /// launcher would still be unguarded. Both layers, deliberately: this one stops the owner being
+    /// offered something that cannot work, and the other one stops it happening.
+    /// </summary>
+    public System.Windows.Visibility AddMemberButtonVisibility { get; init; } = System.Windows.Visibility.Visible;
+
     /// <summary>🔕 when this topic's outbound Telegram traffic is dropped ("I'm in its terminal").</summary>
     public string SilenceGlyph { get; init; } = "🔔";
 

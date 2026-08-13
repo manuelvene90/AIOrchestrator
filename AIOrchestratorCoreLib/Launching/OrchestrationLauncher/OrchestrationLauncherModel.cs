@@ -129,8 +129,15 @@ internal sealed class OrchestrationLauncherModel(
     ///
     ///   1. SUPERVISOR FIRST. Its spawn stamps `SupervisorSpawnedUtc` BEFORE the attempt, so from
     ///      that instant the orchestration reads as promoted and the watchdog will respawn the
-    ///      supervisor if the spawn itself failed. Nothing has been destroyed yet either: if this
-    ///      throws, the solo is still running and the orchestration is exactly what it was.
+    ///      supervisor if the spawn itself failed. Nothing has been DESTROYED yet either: if this
+    ///      throws, the solo is still running.
+    ///
+    ///      **This used to claim "the orchestration is exactly what it was", and that was false** —
+    ///      the shape flag has already flipped by then and nothing rolls it back, because the stamp
+    ///      is deliberately written before the attempt. What is true is narrower: nothing is lost, and
+    ///      the state is RECOVERABLE. That half-promoted state now has a name — `Incomplete` — and a
+    ///      retry finishes it rather than being refused as "already a crew", which is what the old
+    ///      wording's optimism was hiding.
     ///   2. THEN CLOSE THE SOLO. Doing this first would mean a failed supervisor spawn leaves an
     ///      orchestration with NOTHING running and nothing to recover it — the watchdog skips closed
     ///      members, and a basic orchestration has no supervisor slot to protect.
@@ -144,7 +151,37 @@ internal sealed class OrchestrationLauncherModel(
     {
         var session = _store.Get_Session(orchId);
 
-        Respawn_Supervisor(orchId);
+        var hasLiveSolo = session.Members.Any(member =>
+            member.ClosedUtc == null && MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Solo);
+
+        // ASKED AT THE MOMENT OF EFFECT, because the park-time check can be twelve hours old. Two
+        // requests can both pass it while neither has executed, and a `set-model` can change the shape
+        // underneath it — so the decision that matters is this one.
+        var readiness = OrchestrationShape.Decide_PromotionReadiness(session.SupervisorSpawnedUtc, hasLiveSolo);
+
+        if (readiness == PromotionReadiness.AlreadyACrew || readiness == PromotionReadiness.NothingToPromote)
+        {
+            _log.Log_Warning(orchId, $"Promotion skipped — {readiness}");
+            return session;
+        }
+
+        // THE REPO IS CHECKED BEFORE THE STAMP, not after. `Respawn_Supervisor`'s first act is to
+        // stamp `SupervisorSpawnedUtc`, deliberately, so no tick sees "no pid file and no grace" and
+        // double-spawns — which means a spawn that throws leaves the orchestration reading as a crew
+        // with its solo still running. Start_Orchestration and Start_BasicOrchestration both validate
+        // this; promotion did not, so a moved or renamed repo folder flipped the shape and then failed.
+        if (!Directory.Exists(session.RepoPath))
+            throw new Exception($"Repo path '{session.RepoPath}' for '{orchId}' does not exist — nothing was promoted");
+
+        // INCOMPLETE means a supervisor spawn was already attempted for this orchestration, so this
+        // does NOT spawn a second one: `Respawn_Supervisor` does not terminate an incumbent, it nulls
+        // the stored pid and clears the pid file — and both `Kill_AllSessions` and
+        // `Kill_OrchestrationSessions` enumerate pid FILES, so the first supervisor would survive the
+        // orchestration's close AND the app's exit, still appending to owner-channel.md.
+        if (readiness == PromotionReadiness.Ready)
+            Respawn_Supervisor(orchId);
+        else
+            _log.Log_Info(orchId, "Finishing a promotion that stopped halfway — a supervisor spawn was already attempted, so it is not repeated");
 
         foreach (var member in session.Members)
         {
@@ -157,7 +194,13 @@ internal sealed class OrchestrationLauncherModel(
             _log.Log_Info(orchId, $"Solo session '{member.MemberId}' closed — promoted to a full crew");
         }
 
-        return Add_Implementer(orchId);
+        // ONLY IF THERE IS NOT ONE ALREADY. Finishing a half-done promotion must not hand the
+        // supervisor an imp-2 beside the imp-1 it already has — an idempotent completion that adds a
+        // session every time it runs is not idempotent, it is just slower to notice.
+        var hasLiveImplementer = _store.Get_Session(orchId).Members.Any(member =>
+            member.ClosedUtc == null && MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Implementer);
+
+        return hasLiveImplementer ? _store.Get_Session(orchId) : Add_Implementer(orchId);
     }
 
     public void Respawn_Supervisor(string orchId)

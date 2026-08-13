@@ -1,5 +1,25 @@
 namespace AIOrchestratorCoreLib.Sessions;
 
+/// <summary>What a promotion should do to an orchestration, decided at the moment it would act.</summary>
+public enum PromotionReadiness
+{
+    /// <summary>Basic, with a live solo — promote it.</summary>
+    Ready,
+
+    /// <summary>Basic with no live solo: nothing to replace, so nothing to do.</summary>
+    NothingToPromote,
+
+    /// <summary>
+    /// Stamped as a crew but its solo is still running — a promotion that stopped halfway. FINISH it
+    /// rather than refusing: spawning a second supervisor would orphan the first beyond every
+    /// shutdown path, and refusing closes off the recovery the failure message asks for.
+    /// </summary>
+    Incomplete,
+
+    /// <summary>A crew with no solo left. Nothing to promote, and the refusal that stops a second tap.</summary>
+    AlreadyACrew,
+}
+
 /// <summary>
 /// Whether an orchestration has a SUPERVISOR SLOT — the only question anything actually asks about
 /// its shape, and the one the watchdog needs an answer to before it respawns anything.
@@ -69,6 +89,38 @@ public static class OrchestrationShape
         return Is_BasicOrchestration(supervisorSpawnedUtc)
             ? kind == MemberKinds.Solo
             : kind != MemberKinds.Solo;
+    }
+
+    /// <summary>
+    /// What a promotion should do to this orchestration RIGHT NOW — asked at the moment of effect, not
+    /// remembered from when the request was written.
+    ///
+    /// rev-5 F3, F4 and F5 are one defect seen three ways: the shape flag is written before the spawn
+    /// succeeds and then never re-read. The park-time check was the only one, and up to twelve hours
+    /// can pass under it.
+    ///
+    /// The four states are the whole rule, and the middle two are the ones that did not exist before:
+    ///
+    ///   - basic with a live solo → READY. The ordinary case.
+    ///   - basic with no live solo → NOTHING TO PROMOTE. There is no session to replace, and spawning
+    ///     a crew around an empty orchestration is not what anybody asked for.
+    ///   - CREW WITH A LIVE SOLO → INCOMPLETE, and this is the state F5 leaves behind: the stamp lands
+    ///     before the spawn attempt (deliberately, against a double spawn), so a spawn that throws
+    ///     leaves an orchestration that reads as a crew with its solo still running. The old rule
+    ///     called that "already a crew" and refused the retry — closing off the recovery its own error
+    ///     message told the solo to attempt. It is not a crew; it is a promotion that stopped halfway,
+    ///     and finishing it is exactly right.
+    ///   - crew with no live solo → ALREADY A CREW. The genuine refusal, and the one that stops F3's
+    ///     second tap: two parked requests both pass the park check, and the second execution finds
+    ///     this and does nothing rather than spawning a SECOND supervisor whose predecessor no
+    ///     shutdown path can reach.
+    /// </summary>
+    public static PromotionReadiness Decide_PromotionReadiness(DateTime? supervisorSpawnedUtc, bool hasLiveSolo)
+    {
+        if (Is_BasicOrchestration(supervisorSpawnedUtc))
+            return hasLiveSolo ? PromotionReadiness.Ready : PromotionReadiness.NothingToPromote;
+
+        return hasLiveSolo ? PromotionReadiness.Incomplete : PromotionReadiness.AlreadyACrew;
     }
 
     /// <summary>

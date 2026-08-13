@@ -2131,6 +2131,28 @@ internal sealed class BridgeEngineModel(
             {
                 if (request.Role == GeneralSupervision.SetModelRequest.SetModelRequest_Factory.SUPERVISOR_ROLE)
                 {
+                    // A BASIC ORCHESTRATION HAS NO SUPERVISOR TO RE-MODEL, and spawning one here does
+                    // not just add a session — it flips the shape PERMANENTLY. `Respawn_Supervisor`
+                    // stamps `SupervisorSpawnedUtc`, the factory merges it with a plain coalesce and
+                    // no wasSet escape hatch, and nothing anywhere clears it, including the close
+                    // paths. So "use fable for the CRM one" about a basic orchestration used to put a
+                    // supervisor beside the solo on one channel and make every later promotion
+                    // request answer "already has a supervisor" for ever.
+                    //
+                    // The concierge is explicitly authorised to drop this request for any orch id, so
+                    // the guard belongs here rather than in its instructions.
+                    if (Sessions.OrchestrationShape.Is_BasicOrchestration(_store.Get_Session(request.OrchId).SupervisorSpawnedUtc))
+                    {
+                        Append_OrchestrationAppEntry(
+                            request.OrchId,
+                            "model change REFUSED — this is a basic orchestration and has no supervisor",
+                            "A basic orchestration is one session with no supervisor, so there is no supervisor model to set. Spawning one here would permanently turn it into a crew and block any real promotion.\n\n"
+                            + "Use role 'implementer' to change the model of the session that IS here.");
+
+                        Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "no-supervisor");
+                        continue;
+                    }
+
                     _store.Set_SupervisorModelOverride(request.OrchId, request.Model);
                     SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_SupervisorPidFile(request.OrchId));
                     _launcher.Respawn_Supervisor(request.OrchId);
@@ -2385,14 +2407,27 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                if (!Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc))
+                // THE SAME RULE THE EXECUTION USES, so the answer at park time and the answer at tap
+                // time cannot differ in kind — only in how stale they are. A half-promoted
+                // orchestration (stamped, solo still running) is INCOMPLETE rather than "already a
+                // crew", so the retry the failure message asks for is allowed through instead of
+                // being refused by the app's own guard.
+                var readiness = Sessions.OrchestrationShape.Decide_PromotionReadiness(
+                    session.SupervisorSpawnedUtc,
+                    session.Members.Any(member => member.ClosedUtc == null && Sessions.MemberKind_Ids.Resolve_Kind(member.MemberId) == Sessions.MemberKinds.Solo));
+
+                if (readiness == Sessions.PromotionReadiness.AlreadyACrew || readiness == Sessions.PromotionReadiness.NothingToPromote)
                 {
                     Append_OrchestrationAppEntry(
                         request.OrchId,
-                        "promotion REFUSED — this orchestration already has a supervisor",
-                        "A promotion turns a basic orchestration into a full crew, and this one is already a crew. Nothing was changed and the owner was not asked.");
+                        readiness == Sessions.PromotionReadiness.AlreadyACrew
+                            ? "promotion REFUSED — this orchestration already has a supervisor"
+                            : "promotion REFUSED — there is no solo session here to promote",
+                        readiness == Sessions.PromotionReadiness.AlreadyACrew
+                            ? "A promotion turns a basic orchestration into a full crew, and this one is already a crew. Nothing was changed and the owner was not asked."
+                            : "A promotion replaces the solo session with a supervisor, and this orchestration has no live solo. Nothing was changed and the owner was not asked.");
 
-                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "already-a-crew");
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, readiness == Sessions.PromotionReadiness.AlreadyACrew ? "already-a-crew" : "nothing-to-promote");
                     continue;
                 }
 
