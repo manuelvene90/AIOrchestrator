@@ -108,6 +108,33 @@ public class SupervisorNudgeClockProbeTests : IDisposable
     }
 
     /// <summary>
+    /// THE SIGN TRAP, ISOLATED — and it exists because the two controls this file shipped with had
+    /// the SAME red set (rev-7's F2). Reverting to the file stamp and handing the reader `UtcNow` both
+    /// reddened the compaction case, so the second failure was only ever caught by breaking what the
+    /// first breaks, and a "correct this to UtcNow" edit would have been indistinguishable from a
+    /// revert. They are not the same failure: the file-stamp reading still fires after eight minutes
+    /// of genuine quiet, while `UtcNow` on a machine east of UTC fires NEVER.
+    ///
+    /// Here the conversation and the file stamp AGREE that the channel is twenty minutes old, so the
+    /// old file-stamp reading is right too and stays green — leaving `UtcNow`, whose subtraction goes
+    /// negative, as the only mutation that can redden this.
+    ///
+    /// The author's own rule, applied to the author: a case that reddens with its siblings pins
+    /// nothing of its own.
+    /// </summary>
+    [Fact]
+    public async Task AStalledReportIsNudgedEvenWhenTheFileStampAgreesItIsOld()
+    {
+        var ownerChannel = Start_WithStalledReport_AndAnAgreeingFileStamp();
+
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => Has_SupervisorNudge(ownerChannel)),
+            "a plainly stalled report was not reported to the supervisor — the clock is not measuring in the direction it thinks it is");
+    }
+
+    /// <summary>
     /// Twenty minutes of unanswered report, with the file stamped now as a compaction or an app write
     /// would leave it. The member spoke LAST, so the member-nudge path has nothing to do here and the
     /// only thing that can move is the supervisor's own channel.
@@ -118,7 +145,8 @@ public class SupervisorNudgeClockProbeTests : IDisposable
 
         return Start_WithMemberChannel(
             $"## [1] FROM supervisor — {filed} — brief\nimplement the parser\n\n"
-            + $"## [2] FROM implementer — {filed} — TASK 1 landed abc1234\nparser done, suite green\n");
+            + $"## [2] FROM implementer — {filed} — TASK 1 landed abc1234\nparser done, suite green\n",
+            DateTime.Now);
     }
 
     string Start_WithReportFiledAMinuteAgo()
@@ -128,20 +156,38 @@ public class SupervisorNudgeClockProbeTests : IDisposable
 
         return Start_WithMemberChannel(
             $"## [1] FROM supervisor — {briefed} — brief\nimplement the parser\n\n"
-            + $"## [2] FROM implementer — {justNow} — TASK 1 landed abc1234\nparser done, suite green\n");
+            + $"## [2] FROM implementer — {justNow} — TASK 1 landed abc1234\nparser done, suite green\n",
+            DateTime.Now);
+    }
+
+    /// <summary>
+    /// Everything old and AGREEING — the conversation twenty minutes back and the file stamp with it.
+    /// Nothing has touched this channel; it is simply stalled. The point is what it does NOT
+    /// discriminate: the old file-stamp reading is right here too, so this case cannot redden for the
+    /// reason the other one does.
+    /// </summary>
+    string Start_WithStalledReport_AndAnAgreeingFileStamp()
+    {
+        var filed = DateTime.Now.AddMinutes(-20);
+
+        return Start_WithMemberChannel(
+            $"## [1] FROM supervisor — {filed:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n\n"
+            + $"## [2] FROM implementer — {filed:yyyy-MM-dd HH:mm} — TASK 1 landed abc1234\nparser done, suite green\n",
+            filed);
     }
 
     /// <summary>Returns the OWNER channel — the supervisor's own, which is where its nudge lands.</summary>
-    string Start_WithMemberChannel(string text)
+    string Start_WithMemberChannel(string text, DateTime fileStamp)
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, session.Members[0].MemberId);
 
         File.WriteAllText(channelFile, text);
 
-        // The touch under test. A compaction's rename-over leaves exactly this: a file stamped now,
-        // with the conversation inside it untouched and hours old.
-        File.SetLastWriteTime(channelFile, DateTime.Now);
+        // The file stamp is a PARAMETER because it is the axis the cases differ on: set to now it
+        // reproduces a compaction's rename-over (a stamp moved with nobody speaking), set to the
+        // conversation's own age it reproduces an ordinary stall.
+        File.SetLastWriteTime(channelFile, fileStamp);
 
         return _paths.Get_OwnerChannelFile(session.OrchId);
     }
