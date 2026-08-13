@@ -574,6 +574,38 @@ check "...and marks nothing" ABSENT "$(rm -f "$MARKER_FILE"; run_hook "$REVIEWER
 
 rm -f "$MARKER_FILE"
 
+# ── A LINE CONTINUATION IS DELETED, NOT ESCAPED ──────────────────────────────────────────────────
+#
+# `\` + newline is removed by a shell and the two halves join. The scanner escaped the newline like
+# any other character instead, so it stayed inside the word and `\nrm` matched no verb.
+#
+# READ THE HISTORY HERE BEFORE DELETING ANYTHING: this was DENIED before the CRLF fix, and denied for
+# a reason that had nothing to do with continuations. The extractor's stray `\r` sat between the
+# backslash and the newline, so the backslash escaped the `\r` and the surviving newline acted as a
+# separator — the verb was classified because a bug was standing in the right place. Removing the
+# stray byte exposed the real defect, which means the CRLF fix opened this row and this case closes
+# it. A mask is not a fix, and the case that only passes while a second bug is present is the one
+# that quietly stops meaning anything.
+check "a continuation before the verb" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command '\
+rm -rf build')" reviewer)")"
+check "a continuation before a git subcommand" git "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git \
+commit -m x')" reviewer)")"
+# A CONTROL, AND LABELLED AS ONE BECAUSE IT CANNOT REDDEN. Removing the continuation handling leaves
+# this green: `rm` is the first word either way, so the verb is classified whether the join happens or
+# not. It earns its place by catching a join that mangles the ARGUMENTS or raises — not by pinning the
+# fix, which the two cases above do. Measured under the mutation rather than assumed; a case that
+# cannot fail is worth keeping only when the file says out loud that it cannot.
+check "control: a continuation between verb and args" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm \
+-rf build')" reviewer)")"
+
+# The other direction: joining lines must not manufacture a denial, and an ordinary escaped backslash
+# must still be an escaped backslash rather than a continuation.
+check "a continuation in a read-only command" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn \
+"pattern" src/')" reviewer)")"
+check "a continuation inside double quotes" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo "a \
+b"')" reviewer)")"
+check "an escaped backslash is not a continuation" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo "a \\ b"')" reviewer)")"
+
 # ── THE COMMAND MUST REACH THE REDUCER AS THE BYTES THAT WERE SENT ───────────────────────────────
 #
 # python3 here is native Windows python, and its text-mode stdout turned every newline it wrote into

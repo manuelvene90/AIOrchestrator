@@ -178,6 +178,14 @@ def strip_comments_and_heredoc_bodies(s):
     while i < n:
         c = s[i]
 
+        # A LINE CONTINUATION IS NOT AN ESCAPED CHARACTER, IT IS NOTHING. A shell deletes `\` and the
+        # newline together and joins what is either side; escaping the newline instead leaves it in
+        # the word, and `\nrm` matches no verb. Both scanners have to agree on this, so the same two
+        # lines appear in `tokenize` — and `at_word_start` is deliberately left alone, because the
+        # word continues across the join exactly as if the break were not there.
+        if c == "\\" and i + 1 < n and s[i + 1] == "\n":
+            i += 2; continue
+
         if c == "\\" and i + 1 < n:
             out.append(s[i:i + 2]); i += 2; at_word_start = False; continue
 
@@ -265,6 +273,12 @@ def tokenize(s):
     while i < n:
         c = s[i]
 
+        # The same rule as the stripper: `\` + newline is deleted, not escaped. Note it does NOT set
+        # has_word — a continuation on its own does not begin a word, so `\<newline>rm -rf x` reduces
+        # to the command it is, rather than to a word called `\nrm` that matches no verb.
+        if c == "\\" and i + 1 < n and s[i + 1] == "\n":
+            i += 2; continue
+
         if c == "\\" and i + 1 < n:
             buf.append(s[i + 1]); has_word = True; i += 2; continue
 
@@ -278,7 +292,10 @@ def tokenize(s):
             j = i + 1
             while j < n and s[j] != '"':
                 if s[j] == "\\" and j + 1 < n:
-                    buf.append(s[j + 1]); j += 2; continue
+                    # Inside double quotes a continuation is still deleted, as the shell does.
+                    if s[j + 1] != "\n":
+                        buf.append(s[j + 1])
+                    j += 2; continue
                 buf.append(s[j]); j += 1
             if j >= n:
                 raise Undecidable("an unbalanced double quote")
