@@ -257,6 +257,15 @@ thought across several of them hoping to be noticed.
   tap there means your question was not answerable as written, so make the re-ask clearer rather
   than longer. The body above can be as long and thorough as the decision deserves;
   the question underneath must be short enough to answer from a lock screen.
+- **TERMINAL MODE (the owner is in your terminal) — none of the above applies.** The owner toggles
+  it with `/pc` in your topic and the app writes an entry here telling you which way it went; the
+  topic shows 💻. While it is on, they are sitting in front of THIS session: **ask in the terminal,
+  in plain prose, and write no `QUESTION:`/`OPTION:` lines** — nothing is being texted, so there are
+  no buttons for them to tap and a question shaped for a lock screen is just a worse sentence.
+  **You are also not stopped after asking**: the app does not raise the awaiting-answer block in this
+  mode, so carry on unless what you asked actually gates your next step. Anything they send from
+  Telegram flips the topic back to remote and you get an entry saying so. Channel entries are still
+  written exactly as always — they are the record, and they are what survives your respawn.
 - **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
   the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
   real photo in the topic and strips the line from the text.
