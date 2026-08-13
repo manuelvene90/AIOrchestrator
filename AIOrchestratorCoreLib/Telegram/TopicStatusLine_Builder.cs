@@ -24,10 +24,30 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// </summary>
 public static class TopicStatusLine_Builder
 {
-    /// <summary>Task words kept per member row — a topic line is glanceable or it is nothing.</summary>
-    public const int MEMBER_TASK_WORDS = 5;
+    /// <summary>
+    /// Task words kept per member row — a topic line is glanceable or it is nothing.
+    ///
+    /// FOUR, down from five on the owner's 2026-08-13 directive, and the number is a WRAP budget
+    /// rather than a taste: the row it sits in is `• imp-1 · <task> · 12 min`, so ten characters go
+    /// to the member and eight to the duration before the task gets any. At five words the owner's
+    /// own screenshot wrapped `rev-1 · audit R2–R8 against current master · 2 min` onto three visual
+    /// lines. Four costs the trailing word of a long brief and buys the row back.
+    /// </summary>
+    public const int MEMBER_TASK_WORDS = 4;
 
-    const string SEPARATOR = "────────────────────────────";
+    /// <summary>
+    /// Opens every member row and is the only thing dividing them, which is why the 28-dash divider
+    /// could go. It also survives WRAPPING, which no amount of column padding did: a bullet row that
+    /// spills onto a second visual line still reads as one row, because the `•` marks where it began.
+    /// </summary>
+    const string MEMBER_BULLET = "• ";
+
+    /// <summary>
+    /// Between every pair of fields, in place of the runs of spaces that used to fake columns.
+    /// Telegram renders the message body in a PROPORTIONAL font, so those columns could never align
+    /// — the padding bought nothing and spent the width that made the rows wrap.
+    /// </summary>
+    const string FIELD_SEPARATOR = " · ";
 
     /// <summary>
     /// <paramref name="aMessageIsAlreadyPosted"/> decides what NOTHING TO SAY means. With no
@@ -77,11 +97,12 @@ public static class TopicStatusLine_Builder
 
         lines.Insert(0, Build_TitleLine(title, progress));
 
+        // NO BULLET on this one, deliberately: it is not a member, and a `• last · …` row reads like
+        // one more session called "last". Not having the bullet is what separates it now that the
+        // divider is gone. It affords two more task words than a member row because it carries no
+        // duration — a longer field, in a shorter row.
         if (!string.IsNullOrWhiteSpace(lastSubject))
-        {
-            lines.Add(SEPARATOR);
-            lines.Add($"last    {TextSummary_Formatter.Summarize_Task(lastSubject, MEMBER_TASK_WORDS + 3)}");
-        }
+            lines.Add($"last{FIELD_SEPARATOR}{TextSummary_Formatter.Summarize_Task(lastSubject, MEMBER_TASK_WORDS + 2)}");
 
         return string.Join('\n', lines);
     }
@@ -100,7 +121,7 @@ public static class TopicStatusLine_Builder
         if (progress == null || progress.Total <= 0)
             return title;
 
-        return $"{title}          {progress.Done}/{progress.Total} · {PlanProgress_Formatter.Percent(progress)}%";
+        return $"{title}{FIELD_SEPARATOR}{progress.Done}/{progress.Total}{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)}%";
     }
 
     /// <summary>
@@ -113,20 +134,32 @@ public static class TopicStatusLine_Builder
         var state = MemberState_Resolver.Resolve(member.Entries);
 
         if (Is_Idle(state))
-            return $"{member.MemberId}   idle";
+            return Build_Row(member.MemberId, "idle");
 
         var brief = MemberState_Resolver.Find_LastBrief_OrNull(member.Entries);
 
         if (brief == null)
-            return $"{member.MemberId}   idle";
+            return Build_Row(member.MemberId, "idle");
 
         var task = TextSummary_Formatter.Summarize_Task(brief.Subject, MEMBER_TASK_WORDS);
         var onTaskFor = SessionDuration_Formatter.Describe_SinceStamp_OrNull(brief.DateText, now);
 
-        if (onTaskFor == null)
-            return $"{member.MemberId}   {task}";
+        // A missing duration DROPS ITS FIELD rather than leaving the separator standing: a row ending
+        // in a dangling `· ` reads as a value that failed to load, when the truth is that the stamp
+        // was not trustworthy enough to date.
+        return onTaskFor == null
+            ? Build_Row(member.MemberId, task)
+            : Build_Row(member.MemberId, task, onTaskFor);
+    }
 
-        return $"{member.MemberId}   {task}      {onTaskFor}";
+    /// <summary>
+    /// ONE place that joins a member row, so the bullet and the separator cannot drift apart between
+    /// the idle row, the dated row and the undated one — three copies of a format string is how the
+    /// old shape ended up with a four-space gap in one branch and a six-space gap in another.
+    /// </summary>
+    static string Build_Row(string memberId, params string[] fields)
+    {
+        return MEMBER_BULLET + memberId + FIELD_SEPARATOR + string.Join(FIELD_SEPARATOR, fields);
     }
 
     /// <summary>
