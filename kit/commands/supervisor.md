@@ -380,18 +380,17 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   final report; then drop
   `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`
   (the same action closes a `rev-<n>` — pass its member id).
-- **THE MEMBER IS NOT CLOSED WHEN YOU DROP THAT FILE. The owner confirms it with a tap**, exactly as
-  they do for a whole-orchestration close (owner decision 2026-08-12: this action and no other,
-  because closing a member throws away a session's work while a model or mute change is cheap to
-  undo). It used to execute about two seconds after the file landed.
-  - **You get an app entry saying it is HELD, and the member keeps working meanwhile.** Do not brief
-    it as if it were gone, and do NOT re-drop the request — a second file is a second prompt for the
-    same close.
-  - **You are told either way**: closed, declined, or lapsed unanswered after 12 hours. A lapse is not
-    carried over; ask again if it still applies.
-  - **`reason` is what the owner reads on their phone before deciding.** "no longer needed" tells them
-    nothing; "its deliverable is merged and nothing is queued for it" is a decision they can make in
-    one tap.
+- **IT TAKES EFFECT WHEN YOU DROP THAT FILE — the owner is not asked.** Owner directive 2026-08-13,
+  reversing their own decision of the day before: *"I wanted to be asked for confirmation to close the
+  entire orchestration session. I trust the supervisor to manage its subordinate windows."* Your crew
+  is yours; only the WHOLE-orchestration close still waits for their tap.
+  - **So make sure it is finished before you drop it.** Nothing stands between the file and the kill
+    now: the session tree goes down within about two seconds, and its context is gone. Get its final
+    report first, as above.
+  - **You get an app entry confirming the close**, and one naming the error if it failed — in which
+    case the member may still be running, so check before asking again.
+  - **`reason` goes in the audit trail, not to the owner's phone.** It is still worth writing properly:
+    it is what answers "why is this member gone" when someone reads the channel back.
 - **CLOSING A FINISHED MEMBER IS A RULE, NOT A JUDGEMENT CALL.** The owner, 2026-08-12: *"if an impl
   is done and the sup doesn't want to use it anymore and spawns another one, the old one stays open
   forever monitoring the channel and wasting tokens."* An idle member is not free — it holds a
@@ -425,8 +424,10 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   waiting on something you did not notice. Write in its channel and wait.
 
   If you truly must replace a member, **close the old one FIRST** — drop `close-implementer` for it,
-  wait for the confirmation, and only then request the replacement. Two live members briefed on one
-  task is always a bug, never a redundancy strategy.
+  wait for the app entry confirming it actually closed, and only then request the replacement. That
+  wait is short now that nobody is asked, but it is not skippable: the close can fail, and the entry
+  is the only thing that tells you it did. Two live members briefed on one task is always a bug,
+  never a redundancy strategy.
 - **Close the WHOLE orchestration — only on an UNAMBIGUOUS instruction.** This is the one
   irreversible action you have: it ends every session including yours, deletes the topic, and cannot
   be undone.

@@ -626,6 +626,12 @@ internal sealed class BridgeEngineModel(
         // muted. Behind the gate, DND froze the only thing that disarms a live confirmation button.
         Expire_StaleCloseConfirmations();
 
+        // Same reason, and it must not wait for a restart: a member close parked before the
+        // 2026-08-13 directive has a live button that now points at a decision the owner no longer
+        // makes. Every tick rather than once at startup, so it is idempotent and cannot be skipped by
+        // whatever order the app happens to come up in.
+        Release_ParkedMemberCloses();
+
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
         // Crash-loop alerts stay queued in the watchdog until unmute for the same reason.
@@ -2345,14 +2351,23 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// A member close is NOT executed on arrival either — it parks for the owner's tap, exactly as an
-    /// orchestration close does (owner decision 2026-08-12: this one action, not set-model and not
-    /// mute, because those are cheap to undo and this throws away a session's work).
+    /// A member close EXECUTES ON ARRIVAL. Owner directive 2026-08-13, reversing their own decision of
+    /// 2026-08-12 in their own words: *"currently I'm being asked for confirmation for the closure of
+    /// each element of the session, any reviewer or implementer. That wasn't what I wanted, I wanted
+    /// to be asked for confirmation to close the entire orchestration session. I trust the supervisor
+    /// to manage its subordinate windows."*
     ///
-    /// It used to kill the session tree about two seconds after the file landed, on the say-so of a
-    /// request nothing had verified — and <c>Close_Member</c> has no other caller, so there was no
-    /// owner-facing route at all. The guard does not take anything away from them; it gives them the
-    /// only say they had.
+    /// THE ORCHESTRATION CLOSE KEEPS ITS TAP — see <see cref="Process_CloseOrchestrationRequests"/>.
+    /// That one is irreversible: it ends every session including the supervisor's and deletes the
+    /// topic. This one ends a session whose replacement costs a spawn. The two actions share
+    /// <see cref="CloseConfirmation_Parking"/> and every sweep around it, so the difference between
+    /// them now rests on nothing but which of these two methods a request reaches. It is worth
+    /// knowing that is the whole of the distinction.
+    ///
+    /// The 2026-08-12 guard was not wrong for its own reason — a close does throw away a session's
+    /// work, and before it there was no owner-facing route at all. What the owner corrected is WHOSE
+    /// judgement that spends: retiring a finished member is the supervisor's own crew management, and
+    /// asking them to approve each one made them the bottleneck on a decision they had delegated.
     /// </summary>
     void Process_CloseImplementerRequests(IPendingRequests pending)
     {
@@ -2360,45 +2375,61 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                var parkedPath = CloseConfirmation_Parking.Park(_paths, request.SourceFilePath);
-
-                _log.Log_Info(request.OrchId, $"close-implementer '{request.MemberId}' held for the owner's confirmation ({parkedPath})");
-
-                Append_OrchestrationAppEntry(
-                    request.OrchId,
-                    $"close of '{request.MemberId}' HELD — the owner confirms every close with a tap now",
-                    $"Nothing has been closed and '{request.MemberId}' is still running. The owner has been asked to confirm.\n\n"
-                    + $"Reason relayed: {request.Reason}\n\n"
-                    + $"You will get an entry here either way. If they do not answer within {CloseConfirmation_Parking.EXPIRY_HOURS} hours the request lapses and you are told — do NOT re-drop it in the meantime.");
+                Execute_CloseImplementer(request.OrchId, request.MemberId, request.Reason);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // The guard could not be honoured, so the member is NOT closed. This is the app, not
-                // a hook: a hook that cannot evaluate its predicate says so and allows, because it
-                // only ever advises — here the effect is destructive and irreversible, so the same
-                // failure has to stop rather than wave through. Fail closed, and say why.
-                _log.Log_Error(request.OrchId, $"close-implementer '{request.MemberId}' could not be held for confirmation — NOT closed", ex);
-
-                Append_OrchestrationAppEntry(
-                    request.OrchId,
-                    $"close of '{request.MemberId}' NOT held — nothing was closed",
-                    $"Your close request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and '{request.MemberId}' is still running. Ask again if the close is still wanted.");
-
-                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
+                // Already logged and reported into the requester's channel by Execute_CloseImplementer,
+                // which reports before it rethrows. Swallowed here so one member's failure cannot take
+                // down the tick and with it every other orchestration's traffic.
+            }
+            finally
+            {
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "executed");
             }
         }
     }
 
     /// <summary>
-    /// The ONE member-close execution, reached only from the owner's confirmed tap — the same shape
-    /// as <see cref="Execute_Close"/> for an orchestration, so a close cannot come to mean two
-    /// different things depending on which door it walked through.
+    /// Member closes parked before the 2026-08-13 directive are RELEASED, never executed.
+    ///
+    /// A parked request is one the supervisor asked for and the owner never answered, and it may be
+    /// hours old. This codebase already decided what a stale close is worth, in the lapse wording it
+    /// has used all along: *"a close must reflect the situation at the moment it is confirmed, not a
+    /// stale one"*. Executing it now would apply a new policy retroactively to a decision the owner
+    /// declined to make — and the member may since have been briefed with new work, finished, or been
+    /// closed another way. Dropping costs one re-drop; executing costs a live session's context.
+    ///
+    /// It goes out through the existing lapse path rather than a new one, so the registrations behind
+    /// any live button are cleared by the same code that always cleared them. A released request whose
+    /// button stayed armed is exactly the immortal-button defect
+    /// <see cref="Resolve_CloseConfirmations_Async"/> documents.
+    /// </summary>
+    void Release_ParkedMemberCloses()
+    {
+        foreach (var parkedPath in CloseConfirmation_Parking.Find_Parked(_paths))
+        {
+            if (Is_BeingResolved(parkedPath))
+                continue;
+
+            if (ParkedCloseRequest_Reader.Read_OrNull(parkedPath)?.Kind != ParkedCloseKinds.Implementer)
+                continue;
+
+            Release_ParkedMemberClose(parkedPath);
+        }
+    }
+
+    /// <summary>
+    /// The ONE member-close execution — the same shape as <see cref="Execute_Close"/> for an
+    /// orchestration, so a close cannot come to mean two different things depending on which door it
+    /// walked through. Since 2026-08-13 its only live caller is the request arriving
+    /// (<see cref="Process_CloseImplementerRequests"/>); the owner's tap no longer reaches it.
     /// </summary>
     /// <remarks>
     /// It REPORTS and then rethrows, which is the contract <see cref="Execute_Close"/> already has
-    /// and the caller already relies on: the confirmed-tap path swallows, because it runs on the
-    /// inbound loop with nobody watching. Reporting anywhere but here would mean a failed close is
-    /// silent to the one session waiting on it.
+    /// and every caller relies on: they swallow, because they run on the inbound loop with nobody
+    /// watching. Reporting anywhere but here would mean a failed close is silent to the one session
+    /// waiting on it.
     /// </remarks>
     void Execute_CloseImplementer(string orchId, string memberId, string reason)
     {
@@ -2410,16 +2441,16 @@ internal sealed class BridgeEngineModel(
             Append_OrchestrationAppEntry(
                 orchId,
                 $"member '{memberId}' closed — {reason}",
-                $"'{memberId}' is retired: the owner confirmed it with a tap, its terminal was closed, and its channel stays on disk as audit trail.");
+                $"'{memberId}' is retired: its terminal was closed and its channel stays on disk as audit trail. Your crew is yours to manage, so this took effect on your request without asking the owner.");
         }
         catch (Exception ex)
         {
-            _log.Log_Error(orchId, $"close-implementer '{memberId}' failed after the owner confirmed it", ex);
+            _log.Log_Error(orchId, $"close-implementer '{memberId}' failed", ex);
 
             Append_OrchestrationAppEntry(
                 orchId,
                 $"close of '{memberId}' FAILED — it may still be running",
-                $"The owner confirmed the close, but it did not complete ({ex.Message}). Check whether '{memberId}' is still alive before asking again.");
+                $"The close did not complete ({ex.Message}). Check whether '{memberId}' is still alive before asking again.");
 
             throw;
         }
@@ -2895,7 +2926,22 @@ internal sealed class BridgeEngineModel(
             // able to execute an orchestration close because some other state disagreed.
             if (request.Kind == ParkedCloseKinds.Implementer)
             {
-                Execute_CloseImplementer(confirmation.OrchId, request.MemberId!, request.Reason);
+                // A MEMBER CLOSE NO LONGER REACHES A TAP (owner directive 2026-08-13), so this is a
+                // button left over from before the change. It is refused rather than executed: the
+                // request is stale for the same reason Release_ParkedMemberCloses gives, and the
+                // sweep is about to release it anyway.
+                //
+                // THE BRANCH ITSELF STAYS, and deleting it is the trap. `else` here is
+                // Execute_Close — the whole orchestration — so a member-kind file falling through
+                // this test would end every session in it, which is the exact substitution the
+                // comment above about reading the kind from the FILE exists to prevent. Unreachable
+                // is not the same as safe when the fallthrough is irreversible.
+                _log.Log_Warning(confirmation.OrchId, $"a tap arrived for parked close-implementer '{request.MemberId}' — refused, member closes no longer wait for the owner");
+
+                Append_OrchestrationAppEntry(
+                    confirmation.OrchId,
+                    $"close of '{request.MemberId}' NOT executed — that button predates the rule change",
+                    "Member closes no longer wait for the owner, so this parked request was released rather than executed and nothing was closed. Drop it again if it still applies; it takes effect immediately.");
             }
             else
             {
@@ -2962,15 +3008,56 @@ internal sealed class BridgeEngineModel(
             $"Asked by: {request?.Requester ?? "unrecorded"}. Reason given: {request?.Reason ?? "none recorded"}. Its sessions are all still running.");
     }
 
-    void Expire_CloseConfirmation(string parkedPath)
+    /// <summary>
+    /// Disarms every button pointing at this parked request. EXTRACTED so the policy release shares
+    /// it rather than reimplementing it: a released request whose registrations survived is the
+    /// immortal-button defect <see cref="Resolve_CloseConfirmations_Async"/> documents, where a tap
+    /// on a stale button closed an orchestration the owner had explicitly refused to close.
+    /// </summary>
+    void Clear_CloseConfirmationRegistrations(string parkedPath)
     {
-        var request = ParkedCloseRequest_Reader.Read_OrNull(parkedPath);
-
         lock (_closeConfirmationLock)
         {
             foreach (var key in _closeConfirmations.Where(pair => pair.Value.ParkedPath == parkedPath).Select(pair => pair.Key).ToList())
                 _closeConfirmations.Remove(key);
         }
+    }
+
+    /// <summary>
+    /// A member close that was parked before the 2026-08-13 directive. Released, never executed — see
+    /// <see cref="Release_ParkedMemberCloses"/> for why a stale close is not authority to kill a
+    /// session. Worded as its own outcome rather than reusing the lapse text, which would tell the
+    /// supervisor its request sat for twelve hours when it may have sat for two minutes.
+    /// </summary>
+    void Release_ParkedMemberClose(string parkedPath)
+    {
+        var request = ParkedCloseRequest_Reader.Read_OrNull(parkedPath);
+
+        Clear_CloseConfirmationRegistrations(parkedPath);
+
+        if (request != null)
+        {
+            _log.Log_Info(request.OrchId, $"parked close-implementer '{request.MemberId}' released unexecuted — member closes no longer wait for the owner");
+
+            Append_OrchestrationAppEntry(
+                request.OrchId,
+                $"close of '{request.MemberId}' RELEASED — member closes no longer need the owner",
+                "The owner has changed this: closing an implementer or a reviewer is yours to decide and now takes effect the moment you drop the request. "
+                + "This one was waiting for a tap that will not come, and it was NOT executed — it may be hours old, and a close must reflect the situation "
+                + $"now rather than when it was asked. Nothing was closed and '{request.MemberId}' is still running. Drop it again if the close still applies; "
+                + "it will take effect immediately. The whole-orchestration close is unchanged and still asks.");
+
+            Report_CloseOutcome_ToGeneral(request.OrchId, "released unexecuted — member closes no longer ask the owner", request);
+        }
+
+        Archive_ResolvedRequest_BestEffort(parkedPath, "released");
+    }
+
+    void Expire_CloseConfirmation(string parkedPath)
+    {
+        var request = ParkedCloseRequest_Reader.Read_OrNull(parkedPath);
+
+        Clear_CloseConfirmationRegistrations(parkedPath);
 
         if (request != null)
         {

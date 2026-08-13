@@ -62,19 +62,24 @@ public class CloseImplementerGuardProbeTests : IDisposable
     }
 
     /// <summary>
-    /// A dropped close-implementer request must leave the member ALIVE and the request waiting for
-    /// the owner.
+    /// A close-implementer request CLOSES THE MEMBER ON ARRIVAL — owner directive 2026-08-13,
+    /// reversing their own decision of 2026-08-12: *"I wanted to be asked for confirmation to close
+    /// the entire orchestration session. I trust the supervisor to manage its subordinate windows."*
     ///
-    /// THE TWO ASSERTIONS ARE SEPARATE AND NAMED, which is the reviewer's own correction to their
-    /// first draft. Written as "wait until one file is parked", it also failed when the reader could
-    /// not see member closes at all — the file is then archived unreadable and the wait never
-    /// succeeds. Two routes to one failure is the exact defect this probe was added alongside.
+    /// This assertion was the exact inverse one day ago, and that is the point of leaving it here
+    /// rather than deleting the file: the guard it pinned is gone deliberately, not by accident, and
+    /// the next person to find a close executing without a tap should find this docstring rather than
+    /// conclude a protection was lost.
     ///
-    /// So the wait is on the request being CONSUMED, and ClosedUtc is asserted on its own: that one is
-    /// specific to executing-versus-parking, and no reader change can reach it.
+    /// THE THREE ASSERTIONS STAY SEPARATE, which was the reviewer's correction to the original and
+    /// survives the reversal intact. The wait is on the request being CONSUMED, because "wait until
+    /// the member is closed" also fails when the reader cannot see member closes at all — two routes
+    /// to one symptom. `ClosedUtc` is specific to executing-versus-parking. And the absence of HELD
+    /// closes the hole `ClosedUtc` leaves open on its own: a change that closed the member AND still
+    /// parked a confirmation would satisfy the first two and put the owner's tap straight back.
     /// </summary>
     [Fact]
-    public async Task ACloseRequestParksTheAskAndLeavesTheMemberRunning()
+    public async Task ACloseRequestClosesTheMemberOnArrivalWithoutAskingTheOwner()
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         var memberId = session.Members[0].MemberId;
@@ -91,22 +96,112 @@ public class CloseImplementerGuardProbeTests : IDisposable
             "the request file was never consumed — the engine never processed it, so nothing below means anything");
 
         Assert.True(
-            _store.Get_Session(session.OrchId).Members[0].ClosedUtc == null,
-            $"'{memberId}' was CLOSED without the owner confirming anything — the guard is not in force");
+            _store.Get_Session(session.OrchId).Members[0].ClosedUtc != null,
+            $"'{memberId}' is still open — the close did not execute on arrival");
 
-        // NOT Find_Parked, and this is the same correction one step further on. "One file is parked"
-        // ALSO fails when the reader cannot see member closes: the file parks, the ask then reads
-        // null and archives it as unreadable, and the count is zero for a reason that has nothing to
-        // do with this guard. Two defects, one symptom — which is the thing being fixed everywhere
-        // else in this branch.
-        //
-        // The HELD entry is written by the parking path itself, before anything can undo it, and no
-        // other path writes it. It also closes the hole ClosedUtc leaves open on its own: a mutation
-        // that simply DROPPED the request would keep the member alive and satisfy the assertion above
-        // while losing the close entirely.
+        Assert.DoesNotContain(
+            "HELD",
+            File.ReadAllText(_paths.Get_OwnerChannelFile(session.OrchId)));
+    }
+
+    /// <summary>
+    /// AND THE ORCHESTRATION CLOSE STILL ASKS. The owner kept that tap explicitly — it is the
+    /// irreversible one, it ends every session including the supervisor's, and it cannot be undone.
+    ///
+    /// Asserted here, in the same file, because the two actions share `CloseConfirmation_Parking` and
+    /// every sweep around it. Removing the member's confirmation is one `if` away from removing the
+    /// orchestration's, and nothing else in the suite would notice.
+    /// </summary>
+    [Fact]
+    public async Task ACloseOrchestrationRequestStillWaitsForTheOwner()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        var requestPath = Path.Combine(_paths.RequestsFolder, "close-orch.json");
+        File.WriteAllText(
+            requestPath,
+            $$"""{"action":"close-orchestration","orchId":"{{session.OrchId}}","reason":"the work is delivered","requester":"supervisor of {{session.OrchId}}"}""");
+
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => !File.Exists(requestPath)),
+            "the request file was never consumed — the engine never processed it");
+
+        Assert.True(
+            _store.Get_Session(session.OrchId).ClosedUtc == null,
+            "the ORCHESTRATION was closed without the owner confirming — the irreversible tap was lost");
+
         Assert.Contains(
             "HELD",
             File.ReadAllText(_paths.Get_OwnerChannelFile(session.OrchId)));
+    }
+
+    /// <summary>
+    /// A member close PARKED BEFORE the rule change is released, never executed. It may be hours old,
+    /// and the member may since have been briefed with new work or finished — so it is not authority
+    /// to kill a session, by the same standard the lapse path has always applied: a close must
+    /// reflect the situation at the moment it takes effect, not a stale one.
+    ///
+    /// Executing it instead would apply a new policy retroactively to a decision the owner declined
+    /// to make. Dropping costs one re-drop; executing costs a live session's context.
+    /// </summary>
+    [Fact]
+    public async Task AMemberCloseParkedBeforeTheRuleChangeIsReleasedRatherThanExecuted()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var memberId = session.Members[0].MemberId;
+
+        var parkedPath = Park_Directly(
+            "close-member-from-yesterday.json",
+            $$"""{"action":"close-implementer","orchId":"{{session.OrchId}}","memberId":"{{memberId}}","reason":"asked for before the rule changed"}""");
+
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => !File.Exists(parkedPath)),
+            "the parked request was never resolved — nothing below means anything");
+
+        Assert.True(
+            _store.Get_Session(session.OrchId).Members[0].ClosedUtc == null,
+            $"'{memberId}' was closed by a stale parked request the owner never answered");
+
+        Assert.Contains(
+            "RELEASED",
+            File.ReadAllText(_paths.Get_OwnerChannelFile(session.OrchId)));
+    }
+
+    /// <summary>
+    /// AND THE SWEEP LEAVES ORCHESTRATION CLOSES ALONE — asserted apart, because a release that did
+    /// not read the kind would satisfy the case above and silently disarm the one confirmation the
+    /// owner kept. With no Telegram client the ask fails closed and the file stays parked, which is
+    /// the stable end state this harness already relies on.
+    /// </summary>
+    [Fact]
+    public async Task TheReleaseSweepDoesNotTouchAParkedOrchestrationClose()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        var parkedPath = Park_Directly(
+            "close-orch-awaiting.json",
+            $$"""{"action":"close-orchestration","orchId":"{{session.OrchId}}","reason":"the work is delivered","requester":"supervisor of {{session.OrchId}}"}""");
+
+        await Tick_Once_Async();
+
+        Assert.True(File.Exists(parkedPath), "the orchestration close was released — the owner's tap was disarmed");
+        Assert.True(_store.Get_Session(session.OrchId).ClosedUtc == null, "the orchestration was closed outright");
+    }
+
+    /// <summary>Writes a request straight into the awaiting folder, as parking would have left it.</summary>
+    string Park_Directly(string fileName, string json)
+    {
+        var awaitingFolder = CloseConfirmation_Parking.Get_AwaitingFolder(_paths);
+        Directory.CreateDirectory(awaitingFolder);
+
+        var parkedPath = Path.Combine(awaitingFolder, fileName);
+        File.WriteAllText(parkedPath, json);
+
+        return parkedPath;
     }
 
     /// <summary>
