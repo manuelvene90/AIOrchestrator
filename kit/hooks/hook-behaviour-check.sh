@@ -143,10 +143,26 @@ deny_reason() {
 # three times tonight, and a fork that fails for only some invocations leaves the affected ALLOW
 # cases passing silently in a sea of green. The probe converts that into a VOID run instead, because
 # a suite that cannot evaluate its subject must not report on it.
+#
+# IT ESTABLISHES ITS OWN PRECONDITION, and that is not tidiness. The probe expects a DENY that the
+# await hook only produces while `.awaiting-answer` is up — an UNSTATED precondition, which the suite
+# removes at line 359 for the cases that follow. Called after that point the probe returned ALLOW and
+# announced "the environment cannot evaluate these hooks", which was a confident wrong diagnosis of a
+# flag it had itself failed to check: exactly the detached-copy failure this file already documents,
+# the right answer for the wrong stated reason, in the function whose job is to stop the suite lying.
+#
+# So it raises the flag, probes, and restores whatever state it found. ALLOW can now mean only one
+# thing, which is what lets it be called anywhere — including after the last case, where the run
+# spends most of its life.
 assert_environment_can_evaluate() {
-  local when="$1" result
+  local when="$1" result flag="$SUPERVISION/.awaiting-answer" was_raised=no
+
+  [ -f "$flag" ] && was_raised=yes
+  touch "$flag"
 
   result=$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")")
+
+  [ "$was_raised" = "no" ] && rm -f "$flag"
 
   if [ "$result" = "DENY" ]; then
     return 0
@@ -644,9 +660,15 @@ cat >> \"\${ch}\"")" reviewer)")"
 # side. These four cases are one class in four spellings: a longer name before, and a longer name in
 # each of the three segments that must match exactly.
 check "a directory whose name ENDS with supervision" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/evil-supervision/$ORCH/$MEMBER/notes.md")" reviewer)")"
-check "a longer supervision segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervisionX/$ORCH/$MEMBER/notes.md")" reviewer)")"
-check "a longer member segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervision/$ORCH/${MEMBER}X/notes.md")" reviewer)")"
-check "a longer orchestration segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervision/${ORCH}X/$MEMBER/notes.md")" reviewer)")"
+
+# THE NEXT THREE ARE CONTROLS and only the case above pins the fix — measured, not guessed. The old
+# substring test denied these three anyway: a longer name in any of the three matched segments means
+# the searched-for string is not present at all, so they were never the hole. They pin the segment
+# comparison against a LOOSER replacement — a `startswith` per segment, say — and the mutation that
+# would redden them is not the one that restores the substring.
+check "control: a longer supervision segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervisionX/$ORCH/$MEMBER/notes.md")" reviewer)")"
+check "control: a longer member segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervision/$ORCH/${MEMBER}X/notes.md")" reviewer)")"
+check "control: a longer orchestration segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervision/${ORCH}X/$MEMBER/notes.md")" reviewer)")"
 
 # The pair that stops the fix from becoming "deny everything": the same three segments, exact, from a
 # root that is not this run's HOME at all — the folder is identified by its segments, not by where it
