@@ -4,12 +4,23 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Planning;
 
 /// <summary>
-/// /progress answers "what is LEFT" and /tasks answers "show me everything" — one parse, two
-/// renderings. The owner asked for both: the short form because 683 lines do not fit a phone, and
-/// the long one because they explicitly said to KEEP the detail rather than lose it.
+/// /progress and /tasks are one parse, two renderings — and since 2026-08-13 they carry the SAME
+/// rows. What separates them is order and vocabulary: /progress prints the ledger as written with
+/// the ledger's own markers, /tasks groups nothing and prints the indented ones it has always used.
 ///
-/// The test that matters is that the two can never be the same string. If they collapse into one
-/// shape the split has silently undone itself, and nothing else in the system would notice — the
+/// THIS DOCSTRING SAID THE OPPOSITE UNTIL rev-3 CAUGHT IT, and the file itself disproved it twice
+/// forty lines below. It claimed /progress answers "what is LEFT" while /tasks shows everything, and
+/// that the short form exists because 683 lines do not fit a phone — the capping model the owner
+/// overruled ("I want to see all the rows, it must not be truncated"). A maintainer opening this file
+/// to learn what the split guarantees reads the top first, so a stale summary here re-teaches the
+/// rule the branch removed.
+///
+/// It is the third instance on this branch of prose outliving the code beneath it, and it was left
+/// standing four lines above a commit that existed to close a false claim in the same file. Nothing
+/// checks a comment.
+///
+/// The test that matters is still that the two can never be the same string. If they collapse into
+/// one shape the split has silently undone itself, and nothing else in the system would notice — the
 /// commands would both still answer, both still be correct-looking, and one of the two questions
 /// would simply stop being answerable.
 /// </summary>
