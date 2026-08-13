@@ -3144,7 +3144,7 @@ internal sealed class BridgeEngineModel(
                     {
                         // Answered by the APP straight from PLAN.md — instant, and it works even
                         // while the supervisor is mid-turn (which is exactly when it gets asked).
-                        await Send_ProgressReport_Async(client, message.MessageThreadId, cancellationToken);
+                        await Send_ProgressReport_Async(client, message.MessageThreadId, command, cancellationToken);
                     }
                     // NOT an alias of /progress: the owner asked to KEEP the full detail when the
                     // short form was built, so this is the second RENDERING of the same parse.
@@ -3286,9 +3286,9 @@ internal sealed class BridgeEngineModel(
                     // IS an answer to what is left. A correction has to be checked in every scope the
                     // thing it corrects runs in, or it is the same defect with a newer date.
                     ("progress", "This topic's task ledger, every row — in General, one line per orchestration"),
-                    ("left", "The task ledger — same as /progress"),
+                    ("left", "Same as /progress"),
                     ("tasks", "The FULL ledger of this orchestration, done lines included"),
-                    ("cost", "What this has cost, per session, and the burn rate"),
+                    ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
@@ -3297,8 +3297,17 @@ internal sealed class BridgeEngineModel(
                     ("pending", "Open questions awaiting me"),
                     ("resume", "Wake EVERY session — use when the usage limit resets"),
                     ("clear", "Wipe THIS topic's messages (the sessions keep running)"),
-                    ("mute", "Toggle 🔕 THIS topic — drop its messages (I'm in its terminal)"),
-                    ("dnd", "Toggle 🌙 THIS topic — hold its messages for later"),
+                    // "THIS topic" WAS A LIE IN GENERAL, and this is the worst instance of the class
+                    // the two entries above were fixed for: in General the BARE command takes the
+                    // app-wide path (`Apply_ModeCommand_Async` — `session == null` routes to
+                    // `Apply_AppWideMode_Async`, as that method's own docstring already said). So an
+                    // owner reading "THIS topic — drop its messages" in the pinned General topic and
+                    // tapping /mute silences EVERY orchestration — and Silenced DROPS rather than
+                    // defers, so traffic from every session is destroyed until they notice. The reply
+                    // does say "everywhere", but a correction after the fact is exactly what the
+                    // /progress fix rejected as sufficient: the menu is what they read BEFORE tapping.
+                    ("mute", "Toggle 🔕 this topic — drop its messages (in General: everywhere)"),
+                    ("dnd", "Toggle 🌙 this topic — hold its messages for later (in General: everywhere)"),
                     ("mute_all", "Toggle 🔕 everywhere"),
                     ("dnd_all", "Toggle 🌙 everywhere"),
                     ("italian", "Toggle 🇮🇹 — translate what I send you"),
@@ -3344,9 +3353,9 @@ internal sealed class BridgeEngineModel(
     /// full ledger; in General: one line per open orchestration. Deliberately NOT routed to the
     /// supervisor: this is asked precisely when the supervisor is mid-turn and cannot answer.
     /// </summary>
-    async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, string command, CancellationToken cancellationToken)
     {
-        var text = await Translate_LedgerText_Async(Build_ProgressReportText(messageThreadId), "progress", messageThreadId, cancellationToken);
+        var text = await Translate_LedgerText_Async(Build_ProgressReportText(messageThreadId), command, messageThreadId, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
