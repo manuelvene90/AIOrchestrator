@@ -87,6 +87,48 @@ public static class Retirement_Advisor
         return Formatting.SessionDuration_Formatter.Describe(idleFor);
     }
 
+    /// <summary>
+    /// The flag's dedup key: the MEMBER SET, and nothing that moves on its own.
+    ///
+    /// THIS IS THE WHOLE FIX. The key used to be the rendered entry text — "imp-2 (idle 1 h 56 min)"
+    /// — so it changed every minute and the comparison it feeds could never match. 151 identical
+    /// flags went into one orchestration's channel between 12:04 and 18:24 on 2026-08-13, one per
+    /// minute, 137 of which had to be archived: six hours of noise in the one channel the supervisor
+    /// reads to decide what to do next. A key that changes whenever a clock ticks is not a key.
+    ///
+    /// SORTED, so the same members in a different roster order stay one flag. The duration is
+    /// deliberately absent here and deliberately present in <see cref="Build_FlagBody"/> — the
+    /// supervisor still needs to know how long, it just must not be told again every minute.
+    /// </summary>
+    public static string Build_FlagKey(IReadOnlyList<IdleMember.IIdleMember> idle)
+    {
+        List<string> memberIds = [];
+
+        foreach (var member in idle)
+            memberIds.Add(member.MemberId);
+
+        memberIds.Sort(StringComparer.Ordinal);
+
+        return string.Join(", ", memberIds);
+    }
+
+    /// <summary>
+    /// What the supervisor reads. It ADVISES — the closing decision stays theirs, and the last
+    /// sentence says so, because a flag that reads as an instruction gets obeyed on a bad day.
+    /// </summary>
+    public static string Build_FlagBody(IReadOnlyList<IdleMember.IIdleMember> idle)
+    {
+        List<string> rendered = [];
+
+        foreach (var member in idle)
+            rendered.Add($"{member.MemberId} (idle {member.IdleFor})");
+
+        return $"{string.Join(", ", rendered)} — each declared STANDING BY and has nothing owed. "
+            + "Close what you are finished with: an idle member holds a window, a watcher and a "
+            + "context, and bills for all three. This is a REMINDER, not an instruction — if you "
+            + "still want one of them, keep it and ignore this.";
+    }
+
     static IChannelEntry? Find_LastMemberEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
     {
         for (var index = entries.Count - 1; index >= 0; index--)

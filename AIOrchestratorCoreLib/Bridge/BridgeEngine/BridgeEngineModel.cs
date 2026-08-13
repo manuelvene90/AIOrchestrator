@@ -4185,7 +4185,7 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            List<string> idle = [];
+            List<Status.IdleMember.IIdleMember> idle = [];
 
             foreach (var member in session.Members)
             {
@@ -4202,10 +4202,17 @@ internal sealed class BridgeEngineModel(
                 if (!Status.Retirement_Advisor.Should_SuggestClosing(entries, Nudge_Decider.Has_BeenBriefed(channelFile), DateTime.Now))
                     continue;
 
-                idle.Add($"{member.MemberId} (idle {Status.Retirement_Advisor.Describe_IdleFor_OrNull(entries, DateTime.Now)})");
+                var idleFor = Status.Retirement_Advisor.Describe_IdleFor_OrNull(entries, DateTime.Now);
+
+                if (idleFor == null)
+                    continue;
+
+                idle.Add(Status.IdleMember.IdleMember_Factory.Create(member.MemberId, idleFor));
             }
 
-            var signature = string.Join(", ", idle);
+            // The key is the member SET — never the rendered line, which carries a duration that moves
+            // every minute and defeated this comparison for six hours on 2026-08-13.
+            var signature = Status.Retirement_Advisor.Build_FlagKey(idle);
 
             _flaggedIdleMembersByOrchId.TryGetValue(session.OrchId, out var lastSignature);
 
@@ -4220,7 +4227,7 @@ internal sealed class BridgeEngineModel(
             ChannelAppender.Append_AppEntry(
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 Status.Retirement_Advisor.FLAG_SUBJECT,
-                $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
+                Status.Retirement_Advisor.Build_FlagBody(idle),
                 DateTime.Now);
 
             _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
