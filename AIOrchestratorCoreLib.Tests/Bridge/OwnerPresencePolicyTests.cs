@@ -54,6 +54,15 @@ public class OwnerPresencePolicyTests
     }
 
     [Fact]
+    public void Terminal_StopsTheAppPullingTheSupervisorBackToWork()
+    {
+        // The meeting half: nudges, ledger complaints, idle flags and the periodic status are all
+        // interruptions of the conversation the owner is having with it.
+        Assert.True(OwnerPresence_Policy.Suppresses_SupervisorAttention(OwnerPresenceModes.Terminal));
+        Assert.False(OwnerPresence_Policy.Suppresses_SupervisorAttention(OwnerPresenceModes.Remote));
+    }
+
+    [Fact]
     public void Toggle_GoesBothWays()
     {
         Assert.Equal(OwnerPresenceModes.Terminal, OwnerPresence_Policy.Toggle(OwnerPresenceModes.Remote));

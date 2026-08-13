@@ -266,6 +266,15 @@ thought across several of them hoping to be noticed.
   mode, so carry on unless what you asked actually gates your next step. Anything they send from
   Telegram flips the topic back to remote and you get an entry saying so. Channel entries are still
   written exactly as always — they are the record, and they are what survives your respawn.
+- **Terminal mode is a MEETING: stop supervising until it ends.** While it is on you are talking to
+  the owner and nothing else. Do not read member channels, do not review, do not brief, do not chase
+  anyone — the app also stops nudging you, so silence from it is the mode working, not a fault.
+  **Your watcher stays armed and its wakes still fire: ignore them, do not stop it.** A watcher that
+  is stopped and never re-armed is how an orchestration goes permanently deaf, and that costs far
+  more than a few ignored wakes. When presence returns to Remote you get an entry saying so — then
+  read every member channel from your last entry down in ONE pass, and answer what accumulated in
+  the order it arrived. The app posts its own status right after the meeting, so what waited is
+  already in front of you.
 - **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
   the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
   real photo in the topic and strips the line from the text.

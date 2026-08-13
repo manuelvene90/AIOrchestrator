@@ -1195,14 +1195,13 @@ internal sealed class BridgeEngineModel(
 
         _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
 
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
-            $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
-            $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
-            DateTime.Now);
+        if (!Append_SupervisorAttention_UnlessMeeting(
+                session.OrchId,
+                $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
+                $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one."))
+            return;
 
         _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
-        Raise_OrchestrationActivity(session.OrchId);
     }
 
     async Task Nudge_Implementer_Async(
@@ -1341,14 +1340,13 @@ internal sealed class BridgeEngineModel(
             }
             else if (_ledgerBehindReportedOrchIds.Add(session.OrchId))
             {
-                ChannelAppender.Append_AppEntry(
-                    _paths.Get_OwnerChannelFile(session.OrchId),
-                    "PLAN.md is behind your verdicts",
-                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
-                    DateTime.Now);
-
-                _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
-                Raise_OrchestrationActivity(session.OrchId);
+                if (Append_SupervisorAttention_UnlessMeeting(
+                        session.OrchId,
+                        "PLAN.md is behind your verdicts",
+                        "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do."))
+                {
+                    _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
+                }
             }
 
             Report_LedgerShape(session);
@@ -1398,14 +1396,13 @@ internal sealed class BridgeEngineModel(
         if (complaints.Count == 0)
             return;
 
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
+        if (!Append_SupervisorAttention_UnlessMeeting(
+            session.OrchId,
             "PLAN.md has lines that cannot show progress",
-            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
-            DateTime.Now);
+            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger."))
+            return;
 
         _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
-        Raise_OrchestrationActivity(session.OrchId);
     }
 
     /// <summary>Runaway guard: a per-orchestration token ceiling the owner sets in config.json.</summary>
@@ -4247,11 +4244,16 @@ internal sealed class BridgeEngineModel(
                 // panel shows it live — which is the whole reason the app writes this and not the hook.
                 _log.Log_Warning(session.OrchId, description);
 
-                ChannelAppender.Append_AppEntry(
-                    _paths.Get_OwnerChannelFile(session.OrchId),
-                    Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
-                    $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now.",
-                    DateTime.Now);
+                if (!Append_SupervisorAttention_UnlessMeeting(
+                        session.OrchId,
+                        Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
+                        $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now."))
+                {
+                    // The marker STAYS while the meeting lasts. Deleting it here would drop a
+                    // standing warning about a guard that is not running, rather than defer it —
+                    // and the supervisor would never learn its restraint was absent.
+                    continue;
+                }
 
                 File.Delete(markerFile);
             }
@@ -4302,11 +4304,11 @@ internal sealed class BridgeEngineModel(
             if (idle.Count == 0)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(session.OrchId),
-                Status.Retirement_Advisor.FLAG_SUBJECT,
-                $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
-                DateTime.Now);
+            if (!Append_SupervisorAttention_UnlessMeeting(
+                    session.OrchId,
+                    Status.Retirement_Advisor.FLAG_SUBJECT,
+                    $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this."))
+                continue;
 
             _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
         }
@@ -4893,6 +4895,26 @@ internal sealed class BridgeEngineModel(
     /// the answer arrives. Queueing its output instead would have left it working in the
     /// background, which is precisely what makes an answer arrive against a changed world.
     /// </summary>
+    /// <summary>
+    /// Every app-generated entry whose PURPOSE is to get the supervisor working — nudges, ledger
+    /// complaints, idle flags, the periodic status. ONE choke point rather than a guard at each call
+    /// site: terminal mode has to suppress all of them, and six scattered checks is five chances to
+    /// add a seventh site later without noticing it interrupts the owner's meeting.
+    /// <para>
+    /// Returns whether it wrote. Traffic that is NOT attention-seeking keeps the raw appender: the
+    /// presence entries themselves (one of which is the resume signal), /resume, and away mode.
+    /// </para>
+    /// </summary>
+    bool Append_SupervisorAttention_UnlessMeeting(string orchId, string subject, string body)
+    {
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(orchId)))
+            return false;
+
+        ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(orchId), subject, body, DateTime.Now);
+        Raise_OrchestrationActivity(orchId);
+        return true;
+    }
+
     /// <summary>Where the owner is for this orchestration; General has no session, so it is Remote.</summary>
     OwnerPresenceModes Resolve_Presence(string orchId)
     {
@@ -5356,6 +5378,14 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
 
+            // MEETING: skipped BEFORE the stamp, deliberately. Stamping here would restart the
+            // 30-minute clock on every tick of the meeting, so the owner would leave terminal mode
+            // and then wait up to half an hour for the first status. Leaving the stamp alone means
+            // the very next tick after they return posts one — which IS the "what waited while we
+            // talked" summary, built by the formatter that already exists rather than a second copy.
+            if (OwnerPresence_Policy.Suppresses_SupervisorAttention(session.OwnerPresence))
+                continue;
+
             // No mode gate here: the status now rides the channel, so Normal mirrors it, Deferred
             // queues it (newest only) and Silenced drops it — all handled by the mirror already.
             _lastPeriodicStatusUtc.TryGetValue(session.OrchId, out var lastUtc);
@@ -5732,13 +5762,10 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Post_StatusEntry(string orchId, string text)
     {
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(orchId),
-            MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
-            text,
-            DateTime.Now);
-
-        Raise_OrchestrationActivity(orchId);
+        // Suppressed WITHOUT stamping during a meeting (see Push_PeriodicStatus_Async), so the first
+        // tick after the owner leaves terminal mode posts a fresh status immediately — which is the
+        // "what waited while we talked" summary, built by the formatter that already exists.
+        Append_SupervisorAttention_UnlessMeeting(orchId, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, text);
     }
 
     /// <summary>

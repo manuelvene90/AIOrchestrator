@@ -57,6 +57,22 @@ public static class OwnerPresence_Policy
         return presence == OwnerPresenceModes.Terminal && !isPresenceCommandItself;
     }
 
+    /// <summary>
+    /// Whether the app must stop trying to get this orchestration's SUPERVISOR back to work. Terminal
+    /// mode is a meeting: the owner is talking to it, and every nudge, ledger complaint, idle flag and
+    /// periodic status is an interruption of the conversation they are having.
+    /// <para>
+    /// It suppresses the app's own attention traffic and NOTHING ELSE. Members keep working, keep
+    /// writing to their channels and keep being nudged — they are not in the meeting. The supervisor's
+    /// watcher keeps running too: a stopped watcher that never gets re-armed is how an orchestration
+    /// goes permanently deaf, so the wake still fires and the supervisor simply does not act on it.
+    /// </para>
+    /// </summary>
+    public static bool Suppresses_SupervisorAttention(OwnerPresenceModes presence)
+    {
+        return presence == OwnerPresenceModes.Terminal;
+    }
+
     /// <summary>What `/pc` does: a toggle, because the owner asked for one switch and not two commands.</summary>
     public static OwnerPresenceModes Toggle(OwnerPresenceModes current)
     {
