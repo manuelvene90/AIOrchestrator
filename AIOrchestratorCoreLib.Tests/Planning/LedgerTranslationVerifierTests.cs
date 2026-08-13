@@ -230,12 +230,94 @@ public class LedgerTranslationVerifierTests
         {
             Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(message, message));
 
+            // EVERY row, not just the last. Stripping one exercises one marker, and the single remap
+            // `Describe_FullFormPrefix` performs — the open-task prefix — is not necessarily the one
+            // you happen to land on. rev-4: closing this costs nothing.
             var lines = message.Split('\n');
-            var rowIndex = lines.Length - 1;
-            lines[rowIndex] = lines[rowIndex][4..];
 
-            Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(message, string.Join('\n', lines)));
+            for (var index = 0; index < lines.Length; index++)
+            {
+                if (lines[index].Length < 4)
+                    continue;
+
+                var stripped = (string[])lines.Clone();
+                stripped[index] = stripped[index][4..];
+
+                var change = LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(message, string.Join('\n', stripped));
+
+                // A line that carried no marker is prose, and stripping four characters off prose is
+                // not a shape change — those are the counts line and the blank separator.
+                if (LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(lines[index], stripped[index]) != null)
+                    Assert.NotNull(change);
+            }
         }
+    }
+
+    /// <summary>
+    /// A PLACEHOLDER ROW — `- [ ]` with no task text — renders as four characters ending in the space
+    /// before the empty text, and a model returning the visually identical three-character line was a
+    /// shape change. That pinned the orchestration to English for every /progress and /tasks from then
+    /// on, PERSISTENTLY, because the trigger is a property of the ledger FILE rather than of one
+    /// sample — and whole-string trimming never reaches it unless it is the last line.
+    ///
+    /// It is a supported state: the parser accepts it deliberately, counts it in the denominator, and
+    /// both formatters render it. A supported state that silently disables a persisted owner setting
+    /// is not garbage-in.
+    /// </summary>
+    [Fact]
+    public void APlaceholderRowSurvivesLosingItsTrailingSpace()
+    {
+        var progress = PlanLedger_Parser.Parse_OrNull("- [ ]\n- [x] the delivered thing")!;
+
+        foreach (var rendered in new[] { PlanProgress_Formatter.Describe_Ledger(progress), PlanProgress_Formatter.Describe_EveryLine(progress) })
+        {
+            var lines = rendered.Split('\n');
+
+            Assert.Equal(4, lines[0].Length);
+            Assert.EndsWith(" ", lines[0]);
+
+            lines[0] = lines[0].TrimEnd();
+
+            Assert.Null(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(rendered, string.Join('\n', lines)));
+        }
+    }
+
+    /// <summary>
+    /// AND IT STILL CATCHES A REWRITTEN MARKER on such a row — the tolerance is for the trailing
+    /// space alone, not for the marker body. Asserted beside the case above so the fix cannot pass by
+    /// having stopped checking placeholder rows altogether.
+    /// </summary>
+    [Fact]
+    public void APlaceholderRowStillHasItsMarkerChecked()
+    {
+        var rendered = PlanProgress_Formatter.Describe_Ledger(PlanLedger_Parser.Parse_OrNull("- [ ]\n- [x] the delivered thing")!);
+        var lines = rendered.Split('\n');
+
+        lines[0] = "[x]";
+
+        Assert.NotNull(LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(rendered, string.Join('\n', lines)));
+    }
+
+    /// <summary>
+    /// THE DIAGNOSTIC TELLS A LOST ROW FROM A REFLOWED SEPARATOR. Every topic-scope /progress carries
+    /// an interior blank line by construction, so a model that merely closes the gap was reported as
+    /// "5 lines came back as 4" — indistinguishable from a vanished ledger row, in the one line that
+    /// exists to diagnose exactly that difference.
+    /// </summary>
+    [Fact]
+    public void ALostBlankSeparatorIsNotReportedAsALostRow()
+    {
+        const string withSeparator = "handoff backlog · 2/7 done (28%)\n\n[>] fix R1\n[x] audit R2–R8";
+
+        var reflowed = LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(
+            withSeparator, "arretrato · 2/7 fatti (28%)\n[>] correggi R1\n[x] verifica R2–R8");
+
+        Assert.Equal("4 lines came back as 3 (blank separators 1 → 0)", reflowed);
+
+        // A genuinely lost ROW keeps its separator, and says nothing about blanks.
+        Assert.Equal(
+            "4 lines came back as 3",
+            LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(withSeparator, "arretrato · 2/7 fatti (28%)\n\n[>] correggi R1"));
     }
 
     /// <summary>
@@ -269,8 +351,10 @@ public class LedgerTranslationVerifierTests
         var lines = ENGLISH.Split('\n');
         lines[3] = "[-] verifica R2–R8";
 
+        // The marker BODY, without the trailing space it used to carry: a placeholder row ends at the
+        // marker, so including the space made an empty row disagree with itself about what it is.
         Assert.Equal(
-            "line 4: marker '[x] ' came back as '[-] '",
+            "line 4: marker '[x]' came back as '[-]'",
             LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, string.Join('\n', lines)));
 
         Assert.Equal("the answer came back empty", LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(ENGLISH, ""));

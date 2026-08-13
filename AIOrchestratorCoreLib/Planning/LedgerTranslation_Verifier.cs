@@ -43,9 +43,8 @@ public static class LedgerTranslation_Verifier
     /// PER INDEX, not as a tally: rows regrouped ACROSS marker groups keep every count identical, and
     /// a set comparison would call that preserved while the owner's document had been rearranged.
     /// **Two rows carrying the SAME marker that swap places are not caught** — their markers match at
-    /// both indexes — and the earlier wording of this comment claimed the rearrangement case outright.
-    /// Prose is not checked by anything, so an overstated guarantee here survives until someone
-    /// re-derives it; what is actually guaranteed is the marker SEQUENCE, not the row order.
+    /// both indexes — so what is guaranteed is the marker SEQUENCE, not the row order. Worth stating
+    /// because an overstated guarantee here survives until someone re-derives it.
     ///
     /// "No marker" is itself a shape and is checked like any other. The heading carries none, so it
     /// may be translated freely — and a heading that comes back WEARING one means the model read the
@@ -63,7 +62,7 @@ public static class LedgerTranslation_Verifier
         var translatedLines = translated.TrimEnd().Split('\n');
 
         if (originalLines.Length != translatedLines.Length)
-            return $"{originalLines.Length} lines came back as {translatedLines.Length}";
+            return Describe_LineCountChange(originalLines, translatedLines);
 
         for (var index = 0; index < originalLines.Length; index++)
         {
@@ -82,31 +81,81 @@ public static class LedgerTranslation_Verifier
     }
 
     /// <summary>
-    /// The four characters a rendered ledger row opens with, or empty for a line that is prose.
+    /// WHICH KIND of line count change, because the one diagnostic line has to tell a lost ROW from a
+    /// reflowed blank separator and the raw numbers cannot.
     ///
-    /// BOTH VOCABULARIES, because both are translated: /progress renders `[x] row` and /tasks renders
-    /// `  x row`. Knowing both is what makes the check mean something for /tasks rather than
-    /// degrading to a line count there — and the line count is the weaker half, since a model that
-    /// rewrites a marker usually keeps the row.
+    /// Every topic-scope /progress carries an interior blank line by construction —
+    /// `Build_OrchestrationLedgerText` joins the counts line, a blank, then the rows — so a model that
+    /// merely closes that gap was reported as "5 lines came back as 4", which reads as a vanished
+    /// ledger row and sends whoever is diagnosing it looking for the wrong thing.
+    /// </summary>
+    static string Describe_LineCountChange(string[] originalLines, string[] translatedLines)
+    {
+        var originalBlanks = Count_BlankLines(originalLines);
+        var translatedBlanks = Count_BlankLines(translatedLines);
+
+        var blankPart = originalBlanks == translatedBlanks
+            ? ""
+            : $" (blank separators {originalBlanks} → {translatedBlanks})";
+
+        return $"{originalLines.Length} lines came back as {translatedLines.Length}{blankPart}";
+    }
+
+    static int Count_BlankLines(string[] lines)
+    {
+        var blanks = 0;
+
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                blanks++;
+        }
+
+        return blanks;
+    }
+
+    /// <summary>
+    /// The four characters a rendered ledger row opens with, or empty for a line that carries no
+    /// marker — which is prose in every message this repo builds, though the rule is structural and a
+    /// translated line is arbitrary model output.
+    ///
+    /// TWO VOCABULARIES ARE CHECKED, and there is a THIRD SHAPE with no markers at all. /progress in a
+    /// topic renders `[x] row` and /tasks renders `  x row`; /progress in GENERAL renders one counts
+    /// line per orchestration and no rows whatever, so there the marker half finds nothing and the
+    /// check really is a bare line count. That is unavoidable — with no markers there is nothing to
+    /// compare — but it was previously written as though knowing both vocabularies covered every
+    /// message, and an overstated guarantee here survives until someone re-derives it.
     ///
     /// It is read as literal characters rather than parsed, because what is being compared is whether
     /// the SAME thing came back. `[X]` for `[x]`, or `[]` for `[ ]`, is the ledger's vocabulary going
     /// out in two spellings, and a parse that normalised them would agree that nothing had changed.
     ///
-    /// If a renderer's prefix ever changes without this changing with it, the check quietly weakens
-    /// to the line count instead of failing — worth knowing, and the reason the line count is not the
-    /// only thing here.
+    /// THE TRAILING SPACE IS OPTIONAL AT END OF LINE, and that is not tidiness. `- [ ]` is a supported
+    /// ledger row: the parser accepts it, counts it, and both formatters render it as a four-character
+    /// line whose last character is the space before an empty task text. Requiring that space made a
+    /// model returning the visually identical three-character line a shape change — so one placeholder
+    /// row in a PLAN.md pinned that orchestration to English for every /progress and /tasks from then
+    /// on, with no owner-visible reason, because the trigger is a property of the FILE rather than of
+    /// one sample. Whole-string trimming does not reach it unless it is the last line.
     /// </summary>
     static string Read_Marker_OrEmpty(string line)
     {
         const int MARKER_LENGTH = 4;
+        const int MARKER_BODY = 3;
 
-        if (line.Length < MARKER_LENGTH || line[3] != ' ')
+        if (line.Length < MARKER_BODY)
+            return "";
+
+        // The space is required only when something follows it: a row with empty task text ends at
+        // the marker, and its trailing space is not structure the model has to preserve.
+        if (line.Length >= MARKER_LENGTH && line[3] != ' ')
             return "";
 
         var isProgressMarker = line[0] == '[' && line[2] == ']';
         var isFullFormMarker = line[0] == ' ' && line[1] == ' ' && line[2] != ' ';
 
-        return isProgressMarker || isFullFormMarker ? line[..MARKER_LENGTH] : "";
+        // The BODY, never the trailing space, so `[x] row` and a bare `[x]` yield the same marker and
+        // an empty row cannot disagree with itself about what it is.
+        return isProgressMarker || isFullFormMarker ? line[..MARKER_BODY] : "";
     }
 }
