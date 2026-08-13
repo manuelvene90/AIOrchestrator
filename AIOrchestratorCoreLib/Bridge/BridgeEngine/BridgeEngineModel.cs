@@ -1862,6 +1862,14 @@ internal sealed class BridgeEngineModel(
     {
         if (orchId != ChannelDiscovery.GENERAL_ORCH_ID)
         {
+            // PRESENCE FIRST: the owner being in this orchestration's terminal outranks every
+            // delivery setting, because it is not one — it is a statement about where they are, and
+            // pushing to a phone they are not holding is the thing it exists to stop.
+            var presenceOverride = OwnerPresence_Policy.Resolve_ModeOverride_OrNull(Resolve_Presence(orchId));
+
+            if (presenceOverride != null)
+                return presenceOverride.Value;
+
             var topicMode = _store.Get_Session_OrNull(orchId)?.TelegramMode ?? TelegramDeliveryModes.Normal;
 
             if (topicMode != TelegramDeliveryModes.Normal)
@@ -1945,10 +1953,15 @@ internal sealed class BridgeEngineModel(
                 };
             }
 
-            // It asked; now it stops. The hook refuses every tool until the owner answers.
+            // It asked; now it stops. The hook refuses every tool until the owner answers — unless
+            // the owner is IN this orchestration's terminal, where the answer is being typed at the
+            // session itself and the flag would freeze the very conversation it is waiting for.
             if (channel.IsOwnerChannel)
             {
-                Raise_AwaitingAnswerFlag(channel.OrchId);
+                if (OwnerPresence_Policy.Should_RaiseAwaitingAnswer(Resolve_Presence(channel.OrchId)))
+                    Raise_AwaitingAnswerFlag(channel.OrchId);
+                else
+                    _log.Log_Info(channel.OrchId, "Terminal mode: question asked WITHOUT the awaiting-answer block — the owner is in this session's terminal");
             }
         }
     }
@@ -3073,6 +3086,7 @@ internal sealed class BridgeEngineModel(
                 // /pending become canned English requests routed to the general supervisor.
                 List<ITelegramOwnerMessage> routableMessages = [];
                 List<(string Command, long? ThreadId)> modeCommands = [];
+                List<long?> presenceCommands = [];
 
                 foreach (var message in batch.OwnerMessages)
                 {
@@ -3087,9 +3101,22 @@ internal sealed class BridgeEngineModel(
 
                     var command = Get_BotCommand_OrNull(message.Text);
 
+                    // ARRIVING FROM TELEGRAM AT ALL proves the owner is not at this orchestration's
+                    // terminal, so terminal mode ends by itself — the same shape as the auto-unmute,
+                    // and for the same reason: a mode they must remember to turn off is one they get
+                    // trapped by. /pc excludes itself, or the command would be undone by its own
+                    // delivery.
+                    Flip_ToRemote_IfOwnerTextedFromTelegram(message.MessageThreadId, command == "pc");
+
                     // Telegram's own command menu only allows [a-z0-9_], so the menu entries are
                     // mute_all/dnd_all while a hand-typed mute-all works just as well.
-                    if (command == "dnd" || command == "mute" || command == "unmute"
+                    if (command == "pc")
+                    {
+                        // Deferred with the mode commands, and for the same reason: toggling must not
+                        // race the ✓ acks of the batch it arrived in.
+                        presenceCommands.Add(message.MessageThreadId);
+                    }
+                    else if (command == "dnd" || command == "mute" || command == "unmute"
                         || command == "dnd-all" || command == "mute-all" || command == "dnd_all" || command == "mute_all")
                     {
                         // Deferred until after the loop: toggling must not race the ✓ acks, and a
@@ -3188,6 +3215,9 @@ internal sealed class BridgeEngineModel(
                 foreach (var modeCommand in modeCommands)
                     await Apply_ModeCommand_Async(client, modeCommand.Command, modeCommand.ThreadId, cancellationToken);
 
+                foreach (var presenceThreadId in presenceCommands)
+                    await Apply_PresenceCommand_Async(client, presenceThreadId, cancellationToken);
+
                 // Our own topic renames make Telegram post "changed the topic name" notices —
                 // delete them so a mode toggle leaves the conversation clean.
                 foreach (var serviceMessageId in batch.TopicServiceMessageIds)
@@ -3257,6 +3287,7 @@ internal sealed class BridgeEngineModel(
                     ("dnd", "Toggle 🌙 THIS topic — hold its messages for later"),
                     ("mute_all", "Toggle 🔕 everywhere"),
                     ("dnd_all", "Toggle 🌙 everywhere"),
+                    ("pc", "Toggle 💻 THIS topic — I'm at its terminal, don't text or block"),
                     ("italian", "Toggle 🇮🇹 — translate what I send you"),
                 ],
                 cancellationToken);
@@ -3770,6 +3801,94 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// `/pc` — the owner is (or is no longer) at THIS orchestration's terminal. Scoped to the topic
+    /// it was typed in, like the mode commands; a `/pc_all` is deliberately NOT built yet, but this
+    /// is one loop away from being one.
+    /// </summary>
+    async Task Apply_PresenceCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+        {
+            // General has no orchestration to be present AT — saying so beats toggling nothing and
+            // leaving the owner to wonder which topic they just changed.
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "/pc works inside an orchestration's topic — it says which terminal you are sitting at.", cancellationToken);
+            return;
+        }
+
+        try
+        {
+            var newPresence = OwnerPresence_Policy.Toggle(session.OwnerPresence);
+
+            _store.Set_OwnerPresence(session.OrchId, newPresence);
+            _log.Log_Info(session.OrchId, $"Owner presence → {newPresence}");
+            Raise_OrchestrationActivity(session.OrchId);
+
+            Tell_Supervisor_AboutPresence(session.OrchId, newPresence);
+
+            // Sent BEFORE the new presence takes hold on the next tick, so the confirmation itself
+            // is not the first thing terminal mode drops.
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Presence(newPresence), cancellationToken);
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "'/pc' failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"could not change presence: {ex.Message}", cancellationToken);
+        }
+    }
+
+    static string Describe_Presence(OwnerPresenceModes presence)
+    {
+        return presence == OwnerPresenceModes.Terminal
+            ? "💻 TERMINAL — I will not text this topic, and its supervisor will not stop to wait for a tap. Talk to it in its terminal; anything you send here puts it back to remote."
+            : "📱 REMOTE — texting resumes, and questions here will wait for your answer again.";
+    }
+
+    /// <summary>
+    /// The supervisor must be TOLD, not left to infer it: in terminal mode it should ask in the
+    /// terminal and stop writing QUESTION:/OPTION: lines that will never be tapped.
+    /// </summary>
+    void Tell_Supervisor_AboutPresence(string orchId, OwnerPresenceModes presence)
+    {
+        var subject = presence == OwnerPresenceModes.Terminal
+            ? "the owner is now AT YOUR TERMINAL — talk to them there"
+            : "the owner is back on Telegram — questions are texted again";
+
+        var text = presence == OwnerPresenceModes.Terminal
+            ? "They are sitting in front of this session (💻). Ask them in the terminal, in plain prose: do NOT write "
+                + "QUESTION:/OPTION: lines, because nothing is being texted and there are no buttons to tap.\n\n"
+                + "You will also NOT be stopped after asking — the awaiting-answer block is off while they are here, "
+                + "so keep working unless what you asked actually gates the next step. Anything they send from "
+                + "Telegram puts this topic back to remote, and you get an entry here when it happens."
+            : "They are on their phone again (📱). Questions are texted, the awaiting-answer block is back on, and "
+                + "the usual protocol applies: ask ONE question, with options, and stop.";
+
+        ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(orchId), subject, text, DateTime.Now);
+        Raise_OrchestrationActivity(orchId);
+    }
+
+    /// <summary>
+    /// Any owner message ARRIVING FROM TELEGRAM proves they are not at that orchestration's
+    /// terminal. Same shape as the auto-unmute; the presence command excludes itself.
+    /// </summary>
+    void Flip_ToRemote_IfOwnerTextedFromTelegram(long? messageThreadId, bool isPresenceCommandItself)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+            return;
+
+        if (!OwnerPresence_Policy.Should_FlipToRemote(session.OwnerPresence, isPresenceCommandItself))
+            return;
+
+        _store.Set_OwnerPresence(session.OrchId, OwnerPresenceModes.Remote);
+        _log.Log_Info(session.OrchId, "Owner presence → Remote (they texted this topic)");
+        Tell_Supervisor_AboutPresence(session.OrchId, OwnerPresenceModes.Remote);
+    }
+
     async Task Apply_AppWideMode_Async(ITelegramApiClient client, long? messageThreadId, TelegramDeliveryModes wantedMode, bool forceNormal, CancellationToken cancellationToken)
     {
         var alreadyOn = wantedMode == TelegramDeliveryModes.Deferred ? _telegramMuted : _silenceAllTopics;
@@ -3826,7 +3945,7 @@ internal sealed class BridgeEngineModel(
 
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId));
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence);
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -4321,7 +4440,8 @@ internal sealed class BridgeEngineModel(
         try
         {
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
-            var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(baseName, Resolve_EffectiveMode(session.OrchId));
+            var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence);
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
@@ -4773,6 +4893,12 @@ internal sealed class BridgeEngineModel(
     /// the answer arrives. Queueing its output instead would have left it working in the
     /// background, which is precisely what makes an answer arrive against a changed world.
     /// </summary>
+    /// <summary>Where the owner is for this orchestration; General has no session, so it is Remote.</summary>
+    OwnerPresenceModes Resolve_Presence(string orchId)
+    {
+        return _store.Get_Session_OrNull(orchId)?.OwnerPresence ?? OwnerPresenceModes.Remote;
+    }
+
     void Raise_AwaitingAnswerFlag(string orchId)
     {
         try
