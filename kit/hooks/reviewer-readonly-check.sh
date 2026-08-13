@@ -123,6 +123,24 @@ class Undecidable(Exception):
     pass
 
 
+class UnresolvedTarget:
+    """A redirect target the scanner cannot READ — deliberately NOT the same value as no target.
+
+    `> $(date).log` emits its target as an operator, so there is no word to take. Saying so is right;
+    saying it from inside `split_commands` was not. `analyse` calls that before `classify_words` has
+    run, so the exception aborted the reduction before a single command had been classified, and one
+    everyday logging idiom switched off the file-verb, git, editor and package rules as well as the
+    redirect rule — a narrow silent allow traded for a WIDE logged one.
+
+    The undecidable is real, but it is a fact about ONE redirect. Carrying it as a value instead of
+    an exception lets the verb that was already tokenised be classified first, and a DENY from that
+    verb outranks it.
+    """
+
+
+UNRESOLVED = UnresolvedTarget()
+
+
 def strip_comments_and_heredoc_bodies(s):
     """Removes the two spans that are TEXT rather than syntax: `#` comments and heredoc bodies.
 
@@ -292,8 +310,14 @@ def split_commands(tokens):
                     # A target that is a command or process substitution arrives as an OPERATOR, so
                     # there is no word to read. That is UNANALYSABLE, not absent: reporting "no
                     # target" here was a confident answer about something never seen, and it let an
-                    # everyday logging idiom straight through. Saying so allows and leaves a marker.
-                    raise Undecidable("a redirect target this scanner cannot resolve")
+                    # everyday logging idiom straight through.
+                    #
+                    # RECORDED, NOT RAISED. This function runs before any command is classified, so
+                    # raising here answered for the whole command line: `<destructive> > $(date).log`
+                    # allowed, `git commit … > $(date).log` allowed — every rule in the file off, for
+                    # a verb this scanner had already tokenised. `analyse` now raises after the verb
+                    # rules have had their turn.
+                    target = UNRESOLVED
                 redirects.append((text, target))
             elif text in CMD_SEPARATORS:
                 if current:
@@ -392,6 +416,11 @@ def redirect_reason(operator, target, source):
     if target is None:
         return None
 
+    # Handed straight back to `analyse`, which decides what it means once every command has been
+    # classified. This branch is the ONLY thing an unreadable target may affect.
+    if target is UNRESOLVED:
+        return UNRESOLVED
+
     normalised = target.replace("\\", "/")
 
     own_channel = "supervision/%s/%s/" % (ORCH, MEMBER)
@@ -428,10 +457,22 @@ def analyse(source, depth=0):
         if reason:
             return reason
 
+    # THE VERB RULES HAVE ALREADY RUN. An unreadable target is reported only if nothing above it was
+    # denied, so a command whose verb is denied is still denied — the redirect it happens to carry
+    # cannot excuse it — and the undecidable marker survives for the case where the redirect really
+    # is the only thing in question.
+    unresolved = False
+
     for operator, target in redirects:
         reason = redirect_reason(operator, target, source)
+        if reason is UNRESOLVED:
+            unresolved = True
+            continue
         if reason:
             return reason
+
+    if unresolved:
+        raise Undecidable("a redirect target this scanner cannot resolve")
 
     return None
 

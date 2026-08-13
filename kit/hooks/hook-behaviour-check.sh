@@ -112,6 +112,31 @@ verdict() {
   fi
 }
 
+# WHICH RULE DENIED, not merely that something did. A payload can reach DENY by more than one route —
+# a destructive verb carrying a redirect is the standing example — and a case that accepts either
+# route pins neither, which is how a guard stayed green here with its check deleted. Cases that care
+# about the route assert through this; cases that only care that the door is shut still use verdict().
+#
+# Every non-verdict outcome passes through untouched for the same reason it does in verdict(): a
+# crashed, missing or unparseable run must not be able to score as a rule firing. It cannot match any
+# expected reason, so it fails the case rather than passing it.
+deny_reason() {
+  case "$1" in
+    UNPARSEABLE_FIXTURE|HOOK_MISSING|HOOK_EXIT_*)
+      printf '%s' "$1"
+      return ;;
+  esac
+
+  case "$1" in
+    *"deletes or rewrites files"*)     printf 'files' ;;
+    *"edits files in place"*)          printf 'editor' ;;
+    *"changes repository state"*)      printf 'git' ;;
+    *"installs or scaffolds"*)         printf 'pkg' ;;
+    *"redirects output into a file"*)  printf 'redirect' ;;
+    *)                                 printf 'NO_DENIAL' ;;
+  esac
+}
+
 # A known-DENY probe, run before AND after the PreToolUse block. A TOTAL environment failure is loud
 # — every DENY case reddens at once — but a PARTIAL one is not: this machine hit its commit limit
 # three times tonight, and a fork that fails for only some invocations leaves the affected ALLOW
@@ -487,6 +512,35 @@ check "another member's channel is still denied" DENY "$(verdict "$(run_hook "$R
 # leaves the marker, instead of silently concluding the redirect was harmless.
 check "a redirect into a substitution is not silently allowed" PRESENT "$(rm -f "$MARKER_FILE"; run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > $(date +%F).log')" reviewer >/dev/null; flag_state "$MARKER_FILE")"
 check "a redirect into a backtick target, same" PRESENT "$(rm -f "$MARKER_FILE"; run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > `date +%F`.log')" reviewer >/dev/null; flag_state "$MARKER_FILE")"
+
+# AN UNRESOLVABLE TARGET MUST NOT SWITCH OFF THE VERB RULES. Reporting undecidable from inside the
+# reduction happened BEFORE the commands were classified, so a redirect nobody could resolve disabled
+# the file-verb, git, editor and package rules too — every rule in the file — for a command whose
+# verb had already been tokenised. That traded a narrow silent allow for a WIDE logged one, and
+# `> $(date).log` is an everyday idiom rather than anything contrived.
+#
+# ASSERTED BY WHICH RULE FIRED, NOT MERELY THAT SOMETHING DID. "It denies" has two routes here: the
+# verb rule catching the verb, which is the fix — or an unreadable target simply becoming a plain
+# redirect DENY, which would score green on every line below while silently undoing the
+# undecidable-and-allow behaviour the two cases above pin. A case with two routes to green pins
+# neither, so each of these names the rule it expects to hear from.
+#
+# The first three cases are imp-1's, adopted; the rest close the families they left uncovered.
+check "a destructive verb is denied despite an unresolvable target" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build > $(date +%F).log')" reviewer)")"
+check "a git state change, same" git "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git commit -m x > $(date +%F).log')" reviewer)")"
+check "control: literal target, same verb" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build > /tmp/a.log')" reviewer)")"
+check "an in-place edit, same" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'sed -i s/a/b/ Foo.cs > $(date +%F).log')" reviewer)")"
+check "a package install, same" pkg "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'npm install > `date +%F`.log')" reviewer)")"
+
+# The raise aborted the SPLIT, not just the classification, so everything after the redirect was
+# never separated into commands at all. A denied verb sitting after it is the case that shows the
+# difference between "classified and allowed" and "never looked at".
+check "a denied verb AFTER the unresolvable redirect" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > $(date +%F).log; rm -rf build')" reviewer)")"
+
+# And the other direction, which is what stops the fix above from being "deny everything unreadable":
+# with no denied verb present, the same target is still ALLOWED, and still marked. The two PRESENT
+# cases above assert the marker; this asserts the verdict they do not.
+check "an innocuous command with the same target is still allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > $(date +%F).log')" reviewer)")"
 
 # The ordinary resolvable cases must NOT become undecidable — that would trade a silent allow for a
 # noisy one and pin nothing.
