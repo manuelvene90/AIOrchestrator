@@ -629,6 +629,37 @@ def normalise_path(text):
     return leading + "/".join(resolved)
 
 
+def is_file_in_own_folder(resolved):
+    """Is this path a file DIRECTLY inside this member's own folder — one question, one answer.
+
+    It compares SEGMENTS rather than searching for a substring, which closes both boundaries by
+    construction instead of by a guard per side. The previous version searched for
+    `supervision/<orch>/<member>/` and checked only what came AFTER it, so the left side was open and
+    any directory whose name merely ENDED with the word satisfied it:
+
+        /tmp/evil-supervision/<orch>/<member>/notes.md      was ALLOWED
+
+    A boundary check bolted onto the left would have worked and would have been the third guard on one
+    predicate. The identity question is "are these the segments", and asked that way a name that
+    merely contains another cannot answer yes.
+
+    The fix for this exact class was already four lines below, on the baseline clause, with a comment
+    explaining it — written in the same change that left this one substring-based. Fixing a class and
+    not sweeping for it is how the twin survives.
+    """
+    segments = resolved.split("/")
+
+    for index in range(len(segments) - 3):
+        if (segments[index] == "supervision"
+                and segments[index + 1] == ORCH
+                and segments[index + 2] == MEMBER):
+            # DIRECTLY inside: the file must be the last segment, so a path that descends further is
+            # not in the folder it matched.
+            return index + 3 == len(segments) - 1
+
+    return False
+
+
 def write_target_allowed(operator, target, assignments):
     """THE one write a reviewer may make, in one place because two rules need to agree on it.
 
@@ -660,13 +691,7 @@ def write_target_allowed(operator, target, assignments):
         # Append is the whole of the permission. Nothing below needs to say so again.
         return False
 
-    own_folder = "supervision/%s/%s/" % (ORCH, MEMBER)
-    position = resolved.find(own_folder)
-
-    # INSIDE the folder, not merely PAST it. Containment is checked after normalisation and the
-    # remainder must be a bare filename — a path that satisfies the test and then descends or climbs
-    # is not in the folder it matched.
-    if position != -1 and "/" not in resolved[position + len(own_folder):]:
+    if is_file_in_own_folder(resolved):
         return True
 
     # The watcher baseline. Its NAME, not a substring of the path: `/tmp/watch-base/anything` used to

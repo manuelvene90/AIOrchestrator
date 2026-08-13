@@ -635,6 +635,24 @@ cat >> \"\${ch}\"")" reviewer)")"
 # and only it) and the descend-below DENY (containment and only it). So all five earn their place —
 # delete the single-dot case and normalisation is unpinned, delete the descend-below case and
 # containment is unpinned, delete these three and rev-6's actual finding is asserted nowhere.
+# THE LEFT BOUNDARY. The containment test searched for `supervision/<orch>/<member>/` and checked only
+# what came AFTER it, so any directory whose name merely ENDED with the word satisfied it. The fix for
+# this exact class was already four lines below, on the baseline clause, with a comment explaining it —
+# written in the same change that left this one substring-based.
+#
+# The test compares SEGMENTS now, so both boundaries close by construction rather than by a guard per
+# side. These four cases are one class in four spellings: a longer name before, and a longer name in
+# each of the three segments that must match exactly.
+check "a directory whose name ENDS with supervision" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/evil-supervision/$ORCH/$MEMBER/notes.md")" reviewer)")"
+check "a longer supervision segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervisionX/$ORCH/$MEMBER/notes.md")" reviewer)")"
+check "a longer member segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervision/$ORCH/${MEMBER}X/notes.md")" reviewer)")"
+check "a longer orchestration segment" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervision/${ORCH}X/$MEMBER/notes.md")" reviewer)")"
+
+# The pair that stops the fix from becoming "deny everything": the same three segments, exact, from a
+# root that is not this run's HOME at all — the folder is identified by its segments, not by where it
+# happens to live.
+check "the same segments under a different root" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $TEMP_HOME/supervision/$ORCH/$MEMBER/channel.md")" reviewer)")"
+
 check "a traversal into another member's channel" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/$MEMBER/../imp-1/channel.md")" reviewer)")"
 check "a traversal out of the orchestration" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/$MEMBER/../../other-orch/$MEMBER/channel.md")" reviewer)")"
 check "the same traversal through tee" tee "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee -a $SUPERVISION/$MEMBER/../imp-1/channel.md")" reviewer)")"
@@ -862,6 +880,18 @@ check "silence with exit 0 IS an allow" ALLOW "$(verdict "$(run_hook "$TEMP_HOME
 # right answer for the wrong stated reason is how this file lies to the next reader.
 cp "$0" "$TEMP_HOME/detached-copy.sh"
 check "a detached copy REFUSES to run" REFUSED "$(bash "$TEMP_HOME/detached-copy.sh" 2>&1 | grep -oE 'REFUSED|VOID|did not match' | head -1)"
+
+# THE LAST PROBE, AND IT HAS TO BE LAST. The other two sit at the top and just before the PreToolUse
+# block, so everything after them — which is now most of this file — ran unprobed. A fork that starts
+# failing mid-run leaves every ALLOW case after that point passing for the wrong reason, and this
+# machine does fail to fork: a run tonight died with `dofork: child died unexpectedly` and was caught
+# only because the second probe happened to be downstream of the damage.
+#
+# THE EVIDENCE SPLITS, which is why the run is voided rather than failed: a DENIAL cannot be produced
+# by a reducer that never started, so denials stand on their own. Allowances cannot, and there is no
+# way from here to say which of them were evaluated — so the whole run is declared worthless rather
+# than half-reported.
+assert_environment_can_evaluate "after every case"
 
 printf '\n'
 
