@@ -47,6 +47,11 @@ public static class ChannelAppender
 
             var nextIndex = ChannelEntry_Parser.Get_NextIndex(existingText);
 
+            // The leading "\n" is the whole requirement, and it is not cosmetic: the parser matches
+            // its header regex per line with no lookback, so an entry is read iff its header BEGINS
+            // A LINE. Starting the append with a newline guarantees that whether or not the file
+            // ended in one. There is no blank-line rule — that was believed briefly on 2026-08-13
+            // and disproved by reading the parser.
             var entry =
                 $"\n## [{nextIndex}] FROM {authorWord} — {nowLocal:yyyy-MM-dd HH:mm} — {subject}\n" +
                 $"\n{body.Trim()}\n";

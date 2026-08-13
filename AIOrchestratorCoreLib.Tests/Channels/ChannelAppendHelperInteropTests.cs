@@ -225,6 +225,31 @@ public class ChannelAppendHelperInteropTests : IDisposable
         Assert.Empty(ChannelEntry_Parser.Parse_All(File.ReadAllText(_channelFile)));
     }
 
+    /// <summary>
+    /// The helper's half of the real invariant: an append must BEGIN A LINE. Both sides have to
+    /// agree here too — a channel is written by both, so one writer that ran an entry onto the
+    /// previous line would corrupt a file the other had kept well-formed.
+    /// </summary>
+    [Fact]
+    public void Helper_AppendingToAFileNotEndingInANewline_StillStartsTheHeaderOnItsOwnLine()
+    {
+        File.WriteAllText(_channelFile, "seed\n\n---");
+
+        var bodyFile = Path.Combine(_tempFolder, "body.txt");
+        File.WriteAllText(bodyFile, "a body\n");
+
+        var run = Run_Helper($"--channel \"{To_BashPath(_channelFile)}\" --author implementer --subject \"pressed\" --body-file \"{To_BashPath(bodyFile)}\"");
+
+        Assert.True(run.ExitCode == 0, $"helper failed: {run.StandardError}");
+
+        var text = File.ReadAllText(_channelFile);
+
+        Assert.Single(ChannelEntry_Parser.Parse_All(text));
+        Assert.Contains("\n---\n", text);
+        Assert.DoesNotContain("---##", text);
+        Assert.EndsWith("\n", text);
+    }
+
     readonly record struct HelperRun(int ExitCode, string StandardOutput, string StandardError);
 
     static HelperRun Run_Helper(string arguments)

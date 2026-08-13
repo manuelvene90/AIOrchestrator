@@ -158,6 +158,10 @@ STAMP="$(date +'%Y-%m-%d %H:%M')"
 
 STAGED_ENTRY="$(mktemp)" || { echo "channel-append.sh: cannot create a temp file" >&2; exit 4; }
 
+# The leading newline is the whole requirement, and it is not cosmetic: the parser matches its header
+# regex per line with no lookback, so an entry is read iff its header BEGINS A LINE. Starting with a
+# newline guarantees that whether or not the channel ended in one. There is no blank-line rule — that
+# was believed briefly on 2026-08-13 and disproved by reading the parser.
 {
   printf '\n## [%s] FROM %s — %s — %s\n\n' "$NEXT_INDEX" "$AUTHOR" "$STAMP" "$SUBJECT"
   cat "$BODY_FILE"
