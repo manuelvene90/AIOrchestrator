@@ -1014,7 +1014,15 @@ internal sealed class BridgeEngineModel(
                         && alreadyNudgedAbout == conversationIdentity)
                         continue;
 
-                    await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, dormantMidWork, cancellationToken);
+                    var nudged = await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, dormantMidWork, cancellationToken);
+
+                    // BOTH memos are conditional on the nudge existing. The first starts the orphan
+                    // clock — miss this and a member that never received a nudge is killed and
+                    // respawned for not answering it, losing its context. The second suppresses
+                    // re-nudging about this same entry forever.
+                    if (!nudged)
+                        continue;
+
                     _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
 
                     if (conversationIdentity != null)
@@ -1104,24 +1112,42 @@ internal sealed class BridgeEngineModel(
             // re-announcing it at every startup trains the owner to ignore the one that matters.
             var isFirstSight = _channelsShapeBaselined.Add(channel.FilePath);
 
+            // The set is only CONSULTED here. Recording happens after the report lands, below —
+            // adding first meant a failed append marked those headers reported forever, and the set
+            // is the only record that they were not.
             List<(int LineNumber, string Line)> unreported = [];
 
             foreach (var entry in malformed)
             {
-                var isNew = _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
+                var alreadyReported = _reportedMalformedHeaders.Contains($"{channel.FilePath}|{entry.Line}");
 
-                if (isNew && !isFirstSight)
+                if (!alreadyReported && !isFirstSight)
                     unreported.Add(entry);
+            }
+
+            // First sight still baselines everything, reported or not: those headers are HISTORY and
+            // must never be announced, which is what isFirstSight above decided.
+            if (isFirstSight)
+            {
+                foreach (var entry in malformed)
+                    _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
             }
 
             if (unreported.Count == 0)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
-                channel.FilePath,
-                $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
-                ChannelShape_Validator.Build_ReportBody(unreported),
-                DateTime.Now);
+            if (!ChannelAppender.Append_AppEntry(
+                    channel.FilePath,
+                    $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
+                    ChannelShape_Validator.Build_ReportBody(unreported),
+                    DateTime.Now))
+            {
+                _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} invisible entr(ies) could not be reported (channel locked) — NOT marked as reported, the next tick retries");
+                continue;
+            }
+
+            foreach (var entry in unreported)
+                _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
 
             _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} malformed entry header(s) — those entries were never mirrored");
             Raise_OrchestrationActivity(channel.OrchId);
@@ -1206,19 +1232,27 @@ internal sealed class BridgeEngineModel(
         if (_nudgedMemberUtc.ContainsKey(session.OrchId))
             return;
 
-        _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
+        // Memo AFTER the nudge lands: it is once per quiet spell, and the spell only clears when
+        // every member stops waiting. Recording it for a nudge that was never written would leave
+        // the supervisor un-nudged for the entire remaining stall.
+        if (!ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(session.OrchId),
+                $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
+                $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
+                DateTime.Now))
+        {
+            _log.Log_Warning(session.OrchId, "Supervisor idle-nudge could not be appended (channel locked) — not recorded as nudged; the next tick retries");
+            return;
+        }
 
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
-            $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
-            $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
-            DateTime.Now);
+        _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
 
         _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
     }
 
-    async Task Nudge_Implementer_Async(
+    /// <summary>Returns whether the nudge was actually written — see the guard at the append.</summary>
+    async Task<bool> Nudge_Implementer_Async(
         IOrchestrationSession session,
         string memberId,
         string channelFile,
@@ -1251,7 +1285,16 @@ internal sealed class BridgeEngineModel(
                 lastEntry.Author.ToString().ToLowerInvariant(),
                 SessionDuration_Formatter.Describe(quietFor));
 
-        ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
+        // Returns whether the nudge was actually delivered, and the caller MUST honour it. The memo
+        // it writes on return starts the ORPHAN CLOCK: a member that does not wake within
+        // ORPHAN_CONFIRM_MINUTES is killed and respawned, losing its context. So a nudge that was
+        // never written would have the app destroy a healthy session for failing to answer a message
+        // it was never sent — a locked channel escalating into the most destructive act the app has.
+        if (!ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now))
+        {
+            _log.Log_Warning(session.OrchId, $"{memberId} needed a nudge but the channel was locked — NOT nudged, and deliberately not counted as nudged; the next tick retries");
+            return false;
+        }
 
         var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
         _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
@@ -1265,6 +1308,7 @@ internal sealed class BridgeEngineModel(
         // It stays in the log, where diagnosing this belongs. If a nudge does NOT work, the
         // orphan-recovery path speaks up — and that one IS a real problem, because context is lost.
         await Task.CompletedTask;
+        return true;
     }
 
     /// <summary>
@@ -1282,11 +1326,24 @@ internal sealed class BridgeEngineModel(
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(session.OrchId, memberId));
             _launcher.Respawn_Implementer(session.OrchId, memberId);
 
-            ChannelAppender.Append_AppEntry(
-                _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
-                "session was orphaned and has been respawned",
-                "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
-                DateTime.Now);
+            // The kill and the respawn above have already happened and cannot be undone, so this
+            // entry is the ONLY thing that tells the respawned session why it restarted and where to
+            // resume. If it did not land, the session wakes with no explanation — and the owner must
+            // not then be told the orphan was handled. Escalated rather than logged: an unexplained
+            // respawn is a member that will sit there having lost its context and not know it.
+            if (!ChannelAppender.Append_AppEntry(
+                    _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
+                    "session was orphaned and has been respawned",
+                    "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
+                    DateTime.Now))
+            {
+                _log.Log_Error(
+                    session.OrchId,
+                    $"{memberId} was respawned but the explanation could not be appended (channel locked) — it is awake with no idea why it restarted",
+                    null);
+
+                return;
+            }
 
             Raise_OrchestrationActivity(session.OrchId);
         }
@@ -1352,13 +1409,23 @@ internal sealed class BridgeEngineModel(
             {
                 _ledgerBehindReportedOrchIds.Remove(session.OrchId);
             }
-            else if (_ledgerBehindReportedOrchIds.Add(session.OrchId))
+            else if (!_ledgerBehindReportedOrchIds.Contains(session.OrchId))
             {
-                ChannelAppender.Append_AppEntry(
-                    _paths.Get_OwnerChannelFile(session.OrchId),
-                    "PLAN.md is behind your verdicts",
-                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
-                    DateTime.Now);
+                // The set is the "already told them" record and it is added only once the telling
+                // succeeded. Adding it as the branch condition meant a locked channel silenced the
+                // warning permanently while the flag file kept blocking the supervisor's turn end —
+                // a deadlock with nothing anywhere explaining it.
+                if (!ChannelAppender.Append_AppEntry(
+                        _paths.Get_OwnerChannelFile(session.OrchId),
+                        "PLAN.md is behind your verdicts",
+                        "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
+                        DateTime.Now))
+                {
+                    _log.Log_Warning(session.OrchId, "Ledger-behind warning could not be appended (channel locked) — not recorded as reported; the next tick retries");
+                    continue;
+                }
+
+                _ledgerBehindReportedOrchIds.Add(session.OrchId);
 
                 _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
                 Raise_OrchestrationActivity(session.OrchId);
@@ -1406,16 +1473,28 @@ internal sealed class BridgeEngineModel(
         if (_reportedLedgerShapeByOrchId.TryGetValue(session.OrchId, out var reported) && reported == fingerprint)
             return;
 
-        _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
-
+        // No complaints: record the clean fingerprint and stop. Nothing is written, so there is
+        // nothing that can fail to be written.
         if (complaints.Count == 0)
+        {
+            _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
             return;
+        }
 
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
-            "PLAN.md has lines that cannot show progress",
-            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
-            DateTime.Now);
+        // Fingerprint AFTER the warning lands: it suppresses re-reporting until the offending set
+        // changes, so recording it for a warning that was never written hides the problem until the
+        // supervisor happens to edit those same lines.
+        if (!ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(session.OrchId),
+                "PLAN.md has lines that cannot show progress",
+                $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
+                DateTime.Now))
+        {
+            _log.Log_Warning(session.OrchId, "PLAN.md shape warning could not be appended (channel locked) — fingerprint not recorded; the next tick retries");
+            return;
+        }
+
+        _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
 
         _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
         Raise_OrchestrationActivity(session.OrchId);
@@ -3060,24 +3139,52 @@ internal sealed class BridgeEngineModel(
         });
     }
 
-    void Append_GeneralAppEntry(string subject, string body)
+    /// <summary>
+    /// Returns whether the entry landed.
+    /// <para>
+    /// These two wrappers carry the widest blast radius in the file: most of their callers append
+    /// AFTER something irreversible — an orchestration closed, a session killed and respawned, a
+    /// request file deleted or parked — and the entry is the only thing that tells the agent the
+    /// irreversible thing happened. A dropped one leaves an agent whose world changed underneath it
+    /// with no record of why.
+    /// </para>
+    /// <para>
+    /// The result is surfaced rather than swallowed here, and logged against the orchestration so
+    /// the failure is attributable even where a caller ignores it. Callers that record state on the
+    /// strength of the entry must check it; the ones that do not are listed in the sweep's report.
+    /// </para>
+    /// </summary>
+    bool Append_GeneralAppEntry(string subject, string body)
     {
-        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, subject, body, DateTime.Now);
+        if (!ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, subject, body, DateTime.Now))
+        {
+            _log.Log_Warning(ChannelDiscovery.GENERAL_ORCH_ID, $"General channel entry '{subject}' was NOT written — the channel was locked for the whole budget");
+            return false;
+        }
+
         Raise_OrchestrationActivity(ChannelDiscovery.GENERAL_ORCH_ID);
+        return true;
     }
 
-    void Append_OrchestrationAppEntry(string orchId, string subject, string body)
+    /// <summary>Returns whether the entry landed. See <see cref="Append_GeneralAppEntry"/>.</summary>
+    bool Append_OrchestrationAppEntry(string orchId, string subject, string body)
     {
         var ownerChannel = _paths.Get_OwnerChannelFile(orchId);
 
         if (!File.Exists(ownerChannel))
         {
             _log.Log_Warning(orchId, $"No owner-channel.md for '{orchId}' — app entry '{subject}' logged only");
-            return;
+            return false;
         }
 
-        ChannelAppender.Append_AppEntry(ownerChannel, subject, body, DateTime.Now);
+        if (!ChannelAppender.Append_AppEntry(ownerChannel, subject, body, DateTime.Now))
+        {
+            _log.Log_Warning(orchId, $"Owner-channel entry '{subject}' was NOT written — the channel was locked for the whole budget");
+            return false;
+        }
+
         Raise_OrchestrationActivity(orchId);
+        return true;
     }
 
     /// <summary>
@@ -3926,6 +4033,7 @@ internal sealed class BridgeEngineModel(
 
         var wokenSessions = 0;
         var wokenOrchestrations = 0;
+        List<string> notWoken = [];
 
         foreach (var session in _store.Load_All())
         {
@@ -3934,28 +4042,43 @@ internal sealed class BridgeEngineModel(
 
             wokenOrchestrations++;
 
-            ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), SUBJECT, body, DateTime.Now);
-            wokenSessions++;
+            // Every counter increments only on a written entry. The total is reported to the owner
+            // below as "go ahead sent to N sessions", and /resume is the one command with no retry —
+            // it exists for the usage-limit reset, where nothing else will speak to a session again.
+            // Counting an append that did not happen tells the owner a session was woken and leaves
+            // it asleep, which is the exact failure /resume is the remedy for.
+            if (ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), SUBJECT, body, DateTime.Now))
+                wokenSessions++;
+            else
+                notWoken.Add($"{session.OrchId}/supervisor");
 
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc != null)
                     continue;
 
-                ChannelAppender.Append_AppEntry(
-                    _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), SUBJECT, body, DateTime.Now);
-
-                wokenSessions++;
+                if (ChannelAppender.Append_AppEntry(
+                        _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), SUBJECT, body, DateTime.Now))
+                    wokenSessions++;
+                else
+                    notWoken.Add($"{session.OrchId}/{member.MemberId}");
             }
 
             Raise_OrchestrationActivity(session.OrchId);
         }
 
         // The general supervisor too — it has the same problem and its own channel.
-        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, SUBJECT, body, DateTime.Now);
-        wokenSessions++;
+        if (ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, SUBJECT, body, DateTime.Now))
+            wokenSessions++;
+        else
+            notWoken.Add("general");
 
         _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — woke {wokenSessions} session(s) across {wokenOrchestrations} orchestration(s)");
+
+        // Named, not counted: "3 of 5" leaves the owner to work out which two are still asleep, and
+        // /resume is exactly when they cannot afford to guess.
+        if (notWoken.Count > 0)
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"/resume could NOT wake (channel locked): {string.Join(", ", notWoken)}");
 
         await Send_DirectReply_BestEffort_Async(
             client,
@@ -4169,11 +4292,21 @@ internal sealed class BridgeEngineModel(
                 // panel shows it live — which is the whole reason the app writes this and not the hook.
                 _log.Log_Warning(session.OrchId, description);
 
-                ChannelAppender.Append_AppEntry(
+                var reported = ChannelAppender.Append_AppEntry(
                     _paths.Get_OwnerChannelFile(session.OrchId),
                     Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
                     $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now.",
                     DateTime.Now);
+
+                // The marker goes ONLY if the report went. The catch below states this contract and
+                // used to enforce it for free, because a failed append THREW; once the appender
+                // started returning false instead, nothing threw, the delete ran anyway, and a
+                // report that was never written destroyed the record that would have retried it.
+                if (!reported)
+                {
+                    _log.Log_Warning(session.OrchId, "Guard-not-in-force report could not be appended (channel locked) — the marker survives and the next tick retries");
+                    continue;
+                }
 
                 File.Delete(markerFile);
             }
@@ -4219,19 +4352,39 @@ internal sealed class BridgeEngineModel(
             if (signature == (lastSignature ?? ""))
                 continue;
 
-            _flaggedIdleMembersByOrchId[session.OrchId] = signature;
-
+            // Nothing idle: record the empty signature and move on — no write, nothing to fail.
             if (idle.Count == 0)
+            {
+                _flaggedIdleMembersByOrchId[session.OrchId] = signature;
                 continue;
+            }
 
-            ChannelAppender.Append_AppEntry(
+            // Signature AFTER the flag lands. It re-fires only when the idle SET changes, so
+            // recording it for a flag that was never written means this exact set is never flagged
+            // again.
+            if (!Flag_IdleMembers_Entry(session, signature))
+            {
+                _log.Log_Warning(session.OrchId, "Idle-member flag could not be appended (channel locked) — signature not recorded; the next tick retries");
+                continue;
+            }
+
+            _flaggedIdleMembersByOrchId[session.OrchId] = signature;
+            continue;
+        }
+    }
+
+    /// <summary>Extracted so the caller can record its signature only when the entry landed.</summary>
+    bool Flag_IdleMembers_Entry(IOrchestrationSession session, string signature)
+    {
+        if (!ChannelAppender.Append_AppEntry(
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 Status.Retirement_Advisor.FLAG_SUBJECT,
                 $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
-                DateTime.Now);
+                DateTime.Now))
+            return false;
 
-            _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
-        }
+        _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
+        return true;
     }
 
 
@@ -5996,13 +6149,21 @@ internal sealed class BridgeEngineModel(
             if (pending.Nudged || (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds < OWNER_REPLY_GRACE_SECONDS)
                 continue;
 
-            pending.Nudged = true;
+            // Neither the memo NOR the owner-facing receipt may run ahead of the nudge. `Nudged` is
+            // one-per-pending-reply forever, and the receipt below tells the owner "nudged, an
+            // answer is coming" — so a failed append here would burn the only nudge this reply ever
+            // gets AND assert to the owner that a message was sent that does not exist.
+            if (!ChannelAppender.Append_AppEntry(
+                    ownerChannel,
+                    "the owner is still waiting for your reply",
+                    "Your turn ended without answering the owner's message above. Reply now, even one line (what you are doing / what you are waiting on). The owner is looking at an unanswered receipt.",
+                    DateTime.Now))
+            {
+                _log.Log_Warning(orchId, "Owner reply nudge could not be appended (channel locked) — NOT marked as nudged and the owner's receipt is left alone; the next tick retries");
+                continue;
+            }
 
-            ChannelAppender.Append_AppEntry(
-                ownerChannel,
-                "the owner is still waiting for your reply",
-                "Your turn ended without answering the owner's message above. Reply now, even one line (what you are doing / what you are waiting on). The owner is looking at an unanswered receipt.",
-                DateTime.Now);
+            pending.Nudged = true;
 
             _log.Log_Warning(orchId, "Owner message went unanswered past the grace window — supervisor nudged");
             Raise_OrchestrationActivity(orchId);
