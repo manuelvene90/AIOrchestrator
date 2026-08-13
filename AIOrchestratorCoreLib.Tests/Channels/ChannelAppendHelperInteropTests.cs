@@ -250,6 +250,73 @@ public class ChannelAppendHelperInteropTests : IDisposable
         Assert.EndsWith("\n", text);
     }
 
+    /// <summary>
+    /// The bash half of the abandoned-lock recovery. Both sides must agree, or one wedges on a
+    /// state the other walks past.
+    /// </summary>
+    [Fact]
+    public void Helper_BreaksAnAbandonedMetadataLessLock()
+    {
+        var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);
+        Directory.CreateDirectory(lockDirectory);
+        Directory.SetLastWriteTimeUtc(lockDirectory, DateTime.UtcNow.AddSeconds(-(ChannelFile_Lock.STALE_SECONDS + 30)));
+
+        var bodyFile = Path.Combine(_tempFolder, "body.txt");
+        File.WriteAllText(bodyFile, "written after clearing an abandoned lock\n");
+
+        var run = Run_Helper(
+            $"--channel \"{To_BashPath(_channelFile)}\" --author implementer --subject \"after abandon\" "
+            + $"--body-file \"{To_BashPath(bodyFile)}\" --budget-seconds 10");
+
+        Assert.True(run.ExitCode == 0, $"the helper could not clear an abandoned metadata-less lock: {run.StandardError}");
+        Assert.Single(ChannelEntry_Parser.Parse_All(File.ReadAllText(_channelFile)));
+    }
+
+    /// <summary>
+    /// The disjoint half: a metadata-less lock that is FRESH is a writer part-way through
+    /// acquiring, and must still be respected. Without this, "break any lock with no owner file"
+    /// would pass the test above and destroy live locks.
+    /// </summary>
+    [Fact]
+    public void Helper_RespectsAFreshMetadataLessLock()
+    {
+        Directory.CreateDirectory(ChannelFile_Lock.Build_LockDirectoryPath(_channelFile));
+
+        var bodyFile = Path.Combine(_tempFolder, "body.txt");
+        File.WriteAllText(bodyFile, "must not be written\n");
+
+        var run = Run_Helper(
+            $"--channel \"{To_BashPath(_channelFile)}\" --author implementer --subject \"blocked\" "
+            + $"--body-file \"{To_BashPath(bodyFile)}\" --budget-seconds 1");
+
+        Assert.Equal(3, run.ExitCode);
+        Assert.Empty(ChannelEntry_Parser.Parse_All(File.ReadAllText(_channelFile)));
+    }
+
+    /// <summary>
+    /// The two sides must count the SAME headers. The C# parser accepts any whitespace after the
+    /// hashes; the helper's scanner required exactly one space, so a header written "##  [82]"
+    /// was invisible to bash and visible to the app — and bash would then mint an index that
+    /// already existed. Index allocation inside the lock is what made the duplicate-index defect
+    /// one deliverable instead of two; two scanners that disagree hands it straight back.
+    /// </summary>
+    [Fact]
+    public void Helper_CountsTheSameHeadersTheParserDoes_NotOnlyTheCanonicallySpacedOnes()
+    {
+        File.WriteAllText(_channelFile, "seed\n\n##  [82] FROM supervisor — 2026-08-13 21:00 — oddly spaced but real\n\nbody\n");
+
+        // The parser sees it, so the next index is 83.
+        Assert.Equal(83, ChannelEntry_Parser.Get_NextIndex(File.ReadAllText(_channelFile)));
+
+        var bodyFile = Path.Combine(_tempFolder, "body.txt");
+        File.WriteAllText(bodyFile, "the next entry\n");
+
+        var run = Run_Helper($"--channel \"{To_BashPath(_channelFile)}\" --author implementer --subject \"next\" --body-file \"{To_BashPath(bodyFile)}\"");
+
+        Assert.True(run.ExitCode == 0, $"helper failed: {run.StandardError}");
+        Assert.Equal("83", run.StandardOutput.Trim());
+    }
+
     readonly record struct HelperRun(int ExitCode, string StandardOutput, string StandardError);
 
     static HelperRun Run_Helper(string arguments)

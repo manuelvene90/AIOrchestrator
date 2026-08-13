@@ -119,6 +119,32 @@ public class ChannelFileLockTests : IDisposable
         Assert.False(acquired);
     }
 
+    /// <summary>
+    /// A lock directory with no owner file is treated as a writer mid-acquire, so it is never
+    /// stale — and an OLD one is then unbreakable by both implementations forever. The bash side
+    /// can create exactly that state: it mkdirs the lock and then writes the metadata, and a hard
+    /// kill in between (the app tree-kills every session on exit, which does not run bash's EXIT
+    /// trap) leaves the directory behind empty. Every later writer then waits out its budget and
+    /// declines, and the channel is permanently write-dead with nothing saying so.
+    /// <para>
+    /// So the age of the DIRECTORY is the fallback when there is no metadata to read. A writer
+    /// legitimately mid-acquire is microseconds old and unaffected.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Try_Run_WithLock_WhenHeldWithNoOwnerFileAndTheDirectoryIsOld_BreaksItInstead()
+    {
+        var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);
+        Directory.CreateDirectory(lockDirectory);
+        Directory.SetLastWriteTimeUtc(lockDirectory, DateTime.UtcNow.AddSeconds(-(ChannelFile_Lock.STALE_SECONDS + 30)));
+
+        var ran = false;
+        var acquired = ChannelFile_Lock.Try_Run_WithLock(_channelFile, TimeSpan.FromSeconds(5), () => ran = true, out _);
+
+        Assert.True(acquired, "an abandoned metadata-less lock was never breakable — the channel would be write-dead forever");
+        Assert.True(ran);
+    }
+
     void Hold_LockExternally(DateTime heldSinceUtc)
     {
         var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);

@@ -85,9 +85,23 @@ trap 'release_lock' EXIT INT TERM
 # "alive" costs a wait, a false "dead" breaks a live lock and corrupts the file the lock protects.
 lock_is_stale() {
   [ -d "$LOCK_DIR" ] || return 1
-  [ -f "$OWNER_FILE" ] || return 1          # mid-acquire, not dead
 
   local stamp held_epoch now_epoch
+
+  # No owner file is USUALLY a writer part-way through acquiring, and breaking one microseconds old
+  # would be worse than waiting. But treating it as alive UNCONDITIONALLY made the state permanently
+  # unbreakable by both sides — and this script is the only thing that can create it, because it
+  # mkdirs the lock and then writes the metadata. A hard kill in between (the app tree-kills every
+  # session on exit, which does not run the EXIT trap below) would wedge the channel forever.
+  # So fall back to the DIRECTORY's own age.
+  if [ ! -f "$OWNER_FILE" ]; then
+    held_epoch="$(date -u -r "$LOCK_DIR" +%s 2>/dev/null)" || return 1
+    [ -n "$held_epoch" ] || return 1
+    now_epoch="$(date -u +%s)"
+    [ $((now_epoch - held_epoch)) -gt "$STALE_SECONDS" ]
+    return $?
+  fi
+
   stamp="$(grep -m1 '^utc=' "$OWNER_FILE" 2>/dev/null | cut -d= -f2-)"
   [ -n "$stamp" ] || return 1
 
@@ -119,6 +133,23 @@ acquire_lock() {
   budget_ms=$(awk "BEGIN{printf \"%d\", $BUDGET_SECONDS * 1000}")
 
   while true; do
+    # mkdir, NOT the stage-and-rename shape C# uses, and this asymmetry is deliberate and measured.
+    #
+    # C# can fill a staging directory and rename it into place because Directory.Move fails on ANY
+    # existing target, so the lock never exists without its metadata. bash has no primitive with
+    # that behaviour. Measured on this machine:
+    #   plain `mv src dst` on an existing dst  -> moves src INSIDE dst and reports SUCCESS
+    #   `mv -T src dst` on a non-empty dst     -> fails (correct)
+    #   `mv -T src dst` on an EMPTY dst        -> SUCCEEDS, replacing it
+    # That last one is disqualifying: a writer that had just mkdir'd its lock and not yet written
+    # the metadata would have it stolen, and TWO writers would believe they held it — the exact
+    # collision this protocol exists to prevent, and worse than the wedge it was meant to fix.
+    #
+    # mkdir fails on any existing directory, empty or not, which is the exclusivity required. The
+    # window it leaves (lock created, metadata not yet written) is closed downstream instead:
+    # lock_is_stale falls back to the DIRECTORY's age, so an abandoned empty lock is breakable
+    # rather than permanent. The state is recovered from rather than removed, because removing it
+    # is not available here at an acceptable price.
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       HELD=1
       printf 'pid=%s\nutc=%s\nrole=%s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "session" > "$OWNER_FILE"
@@ -145,7 +176,17 @@ fi
 # ---- critical section -------------------------------------------------------------------------
 # The index is read HERE, inside the lock, which is what stops two writers choosing the same one.
 # Read it outside and the lock protects the write while leaving the decision it depends on racing.
-LAST_INDEX="$(grep -oE '^## \[[0-9]+\]' "$CHANNEL" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1)"
+#
+# THE C# PARSER IS AUTHORITATIVE, and this pattern is a transcription of its regex
+# (ChannelEntry_Parser.Header_Regex): ^##\s*\[(\d+)\]\s*FROM\s+(\S+). Any whitespace after the
+# hashes, any whitespace before FROM, and FROM is REQUIRED.
+#
+# It used to require exactly one space and no FROM, which made the two scanners disagree — a header
+# written "##  [82] FROM x" was counted by the app and invisible here. The dangerous direction is
+# this side UNDER-counting: the app appends [84], a session then acquires the lock cleanly, sees a
+# maximum of 82, and mints a duplicate. Allocating the index inside the lock is what made the
+# duplicate-index defect one problem instead of two, and two scanners that disagree hand it back.
+LAST_INDEX="$(grep -oE '^##[[:space:]]*\[[0-9]+\][[:space:]]*FROM[[:space:]]' "$CHANNEL" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1)"
 [ -n "$LAST_INDEX" ] || LAST_INDEX=0
 NEXT_INDEX=$((LAST_INDEX + 1))
 

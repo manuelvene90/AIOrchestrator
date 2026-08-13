@@ -177,10 +177,17 @@ public static class ChannelFile_Lock
             if (!Directory.Exists(lockDirectory))
                 return false;
 
-            // A lock directory with no owner file yet is a writer part-way through acquiring, not a
-            // dead one. Treating missing metadata as stale would break locks microseconds old.
+            // A lock directory with no owner file is USUALLY a writer part-way through acquiring,
+            // and breaking one microseconds old would be worse than waiting. But "no metadata ever
+            // counts as stale" made the state permanently unbreakable by BOTH sides, and the bash
+            // helper can create it: it mkdirs the lock and then writes the metadata, so a hard kill
+            // in between — the app tree-kills every session on exit, which does not run bash's EXIT
+            // trap — abandons an empty directory that wedges the channel forever.
+            //
+            // So fall back to the DIRECTORY's own age. A live acquire is microseconds old; anything
+            // older than the same STALE_SECONDS had a holder that is not coming back.
             if (!File.Exists(ownerFile))
-                return false;
+                return (DateTime.UtcNow - Directory.GetLastWriteTimeUtc(lockDirectory)).TotalSeconds > STALE_SECONDS;
 
             var heldSinceUtc = Read_HeldSinceUtc_OrNull(ownerFile);
 
