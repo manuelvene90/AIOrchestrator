@@ -109,7 +109,16 @@ import os, re, sys
 ORCH = os.environ.get("AIORCH_ID", "") or "__none__"
 MEMBER = os.environ.get("AIORCH_MEMBER", "") or "__none__"
 
-FILE_VERBS = {"rm", "rmdir", "mv", "truncate", "dd",
+# `cp` and `mkdir` are a DELIBERATE WIDENING BEYOND MASTER, ordered rather than assumed. Master
+# denies neither, so "the denied set matches master" — the invariant this branch carried, after that
+# claim was once found false and corrected — no longer holds, and saying so is the point of this
+# comment. They are here because a guard that parses perfectly and then consults a set without `cp`
+# in it still allows a reviewer to overwrite any file in the repo.
+#
+# The PowerShell spellings in this set are INCOMPLETE and deliberately left that way: `remove-item`
+# and `new-item` are here, `copy-item` and `move-item` are not. That asymmetry is pre-existing and
+# widening it further was not ordered — it is filed as a finding rather than fixed in passing.
+FILE_VERBS = {"rm", "rmdir", "mv", "cp", "mkdir", "truncate", "dd",
               "remove-item", "set-content", "add-content", "out-file", "new-item"}
 
 # Same eighteen as before plus the two a previous rewrite dropped.

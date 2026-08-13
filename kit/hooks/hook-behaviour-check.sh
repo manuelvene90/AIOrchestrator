@@ -574,6 +574,24 @@ check "...and marks nothing" ABSENT "$(rm -f "$MARKER_FILE"; run_hook "$REVIEWER
 
 rm -f "$MARKER_FILE"
 
+# ── THE VERB SET IS THE CEILING ON EVERYTHING ELSE ───────────────────────────────────────────────
+#
+# A scanner that reduces flawlessly and then consults a set with no `cp` in it still allows a reviewer
+# to overwrite any file in the repo. Master allows both of these too — a WIDENING beyond master, which
+# every other change on this branch avoided, and it is here because it was ordered after a reviewer
+# demonstrated the gap.
+#
+# The prose control matters more than usual for these two: `cp` and `mkdir` are short, ordinary words
+# that appear in sentences, and refusing a report that mentions one is the exact false denial this
+# branch exists to end.
+check "cp is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'cp a b')" reviewer)")"
+check "cp with flags is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'cp -r src dst')" reviewer)")"
+check "mkdir is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'mkdir newdir')" reviewer)")"
+check "mkdir -p is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'mkdir -p a/b')" reviewer)")"
+check "a new verb reached through find -exec" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'find . -name "*.cs" -exec cp {} /tmp ;')" reviewer)")"
+check "prose naming cp is still allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "cp a b" src/')" reviewer)")"
+check "a command merely starting with mk is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'mktemp -d')" reviewer)")"
+
 # ── A LINE CONTINUATION IS DELETED, NOT ESCAPED ──────────────────────────────────────────────────
 #
 # `\` + newline is removed by a shell and the two halves join. The scanner escaped the newline like
