@@ -279,6 +279,36 @@ public class TopicStatusLineBuilderTests
     }
 
     /// <summary>
+    /// THE HEADLINE OF THE RESTYLE, and until now invisible to the suite. rev-1 F3, which I
+    /// reproduced before writing this: NO fixture anywhere had a brief longer than FOUR words, so
+    /// `Summarize_Task` never truncated in a single test — `MEMBER_TASK_WORDS` could be set to 40 and
+    /// 695 tests stayed green. The whole point of the change (a row that fits a phone) rested on a
+    /// number nothing observed.
+    ///
+    /// Seven words in, and BOTH budgets come out of one fixture: four on the member row, six on the
+    /// `last` row, which is what the `+2` means and is otherwise a constant nobody can see either.
+    ///
+    /// The subject is chosen to survive `Summarize_Task`'s other passes so the count is the only
+    /// thing under test: no bookkeeping prefix, no clause break (no comma, dash, "so", "because"),
+    /// and not one word from FILLER_WORDS — "onto" is deliberately not "into", which IS filler.
+    /// </summary>
+    [Fact]
+    public void ALongBriefIsCutToTheRowBudget()
+    {
+        const string sevenWords = "migrate every supervisor session onto worktree isolation";
+
+        var lines = TopicStatusLine_Builder.Build(
+            "orch",
+            null,
+            [Member("imp-9", Brief(sevenWords, "2026-08-12 12:26"))],
+            sevenWords,
+            NOW, aMessageIsAlreadyPosted: false).Split('\n');
+
+        Assert.Equal("• imp-9 · migrate every supervisor session · 4 min", lines[1]);
+        Assert.Equal("last · migrate every supervisor session onto worktree", lines[2]);
+    }
+
+    /// <summary>
     /// THE OWNER'S FIRST COMPLAINT: "wide spaces". Asserted as a PROPERTY over every row rather than
     /// as one expected string, because the padding can come back in any one of four places — the
     /// title, the idle row, the task column, the duration column — and a fixture only ever pins the
