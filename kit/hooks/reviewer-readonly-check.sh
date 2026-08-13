@@ -118,28 +118,44 @@ class Undecidable(Exception):
     pass
 
 
-def strip_heredoc_bodies(s):
-    """Removes heredoc BODIES, which are data being written and never commands.
+def strip_comments_and_heredoc_bodies(s):
+    """Removes the two spans that are TEXT rather than syntax: `#` comments and heredoc bodies.
 
-    `<<` only opens one when it is a real operator: the version that matched it anywhere on the line
-    treated the `<<` inside `echo "a << b"` as a heredoc, waited for a terminator named `b`, and
-    swallowed every command that followed. An UNTERMINATED heredoc really does make the rest a body
-    — that is what a shell does with it — so dropping it there is the correct reading, not a guess.
+    Both in ONE pass, because each contains characters the other must not interpret. A comment can
+    hold an apostrophe ("don't"), and a heredoc body can hold anything at all — so whichever is
+    scanned second would read the first's contents as quotes. Splitting this into two passes fails
+    in one direction whichever order they run in: a trailing comment with a contraction made the
+    reducer raise on an unbalanced quote, and undecidable ALLOWS, so a contraction switched the guard
+    off for the whole command.
+
+    `<<` only opens a heredoc when it is a real operator: the version that matched it anywhere on the
+    line treated the `<<` inside `echo "a << b"` as one, waited for a terminator named `b`, and
+    swallowed every command that followed. An UNTERMINATED heredoc really does make the rest a body —
+    that is what a shell does with it — so dropping it there is the correct reading, not a guess.
     """
     out = []
     i, n = 0, len(s)
+    at_word_start = True
 
     while i < n:
         c = s[i]
 
         if c == "\\" and i + 1 < n:
-            out.append(s[i:i + 2]); i += 2; continue
+            out.append(s[i:i + 2]); i += 2; at_word_start = False; continue
+
+        # A `#` only starts a comment at the START OF A WORD — `build#1` is a filename, not a comment.
+        if c == "#" and at_word_start:
+            newline = s.find("\n", i)
+            if newline == -1:
+                break
+            i = newline
+            continue
 
         if c == "'":
             j = s.find("'", i + 1)
             if j == -1:
                 raise Undecidable("an unbalanced single quote")
-            out.append(s[i:j + 1]); i = j + 1; continue
+            out.append(s[i:j + 1]); i = j + 1; at_word_start = False; continue
 
         if c == '"':
             j = i + 1
@@ -147,11 +163,11 @@ def strip_heredoc_bodies(s):
                 j += 2 if s[j] == "\\" else 1
             if j >= n:
                 raise Undecidable("an unbalanced double quote")
-            out.append(s[i:j + 1]); i = j + 1; continue
+            out.append(s[i:j + 1]); i = j + 1; at_word_start = False; continue
 
         # `<<<` is a herestring, not a heredoc: it takes a word, not a body.
         if s[i:i + 3] == "<<<":
-            out.append("<<<"); i += 3; continue
+            out.append("<<<"); i += 3; at_word_start = True; continue
 
         if s[i:i + 2] == "<<":
             k = i + 2
@@ -187,7 +203,9 @@ def strip_heredoc_bodies(s):
             i = newline + 1 + consumed
             continue
 
-        out.append(c); i += 1
+        out.append(c)
+        at_word_start = c in " \t\n;|&()<>`"
+        i += 1
 
     return "".join(out)
 
@@ -377,7 +395,7 @@ def redirect_reason(operator, target):
 
 
 def analyse(source, depth=0):
-    commands, redirects = split_commands(tokenize(strip_heredoc_bodies(source)))
+    commands, redirects = split_commands(tokenize(strip_comments_and_heredoc_bodies(source)))
 
     for words in commands:
         reason = classify_words(words, depth)

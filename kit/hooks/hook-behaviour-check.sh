@@ -448,6 +448,20 @@ check "fd duplication is not a file write" ALLOW "$(verdict "$(run_hook "$REVIEW
 # author happened to use.
 check "a printf append with parens is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'I confirm (yes) the finding' >> $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
 
+# ── A TRAILING COMMENT IS NOT A REASON TO STOP GUARDING ──────────────────────────────────────────
+#
+# An apostrophe in a `#` comment — "don't", "it's" — made the reducer raise on an unbalanced quote,
+# and unbalanced means undecidable, which ALLOWS. So the guard switched off for the WHOLE command
+# because of a contraction in a comment nobody meant as syntax. That is ordinary writing, not an
+# exploit, which is exactly why it matters.
+#
+# Note what the fix is NOT: the undecidable→allow posture is correct and stays. An apostrophe in a
+# comment simply is not undecidable — the reducer could not see comments.
+check "a comment with a contraction still denies" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "rm -rf build # don't do this")" reviewer)")"
+check "same for a git subcommand" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "git commit -m x # it's staged")" reviewer)")"
+check "a # inside quotes is not a comment" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "#define FOO" src/')" reviewer)")"
+check "a # mid-word is not a comment" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build#1')" reviewer)")"
+
 # ── A HOOK THAT CANNOT EVALUATE ITS PREDICATE SAYS SO, AND ALLOWS ────────────────────────────────
 #
 # The reducer returning nothing used to be a SILENT allow, which is decision 21's exact failure:
