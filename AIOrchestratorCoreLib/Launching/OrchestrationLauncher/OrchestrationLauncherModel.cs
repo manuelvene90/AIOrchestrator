@@ -358,7 +358,14 @@ internal sealed class OrchestrationLauncherModel(
         if (current == null || current.ClosedUtc != null)
             return;
 
-        // A member closed during the sync window must stay closed — writing its pid would reopen it.
+        // A member closed during the sync window is not written to at all. The REASON here used to be
+        // "writing its pid would reopen it", and that reason is now gone: `Set_MemberPid` carries
+        // `ClosedUtc` through, so the store can no longer resurrect anybody. What is left is smaller
+        // and still worth doing — a retired member's pid is a dead process, and recording it invites
+        // a later reader to kill or foreground whatever now holds that number.
+        //
+        // Said explicitly because a guard whose stated reason has moved elsewhere is how a maintainer
+        // comes to delete the wrong one, or to add a second copy of the one that actually holds.
         foreach (var member in current.Members)
         {
             if (member.MemberId == memberId && member.ClosedUtc == null)
