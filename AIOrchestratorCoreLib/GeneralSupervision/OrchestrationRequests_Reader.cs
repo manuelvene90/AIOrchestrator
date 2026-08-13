@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.CloseImplementerRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.CloseOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.MalformedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
+using AIOrchestratorCoreLib.GeneralSupervision.PromoteOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
@@ -32,6 +33,10 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 ///                                        HELD until the owner confirms with a tap, whoever asked,
 ///                                        so 'requester' is what they are shown, not a gate. The
 ///                                        owner's own closes do not come through here at all.)
+///   {"action":"promote-orchestration","orchId":"...","reason":"..."}
+///                                       (a SOLO session, asking for its basic orchestration to
+///                                        become a full crew — HELD until the owner taps, and
+///                                        refused unless the solo has filed a HANDOVER entry)
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
 ///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
 ///   {"action":"set-model","orchId":"...","role":"supervisor|implementer","model":"..."}  (per-orchestration override)
@@ -42,6 +47,7 @@ public static class OrchestrationRequests_Reader
     public const string ADD_IMPLEMENTER_ACTION = "add-implementer";
     public const string ADD_REVIEWER_ACTION = "add-reviewer";
     public const string CLOSE_IMPLEMENTER_ACTION = "close-implementer";
+    public const string PROMOTE_ORCHESTRATION_ACTION = "promote-orchestration";
     public const string CLOSE_ORCHESTRATION_ACTION = "close-orchestration";
     public const string SET_TELEGRAM_MUTED_ACTION = "set-telegram-muted";
     public const string SET_ORCHESTRATION_NAME_ACTION = "set-orchestration-name";
@@ -72,6 +78,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
         List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
         List<IMalformedRequest> malformedRequests = [];
 
@@ -80,7 +87,7 @@ public static class OrchestrationRequests_Reader
             foreach (var file in Directory.EnumerateFiles(paths.RequestsFolder, "*.json"))
             {
                 var rejectionReason = Try_ParseInto_OrReason(
-                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests);
+                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests);
 
                 if (rejectionReason != null)
                     malformedRequests.Add(MalformedRequest_Factory.Create(file, rejectionReason, Peek_OrchId_OrNull(file)));
@@ -88,7 +95,7 @@ public static class OrchestrationRequests_Reader
         }
 
         return PendingRequests_Factory.Create(
-            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests, malformedRequests);
+            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, malformedRequests);
     }
 
     /// <summary>
@@ -105,6 +112,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
         List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
@@ -115,6 +123,7 @@ public static class OrchestrationRequests_Reader
             closeOrchestrationRequests,
             setTelegramMutedRequests,
             setOrchestrationNameRequests,
+            promoteOrchestrationRequests,
             setModelRequests);
 
         if (rejection != null)
@@ -137,6 +146,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
         List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
@@ -147,6 +157,7 @@ public static class OrchestrationRequests_Reader
             closeOrchestrationRequests,
             setTelegramMutedRequests,
             setOrchestrationNameRequests,
+            promoteOrchestrationRequests,
             setModelRequests);
 
         if (rejection != null)
@@ -180,6 +191,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests,
         List<ISetTelegramMutedRequest> setTelegramMutedRequests,
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests,
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests,
         List<ISetModelRequest> setModelRequests)
     {
         JsonObject root;
@@ -242,6 +254,24 @@ public static class OrchestrationRequests_Reader
                     var kind = action == ADD_REVIEWER_ACTION ? MemberKinds.Reviewer : MemberKinds.Implementer;
 
                     addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, kind, reason.Trim(), filePath));
+                    return null;
+                }
+                case PROMOTE_ORCHESTRATION_ACTION:
+                {
+                    if (string.IsNullOrWhiteSpace(orchId))
+                        return "missing 'orchId'";
+
+                    var reason = root["reason"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(reason))
+                        return MISSING_REASON_MESSAGE;
+
+                    // NOTHING ABOUT THE ORCHESTRATION IS CHECKED HERE, and that is deliberate. This
+                    // reader knows JSON; whether the orchestration is basic, and whether its solo has
+                    // filed the handover entry, are facts about the world that the executor reads and
+                    // refuses on WITH ITS OWN REASON. A parser that answers "unanalysable" to a
+                    // perfectly analysable line — because something it cannot see is not true yet —
+                    // wears the safe posture without having it.
+                    promoteOrchestrationRequests.Add(PromoteOrchestrationRequest_Factory.Create(orchId, reason.Trim(), filePath));
                     return null;
                 }
                 case CLOSE_IMPLEMENTER_ACTION:
