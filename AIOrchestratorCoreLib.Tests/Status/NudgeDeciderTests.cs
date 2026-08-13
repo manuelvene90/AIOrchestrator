@@ -481,6 +481,40 @@ public class NudgeDeciderTests
         Assert.Equal(45, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
     }
 
+    /// <summary>
+    /// A CHANNEL WITH NO CONVERSATION IN IT IS STILL NOT THE FILE'S AGE — rev-5's R9. Compaction
+    /// replaces the live file by renaming a fresh temp over it, so the file stamp moves with NOBODY
+    /// having spoken; every entry inside keeps the stamp it was written with. Measuring from the last
+    /// ENTRY instead of the file therefore survives a compaction, and measuring from the file does
+    /// not.
+    ///
+    /// This is the population R9 survives the merge for and the only one: a briefed member is already
+    /// measured from its last conversation entry, so it was never exposed.
+    ///
+    /// IT DOES NOT RELEASE THE APP-ONLY NUDGE LOOP, which is why it is not blocked behind the
+    /// sentinel the way fail-noisy is. The nudge APPENDS AN ENTRY, so the last-entry clock resets on a
+    /// nudge exactly as the file stamp did — same eight-minute cadence, same throttle. What stops
+    /// resetting it is compaction, which writes no entry. Fail-noisy is a different thing entirely:
+    /// it would report "past the threshold" when nothing can be computed, and after its own nudge it
+    /// would still report past the threshold, which is the release.
+    /// </summary>
+    [Fact]
+    public void AnAppOnlyChannelIsMeasuredFromItsLastEntryNotTheFileStamp()
+    {
+        // A FIXED `now` and a literal stamp, like the cases above — header stamps carry MINUTE
+        // resolution, so deriving one from DateTime.Now leaves the truncated seconds in the answer and
+        // the assertion drifts by up to a minute depending on when the suite happens to run.
+        var now = new DateTime(2026, 8, 12, 19, 0, 0);
+        var file = Write_TempChannel();
+
+        // What a compaction leaves behind: rewritten at `now`, saying nothing new.
+        File.SetLastWriteTime(file, now);
+
+        var entries = Stamped((ChannelAuthors.App, "GO AHEAD — resume", "2026-08-12 18:40"));
+
+        Assert.Equal(20, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+    }
+
     static string Write_TempChannel()
     {
         var path = Path.Combine(Path.GetTempPath(), $"aiorch-quietclock-{Guid.NewGuid():N}.md");

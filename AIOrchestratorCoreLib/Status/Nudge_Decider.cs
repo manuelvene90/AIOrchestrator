@@ -154,6 +154,22 @@ public static class Nudge_Decider
             && SessionDuration_Formatter.Try_ReadTrustedStamp(lastConversationEntry.DateText, now, out var spokenAt))
             return now - spokenAt;
 
+        // NO CONVERSATION TO MEASURE, SO MEASURE THE LAST ENTRY — not the file (rev-5's R9).
+        // Compaction replaces the live file by renaming a fresh temp over it, so the FILE stamp moves
+        // with nobody having spoken while every entry inside keeps the stamp it was written with. An
+        // app entry carries the app's own `DateTime.Now`, so it is both trustworthy and immune to that
+        // rewrite. This is the app-only population — the only one R9 survives the merge for, since a
+        // briefed member is already measured from its conversation above.
+        //
+        // It does NOT release the app-only nudge loop, and that distinction is why it is not gated
+        // behind the sentinel the way fail-noisy is: the nudge APPENDS an entry, so this clock resets
+        // on a nudge exactly as the file stamp did. Fail-noisy would instead report "past the
+        // threshold" whenever nothing can be computed — including immediately after its own nudge,
+        // which is the release.
+        if (entries.Count > 0
+            && SessionDuration_Formatter.Try_ReadTrustedStamp(entries[^1].DateText, now, out var lastEntryAt))
+            return now - lastEntryAt;
+
         return now - File.GetLastWriteTime(channelFilePath);
     }
 

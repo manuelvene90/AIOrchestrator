@@ -135,6 +135,31 @@ public class SupervisorNudgeClockProbeTests : IDisposable
     }
 
     /// <summary>
+    /// THE FILE-STAMP FALLBACK, PINNED AT THIS CALL SITE — rev-7's F3, which observed that removing it
+    /// left all 701 green. It is the last resort of a three-step clock (conversation stamp, then last
+    /// entry, then the file) and it is what stands between an untrustworthy stamp and a member that
+    /// can never be reported as waiting.
+    ///
+    /// The report here is stamped SIX HOURS IN THE FUTURE — the agent-written-stamp failure item 12
+    /// records twice in this orchestration's own channels — so both stamp-reading steps refuse it and
+    /// only the file can answer. The file is old, so the supervisor must still be told.
+    ///
+    /// This is the direction that matters: a clock that cannot be computed must never make a member
+    /// look busy, because that suppresses the report of a session that really has stopped.
+    /// </summary>
+    [Fact]
+    public async Task AnUntrustworthyStampFallsBackToTheFileRatherThanHidingTheReport()
+    {
+        var ownerChannel = Start_WithReportStampedInTheFuture_AndAnOldFileStamp();
+
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => Has_SupervisorNudge(ownerChannel)),
+            "a report the clock could not date was hidden from the supervisor instead of falling back to the file");
+    }
+
+    /// <summary>
     /// Twenty minutes of unanswered report, with the file stamped now as a compaction or an app write
     /// would leave it. The member spoke LAST, so the member-nudge path has nothing to do here and the
     /// only thing that can move is the supervisor's own channel.
@@ -174,6 +199,21 @@ public class SupervisorNudgeClockProbeTests : IDisposable
             $"## [1] FROM supervisor — {filed:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n\n"
             + $"## [2] FROM implementer — {filed:yyyy-MM-dd HH:mm} — TASK 1 landed abc1234\nparser done, suite green\n",
             filed);
+    }
+
+    /// <summary>
+    /// A stamp no reader will trust, and a file old enough to answer instead. Six hours ahead is well
+    /// past the two-minute skew tolerance, so this is refused rather than merely odd.
+    /// </summary>
+    string Start_WithReportStampedInTheFuture_AndAnOldFileStamp()
+    {
+        var briefed = DateTime.Now.AddMinutes(-20);
+        var impossible = DateTime.Now.AddHours(6);
+
+        return Start_WithMemberChannel(
+            $"## [1] FROM supervisor — {briefed:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n\n"
+            + $"## [2] FROM implementer — {impossible:yyyy-MM-dd HH:mm} — TASK 1 landed abc1234\nparser done, suite green\n",
+            briefed);
     }
 
     /// <summary>Returns the OWNER channel — the supervisor's own, which is where its nudge lands.</summary>
