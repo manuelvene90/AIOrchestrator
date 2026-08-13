@@ -958,7 +958,13 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                var quietFor = DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile);
+                // The app's own writes do not count as the channel moving — see Measure_QuietFor.
+                // LOCAL, and it must stay local: both sources that function reads are local wall
+                // time. Handing it UtcNow here on THIS machine (UTC+2) makes quietFor NEGATIVE, so
+                // nothing reaches the threshold and every nudge in the system stops — silently, with
+                // a green suite. NudgeClockProbeTests pins this call for that reason; the decision is
+                // pure and pinned four ways, and all four passed while this line was wrong.
+                var quietFor = Nudge_Decider.Measure_QuietFor(entries, channelFile, DateTime.Now);
                 var alreadyNudged = _nudgedMemberUtc.TryGetValue(memberKey, out var nudgedUtc);
 
                 if (!alreadyNudged && quietFor.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)

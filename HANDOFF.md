@@ -39,19 +39,32 @@ network).
 
 ## Then: the two unmerged branches
 
-### `fix/quiet-clock-ignores-app` — rebase it, do not merge it as-is
+### `fix/quiet-clock-ignores-app` — REBASED as `fix/quiet-clock-rebase`, awaiting review
 
 Two commits: `11a1c1a` (the fix) and `f2485cf` (a probe that pins which clock the engine passes).
 
 - **It conflicts** in `Nudge_Decider.cs`, the file the "one nudge per unanswered thing" work rewrote.
 - **It was correctly held back at the time**: on its own it made the nudge loop *faster*, 8 minutes
   to 6, because the app's own write to the channel was the only thing DELAYING the re-arm.
-- **That hazard is now gone** — the marker gate on master sits upstream of the clock — and there is a
-  real residual it still plugs: an app write to a channel resets the **first** nudge's quiet clock,
-  so a legitimate nudge can be delayed by up to 8 minutes.
-- **But that last paragraph is reasoning, not measurement.** Reasoning about this exact code was
-  wrong three separate times in one evening, twice by the people being most careful about it. Resolve
-  the conflict, pin the behaviour with a test, and have a reviewer attack it.
+- **That hazard is gone, and here is the mechanism** — corrected from "the marker gate sits upstream
+  of the clock", which was the right conclusion by the wrong route. Textually the gate is DOWNSTREAM:
+  the clock check is `BridgeEngineModel.cs:964`, the marker gate `:997-1002`. What actually closes the
+  loop is that `_nudgedAboutEntry` is written at `:1008` and **never removed** — no `.Remove` for it
+  exists anywhere, only loss on restart. So the app permanently remembers WHICH conversation entry it
+  nudged about, its own writes never change that entry, and a second nudge for the same unanswered
+  thing is impossible whatever the clock returns. Order does not enter into it, which is why the
+  original phrasing mattered: it is the kind of sentence someone reorders code on.
+- **The residual it still plugs is real but small**: the FIRST nudge for each new unanswered thing was
+  scheduled from the file's write stamp, so an app write landing after that entry delayed a legitimate
+  nudge by up to 8 minutes. Bounded at one delay, not starvation — the app has exactly four write
+  paths into a member channel (the nudge, the orphan notice, the malformed-header report, a `/resume`
+  broadcast) and none repeats on a timer; the malformed-header one dedupes through
+  `_reportedMalformedHeaders` at `:1101-1108`.
+- **This is now measurement, not reasoning.** Rebased on `fix/quiet-clock-rebase` with the conflicts
+  resolved, the residual pinned by an engine-level probe, and three controls with disjoint red sets.
+  Note the sign trap: the branch's OWN docstring claimed a UTC `now` on a UTC+2 machine "nudges
+  everything on the first tick" — the opposite of the truth, and of what the paragraph below says.
+  The map was right and the code comment was wrong; both comments are corrected on the rebase branch.
 
 `f2485cf` is worth keeping either way: it catches the engine passing `UtcNow` where `Now` is meant,
 which on a machine at UTC+2 makes `quietFor` negative and **silences every nudge in the system with a
