@@ -55,24 +55,123 @@ deny() {
   exit 0
 }
 
-# git commands that change repository state. Read-only git (log/diff/show/status/blame) is the
-# reviewer's main tool and must stay available.
-case "$COMMAND" in
-  *"git commit"*|*"git add"*|*"git push"*|*"git merge"*|*"git rebase"*|*"git reset"*|*"git checkout"*|*"git switch"*|*"git stash"*|*"git cherry-pick"*|*"git revert"*|*"git worktree"*|*"git branch -"*|*"git tag"*|*"git clean"*|*"git restore"*|*"git apply"*|*"git am"*)
-    deny "that git command changes repository state." ;;
-esac
+# WHAT IS A COMMAND, AND WHAT IS PROSE.
+#
+# These tests used to be UNANCHORED SUBSTRING matches, and the cost landed on the one write this role
+# exists to make. `rm ` is inside "confi[rm ]the finding" and `dd ` is inside "a[dd ]tests", so an
+# ordinary English report body was read as a destructive command and refused — while anything the
+# list did not literally spell was still allowed. The matcher was simultaneously too strict and too
+# weak, and the strictness fell entirely on the reviewer's findings.
+#
+# The command is therefore reduced to the words that actually occupy a COMMAND POSITION: the first
+# word of the string, and the first word after each shell separator (`;` `|` `&` `&&` `||`, a
+# newline, and the inside of `$( )`, `( )` or backticks). Prose in a quoted argument never occupies
+# one. Heredoc BODIES are dropped first, because a heredoc body is data being written, never a
+# command — without that, a reviewer reporting on `git commit` is refused for naming its subject.
+#
+# The DENIED SET IS UNCHANGED — same tokens as before, tested properly. Anchoring is the fix;
+# extending the list is not, because a denial list that grows by exception never closes the class.
+#
+# The residual bias is deliberate and is the safe one: anything this reduction cannot classify stays
+# a command and is denied. A false denial is visible and the reviewer can report it; a false allow
+# silently lets a read-only session rewrite the tree.
 
-# In-place editors and file removal.
-case "$COMMAND" in
-  *"sed -i"*|*"perl -i"*|*"rm "*|*"rmdir "*|*"mv "*|*"truncate "*|*"dd "*|*"Remove-Item"*|*"Set-Content"*|*"Add-Content"*|*"Out-File"*|*"New-Item"*)
-    deny "that command deletes or rewrites files." ;;
-esac
+# `<<EOF`, `<<-EOF`, `<<'EOF'` and `<<"EOF"` open a body; a line equal to the marker closes it.
+strip_heredoc_bodies() {
+  awk '
+    {
+      if (marker != "") {
+        line = $0
+        sub(/^[ \t]+/, "", line)
+        sub(/[ \t]+$/, "", line)
+        if (line == marker)
+          marker = ""
+        next
+      }
 
-# Package/build side effects that write into the tree.
-case "$COMMAND" in
-  *"npm install"*|*"npm ci"*|*"yarn add"*|*"pip install"*|*"dotnet add"*|*"dotnet new"*|*"nuget "*)
-    deny "that command installs or scaffolds into the working tree." ;;
-esac
+      if (match($0, /<<-?[ \t]*("[^"]+"|'\''[^'\'']+'\''|[A-Za-z_][A-Za-z0-9_]*)/)) {
+        marker = substr($0, RSTART, RLENGTH)
+        sub(/^<<-?[ \t]*/, "", marker)
+        gsub(/["'\'']/, "", marker)
+      }
+
+      print
+    }
+  '
+}
+
+COMMAND_POSITIONS=$(
+  printf '%s\n' "$COMMAND" \
+    | strip_heredoc_bodies \
+    | sed -E 's/&&|\|\|/\n/g; s/[;|&]/\n/g; s/\$\(/\n/g; s/[()`]/\n/g'
+)
+
+while IFS= read -r SEGMENT; do
+  # Drop what stands in FRONT of the command without being it: leading blanks, `VAR=value` prefixes,
+  # and wrappers like `sudo`. Without this, `sudo rm -rf x` reads as the command `sudo`.
+  while : ; do
+    SEGMENT=${SEGMENT#"${SEGMENT%%[![:space:]]*}"}
+    WORD=${SEGMENT%%[[:space:]]*}
+
+    case "$WORD" in
+      *=*|sudo|command|env|nohup|time|builtin|exec)
+        REST=${SEGMENT#"$WORD"}
+        if [ "$REST" = "$SEGMENT" ]; then
+          break
+        fi
+        SEGMENT=$REST ;;
+      *)
+        break ;;
+    esac
+  done
+
+  CMD=${SEGMENT%%[[:space:]]*}
+  REST=${SEGMENT#"$CMD"}
+  REST=${REST#"${REST%%[![:space:]]*}"}
+  ARG=${REST%%[[:space:]]*}
+
+  # PowerShell cmdlets are case-insensitive to the shell, so the test has to be too.
+  CMD_LOWER=$(printf '%s' "$CMD" | tr '[:upper:]' '[:lower:]')
+
+  case "$CMD_LOWER" in
+    rm|rmdir|mv|truncate|dd|remove-item|set-content|add-content|out-file|new-item)
+      deny "that command deletes or rewrites files." ;;
+    sed|perl)
+      case " $SEGMENT " in
+        *" -i"*) deny "that command edits files in place." ;;
+      esac ;;
+    git)
+      case "$ARG" in
+        commit|add|push|merge|rebase|reset|checkout|switch|stash|cherry-pick|revert|worktree|tag|clean|restore|apply|am)
+          deny "that git command changes repository state." ;;
+        branch)
+          # `git branch` alone lists; anything with a flag can create, move or delete one.
+          case " $SEGMENT " in
+            *" -"*) deny "that git command changes repository state." ;;
+          esac ;;
+      esac ;;
+    npm)
+      case "$ARG" in
+        install|ci) deny "that command installs or scaffolds into the working tree." ;;
+      esac ;;
+    yarn)
+      case "$ARG" in
+        add) deny "that command installs or scaffolds into the working tree." ;;
+      esac ;;
+    pip|pip3)
+      case "$ARG" in
+        install) deny "that command installs or scaffolds into the working tree." ;;
+      esac ;;
+    dotnet)
+      case "$ARG" in
+        add|new) deny "that command installs or scaffolds into the working tree." ;;
+      esac ;;
+    nuget)
+      deny "that command installs or scaffolds into the working tree." ;;
+  esac
+done <<EOF
+$COMMAND_POSITIONS
+EOF
 
 # Output redirection: allowed ONLY when it appends (>>) into this reviewer's own supervision folder
 # — that is how it files its report. Everything else redirecting into a file is a write.

@@ -38,6 +38,7 @@ set -u
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 LEDGER_HOOK="$SCRIPT_DIR/supervisor-ledger-check.sh"
 AWAIT_HOOK="$SCRIPT_DIR/supervisor-awaiting-answer-check.sh"
+REVIEWER_HOOK="$SCRIPT_DIR/reviewer-readonly-check.sh"
 
 # REFUSE TO RUN RATHER THAN CERTIFY. The hooks are resolved relative to THIS file, so a copy taken
 # somewhere else — `git show <sha>:… > /tmp/x.sh && bash /tmp/x.sh` is how it actually happened —
@@ -48,11 +49,12 @@ AWAIT_HOOK="$SCRIPT_DIR/supervisor-awaiting-answer-check.sh"
 # One refusal beats thirty results that describe nothing. Exit 2 means THIS RUN CERTIFIES NOTHING —
 # the same code the environment probe uses, and deliberately distinct from exit 1, which means the
 # suite ran and the hooks are wrong.
-if [ ! -f "$LEDGER_HOOK" ] || [ ! -f "$AWAIT_HOOK" ]; then
+if [ ! -f "$LEDGER_HOOK" ] || [ ! -f "$AWAIT_HOOK" ] || [ ! -f "$REVIEWER_HOOK" ]; then
   printf '\n  REFUSED  this harness cannot find the hooks it tests.\n'
   printf '           expected beside %s:\n' "$SCRIPT_DIR"
   [ -f "$LEDGER_HOOK" ] || printf '             MISSING  %s\n' "$LEDGER_HOOK"
   [ -f "$AWAIT_HOOK" ] || printf '             MISSING  %s\n' "$AWAIT_HOOK"
+  [ -f "$REVIEWER_HOOK" ] || printf '             MISSING  %s\n' "$REVIEWER_HOOK"
   printf '           Run it from kit/hooks/ in a checkout. Nothing was tested.\n\n'
   exit 2
 fi
@@ -60,12 +62,16 @@ fi
 FAILURES=0
 ORCH="check-orch"
 
+# The reviewer hook scopes its one permitted write to THIS member's folder, so the runner has to pass
+# an id the way the spawner does. Irrelevant to the two supervisor hooks, which never read it.
+MEMBER="rev-1"
+
 REAL_HOME="$HOME"
 TEMP_HOME=$(mktemp -d)
 export HOME="$TEMP_HOME"
 
 SUPERVISION="$TEMP_HOME/.claude/supervision/$ORCH"
-mkdir -p "$SUPERVISION/imp-1" "$SUPERVISION/imp-2"
+mkdir -p "$SUPERVISION/imp-1" "$SUPERVISION/imp-2" "$SUPERVISION/$MEMBER"
 
 # The same path in the spelling a Windows session actually passes.
 WIN_SUPERVISION=$(printf '%s' "$SUPERVISION" | tr '/' '\\')
@@ -166,7 +172,7 @@ run_hook() {
     return
   fi
 
-  output=$(printf '%s' "$payload" | AIORCH_ROLE="$role" AIORCH_ID="$ORCH" bash "$hook" 2>/dev/null)
+  output=$(printf '%s' "$payload" | AIORCH_ROLE="$role" AIORCH_ID="$ORCH" AIORCH_MEMBER="$MEMBER" bash "$hook" 2>/dev/null)
   status=$?
 
   # Crashed, killed, or unable to start. Distinct from "ran and said nothing", which is a real ALLOW.
@@ -326,6 +332,58 @@ assert_environment_can_evaluate "after"
 
 rm -f "$SUPERVISION/.awaiting-answer"
 check "no question open" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')")")"
+
+# ── PreToolUse hook — the reviewer is read-only ──────────────────────────────────────────────────
+#
+# BOTH DIRECTIONS, and the second one is the defect. The destructive cases matched UNANCHORED
+# SUBSTRINGS, so `rm ` was found inside "confi**rm **the finding" and `dd ` inside "a**dd ** tests":
+# ordinary English in a quoted report body read as a destructive command. That denied the ONE write
+# the role exists to make — its own findings — while a reviewer that wanted to mutate the tree could
+# still do it by any spelling the list did not literally contain.
+#
+# So the DENY cases here are not decoration. A matcher that stopped denying would satisfy every ALLOW
+# case in this section, and the fix for a false positive is exactly the change that would cause it.
+printf '\nPreToolUse hook — the reviewer is read-only\n'
+
+REV_CHANNEL="$SUPERVISION/$MEMBER/channel.md"
+
+check "rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build')" reviewer)")"
+check "git commit is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git commit -m fix')" reviewer)")"
+check "sed -i is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'sed -i s/a/b/ Foo.cs')" reviewer)")"
+check "npm install is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'npm install')" reviewer)")"
+check "redirection into a file is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x > Foo.cs')" reviewer)")"
+
+# ANCHORING IS NOT JUST "STARTS WITH": a destructive command sitting after a separator is still a
+# command. Mutating the fix to test only the front of the string leaves every case above green.
+check "rm after && is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'cat Foo.cs && rm Foo.cs')" reviewer)")"
+check "rm inside \$() is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo $(rm Foo.cs)')" reviewer)")"
+
+# The reviewer's actual tools have to survive.
+check "git log is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git log --oneline -5')" reviewer)")"
+check "git diff is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git diff master..fix/r1')" reviewer)")"
+
+# F10 ITSELF — prose is not a command. Each of these was DENIED before the fix, and each is a report
+# a reviewer would really write.
+check "a report saying 'confirm' is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> $REV_CHANNEL <<'EOF'
+I confirm the finding is real.
+EOF")" reviewer)")"
+check "a report saying 'add tests' is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> $REV_CHANNEL <<'EOF'
+They should add tests for this.
+EOF")" reviewer)")"
+
+# Searching FOR a destructive command is read-only work, and the reviewer's job is full of it.
+check "grep for a destructive string is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "rm -rf" scripts/')" reviewer)")"
+
+# A report that QUOTES a command in a fenced block. Heredoc bodies are DATA, never commands — without
+# that, a reviewer reporting on `git commit` is refused for naming its subject.
+check "a report quoting a command is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> $REV_CHANNEL <<'EOF'
+The implementer ran:
+git commit -F /tmp/msg.txt
+rm -rf obj/
+That is what I am reporting on.
+EOF")" reviewer)")"
+
+check "a non-reviewer role is untouched" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build')" implementer)")"
 
 # THE GUARDS ON THE GUARDS. If any of these reports ALLOW, every ALLOW case above is meaningless —
 # they are assertions about the CLASS of silent failure, not about the individual instances that
