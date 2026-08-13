@@ -188,8 +188,36 @@ internal sealed class ChannelTailerModel : IChannelTailer
             // unemitted (Extract_CompleteEntries needs Ends_WithLineBreak), so this trades a file
             // that grows — visible, recoverable — for a delivery that disappears silently.
             // Header-less noise does not stick: it is cleared after the quiet-poll window.
-            return state.Unconfirmed.Length > 0 || state.Pending.Length > 0;
+            if (state.Unconfirmed.Length > 0 || state.Pending.Length > 0)
+                return true;
+
+            // THE FILE IS THE THIRD PLACE AN ENTRY CAN BE OWED FROM, and it was the blind spot that
+            // made the two clauses above insufficient. The mirror tick appends to channel files
+            // BETWEEN the poll and compaction, on the same thread — Check_LedgerHealth_Async,
+            // Check_ChannelShapes_Async and Push_PeriodicStatus_Async all write entries after the
+            // poll has run. Those bytes are in no buffer here, so both clauses answered false;
+            // compaction then kept the new entry among the newest 45, returned EOF, and Set_Offset
+            // parked the cursor past it. Gone from Telegram, intact on disk, and invisible to the
+            // log — the per-entry log line lives inside the mirror send that never happened.
+            return Has_BytesPastCursor(state, channelFilePath);
         }
+    }
+
+    /// <summary>
+    /// Runs with <see cref="_statesLock"/> HELD. Costs one stat per channel per tick, against a
+    /// compactor that reads and rewrites whole files — and it is what makes this predicate answer
+    /// the question its contract asks, rather than only the part held in memory.
+    /// </summary>
+    static bool Has_BytesPastCursor(FileTailState state, string channelFilePath)
+    {
+        var fileLength = Get_FileLength_OrNull(channelFilePath);
+
+        // A file that is SHORTER than the cursor is the append-only protocol breaking, not a delivery
+        // owed: the next poll reports it as truncated and re-anchors. Nothing to hold compaction for.
+        if (fileLength == null)
+            return false;
+
+        return fileLength.Value > state.Offset;
     }
 
     public bool Was_PolledInLastPoll(string channelFilePath)

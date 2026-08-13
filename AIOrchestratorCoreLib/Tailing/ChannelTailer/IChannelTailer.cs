@@ -27,14 +27,14 @@ public interface IChannelTailer
     void Confirm_Append(string channelFilePath);
 
     /// <summary>
-    /// Whether anything this tailer has READ is still owed a delivery: entries emitted but not yet
-    /// acknowledged, and bytes read but not yet emitted — both are owed to the owner, and only the
-    /// second survives a poll's rewind. The bridge must not rewrite such a file meanwhile.
+    /// Whether this file still owes a delivery, from any of the three places one can be owed from:
+    /// entries emitted but not yet acknowledged, bytes read but not yet emitted (only these survive
+    /// a poll's rewind), and bytes on disk PAST THE CURSOR that no poll has read yet. The bridge
+    /// must not rewrite such a file meanwhile.
     /// <para>
-    /// LIMIT, because the honest statement of it is worth more than a clean sentence: this answers
-    /// only for what was read. Bytes appended to the file since the last poll are owed too and are
-    /// invisible here, so a rewrite between a poll and this question can still strand them. Closing
-    /// that needs the cursor compared against the file's length, which is a separate open defect.
+    /// The third is the one that is easy to forget and was the last silent-loss hole: the mirror
+    /// tick appends entries after its own poll, so a channel can owe a delivery that exists nowhere
+    /// in this object's memory. It therefore stats the file rather than trusting its buffers.
     /// </para>
     /// </summary>
     bool Has_UndeliveredEntries(string channelFilePath);
@@ -44,8 +44,8 @@ public interface IChannelTailer
     /// poll skipped has a frozen cursor — a deferred topic, an owner channel held mid-composition —
     /// and everything it produced is owed to the owner as a catch-up burst, so compaction asks this
     /// before rewriting anything. It reports whether the file was POLLED, which is not the same as
-    /// whether its cursor is current: a polled file can still have grown since (see the limit on
-    /// <see cref="Has_UndeliveredEntries"/>).
+    /// whether its cursor is current — a polled file can still have grown since, which is
+    /// <see cref="Has_UndeliveredEntries"/>'s third clause and not this one's business.
     /// </summary>
     bool Was_PolledInLastPoll(string channelFilePath);
 

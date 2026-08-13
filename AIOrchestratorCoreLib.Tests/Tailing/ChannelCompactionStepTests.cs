@@ -93,6 +93,29 @@ public class ChannelCompactionStepTests : IDisposable
     }
 
     [Fact]
+    public void ChannelAppendedToAfterItsPoll_IsNotCompacted_AndTheNewEntryIsStillMirrored()
+    {
+        Write_LongChannel(_channelFile);
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        // The mirror tick appends to channel files BETWEEN the poll and the compaction step, on the
+        // same thread: Check_LedgerHealth_Async, Check_ChannelShapes_Async and Push_PeriodicStatus_Async
+        // all write entries after the poll has run. The tailer has not seen these bytes, so nothing
+        // it holds says they exist — Pending is empty and the channel looks perfectly clear.
+        File.AppendAllText(_channelFile, Build_Entry(ENTRIES_ABOVE_THRESHOLD + 1, "written after the poll"));
+
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile);
+        var delivered = Collect_DeliveredEntries(tailer, polls: 4, [_channel]);
+
+        // Compacting here keeps this entry in the file — among the newest 45 — and returns EOF, so
+        // Set_Offset parks the cursor past it. It is then gone from Telegram and intact on disk,
+        // and it never reaches the log either: the per-entry log line lives inside Mirror_Append_Async.
+        Assert.Null(newLength);
+        Assert.Equal("written after the poll", Assert.Single(delivered).Subject);
+    }
+
+    [Fact]
     public void DeferredChannelWithAFrozenCursor_IsNotCompacted_AndStillDeliversItsCatchUpBurst()
     {
         var activeFile = Path.Combine(_tempFolder, "active-channel.md");
