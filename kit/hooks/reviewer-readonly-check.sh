@@ -86,8 +86,13 @@ deny() {
 VERDICT=$(AIORCH_COMMAND="$COMMAND" python3 - <<'PYEOF'
 import os, re, sys
 
-ORCH = os.environ.get("AIORCH_ID", "")
-MEMBER = os.environ.get("AIORCH_MEMBER", "")
+# SENTINELS, NOT EMPTY STRINGS. The own-channel exemption is built from these two ids, and with an
+# empty default the pattern collapses to three slashes — which a crafted path can contain and then
+# walk out of with a parent reference. A value that cannot occur in a real path means a missing id
+# matches nothing, which is the property the original had and this reduction had lost. Nothing
+# validates these two ids the way AIORCH_ROLE is validated above, so the default has to hold the line.
+ORCH = os.environ.get("AIORCH_ID", "") or "__none__"
+MEMBER = os.environ.get("AIORCH_MEMBER", "") or "__none__"
 
 FILE_VERBS = {"rm", "rmdir", "mv", "truncate", "dd",
               "remove-item", "set-content", "add-content", "out-file", "new-item"}

@@ -448,6 +448,20 @@ check "fd duplication is not a file write" ALLOW "$(verdict "$(run_hook "$REVIEW
 # author happened to use.
 check "a printf append with parens is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'I confirm (yes) the finding' >> $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
 
+# ── THE OWN-CHANNEL EXEMPTION MUST NOT DEGENERATE WHEN THE IDS ARE MISSING ───────────────────────
+#
+# The exemption is built from the orchestration and member ids. With an EMPTY-STRING default the
+# pattern collapses to three slashes — which a crafted path can simply contain, and then walk out of
+# with a parent reference. Sentinels that cannot occur in a real path mean an unset id matches
+# nothing, which is what the original did.
+#
+# Run with both ids EMPTY. Note the harness passes them explicitly: `${x:-default}` substitutes for an
+# empty value too, so a helper written that way silently tests the DEFAULTS instead — that mistake
+# hid this regression from my first comparison.
+check "a crafted path cannot satisfy an empty id" DENY "$(verdict "$(MEMBER=""; run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> /tmp/supervision/$ORCH//../../etc/foo")" reviewer)")"
+check "a real own-channel append still works" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
+check "another member's channel is still denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SUPERVISION/imp-2/channel.md")" reviewer)")"
+
 # ── A REDIRECT TARGET THE REDUCER CANNOT RESOLVE IS UNANALYSABLE, NOT ABSENT ─────────────────────
 #
 # A target that begins with a command or process substitution is emitted as an OPERATOR, so the
