@@ -111,10 +111,21 @@ public static class Nudge_Decider
     /// is older than anything live. Preferring the archive would pin every member to an ancient entry
     /// and stop a genuinely new brief from earning its own nudge — the mute switch, from the far side.
     /// </summary>
+    public static string? Identify_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
+    {
+        var live = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
+
+        if (live != null)
+            return live.RawText;
+
+        return MemberState_Resolver
+            .Find_LastConversationEntry_OrNull(ChannelHistory_Counter.Read_ArchivedEntries(channelFilePath))
+            ?.RawText;
+    }
+
     /// <summary>
-    /// What a member is being nudged ABOUT, always answerable — the last conversation entry, or this
-    /// when there is none anywhere. One nudge per unanswered thing, including when the unanswered
-    /// thing is an app entry with no conversation behind it.
+    /// What a channel with NO conversation entry anywhere is keyed on, so it can be nudged once
+    /// instead of forever.
     ///
     /// AT MOST ONCE, NOT NEVER (owner-facing ruling 2026-08-13). "Never nudge an app-only channel"
     /// was the tempting rule and it drops the one wake that matters: a `/resume` broadcast is an app
@@ -134,24 +145,16 @@ public static class Nudge_Decider
     public const string NO_CONVERSATION_YET = "<no conversation entry in this channel>";
 
     /// <summary>
-    /// The identity to remember and compare, never null. See <see cref="NO_CONVERSATION_YET"/> for
-    /// what a channel with no conversation is keyed on and why it is not one of its entries.
+    /// What a member is being nudged ABOUT, always answerable — the last conversation entry above, or
+    /// <see cref="NO_CONVERSATION_YET"/> when there is none anywhere. One nudge per unanswered thing,
+    /// including when the unanswered thing is an app entry with no conversation behind it.
+    ///
+    /// This is what the engine compares and records. It never returns null, and that is the point: a
+    /// null identity used to skip the gate AND skip the record together, which was the loop.
     /// </summary>
     public static string Identify_NudgeSubject(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
     {
         return Identify_LastConversationEntry_OrNull(entries, channelFilePath) ?? NO_CONVERSATION_YET;
-    }
-
-    public static string? Identify_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
-    {
-        var live = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
-
-        if (live != null)
-            return live.RawText;
-
-        return MemberState_Resolver
-            .Find_LastConversationEntry_OrNull(ChannelHistory_Counter.Read_ArchivedEntries(channelFilePath))
-            ?.RawText;
     }
 
     /// <summary>
