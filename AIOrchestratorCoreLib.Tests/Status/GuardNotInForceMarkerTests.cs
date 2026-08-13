@@ -159,6 +159,17 @@ public class GuardNotInForceMarkerTests
     /// The two fields are written in bash and read in C#, so nothing but this asserts that the writer
     /// still writes them. It fails LOUDLY when the script cannot be found rather than passing on an
     /// empty read — a harness that cannot find what it tests must refuse to certify it.
+    ///
+    /// IT ASSERTS ON THE WRITE, NOT ON THE FILE'S TEXT. The first version asserted
+    /// `Contains("md5sum")` over the whole script — and `md5sum` appears twice: once as the command
+    /// and once in a prose comment saying a machine "may well have no md5sum either". **The comment
+    /// alone satisfied it**, so the assertion had two routes to green and pinned neither, and deleting
+    /// the printf entirely would not have reddened it. That is the shape that already cost this repo a
+    /// guard which stayed green with its check removed.
+    ///
+    /// So: the printf that writes the marker is located by the file name it redirects to, and the
+    /// fields are asserted as ARGUMENTS of that one line. `Single` is deliberate — zero or two such
+    /// lines is a refusal, not a pass.
     /// </summary>
     [Fact]
     public void TheHookWritesTheIdentifyingFieldsTheAppReads()
@@ -167,10 +178,37 @@ public class GuardNotInForceMarkerTests
 
         Assert.NotNull(hookScript);
 
-        var shell = File.ReadAllText(hookScript);
+        var lines = File.ReadAllLines(hookScript);
 
-        Assert.Contains("AIORCH_MEMBER", shell);
-        Assert.Contains("md5sum", shell);
+        var writeLine = Assert.Single(lines.Where(line =>
+            line.Contains("printf", StringComparison.Ordinal)
+            && line.Contains(GuardNotInForce_Marker.FILE_NAME, StringComparison.Ordinal)));
+
+        // The fields reach the WRITE — an argument list, not a mention anywhere in the file.
+        Assert.Contains("\"$member\"", writeLine);
+        Assert.Contains("\"$fingerprint\"", writeLine);
+
+        // Five fields written, five fields the reader parses. A dropped %s silently shifts every
+        // field after it, which the reader cannot detect — it would just describe the wrong things.
+        Assert.Equal(5, writeLine.Split("%s").Length - 1);
+    }
+
+    /// <summary>
+    /// And that the two values are COMPUTED rather than merely referenced. Asserted on assignment
+    /// lines, so a comment mentioning either name cannot stand in for the code that produces it —
+    /// the same two-routes-to-green failure as above, one level up.
+    /// </summary>
+    [Fact]
+    public void TheHookComputesBothIdentifyingFields()
+    {
+        var hookScript = Find_HookLogScript_OrNull();
+
+        Assert.NotNull(hookScript);
+
+        var lines = File.ReadAllLines(hookScript).Select(line => line.Trim()).ToList();
+
+        Assert.Contains(lines, line => line.StartsWith("member=", StringComparison.Ordinal) && line.Contains("AIORCH_MEMBER", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.StartsWith("fingerprint=", StringComparison.Ordinal) && line.Contains("md5sum", StringComparison.Ordinal));
     }
 
     static string? Find_HookLogScript_OrNull()
