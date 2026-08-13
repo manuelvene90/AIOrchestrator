@@ -2840,6 +2840,12 @@ internal sealed class BridgeEngineModel(
         // nothing about one member being safe to retire, and the builder deliberately leaves it out
         // of that prompt — reading it here anyway would be work whose only possible use is to
         // mislead.
+        //
+        // DELIBERATELY TWO-ARMED OVER A THREE-VALUED ENUM — do not "fix" it. A promotion ENDS nothing,
+        // so it belongs on the same side as a member close, and it is already there. Said explicitly
+        // because a sweep of this file found six two-armed branches that were wrong and this is the
+        // one that is right: the next person enumerating them should be able to stop here in a second
+        // rather than reason it out again, or worse, "correct" it.
         var unresolved = request.Kind != ParkedCloseKinds.Orchestration
             ? null
             : Planning.PlanProgress_Formatter.Describe_UnresolvedAtClose_OrNull(
