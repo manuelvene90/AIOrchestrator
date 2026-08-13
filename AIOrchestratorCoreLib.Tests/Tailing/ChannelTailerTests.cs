@@ -194,6 +194,87 @@ public class ChannelTailerTests : IDisposable
     }
 
     [Fact]
+    public void Set_Offset_DiscardsTheBytesThatBelongedToThePreRewriteFile()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+        tailer.Poll([_channel]);
+
+        // Those bytes were read out of the OLD file. After a rewrite they describe a file that no
+        // longer exists in that shape, so holding them would mean emitting text at offsets that mean
+        // something else now. Compaction's guards make this state unreachable through the step —
+        // which is exactly why the discard needs its own test rather than an inferred one.
+        File.WriteAllText(_channelFile, "## [0] FROM app — d — compacted\n\narchived\n");
+        tailer.Set_Offset(_channelFile, new FileInfo(_channelFile).Length);
+
+        var afterRewrite = Collect_Entries(tailer, polls: 4);
+
+        Assert.Empty(afterRewrite);
+        Assert.False(tailer.Has_UndeliveredEntries(_channelFile, out _));
+    }
+
+    [Fact]
+    public void Set_Offset_DiscardsUNCONFIRMEDBytesToo_SoAPreRewriteEntryIsNotReSent()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+
+        // EMITTED and never confirmed, so the text sits in Unconfirmed — the retry buffer. The other
+        // Set_Offset test leaves that buffer empty, which is why it cannot pin this half: without the
+        // discard, the next poll rewinds this text out of a file that no longer contains it and
+        // delivers the owner an entry from before the rewrite, a second time.
+        Emit_UntilAnAppendArrives(tailer);
+
+        File.WriteAllText(_channelFile, "## [0] FROM app — d — compacted\n\narchived\n");
+        tailer.Set_Offset(_channelFile, new FileInfo(_channelFile).Length);
+
+        Assert.Empty(Collect_Entries(tailer, polls: 4));
+    }
+
+    [Fact]
+    public void Get_OffsetsSnapshot_BytesReadButNeverEmitted_AreReReadAfterARestart()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+
+        // ONE poll: the bytes are in Pending and the quiet-poll window has not elapsed, so nothing
+        // has been emitted. The process dies here — the persisted cursor must therefore point BEFORE
+        // them, or the next process starts past an entry the owner never saw. The unconfirmed case
+        // has its own test; this is the other half, and it is the window this branch is about.
+        tailer.Poll([_channel]);
+
+        var restarted = ChannelTailer_Factory.Create(tailer.Get_OffsetsSnapshot());
+        var afterRestart = Collect_Entries(restarted, polls: 4);
+
+        Assert.Equal("report", Assert.Single(afterRestart).Subject);
+    }
+
+    IReadOnlyList<AIOrchestratorCoreLib.Channels.ChannelEntry.IChannelEntry> Collect_Entries(IChannelTailer tailer, int polls)
+    {
+        List<AIOrchestratorCoreLib.Channels.ChannelEntry.IChannelEntry> entries = [];
+
+        for (var i = 0; i < polls; i++)
+        {
+            foreach (var append in tailer.Poll([_channel]).CompletedAppends)
+            {
+                entries.AddRange(append.Entries);
+                tailer.Confirm_Append(append.Channel.FilePath);
+            }
+        }
+
+        return entries;
+    }
+
+    [Fact]
     public void Poll_TruncatedFile_ReportsAnomalyAndRecovers()
     {
         File.WriteAllText(_channelFile, "some long seed content here\n");

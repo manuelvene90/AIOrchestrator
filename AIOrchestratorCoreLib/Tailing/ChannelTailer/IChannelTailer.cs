@@ -69,8 +69,14 @@ public interface IChannelTailer
 
     /// <summary>
     /// Re-anchors a file's offset after the bridge itself rewrote it (channel compaction). Without
-    /// this the shrink would look like the append-only protocol breaking and the whole remaining
-    /// file would be re-mirrored to Telegram.
+    /// it the next poll sees a file shorter than its cursor and reads that as the append-only
+    /// protocol breaking: it reports a truncation anomaly, resets the cursor and discards what was
+    /// pending. It does NOT re-mirror the file — the truncation branch emits nothing — and this
+    /// sentence said it did until rev-4 checked it against the branch on 2026-08-13.
+    /// <para>
+    /// It also DISCARDS the pending and unconfirmed bytes, deliberately: they were read out of the
+    /// pre-rewrite file and describe offsets that mean something else now.
+    /// </para>
     /// </summary>
     void Set_Offset(string channelFilePath, long offset);
 }

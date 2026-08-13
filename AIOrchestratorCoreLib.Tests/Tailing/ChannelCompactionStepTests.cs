@@ -56,6 +56,26 @@ public class ChannelCompactionStepTests : IDisposable
     }
 
     [Fact]
+    public void ShortChannel_IsLeftAlone_AndTheStepSaysNothingHappened()
+    {
+        // The COMMON case in production and the one every other test here skips: a channel below the
+        // compaction threshold, polled, owing nothing. The guards all pass and the compactor declines,
+        // so the step must return null without touching the cursor — every fixture in this file is
+        // deliberately oversized, which left the ordinary path unexercised.
+        File.WriteAllText(_channelFile, Build_Entry(1, "hello") + Build_Entry(2, "still here"));
+
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        var lengthBefore = new FileInfo(_channelFile).Length;
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
+
+        Assert.Null(newLength);
+        Assert.Equal(lengthBefore, new FileInfo(_channelFile).Length);
+        Assert.False(File.Exists(Channel_Compactor.Build_ArchiveFilePath(_channelFile)));
+    }
+
+    [Fact]
     public void CompactedChannel_ReAnchorsTheCursor_SoTheShrinkIsNotReadAsAProtocolAnomaly()
     {
         Write_LongChannel(_channelFile);

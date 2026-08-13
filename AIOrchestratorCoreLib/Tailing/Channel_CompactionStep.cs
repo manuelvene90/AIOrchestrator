@@ -73,8 +73,11 @@ public static class Channel_CompactionStep
         if (newLength == null)
             return null;
 
-        // Without this the shrink reads as the append-only protocol breaking and the whole remaining
-        // file is re-mirrored to Telegram.
+        // Without this the next poll sees a file SHORTER than its cursor, which is the append-only
+        // protocol breaking as far as the tailer knows: it reports the anomaly, resets the cursor to
+        // the new length and drops whatever was pending. Nothing is re-mirrored — the truncation
+        // branch returns no entries, so the old claim that "the whole remaining file is re-mirrored"
+        // described a consequence this code cannot produce (rev-4, 2026-08-13).
         tailer.Set_Offset(channelFilePath, newLength.Value);
 
         return newLength;
