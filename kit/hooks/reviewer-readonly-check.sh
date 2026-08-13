@@ -135,6 +135,25 @@ GIT_BRANCH_READONLY_FLAGS = {"-a", "--all", "-l", "--list", "-r", "--remotes", "
 PKG = {"npm": {"install", "ci"}, "yarn": {"add"}, "pip": {"install"}, "dotnet": {"add", "new"}}
 
 PREFIXES = {"sudo", "command", "env", "nohup", "time", "builtin", "exec"}
+
+# Flags that swallow the NEXT word, per prefix. The list is BOUNDED and that is a decision, not an
+# oversight: an unknown value-taking flag falls through as though it took none, its value is read as
+# the command, and the command is then almost certainly not in any denied set — so the guard misses,
+# which is the direction an advisory guard is allowed to be wrong in. The covered set is what people
+# actually type; chasing every sudo flag would be chasing the evasion case, which this branch has
+# been told twice not to do.
+PREFIX_VALUE_FLAGS = {
+    "env": frozenset({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}),
+    "sudo": frozenset({"-u", "--user", "-g", "--group", "-p", "--prompt", "-U", "--other-user",
+                       "-r", "--role", "-t", "--type", "-C", "--close-from", "-h", "--host"}),
+    "exec": frozenset({"-a"}),
+}
+
+# Flags that make the prefix REPORT ON a command rather than run it. Nothing is executed, so nothing
+# can be denied.
+PREFIX_INSPECTION_FLAGS = {
+    "command": frozenset({"-v", "-V"}),
+}
 SHELLS = {"bash", "sh", "zsh", "dash"}
 XARGS_FLAGS_WITH_VALUE = {"-I", "-n", "-P", "-L", "-d", "-E", "-a", "-s",
                           "--max-args", "--max-procs", "--replace", "--delimiter"}
@@ -380,13 +399,37 @@ def classify_words(words, depth, assignments):
     if depth > 4:
         raise Undecidable("indirection nested deeper than this scanner follows")
 
+    # A PREFIX'S FLAGS BELONG TO THE PREFIX, NOT TO THE COMMAND IT CARRIES. This loop used to stop at
+    # the first word starting with `-`, so `env -u FOO rm -rf build` classified `-u` as the command
+    # and allowed it while the bare `env rm -rf build` was denied. Nobody typing the first one is
+    # trying to evade anything — the difference between the two is not something a person thinks
+    # about, which is exactly the population an advisory guard is for.
     index = 0
     while index < len(words):
         word = words[index]
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word) or word.lower() in PREFIXES:
+
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
             index += 1
             continue
-        break
+
+        prefix = word.lower()
+        if prefix not in PREFIXES:
+            break
+
+        index += 1
+        value_flags = PREFIX_VALUE_FLAGS.get(prefix, frozenset())
+        inspection_flags = PREFIX_INSPECTION_FLAGS.get(prefix, frozenset())
+
+        while index < len(words) and words[index].startswith("-") and len(words[index]) > 1:
+            flag = words[index].split("=")[0]
+
+            # `command -v rm` PRINTS where rm is; it does not run it. Denying that would refuse
+            # ordinary read-only work, which is the half of this branch that keeps getting lost.
+            if flag in inspection_flags:
+                return None
+
+            takes_value = flag in value_flags and "=" not in words[index]
+            index += 2 if takes_value else 1
 
     if index >= len(words):
         return None

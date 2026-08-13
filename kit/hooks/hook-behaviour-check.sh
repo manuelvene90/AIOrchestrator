@@ -446,6 +446,37 @@ check "xargs with flags is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" 
 check "find -exec carrying rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'find . -name "*.tmp" -exec rm {} ;')" reviewer)")"
 check "sudo rm is denied" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'sudo rm -rf build')" reviewer)")"
 
+# ── A PREFIX'S FLAGS BELONG TO THE PREFIX ────────────────────────────────────────────────────────
+#
+# The prefix loop stopped at the first word starting with `-`, so the FLAG became the command name:
+# `env -u FOO rm -rf build` allowed, `env rm -rf build` denied. Nothing about the first is an evasion
+# attempt — both are how people invoke things — and an advisory guard exists for exactly that
+# population.
+check "env with a value-taking flag is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'env -u FOO rm -rf build')" reviewer)")"
+check "command with a flag is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'command -p rm -rf build')" reviewer)")"
+check "env with a valueless flag is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'env -i rm -rf build')" reviewer)")"
+check "sudo with a value-taking flag is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'sudo -u root rm -rf build')" reviewer)")"
+check "prefixes stacked, flags and all" git "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'sudo env -u X git commit -m y')" reviewer)")"
+
+# CONTROL, and it cannot redden: the flagless spelling was denied before this fix and after it. Its
+# job is to say the flag handling did not break the path that already worked.
+check "control: the flagless spelling of the same" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'env rm -rf build')" reviewer)")"
+
+# THE OTHER DIRECTION, which is the half a "skip the flags" fix breaks if written carelessly.
+# `command -v rm` PRINTS where rm is and runs nothing; refusing it is a false denial of ordinary
+# read-only work, and a reviewer checking what is on PATH is doing its job.
+# Both name a DENIED verb on purpose. `command -V git` would pass with the inspection handling
+# deleted — `git` with no subcommand is allowed anyway — so it would have been a case that cannot
+# fail, dressed as one that can. Measured under the mutation, then the payload was changed.
+check "command -v reports and does not run" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'command -v rm')" reviewer)")"
+check "command -V, same" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'command -V rm')" reviewer)")"
+
+# CONTROLS, and neither can redden: with the flag handling removed the prefix stops at the flag and
+# both are allowed for that reason instead. They are here to catch a fix that turns ordinary
+# prefixed read-only work into a refusal, which is the direction this branch exists to protect.
+check "control: a prefix with flags carrying a read-only command" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'env -u FOO git log --oneline')" reviewer)")"
+check "control: a prefix with no command at all" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'env')" reviewer)")"
+
 # ── `<<` IS ONLY A HEREDOC WHEN IT IS AN OPERATOR ────────────────────────────────────────────────
 #
 # The stripper matched `<<` ANYWHERE on a line, including inside quotes: it set the marker to `b`,
