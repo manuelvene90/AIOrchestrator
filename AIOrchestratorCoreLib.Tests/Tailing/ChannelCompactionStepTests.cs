@@ -54,6 +54,25 @@ public class ChannelCompactionStepTests : IDisposable
     }
 
     [Fact]
+    public void CompactedChannel_ReAnchorsTheCursor_SoTheShrinkIsNotReadAsAProtocolAnomaly()
+    {
+        Write_LongChannel(_channelFile);
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile);
+        var afterCompaction = tailer.Poll([_channel]);
+
+        // Re-anchoring is the whole reason compaction may touch a tailed file at all. Without it the
+        // cursor still points past the end of the rewritten file, the next poll sees a file SHORTER
+        // than its offset, and that is the append-only protocol breaking as far as the tailer knows:
+        // it reports the anomaly and resets. The suite never pinned this, so the Set_Offset call
+        // could be deleted outright with every test still green (found by rev-4, 2026-08-13).
+        Assert.NotNull(newLength);
+        Assert.Empty(afterCompaction.TruncatedFiles);
+    }
+
+    [Fact]
     public void ChannelOwingAnUnemittedEntry_IsNotCompacted_AndTheEntryIsStillMirrored()
     {
         Write_LongChannel(_channelFile);
