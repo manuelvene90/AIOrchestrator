@@ -423,6 +423,60 @@ public class TopicStatusLinePlannerTests
         Assert.Equal(TopicStatusActions.None, plan.Action);
     }
 
+    /// <summary>
+    /// THE LATCH, rev-1 F1. A delete that is REFUSED rather than failed loops forever and starves the
+    /// edit with it: `Is_MessageGone` matches none of the refusal wordings, so the id is never
+    /// cleared, the delete throws before the send every time, and because the repost overrides the
+    /// decider unconditionally the Edit never runs either.
+    ///
+    /// That is a REGRESSION, not a missing improvement, and this is the sentence that decides the
+    /// design: before this branch a buried line at least stayed CURRENT. Un-latched it can now be
+    /// buried AND stale, which is worse than the behaviour it replaced.
+    ///
+    /// The fix is NOT to call the message gone — rev-1 was right that "can't be deleted" is unsound
+    /// for the identical reason "can't be edited" is excluded: the message still EXISTS, so clearing
+    /// the id posts a second line beside an undeletable one, which is the two-lines-in-one-topic
+    /// defect through a third door. Instead the topic stops trying to MOVE its line and keeps
+    /// updating it in place — degrading to master's behaviour rather than to nothing.
+    /// </summary>
+    [Fact]
+    public void ATopicWhereTheRepostIsImpossibleKeepsEditingInPlace()
+    {
+        Assert.Equal(
+            TopicStatusActions.Edit,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), repostIsImpossible: true).Action);
+    }
+
+    /// <summary>
+    /// And it falls back to what the DECIDER said, not to a blanket edit — the same rule the silenced
+    /// topic follows. Nothing new to say is still silence, or a latched topic would rewrite identical
+    /// text every tick for the rest of the app's life, which is a worse loop than the one being fixed.
+    /// </summary>
+    [Fact]
+    public void ATopicWhereTheRepostIsImpossibleWithNothingNewToSayStaysSilent()
+    {
+        var current = Plan(existingMessageId: STATUS_ID).Text;
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), repostIsImpossible: true).Action);
+    }
+
+    /// <summary>
+    /// The latch is PER TOPIC and nothing else changes: an unlatched topic in the same state still
+    /// reposts. Asserted beside the two above so neither can pass because reposting broke generally.
+    /// </summary>
+    [Fact]
+    public void TheLatchStopsOnlyTheTopicItWasSetFor()
+    {
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), repostIsImpossible: false).Action);
+    }
+
     /// <summary>A buried line in a topic that has been quiet for exactly this many seconds.</summary>
     static TopicStatusLine_Planner.TopicStatusPlan Plan_AfterQuietSeconds(int quietSeconds)
     {
@@ -445,7 +499,8 @@ public class TopicStatusLinePlannerTests
         TelegramDeliveryModes mode = TelegramDeliveryModes.Normal,
         DateTime? lastFailedAttemptAt = null,
         TopicStatusLine_Planner.TopicNewestMessage? newestTopicMessage = null,
-        string title = "orch")
+        string title = "orch",
+        bool repostIsImpossible = false)
     {
         return TopicStatusLine_Planner.Plan(
             title,
@@ -457,7 +512,8 @@ public class TopicStatusLinePlannerTests
             mode,
             lastFailedAttemptAt,
             BACKOFF,
-            newestTopicMessage);
+            newestTopicMessage,
+            repostIsImpossible);
     }
 
     static ITopicStatusMember Member(string memberId, string briefSubject, string stamp)

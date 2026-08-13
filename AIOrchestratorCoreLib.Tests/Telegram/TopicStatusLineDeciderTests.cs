@@ -131,6 +131,47 @@ public class TopicStatusLineDeciderTests
         Assert.True(TopicStatusLine_Decider.Is_MessageGone("Bad Request: message to edit not found"));
     }
 
+    /// <summary>
+    /// A REFUSED DELETE IS NOT A GONE MESSAGE, and keeping the two apart is the whole of rev-1's F1.
+    ///
+    /// Telegram refuses a delete for reasons that leave the message standing: past the 48-hour
+    /// deletion window, or without `can_delete_messages`. Treating that as GONE would clear the id
+    /// and post a second line beside an undeletable one — the two-lines-in-one-topic defect this
+    /// feature exists to prevent, arriving through a third door, and it is the identical unsoundness
+    /// that keeps "message can't be edited" out of Is_MessageGone.
+    ///
+    /// The 48-hour trigger is the one that matters and it needs no missing permission at all: a
+    /// buried status line on a quiet orchestration is precisely the thing that sits untouched for two
+    /// days.
+    /// </summary>
+    [Theory]
+    [InlineData("Bad Request: message can't be deleted")]
+    [InlineData("Bad Request: message can't be deleted for everyone")]
+    [InlineData("Bad Request: message can not be deleted")]
+    [InlineData("Bad Request: not enough rights to delete a message")]
+    [InlineData("CHAT_ADMIN_REQUIRED")]
+    public void ARefusedDeleteIsRecognisedAndIsNotTreatedAsGone(string errorMessage)
+    {
+        Assert.True(TopicStatusLine_Decider.Is_DeleteRefused(errorMessage));
+        Assert.False(TopicStatusLine_Decider.Is_MessageGone(errorMessage));
+    }
+
+    /// <summary>
+    /// And the other direction: a message that is genuinely GONE is not a refusal. Latching a topic
+    /// off for that would stop it ever moving its line again over an error that clears itself the
+    /// moment a fresh message is posted.
+    ///
+    /// Asserted BOTH WAYS on both predicates, because either one answering `true` to everything would
+    /// satisfy half of this pair on its own.
+    /// </summary>
+    [Fact]
+    public void AGoneMessageIsNotARefusal()
+    {
+        Assert.False(TopicStatusLine_Decider.Is_DeleteRefused("Bad Request: message to delete not found"));
+        Assert.False(TopicStatusLine_Decider.Is_DeleteRefused("Bad Request: message to edit not found"));
+        Assert.True(TopicStatusLine_Decider.Is_MessageGone("Bad Request: message to delete not found"));
+    }
+
     /// <summary>The genuine first time: no id anywhere, so there is nothing to edit.</summary>
     [Fact]
     public void TheFirstEverLineIsPosted()

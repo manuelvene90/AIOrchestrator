@@ -285,6 +285,23 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<long, Telegram.TopicStatusLine_Planner.TopicNewestMessage> _newestTopicMessageByThread = [];
 
     /// <summary>
+    /// Orchestrations whose status line can never be MOVED, because Telegram refused to delete it —
+    /// past the 48-hour deletion window, or without `can_delete_messages`. A refusal is permanent for
+    /// that message, and it is not a gone message, so nothing else clears it: without this latch the
+    /// delete throws ahead of the send on every tick and starves the edit with it, leaving the line
+    /// buried AND stale where before the repost existed it was merely buried.
+    ///
+    /// Latched, the topic keeps editing its line in place — master's behaviour, which is the right
+    /// floor to degrade to.
+    ///
+    /// It is CLEARED whenever the message it applies to stops existing: `/clear` recreates the topic,
+    /// and a message reported gone is replaced by a fresh post. The 48-hour reason dies with the old
+    /// message, so a new one deserves one attempt. In-memory for the same reason — a restart retries
+    /// once, and a permission granted meanwhile takes effect without anybody remembering to say so.
+    /// </summary>
+    readonly HashSet<string> _repostImpossibleOrchIds = [];
+
+    /// <summary>
     /// Owner messages handed over and NOT yet answered by their supervisor. Tracked so a receipt
     /// can never stay frozen on "thinking…" — the owner always learns what became of what they
     /// sent, even if the supervisor goes idle without replying.
@@ -4026,7 +4043,8 @@ internal sealed class BridgeEngineModel(
                 Resolve_EffectiveMode(session.OrchId),
                 _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
                 MIRROR_RETRY_BACKOFF_SECONDS,
-                Find_NewestTopicMessage_OrNull(session.TelegramTopicId));
+                Find_NewestTopicMessage_OrNull(session.TelegramTopicId),
+                _repostImpossibleOrchIds.Contains(session.OrchId));
 
             var action = plan.Action;
             var text = plan.Text;
@@ -4116,7 +4134,27 @@ internal sealed class BridgeEngineModel(
                 // for the life of the machine.
                 _store.Clear_StatusLineMessageId(session.OrchId);
                 _statusLineTextByOrchId.Remove(session.OrchId);
+
+                // The latch belonged to the message that has just stopped existing: a 48-hour window
+                // dies with it, so the fresh line posted next tick deserves its one attempt.
+                _repostImpossibleOrchIds.Remove(session.OrchId);
+
                 _log.Log_Warning(session.OrchId, $"Topic status message is gone — posting a new one next tick ({exception.Message})");
+            }
+            catch (Exception exception) when (action == Telegram.TopicStatusActions.Repost && Telegram.TopicStatusLine_Decider.Is_DeleteRefused(exception.Message))
+            {
+                // REFUSED, not failed: this message can never be deleted, so it can never be moved.
+                // Retrying is the loop rev-1 found — and the loop starves the EDIT too, because the
+                // repost overrides the decider. Latch it and the topic goes back to editing in place.
+                //
+                // NO BACKOFF STAMP, deliberately: there is nothing to retry, and stamping one would
+                // delay the very edit this is falling back to.
+                //
+                // The guard is on the ACTION rather than on which call threw. A refusal wording can
+                // only come from the delete in practice; if a send ever produced one, the effect is
+                // to stop moving this topic's line while it stays current — the safe direction.
+                _repostImpossibleOrchIds.Add(session.OrchId);
+                _log.Log_Warning(session.OrchId, $"Topic status line cannot be moved — it will be edited in place from now on ({exception.Message})");
             }
             catch (Exception exception)
             {
@@ -4409,6 +4447,9 @@ internal sealed class BridgeEngineModel(
             _store.Clear_StatusLineMessageId(session.OrchId);
             _statusLineTextByOrchId.Remove(session.OrchId);
             _statusLineFailedAtByOrchId.Remove(session.OrchId);
+
+            // The undeletable message went with the old topic — the new one starts unlatched.
+            _repostImpossibleOrchIds.Remove(session.OrchId);
 
             await client.Remove_TopicCreationPin_Async(newTopicId, cancellationToken);
 

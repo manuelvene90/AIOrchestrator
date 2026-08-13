@@ -60,7 +60,8 @@ public static class TopicStatusLine_Planner
         TelegramDeliveryModes mode,
         DateTime? lastFailedAttemptAt,
         int backoffSeconds,
-        TopicNewestMessage? newestTopicMessage)
+        TopicNewestMessage? newestTopicMessage,
+        bool repostIsImpossible)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
@@ -77,7 +78,18 @@ public static class TopicStatusLine_Planner
         // happened to change something in the same tick, which is never the quiet topic it was asked
         // for. Emptiness is still refused: the builder emits the bare title whenever a message is up,
         // so blank text here would mean sending nothing at all.
-        var action = !string.IsNullOrWhiteSpace(text) && Is_RepostDue(existingMessageId, newestTopicMessage, now, REPOST_AFTER_QUIET_SECONDS)
+        // THE LATCH COMES FIRST, and it is a fallback rather than a failure. Telegram REFUSES some
+        // deletes permanently — a message past its 48-hour window, or a bot without
+        // `can_delete_messages` — and a refusal is not a gone message, so nothing clears the id and
+        // the delete throws ahead of the send on every tick. Because this promotion overrides the
+        // decider, the Edit was starved too: the line ended up buried AND stale, which is worse than
+        // the behaviour the repost replaced, where it was merely buried.
+        //
+        // Latched, the topic stops trying to MOVE its line and goes on updating it in place. That is
+        // master's behaviour, which is the right floor to degrade to.
+        var action = !repostIsImpossible
+                     && !string.IsNullOrWhiteSpace(text)
+                     && Is_RepostDue(existingMessageId, newestTopicMessage, now, REPOST_AFTER_QUIET_SECONDS)
             ? TopicStatusActions.Repost
             : decided;
 
