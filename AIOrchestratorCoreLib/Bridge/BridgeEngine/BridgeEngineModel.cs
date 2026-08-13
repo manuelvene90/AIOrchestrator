@@ -304,8 +304,12 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     const int QUESTION_HOLD_CAP_MINUTES = 10;
 
-    /// <summary>Presence of this file in an orchestration folder stops its supervisor dead.</summary>
-    public const string AWAITING_ANSWER_FLAG_FILE = ".awaiting-answer";
+    /// <summary>
+    /// Presence of this file in an orchestration folder stops its supervisor dead. The name is
+    /// FORWARDED from the marker rather than restated: two copies of a filename that a bash hook
+    /// also hard-codes is one drift away from a block nothing can clear.
+    /// </summary>
+    public const string AWAITING_ANSWER_FLAG_FILE = Status.AwaitingAnswerFlag_Marker.FILE_NAME;
 
     /// <summary>Members waiting on a verdict, one id per line — read by the awaiting-answer hook.</summary>
     public const string AWAITING_VERDICT_FILE = ".awaiting-verdict";
@@ -3817,6 +3821,7 @@ internal sealed class BridgeEngineModel(
             var generalPresence = OwnerPresence_Policy.Toggle(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID));
 
             Status.MeetingFlag_Marker.Sync(_paths, ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
+            Apply_Presence_ToAwaitingAnswerFlag(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
             _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"Owner presence → {generalPresence}");
             Tell_Supervisor_AboutPresence(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
 
@@ -3838,6 +3843,7 @@ internal sealed class BridgeEngineModel(
 
             _store.Set_OwnerPresence(session.OrchId, newPresence);
             Status.MeetingFlag_Marker.Sync(_paths, session.OrchId, newPresence);
+            Apply_Presence_ToAwaitingAnswerFlag(session.OrchId, newPresence);
             _log.Log_Info(session.OrchId, $"Owner presence → {newPresence}");
             Raise_OrchestrationActivity(session.OrchId);
 
@@ -4988,31 +4994,32 @@ internal sealed class BridgeEngineModel(
 
     void Raise_AwaitingAnswerFlag(string orchId)
     {
-        try
-        {
-            File.WriteAllText(
-                Path.Combine(_paths.Get_OrchestrationFolder(orchId), AWAITING_ANSWER_FLAG_FILE),
-                DateTime.UtcNow.ToString("O"));
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Warning(orchId, $"Could not raise the awaiting-answer flag: {ex.Message}");
-        }
+        Status.AwaitingAnswerFlag_Marker.Raise(_paths, orchId, out var failure);
+
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
     }
 
     void Clear_AwaitingAnswerFlag(string orchId)
     {
-        try
-        {
-            var flagFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), AWAITING_ANSWER_FLAG_FILE);
+        Status.AwaitingAnswerFlag_Marker.Clear(_paths, orchId, out var failure);
 
-            if (File.Exists(flagFile))
-                File.Delete(flagFile);
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Warning(orchId, $"Could not clear the awaiting-answer flag: {ex.Message}");
-        }
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
+    }
+
+    /// <summary>
+    /// What a presence change does to an already-raised block, which is the half `/pc` was missing:
+    /// it stopped the NEXT block and left the current one standing for its full ten-minute expiry,
+    /// with the owner in front of a session that would not answer them.
+    /// </summary>
+    void Apply_Presence_ToAwaitingAnswerFlag(string orchId, OwnerPresenceModes presence)
+    {
+        if (Status.AwaitingAnswerFlag_Marker.Apply_Presence(_paths, orchId, presence, out var failure))
+            _log.Log_Info(orchId, "The owner is at the terminal — the question block was lifted so the session can talk to them");
+
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
     }
 
     /// <summary>
