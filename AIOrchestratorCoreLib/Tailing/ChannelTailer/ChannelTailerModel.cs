@@ -122,12 +122,24 @@ internal sealed class ChannelTailerModel : IChannelTailer
         state.Unconfirmed.Clear();
     }
 
-    public bool Has_UnconfirmedEntries(string channelFilePath)
+    public bool Has_UndeliveredEntries(string channelFilePath)
     {
         if (!_states.TryGetValue(channelFilePath, out var state))
             return false;
 
-        return state.Unconfirmed.Length > 0;
+        // PENDING COUNTS TOO, and testing Unconfirmed alone was a silent-loss bug: every poll starts
+        // by draining Unconfirmed back into Pending (Rewind_Unconfirmed), and bytes read but not yet
+        // emitted — a trailing entry still serving its quiet-poll window — live in Pending and
+        // nowhere else. The compaction guard asking this question was told "nothing owed", rewrote
+        // the file underneath the tailer, and Set_Offset then discarded exactly those bytes: the
+        // newest entry vanished from Telegram for good while the file on disk stayed intact.
+        //
+        // The cost, taken deliberately: a file whose last byte is not a newline holds Pending
+        // forever and so never compacts. That file's trailing entry is already permanently unemitted
+        // (Extract_CompleteEntries needs Ends_WithLineBreak), so this trades a file that grows —
+        // visible, recoverable — for a delivery that disappears silently. Header-less noise does not
+        // stick: it is cleared after the quiet-poll window.
+        return state.Unconfirmed.Length > 0 || state.Pending.Length > 0;
     }
 
     static void Rewind_Unconfirmed(FileTailState state)

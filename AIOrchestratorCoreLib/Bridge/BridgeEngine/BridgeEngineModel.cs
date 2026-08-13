@@ -752,7 +752,7 @@ internal sealed class BridgeEngineModel(
             // A channel that still owes Telegram a delivery must not be rewritten underneath the
             // tailer: compaction re-anchors the offset to the new file, and the entries waiting to
             // be retried would go with it. It compacts on a later tick, once the send lands.
-            if (_tailer.Has_UnconfirmedEntries(channel.FilePath))
+            if (_tailer.Has_UndeliveredEntries(channel.FilePath))
                 continue;
 
             var newLength = Channel_Compactor.Compact_IfNeeded(channel.FilePath);

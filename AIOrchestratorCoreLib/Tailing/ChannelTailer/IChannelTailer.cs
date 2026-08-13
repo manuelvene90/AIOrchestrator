@@ -26,8 +26,12 @@ public interface IChannelTailer
     /// </summary>
     void Confirm_Append(string channelFilePath);
 
-    /// <summary>Whether this file still owes a delivery — the bridge must not rewrite it meanwhile.</summary>
-    bool Has_UnconfirmedEntries(string channelFilePath);
+    /// <summary>
+    /// Whether this file still owes a delivery — the bridge must not rewrite it meanwhile. That
+    /// covers entries emitted but not yet acknowledged AND bytes already read that have not been
+    /// emitted yet: both are owed to the owner, and only the second survives a poll's rewind.
+    /// </summary>
+    bool Has_UndeliveredEntries(string channelFilePath);
 
     /// <summary>
     /// Current offsets snapshot, persisted by the bridge so restarts do not re-mirror. Unconfirmed

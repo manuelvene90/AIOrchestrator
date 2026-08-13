@@ -1,4 +1,5 @@
 using System.Text;
+using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Tailing.TailerPollResult;
@@ -172,6 +173,79 @@ public class ChannelTailerTests : IDisposable
         }
 
         throw new Exception("The tailer emitted nothing within 5 polls — the quiet-poll flush never happened.");
+    }
+
+    [Fact]
+    public void OwedEntry_ReadButNotYetEmitted_IsDeclaredUndelivered()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+
+        // The poll that READS the entry emits nothing: it is the trailing entry and the quiet-poll
+        // window has not elapsed. Those bytes are owed to Telegram all the same, and this is the
+        // window in which the bridge used to ask "does this channel owe anything?" and be told no.
+        var readPoll = tailer.Poll([_channel]);
+
+        Assert.Empty(readPoll.CompletedAppends);
+        Assert.True(tailer.Has_UndeliveredEntries(_channelFile));
+    }
+
+    [Fact]
+    public void OwedEntry_CompactionOfferedBeforeItWasEmitted_IsHeldBackAndStillMirrored()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+
+        tailer.Poll([_channel]);
+        Compact_IfTheTailerAllowsIt(tailer);
+
+        var delivered = Collect_DeliveredEntries(tailer, polls: 4);
+
+        // Without the guard the rewrite lands on a channel that still owes this entry, Set_Offset
+        // re-anchors past it, and it is never mirrored — gone from Telegram forever, with the file
+        // on disk intact, which is why nobody notices.
+        Assert.Equal("report", Assert.Single(delivered).Subject);
+    }
+
+    /// <summary>
+    /// The compaction step of a mirror tick (<c>BridgeEngineModel.Compact_LongChannels</c>): rewrite
+    /// the channel and re-anchor the tailer to the new length — but only if the tailer says the
+    /// channel owes nothing.
+    /// </summary>
+    void Compact_IfTheTailerAllowsIt(IChannelTailer tailer)
+    {
+        if (tailer.Has_UndeliveredEntries(_channelFile))
+            return;
+
+        File.WriteAllText(_channelFile, "## [0] FROM app — d — compacted\n\nolder entries archived\n");
+        tailer.Set_Offset(_channelFile, new FileInfo(_channelFile).Length);
+    }
+
+    /// <summary>
+    /// Polls as the mirror loop does, confirming every append — a delivery that lands. Without the
+    /// confirmation the tailer would re-emit the same entry on every poll, by contract, and the
+    /// count would say nothing about whether it was preserved.
+    /// </summary>
+    IReadOnlyList<IChannelEntry> Collect_DeliveredEntries(IChannelTailer tailer, int polls)
+    {
+        List<IChannelEntry> entries = [];
+
+        for (var i = 0; i < polls; i++)
+        {
+            foreach (var append in tailer.Poll([_channel]).CompletedAppends)
+            {
+                entries.AddRange(append.Entries);
+                tailer.Confirm_Append(append.Channel.FilePath);
+            }
+        }
+
+        return entries;
     }
 
     [Fact]
