@@ -1389,14 +1389,19 @@ internal sealed class BridgeEngineModel(
         if (_nudgedMemberUtc.ContainsKey(session.OrchId))
             return;
 
-        _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
-
+        // The token is spent only on a nudge that LANDED. It used to be taken here, one line above
+        // the append — harmless while the append could only throw (the tick died and nothing was
+        // remembered), and a silent loss the moment the safe wrapper began catching and returning
+        // false: the token said "nudged" for an entry that was never written, and this key's only
+        // release is the empty-waiting-list branch above.
         if (!Append_SupervisorAttention_UnlessMeeting(
                 session.OrchId,
                 $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
                 $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
                 presence))
             return;
+
+        _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
 
         _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
     }
@@ -1546,9 +1551,10 @@ internal sealed class BridgeEngineModel(
                 alreadyReported: _ledgerBehindReportedOrchIds.Contains(session.OrchId),
                 suppressed: OwnerPresence_Policy.Suppresses_SupervisorAttention(presence));
 
-            if (ledgerOutcome.RemembersReported)
-                _ledgerBehindReportedOrchIds.Add(session.OrchId);
-            else
+            // FORGETTING is reconciliation and happens regardless; REMEMBERING is a claim that the
+            // alert went out, so it waits for the append (see Nudge_IdleSupervisor for the same rule
+            // and the same reason: the safe wrapper returns false where it once threw).
+            if (!ledgerOutcome.RemembersReported)
                 _ledgerBehindReportedOrchIds.Remove(session.OrchId);
 
             if (ledgerOutcome.ShouldAppendAlert
@@ -1558,6 +1564,7 @@ internal sealed class BridgeEngineModel(
                     "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
                     presence))
             {
+                _ledgerBehindReportedOrchIds.Add(session.OrchId);
                 _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
             }
 
@@ -1617,10 +1624,13 @@ internal sealed class BridgeEngineModel(
         if (_reportedLedgerShapeByOrchId.TryGetValue(session.OrchId, out var reported) && reported == fingerprint)
             return;
 
-        _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
-
+        // An EMPTY set is forgetting — reconciliation, recorded regardless. A non-empty one is a
+        // claim that the complaint was delivered, so it waits for the append below.
         if (complaints.Count == 0)
+        {
+            _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
             return;
+        }
 
         if (!Append_SupervisorAttention_UnlessMeeting(
             session.OrchId,
@@ -1629,6 +1639,7 @@ internal sealed class BridgeEngineModel(
             presence))
             return;
 
+        _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
         _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
     }
 
@@ -4577,10 +4588,13 @@ internal sealed class BridgeEngineModel(
             if (signature == (lastSignature ?? ""))
                 continue;
 
-            _flaggedIdleMembersByOrchId[session.OrchId] = signature;
-
+            // Nobody idle is FORGETTING — recorded regardless, so the next idle set flags again. A
+            // non-empty signature claims the flag was delivered, so it waits for the append.
             if (idle.Count == 0)
+            {
+                _flaggedIdleMembersByOrchId[session.OrchId] = signature;
                 continue;
+            }
 
             if (!Append_SupervisorAttention_UnlessMeeting(
                     session.OrchId,
@@ -4589,6 +4603,7 @@ internal sealed class BridgeEngineModel(
                     presence))
                 continue;
 
+            _flaggedIdleMembersByOrchId[session.OrchId] = signature;
             _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
         }
     }

@@ -228,6 +228,38 @@ public class MeetingDefersAlertsProbeTests : IDisposable
         Assert.False(File.Exists(Path.ChangeExtension(ownerChannel, null) + ".archive.md"), "the frozen channel was compacted — its held backlog is gone");
     }
 
+    /// <summary>
+    /// A FAILED APPEND MUST NOT SPEND THE TOKEN. The nudge fires once per quiet spell and remembers
+    /// that it did; its only release is the spell ending. While a failed append could only THROW,
+    /// taking the token with the tick, recording it first was harmless — the safe wrapper changed
+    /// that by catching and returning false, so the token began saying "nudged" for an entry that was
+    /// never written, and the supervisor was never told for the rest of that spell.
+    /// <para>
+    /// The lock is the same production collision as the tick test: deny-write, so the append really
+    /// fails rather than being simulated.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ANudgeWhoseAppendFAILED_IsDeliveredOnTheNextTick()
+    {
+        var (orchId, _) = Start_WithDormantMember();
+        var ownerChannel = _paths.Get_OwnerChannelFile(orchId);
+
+        using (var collision = File.Open(ownerChannel, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None))
+        {
+            await Tick_Once_Async();
+        }
+
+        Assert.Equal(0, Count_Nudges(ownerChannel));
+
+        // The obstruction is gone; the nudge is still owed and must arrive.
+        await Tick_Once_Async();
+
+        Assert.True(
+            Wait_Until(() => Count_Nudges(ownerChannel) == 1),
+            "the nudge was never delivered — its token was spent on the append that failed");
+    }
+
     /// <summary>A briefed member that went silent twenty minutes ago, with a report nobody answered.</summary>
     (string OrchId, string MemberChannel) Start_WithDormantMember()
     {
