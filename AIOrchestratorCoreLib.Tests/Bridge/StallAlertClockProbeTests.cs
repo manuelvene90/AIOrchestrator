@@ -33,6 +33,14 @@ public class StallAlertClockProbeTests : IDisposable
 {
     const int OLDER_THAN_THE_STALL_THRESHOLD_MINUTES = 40;
 
+    /// <summary>
+    /// How long to wait before concluding an alert did NOT fire. The positive cases in this file fire
+    /// on the first tick in about 200 ms, so this is generous rather than tight — but it is a WINDOW,
+    /// and an absence proven by waiting is weaker evidence than a presence. It is stated here so the
+    /// next reader knows which kind of claim the False assertions are making.
+    /// </summary>
+    const int NEGATIVE_WINDOW_MILLISECONDS = 4_000;
+
     readonly string _tempRoot;
     readonly string _tempRepo;
     readonly ISupervisionPaths _paths;
@@ -140,6 +148,84 @@ public class StallAlertClockProbeTests : IDisposable
             silentSince);
     }
 
+    /// <summary>
+    /// THE MINIMUM, PINNED — rev-8's F2. `Get_OrchestrationQuietFor` takes the SHORTEST quiet across
+    /// channels, and nothing asserted it: every existing fixture ages the session and every channel to
+    /// the same instant, so minimum and maximum are the same number and the operator could be flipped
+    /// with the suite green.
+    ///
+    /// Here one member spoke two minutes ago and everything else is forty minutes stale. Minimum says
+    /// two — somebody is talking, no alert. Maximum says forty — and the owner gets "quiet for 40 min
+    /// and no session is working" about an orchestration that is working. That is the false-alert class
+    /// items 14 and 15 exist to prevent, and it is why this asserts SILENCE rather than an alert.
+    /// </summary>
+    [Fact]
+    public async Task AnOrchestrationWithOneRecentChannelIsNotReportedAsStalled()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        var silentSince = DateTime.Now.AddMinutes(-OLDER_THAN_THE_STALL_THRESHOLD_MINUTES);
+        var justSpoke = DateTime.Now.AddMinutes(-2);
+
+        Age_Session(session.OrchId, silentSince);
+
+        foreach (var member in session.Members)
+            File.SetLastWriteTime(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), silentSince);
+
+        Write_Channel(
+            _paths.Get_ImplementerChannelFile(session.OrchId, session.Members[0].MemberId),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n\n"
+            + $"## [2] FROM implementer — {justSpoke:yyyy-MM-dd HH:mm} — still going\nmid-task\n",
+            silentSince);
+
+        Write_Channel(
+            _paths.Get_OwnerChannelFile(session.OrchId),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
+            silentSince);
+
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0, NEGATIVE_WINDOW_MILLISECONDS);
+
+        Assert.False(alerted, "a working orchestration was reported as stalled — the span is the shortest across channels, not the longest");
+    }
+
+    /// <summary>
+    /// THE FLOOR, PINNED — the other half of F2, and it takes both remaining mutations at once.
+    ///
+    /// Every channel here is undateable, so the floor — "an orchestration cannot have been quiet for
+    /// longer than it has existed" — is the only value left. The orchestration is five minutes old, so
+    /// nothing is owed.
+    ///
+    /// Replace the floor with `TimeSpan.MaxValue` and this reddens. Drop `.ToLocalTime()` and it
+    /// reddens too: `CreatedUtc` really is UTC — `SessionJson_Serializer` parses with
+    /// `DateTimeStyles.RoundtripKind` — so without the conversion the floor gains two hours on this
+    /// machine and a five-minute-old orchestration is announced to the owner as long dead.
+    /// </summary>
+    [Fact]
+    public async Task AYoungOrchestrationWhoseChannelsCannotBeDatedIsNotReportedAsStalled()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        Age_Session(session.OrchId, DateTime.Now.AddMinutes(-5));
+
+        // App entries only: nothing here can be dated, so every channel returns null and is skipped.
+        foreach (var member in session.Members)
+        {
+            Write_Channel(
+                _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId),
+                $"## [1] FROM app — {DateTime.Now:yyyy-MM-dd HH:mm} — GO AHEAD — resume\npick up where you left off\n",
+                DateTime.Now.AddMinutes(-5));
+        }
+
+        Write_Channel(
+            _paths.Get_OwnerChannelFile(session.OrchId),
+            $"## [1] FROM app — {DateTime.Now:yyyy-MM-dd HH:mm} — GO AHEAD — resume\npick up where you left off\n",
+            DateTime.Now.AddMinutes(-5));
+
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0, NEGATIVE_WINDOW_MILLISECONDS);
+
+        Assert.False(alerted, "a five-minute-old orchestration was reported as stalled — the floor is its own age, in local time");
+    }
+
     void Start_StalledOrchestration_WithAFreshAppEntryInTheOwnerChannel()
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
@@ -208,13 +294,13 @@ public class StallAlertClockProbeTests : IDisposable
     /// and NOTHING is ever attempted. Measured — the first draft of this test read zero attempts of
     /// any kind, which is indistinguishable from the defect it was written to catch.
     /// </summary>
-    async Task<bool> Run_UntilAsync(Func<bool> condition)
+    async Task<bool> Run_UntilAsync(Func<bool> condition, int maxMilliseconds = 15_000)
     {
         using var cancellation = new CancellationTokenSource();
 
         var loop = _engine.Run_Async(cancellation.Token);
 
-        var satisfied = Wait_Until(condition, 15_000);
+        var satisfied = Wait_Until(condition, maxMilliseconds);
 
         await cancellation.CancelAsync();
 
