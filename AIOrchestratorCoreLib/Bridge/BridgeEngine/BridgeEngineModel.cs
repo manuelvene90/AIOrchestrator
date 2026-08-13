@@ -1807,7 +1807,14 @@ internal sealed class BridgeEngineModel(
                     }
                 }
             }
-            catch (OperationCanceledException)
+            // THE TOKEN DECIDES WHETHER THIS IS A SHUTDOWN, never the exception type — the same rule
+            // Run_MirrorLoop_Async already states. HttpClient.Timeout expiry throws
+            // TaskCanceledException, which IS an OperationCanceledException, so the bare rethrow this
+            // filter replaced let an ordinary network timeout escape Mirror_Append_Async entirely.
+            // Settle_MirrorAttempt then never ran, which cost BOTH stamps: no backoff, so the channel
+            // re-attempted on the next 2 s tick, and no first-failure time, so the 30-minute give-up
+            // never armed. One wedged endpoint re-notified the owner every ~90 s forever.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }

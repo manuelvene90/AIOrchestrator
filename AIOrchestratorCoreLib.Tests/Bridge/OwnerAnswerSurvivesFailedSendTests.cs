@@ -49,6 +49,13 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
     /// <summary>Distinctive, and deliberately free of anything that would push on its own merits.</summary>
     const string ANSWER_TEXT = "Yes. The rebuild finished and the branch is clean.";
 
+    /// <summary>
+    /// These two ASK something, so they push on their own merits. That is deliberate: the timeout and
+    /// shutdown cases are about the catch filter and must not depend on the waiting flag at all.
+    /// </summary>
+    const string TIMEOUT_TEXT = "Did the timed-out send still get its backoff?";
+    const string SHUTDOWN_TEXT = "Is the shutdown path still a rethrow?";
+
     readonly string _tempRoot;
     readonly string _tempRepo;
     readonly ISupervisionPaths _paths;
@@ -111,7 +118,7 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
             "the owner's message never reached the router, so the waiting flag was never raised");
 
         // 2 — the supervisor answers, and the send fails.
-        Append_SupervisorAnswer(session.OrchId);
+        Append_SupervisorEntry(session.OrchId, 1, "the answer", ANSWER_TEXT);
         _telegram.Fail_Sends_Containing(ANSWER_TEXT);
 
         Assert.True(
@@ -135,6 +142,73 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
             + "question they asked");
     }
 
+    /// <summary>
+    /// A TIMEOUT IS NOT A SHUTDOWN. `HttpClient.Timeout` throws `TaskCanceledException`, which IS an
+    /// `OperationCanceledException`, so an unfiltered rethrow lets a plain network timeout escape
+    /// `Mirror_Append_Async` entirely. `Settle_MirrorAttempt` then never runs, which costs BOTH the
+    /// backoff stamp — so the channel re-attempts on the very next 2 s tick — and the first-failure
+    /// stamp, so the 30-minute give-up never arms. The same message re-notifies the owner forever.
+    ///
+    /// The engine already fixed this exact trap one level up, at `Run_MirrorLoop_Async`, with the
+    /// token filter this case pins.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ATimedOutSend_IsNotReadAsShutdown_SoTheChannelStillGetsItsBackoff()
+    {
+        var orchId = await Start_WithChannelAlreadySeen_Async();
+
+        Append_SupervisorEntry(orchId, 1, "a question", TIMEOUT_TEXT);
+        _telegram.Timeout_Sends_Containing(TIMEOUT_TEXT);
+
+        // Well past several mirror ticks (2 s each) but far short of the 30 s backoff, so a channel
+        // that was settled correctly cannot legitimately attempt twice inside this window.
+        await Run_For_Async(14_000);
+
+        var attempts = _telegram.Count_Attempts_Containing(TIMEOUT_TEXT);
+
+        Assert.True(attempts >= 1, $"the entry was never attempted, so this test reached nothing.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(1, attempts);
+    }
+
+    /// <summary>
+    /// THE HALF THE FILTER PROTECTS. A real shutdown must still propagate: without the rethrow, a
+    /// cancelled send falls into the generic catch, is logged as a delivery failure that never
+    /// happened, and stamps a backoff on the way out of the process. Deleting the rethrow is the
+    /// obvious way to "fix" the timeout case, so it gets its own pin.
+    /// </summary>
+    [Fact]
+    public async Task ARealShutdownStillPropagates_AndIsNeverLoggedAsASendFailure()
+    {
+        var orchId = await Start_WithChannelAlreadySeen_Async();
+
+        Append_SupervisorEntry(orchId, 1, "a question", SHUTDOWN_TEXT);
+        _telegram.Block_Sends_Containing(SHUTDOWN_TEXT);
+
+        using var cancellation = new CancellationTokenSource();
+        var loop = _engine.Run_Async(cancellation.Token);
+
+        // Cancelling before the send is in flight would prove nothing — there would be no
+        // OperationCanceledException from a send for the filter to classify.
+        Assert.True(Wait_Until(() => _telegram.Is_SendInFlight(), 15_000), "the send never started, so nothing was cancelled mid-flight");
+
+        await cancellation.CancelAsync();
+
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+            // The normal way these loops end.
+        }
+
+        Assert.False(
+            _log.Has_Line_Containing("Telegram mirror send failed"),
+            $"a shutdown was recorded as a failed delivery.{Environment.NewLine}{_log.Dump()}");
+    }
+
     void Seed_OwnerChannel(string orchId)
     {
         var channelFile = _paths.Get_OwnerChannelFile(orchId);
@@ -144,15 +218,32 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
     }
 
     /// <summary>
-    /// A supervisor entry that says nothing ask-shaped, so the ONLY thing that can push it is the
-    /// owner waiting for it.
+    /// Starts an orchestration whose owner channel the tailer has ALREADY SEEN. An unseen file is
+    /// registered at its current end and emits nothing, so an entry appended before the first poll is
+    /// behind the starting offset and is never mirrored — a setup mistake that looks exactly like the
+    /// defect under test. One short run baselines the file; entries appended after it are new bytes.
     /// </summary>
-    void Append_SupervisorAnswer(string orchId)
+    async Task<string> Start_WithChannelAlreadySeen_Async()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        Seed_OwnerChannel(session.OrchId);
+
+        await Run_For_Async(4_000);
+
+        return session.OrchId;
+    }
+
+    /// <summary>
+    /// A supervisor entry on the owner channel. `ANSWER_TEXT` says nothing ask-shaped, so the ONLY
+    /// thing that can push it is the owner waiting for it.
+    /// </summary>
+    void Append_SupervisorEntry(string orchId, int index, string subject, string body)
     {
         var channelFile = _paths.Get_OwnerChannelFile(orchId);
         var stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
 
-        File.AppendAllText(channelFile, $"\n## [1] FROM supervisor — {stamp} — the answer\n{ANSWER_TEXT}\n");
+        File.AppendAllText(channelFile, $"\n## [{index}] FROM supervisor — {stamp} — {subject}\n{body}\n");
     }
 
     static string Build_OwnerMessageJson(string text)
@@ -167,6 +258,24 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
     /// rather than poked because the state under test — the waiting flag — has no getter: its only
     /// reader is the mirror path's push decision.
     /// </summary>
+    async Task Run_For_Async(int milliseconds)
+    {
+        await Run_Until_Async(() => false, milliseconds);
+    }
+
+    static bool Wait_Until(Func<bool> condition, int maxMilliseconds)
+    {
+        for (var waited = 0; waited < maxMilliseconds; waited += 50)
+        {
+            if (condition())
+                return true;
+
+            Thread.Sleep(50);
+        }
+
+        return condition();
+    }
+
     async Task<bool> Run_Until_Async(Func<bool> condition, int maxMilliseconds)
     {
         using var cancellation = new CancellationTokenSource();
@@ -214,6 +323,9 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
     readonly List<string> _sentTexts = [];
     string? _queuedUpdatesJson;
     string? _failFragment;
+    string? _timeoutFragment;
+    string? _blockFragment;
+    bool _sendInFlight;
     long _nextMessageId = 9000;
 
     public void Queue_OwnerMessage(string updatesJson)
@@ -240,6 +352,35 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
             _failFragment = null;
     }
 
+    /// <summary>
+    /// What `HttpClient.Timeout` actually throws. It is an `OperationCanceledException` even though
+    /// nothing was cancelled, which is the whole reason the catch needs a token filter.
+    /// </summary>
+    public void Timeout_Sends_Containing(string fragment)
+    {
+        lock (_lock)
+            _timeoutFragment = fragment;
+    }
+
+    /// <summary>Hangs the send until the caller's token is cancelled — a real shutdown mid-flight.</summary>
+    public void Block_Sends_Containing(string fragment)
+    {
+        lock (_lock)
+            _blockFragment = fragment;
+    }
+
+    public bool Is_SendInFlight()
+    {
+        lock (_lock)
+            return _sendInFlight;
+    }
+
+    public int Count_Attempts_Containing(string fragment)
+    {
+        lock (_lock)
+            return _attemptedTexts.Count(text => text.Contains(fragment, StringComparison.Ordinal));
+    }
+
     public bool Has_Attempted_Containing(string fragment)
     {
         lock (_lock)
@@ -252,14 +393,36 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
             return _sentTexts.Any(text => text.Contains(fragment, StringComparison.Ordinal));
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public async Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
     {
-        return Task.FromResult<long?>(Record_AndMaybeFail(text));
+        await Block_IfAsked_Async(text, cancellationToken);
+
+        return Record_AndMaybeFail(text);
     }
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public async Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
     {
-        return Task.FromResult<long?>(Record_AndMaybeFail(html));
+        await Block_IfAsked_Async(html, cancellationToken);
+
+        return Record_AndMaybeFail(html);
+    }
+
+    /// <summary>
+    /// Hangs until the caller's token is cancelled, then throws exactly what a cancelled await throws.
+    /// This is how the shutdown case gets a send genuinely IN FLIGHT at cancellation time — cancelling
+    /// before one starts would prove nothing about how the catch classifies it.
+    /// </summary>
+    async Task Block_IfAsked_Async(string text, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            if (_blockFragment == null || !text.Contains(_blockFragment, StringComparison.Ordinal))
+                return;
+
+            _sendInFlight = true;
+        }
+
+        await Task.Delay(Timeout.Infinite, cancellationToken);
     }
 
     public Task<long?> Send_MessageWithButtons_Async(
@@ -276,6 +439,10 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         lock (_lock)
         {
             _attemptedTexts.Add(text);
+
+            // A REAL HttpClient.Timeout, which is an OperationCanceledException with nothing cancelled.
+            if (_timeoutFragment != null && text.Contains(_timeoutFragment, StringComparison.Ordinal))
+                throw new TaskCanceledException($"Simulated HttpClient timeout while sending: {text}");
 
             if (_failFragment != null && text.Contains(_failFragment, StringComparison.Ordinal))
                 throw new Exception($"Simulated Telegram outage while sending: {text}");
@@ -379,6 +546,12 @@ internal sealed class RecordingLog_Fake : IOrchestrationLog
     /// for a dozen reasons that all look identical from outside; the engine's own log is the only
     /// thing that distinguishes "the defect" from "the setup never got there".
     /// </summary>
+    public bool Has_Line_Containing(string fragment)
+    {
+        lock (_lock)
+            return _allLines.Any(line => line.Contains(fragment, StringComparison.Ordinal));
+    }
+
     public string Dump()
     {
         lock (_lock)
