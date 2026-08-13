@@ -123,6 +123,30 @@ public class ChannelCompactionStepTests : IDisposable
     }
 
     [Fact]
+    public void ChannelWithAnEmittedButUnconfirmedEntry_IsNotCompacted_UntilTheSendIsAcknowledged()
+    {
+        Write_LongChannel(_channelFile);
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, Build_Entry(ENTRIES_ABOVE_THRESHOLD + 1, "sent but not acknowledged"));
+        Emit_UntilAnAppendArrives(tailer);
+
+        // Emitted and NOT confirmed — the Telegram send failed, and the tailer re-emits it on every
+        // poll until it lands. Pending is empty (the bytes were consumed) and the cursor is at EOF
+        // (nothing new arrived), so the unconfirmed buffer is the ONLY thing that still owes.
+        var beforeConfirmation = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
+
+        tailer.Confirm_Append(_channelFile);
+        var afterConfirmation = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
+
+        // Both halves matter: the refusal, and that confirming is what LIFTS it. Without the second
+        // assertion the first could pass for any reason at all.
+        Assert.Null(beforeConfirmation);
+        Assert.NotNull(afterConfirmation);
+    }
+
+    [Fact]
     public void ChannelAppendedToAfterItsPoll_IsNotCompacted_AndTheNewEntryIsStillMirrored()
     {
         Write_LongChannel(_channelFile);
@@ -238,6 +262,18 @@ public class ChannelCompactionStepTests : IDisposable
             add { }
             remove { }
         }
+    }
+
+    /// <summary>Polls until the trailing entry clears its quiet-poll window, WITHOUT confirming it.</summary>
+    void Emit_UntilAnAppendArrives(IChannelTailer tailer)
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            if (tailer.Poll([_channel]).CompletedAppends.Count > 0)
+                return;
+        }
+
+        throw new Exception("The tailer emitted nothing within 5 polls — the quiet-poll flush never happened.");
     }
 
     static void Write_LongChannel(string channelFilePath)
