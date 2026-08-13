@@ -376,7 +376,7 @@ def split_commands(tokens):
     return commands, redirects
 
 
-def classify_words(words, depth):
+def classify_words(words, depth, assignments):
     if depth > 4:
         raise Undecidable("indirection nested deeper than this scanner follows")
 
@@ -408,6 +408,20 @@ def classify_words(words, depth):
             flags = [a for a in args[1:] if a.startswith("-")]
             return None if all(f.split("=")[0] in GIT_BRANCH_READONLY_FLAGS for f in flags) else "git"
         return "git" if first in GIT_DENIED else None
+
+    # `tee` IS A REDIRECT WITH A DIFFERENT SPELLING, so it gets the redirect's exemption rather than a
+    # flat deny. `… | tee -a "$ch"` is the one write a reviewer is allowed to make, and refusing it
+    # with a message telling the reviewer to append to its own channel is the CRITICAL silencing shape
+    # rebuilt in new clothes — on the branch that exists to remove it. Same predicate as the redirect
+    # rule, called here rather than copied: two implementations of one exemption would drift, and the
+    # one that drifted would be the one nobody was reading.
+    if command == "tee":
+        targets = [a for a in args if not (a.startswith("-") and len(a) > 1)]
+        appending = any(a in ("-a", "--append") for a in args)
+        operator = ">>" if appending else ">"
+        if all(write_target_allowed(operator, t, assignments) for t in targets):
+            return None
+        return "tee"
 
     if command in PKG:
         return "pkg" if first in PKG[command] else None
@@ -490,18 +504,14 @@ def expand_variables(text, assignments):
     return text
 
 
-def redirect_reason(operator, target, assignments):
-    # `>&` and `2>&1` duplicate a descriptor; nothing is written to a file.
-    if operator in ("<", "<<", "<<<", ">&"):
-        return None
-    if target is None:
-        return None
+def write_target_allowed(operator, target, assignments):
+    """THE one write a reviewer may make, in one place because two rules need to agree on it.
 
-    # Handed straight back to `analyse`, which decides what it means once every command has been
-    # classified. This branch is the ONLY thing an unreadable target may affect.
-    if target is UNRESOLVED:
-        return UNRESOLVED
-
+    The redirect rule and `tee` are the same permission wearing different spellings, and an exemption
+    implemented twice is an exemption that will drift — with the copy nobody is reading being the one
+    that drifts. Whatever this returns True for is exactly what a reviewer can write, whichever
+    syntax it reaches for.
+    """
     # A TARGET NAMED BY A VARIABLE IS RESOLVED, NOT SEARCHED FOR. The reviewer role command shows the
     # channel path put in a variable and the append using the variable, so a token-only test refuses
     # the one write a reviewer is allowed to make — that was the CRITICAL. The first fix for it fell
@@ -524,15 +534,30 @@ def redirect_reason(operator, target, assignments):
     own_channel = "supervision/%s/%s/" % (ORCH, MEMBER)
 
     if operator == ">>" and own_channel in normalised:
-        return None
+        return True
 
     # The watcher baseline lives beside the channel. APPEND-ONLY, like the clause above: without that
     # requirement this clause permitted a truncating write, which is strictly worse than the write
     # the exemption exists to allow.
     if operator == ">>" and "watch-base" in normalised:
+        return True
+
+    return False
+
+
+def redirect_reason(operator, target, assignments):
+    # `>&` and `2>&1` duplicate a descriptor; nothing is written to a file.
+    if operator in ("<", "<<", "<<<", ">&"):
+        return None
+    if target is None:
         return None
 
-    return "redirect"
+    # Handed straight back to `analyse`, which decides what it means once every command has been
+    # classified. This branch is the ONLY thing an unreadable target may affect.
+    if target is UNRESOLVED:
+        return UNRESOLVED
+
+    return None if write_target_allowed(operator, target, assignments) else "redirect"
 
 
 def analyse(source, depth=0):
@@ -540,7 +565,7 @@ def analyse(source, depth=0):
     assignments = leading_assignments(commands)
 
     for words in commands:
-        reason = classify_words(words, depth)
+        reason = classify_words(words, depth, assignments)
         if reason:
             return reason
 
@@ -591,6 +616,11 @@ case "$VERDICT" in
     deny "that command installs or scaffolds into the working tree." ;;
   "DENY redirect")
     deny "that command redirects output into a file. The only write you may make is appending (>>) to your own channel under your member folder." ;;
+  # Its own message rather than borrowing the redirect one: a reviewer told its `tee` "redirects
+  # output" has to work out what the guard actually objected to, and the whole point of these strings
+  # is that a refusal teaches. `tee -a` into its own channel is permitted and does not reach here.
+  "DENY tee")
+    deny "that command writes output into a file. You may pipe into tee only with -a and only into your own channel under your member folder." ;;
   UNDECIDABLE*)
     aiorch_log_undecidable "whether this command mutates anything" "${VERDICT#UNDECIDABLE }"
     exit 0 ;;

@@ -132,6 +132,7 @@ deny_reason() {
     *"edits files in place"*)          printf 'editor' ;;
     *"changes repository state"*)      printf 'git' ;;
     *"installs or scaffolds"*)         printf 'pkg' ;;
+    *"writes output into a file"*)     printf 'tee' ;;
     *"redirects output into a file"*)  printf 'redirect' ;;
     *)                                 printf 'NO_DENIAL' ;;
   esac
@@ -591,6 +592,29 @@ check "mkdir -p is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(
 check "a new verb reached through find -exec" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'find . -name "*.cs" -exec cp {} /tmp ;')" reviewer)")"
 check "prose naming cp is still allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "cp a b" src/')" reviewer)")"
 check "a command merely starting with mk is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'mktemp -d')" reviewer)")"
+
+# `tee` GOES THROUGH THE EXEMPTION, NOT INTO THE VERB SET. `… | tee -a "$ch"` is the permitted append
+# in a different spelling, and refusing it with a message telling the reviewer to append to its own
+# channel would rebuild the CRITICAL — the guard silencing the role it governs — on the branch that
+# exists to remove it. So the deny cases below are only the writes a reviewer genuinely may not make,
+# and the ALLOW cases are the same write it may already make with `>>`.
+check "tee into an arbitrary file is denied" tee "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x | tee /tmp/out.log')" reviewer)")"
+check "tee -a into an arbitrary file, same" tee "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x | tee -a /tmp/out.log')" reviewer)")"
+check "tee into ANOTHER member's channel is denied" tee "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee -a $SUPERVISION/imp-2/channel.md")" reviewer)")"
+
+# Append is the whole of the permission, here as everywhere: without -a, tee TRUNCATES the channel it
+# is pointed at, which is the opposite of the write being allowed.
+check "tee WITHOUT -a into its own channel is denied" tee "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
+check "tee -a into its own channel is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee -a $SUPERVISION/$MEMBER/channel.md")" reviewer)")"
+check "…and through a variable, as the role command writes it" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "ch=\"$SUPERVISION/$MEMBER/channel.md\"
+echo x | tee -a \"\$ch\"")" reviewer)")"
+
+# ONE PERMITTED TARGET DOES NOT EXCUSE THE OTHERS. tee takes a list, and a rule that allowed the
+# command because its first file was exempt would write everything after it too.
+check "a permitted target plus a second file is denied" tee "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee -a $SUPERVISION/$MEMBER/channel.md /tmp/other.log")" reviewer)")"
+
+check "tee with no file writes nothing and is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x | tee')" reviewer)")"
+check "prose naming tee is still allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "tee -a x" src/')" reviewer)")"
 
 # ── A LINE CONTINUATION IS DELETED, NOT ESCAPED ──────────────────────────────────────────────────
 #
