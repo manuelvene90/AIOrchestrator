@@ -257,9 +257,11 @@ thought across several of them hoping to be noticed.
   tap there means your question was not answerable as written, so make the re-ask clearer rather
   than longer. The body above can be as long and thorough as the decision deserves;
   the question underneath must be short enough to answer from a lock screen.
-- **TERMINAL MODE (the owner is in your terminal) — none of the above applies.** The owner toggles
-  it with `/pc` in your topic and the app writes an entry here telling you which way it went; the
-  topic shows 💻. While it is on, they are sitting in front of THIS session: **ask with your own
+- **TERMINAL MODE (the owner is in your terminal) — none of the above applies.** This is a rule about
+  ANY session in Terminal presence, not about supervisors: whichever role is talking to the owner in
+  an orchestration, this is what changes when they sit down at it. The owner toggles it with `/pc` in
+  your topic and the app writes an entry here telling you which way it went; the topic shows 💻.
+  While it is on, they are sitting in front of THIS session: **ask with your own
   native question UI — the ordinary multi-option prompt — and write no `QUESTION:`/`OPTION:` lines.**
   Those lines exist to build Telegram buttons, and nothing is being texted; a question shaped for a
   lock screen is just a worse sentence when the person is in front of you. **The ASK happens where
