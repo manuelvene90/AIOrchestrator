@@ -95,6 +95,27 @@ public class TopicStatusLineDeciderTests
     }
 
     /// <summary>
+    /// THE REPOST'S OWN WORDING FOR THE SAME THING. A repost DELETES the old message first, and
+    /// Telegram answers a delete of a message that is not there with "message to delete not found" —
+    /// a different sentence for the state the two above already describe.
+    ///
+    /// Without it that error fell to the generic catch, which backs off and RETRIES: an owner who
+    /// deleted the status line by hand left a topic whose text never changes (so the edit path that
+    /// clears the id is never taken) reposting into a delete that can never succeed, every backoff
+    /// period, for the life of the app. Terminal here instead — the id is forgotten and the next tick
+    /// posts a fresh line.
+    /// </summary>
+    [Fact]
+    public void AMessageThatIsAlreadyDeletedIsTerminalToo()
+    {
+        Assert.True(TopicStatusLine_Decider.Is_MessageGone("Bad Request: message to delete not found"));
+
+        // The exclusion still holds: a message that exists and merely cannot be edited is NOT gone,
+        // and clearing the id there posts a second line beside a frozen one.
+        Assert.False(TopicStatusLine_Decider.Is_MessageGone("Bad Request: message can't be edited"));
+    }
+
+    /// <summary>
     /// N7: "message can't be edited" means the message EXISTS and is not editable. Treating it as
     /// gone cleared the id and posted a second line while the frozen one stayed up — two status
     /// lines in one topic, which is the defect this feature exists to prevent, by another door.

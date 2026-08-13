@@ -269,6 +269,22 @@ internal sealed class BridgeEngineModel(
     readonly Lock _knownMessageIdsLock = new();
 
     /// <summary>
+    /// The NEWEST message id seen in each topic and when it was seen — the two facts the status-line
+    /// planner needs to know whether its message has been buried, and whether the topic has since
+    /// gone quiet. Written by the same one method that records every id, so nothing can be recorded
+    /// as known without also being recorded as newest. Key 0 = the General topic.
+    ///
+    /// IN MEMORY ON PURPOSE, not in session.json. It is a fact about a conversation that is still
+    /// happening; after a restart the planner is told nothing rather than something stale, and it
+    /// answers that by editing in place until the first message repopulates this.
+    ///
+    /// The STATUS LINE'S OWN message is deliberately absent — it is posted through
+    /// Refresh_TopicStatusLines_Async, which does not record it. It must not count as traffic that
+    /// buries itself.
+    /// </summary>
+    readonly Dictionary<long, Telegram.TopicStatusLine_Planner.TopicNewestMessage> _newestTopicMessageByThread = [];
+
+    /// <summary>
     /// Owner messages handed over and NOT yet answered by their supervisor. Tracked so a receipt
     /// can never stay frozen on "thinking…" — the owner always learns what became of what they
     /// sent, even if the supervisor goes idle without replying.
@@ -3954,14 +3970,22 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// ONE status message per topic: posted the first time there is anything to say, then EDITED
-    /// forever. It never notifies and never scrolls away, which is why it can be kept current at all.
+    /// silently for as long as it is the last thing in the topic.
     ///
-    /// Three properties matter and each has a test:
+    /// Four properties matter and each has a test:
     ///   - a change edits;
     ///   - an IDENTICAL line does nothing, because an edit that writes the same text is a wasted API
     ///     call and, against the 429 limit we already have open on the ledger, a real cost;
     ///   - a RESTART edits the existing message rather than posting a second one — the id is read
-    ///     from session.json, not from memory.
+    ///     from session.json, not from memory;
+    ///   - a line BURIED by later traffic, in a topic that has since been quiet for two minutes, is
+    ///     deleted and written again at the bottom. Telegram cannot move a message, so this is the
+    ///     only way to put the current state where the owner is looking when they enter the chat.
+    ///
+    /// The repost is the ONE action here that notifies, and everything about it is arranged so that
+    /// it cannot become a waterfall: the quiet window bounds it to one ping per quiet period, the
+    /// delivery gate blocks it in a silenced topic exactly as it blocks a first post, and it never
+    /// fires while the line is already last.
     /// </summary>
     async Task Refresh_TopicStatusLines_Async(CancellationToken cancellationToken)
     {
@@ -3994,7 +4018,8 @@ internal sealed class BridgeEngineModel(
                 lastText,
                 Resolve_EffectiveMode(session.OrchId),
                 _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
-                MIRROR_RETRY_BACKOFF_SECONDS);
+                MIRROR_RETRY_BACKOFF_SECONDS,
+                Find_NewestTopicMessage_OrNull(session.TelegramTopicId));
 
             var action = plan.Action;
             var text = plan.Text;
@@ -4012,10 +4037,38 @@ internal sealed class BridgeEngineModel(
                 }
                 else
                 {
+                    // DELETE FIRST, AND ONLY THEN SEND. Telegram cannot move a message, so a repost is
+                    // a delete plus a post — and the order is the whole invariant: exactly ONE status
+                    // message per topic, always. Posting first and deleting after leaves two of them
+                    // up for as long as the second call takes, and leaves two of them up FOREVER if it
+                    // fails, which is the precise defect this feature was built to prevent.
+                    //
+                    // A FAILED DELETE THEREFORE MUST NOT POST. It throws, the catches below take it,
+                    // the old message and its id are kept untouched, and the next tick tries again
+                    // behind the backoff. If the message is simply gone, Is_MessageGone forgets the id
+                    // and the next tick posts a fresh line.
+                    if (action == Telegram.TopicStatusActions.Repost && session.StatusLineMessageId != null)
+                        await _telegramClient.Delete_Message_Async(session.StatusLineMessageId.Value, cancellationToken);
+
                     var messageId = await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
 
                     if (messageId == null)
+                    {
+                        // A REPOST HAS ALREADY DELETED THE OLD MESSAGE by the time it gets here, so
+                        // keeping its id would leave the topic pointing at nothing — and a quiet
+                        // orchestration's text never changes, so the edit that would discover the dead
+                        // id is never attempted and the topic loses its status line for good. Forget
+                        // the id AND the remembered text (which would otherwise silence the fresh post
+                        // as identical) and let the next tick start over. On a first POST there is
+                        // nothing to undo, which is why this is not unconditional.
+                        if (action == Telegram.TopicStatusActions.Repost)
+                        {
+                            _store.Clear_StatusLineMessageId(session.OrchId);
+                            _statusLineTextByOrchId.Remove(session.OrchId);
+                        }
+
                         continue;
+                    }
 
                     _store.Set_StatusLineMessageId(session.OrchId, messageId.Value);
                 }
@@ -5175,6 +5228,32 @@ internal sealed class BridgeEngineModel(
 
             if (ids.Count > KNOWN_IDS_PER_TOPIC_CAP)
                 ids.RemoveRange(0, ids.Count - KNOWN_IDS_PER_TOPIC_CAP);
+
+            // THE HIGHEST id wins, not the last one recorded: these arrive from a batch of updates
+            // and from concurrent sends, so "most recently handed to this method" is not "latest in
+            // the chat". An out-of-order id overwriting a higher one would tell the status line it is
+            // no longer buried when it still is.
+            //
+            // DateTime.Now, LOCAL, because the planner compares it against the one local clock this
+            // file uses everywhere — read the Is_AttemptDue comment before changing that. Arrival is
+            // when the app learned of the message rather than Telegram's own `date`: for the quiet
+            // window, which asks whether the conversation has stopped, they differ by the poll
+            // latency and never by enough to matter.
+            if (!_newestTopicMessageByThread.TryGetValue(key, out var newest) || messageId.Value > newest.MessageId)
+                _newestTopicMessageByThread[key] = new Telegram.TopicStatusLine_Planner.TopicNewestMessage(messageId.Value, DateTime.Now);
+        }
+    }
+
+    /// <summary>
+    /// What the status-line planner is told about the topic's traffic. Absent means the app knows
+    /// nothing about this topic yet — a fresh start, or a topic that has said nothing since — and the
+    /// planner treats that as "not buried" rather than guessing.
+    /// </summary>
+    Telegram.TopicStatusLine_Planner.TopicNewestMessage? Find_NewestTopicMessage_OrNull(long? messageThreadId)
+    {
+        lock (_knownMessageIdsLock)
+        {
+            return _newestTopicMessageByThread.TryGetValue(messageThreadId ?? 0, out var newest) ? newest : null;
         }
     }
 

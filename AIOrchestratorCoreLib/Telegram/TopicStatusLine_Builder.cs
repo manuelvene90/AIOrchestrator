@@ -9,8 +9,10 @@ using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 namespace AIOrchestratorCoreLib.Telegram;
 
 /// <summary>
-/// The one message per Telegram topic that is posted once and EDITED forever after — so it never
-/// notifies and never scrolls away.
+/// The one message per Telegram topic. It is EDITED in place while it is the last thing in the
+/// topic, so it never notifies; when later traffic buries it and the topic then goes quiet for two
+/// minutes it is deleted and written again at the bottom, because Telegram cannot move a message and
+/// the owner wants the current state to be what they see on entering the chat.
 ///
 /// NOT PINNED, and the owner's reason for refusing that is the reason this file exists at all.
 /// "Working now" elsewhere in the app is FILE MTIME, which stays true for ~2 minutes after a turn
@@ -19,8 +21,10 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// an agent actually wrote — and a member with nothing to report reads "idle" rather than being
 /// described by how recently its file was touched.
 ///
-/// Being an EDIT rather than a message is also what makes it safe to keep current: a repeat that is
-/// a notification is a waterfall, which is the thing this system exists to prevent.
+/// Being an EDIT rather than a message is what makes it safe to keep CURRENT: a repeat that is a
+/// notification is a waterfall, which is the thing this system exists to prevent. The repost is the
+/// one exception and it is bounded by the quiet window — every message resets it, so at most one
+/// notification arrives per quiet period, and never in the middle of the owner's own conversation.
 /// </summary>
 public static class TopicStatusLine_Builder
 {

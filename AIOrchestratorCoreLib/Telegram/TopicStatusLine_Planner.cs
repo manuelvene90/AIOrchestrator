@@ -30,6 +30,26 @@ public static class TopicStatusLine_Planner
     /// <summary>What the engine should do this tick, and the exact text to send if anything.</summary>
     public readonly record struct TopicStatusPlan(TopicStatusActions Action, string Text);
 
+    /// <summary>
+    /// The newest message the app knows of in a topic, and when it learned of it.
+    ///
+    /// A RECORD RATHER THAN TWO LOOSE PARAMETERS, and that is the M-G3 lesson applied preventively:
+    /// `existingMessageId` and this id are both `long?` and mean opposite things, so as adjacent
+    /// arguments they could be swapped at the one call site with everything still compiling — and the
+    /// swap is invisible to the suite, because the engine is `internal sealed`. Swapped, the status
+    /// line would be compared against itself and never move again. As a named type the compiler
+    /// refuses it.
+    /// </summary>
+    public readonly record struct TopicNewestMessage(long MessageId, DateTime ArrivedAt);
+
+    /// <summary>
+    /// How long a topic must be quiet before a buried status line is rewritten at the bottom, as the
+    /// owner stated the rule on 2026-08-13. It is what bounds the repost to at most one notification
+    /// per quiet period: every message resets it, so a conversation in progress is never interrupted,
+    /// and the line moves once the exchange is over.
+    /// </summary>
+    public const int REPOST_AFTER_QUIET_SECONDS = 120;
+
     public static TopicStatusPlan Plan(
         string title,
         IPlanProgress? progress,
@@ -39,7 +59,8 @@ public static class TopicStatusLine_Planner
         string? lastWrittenText,
         TelegramDeliveryModes mode,
         DateTime? lastFailedAttemptAt,
-        int backoffSeconds)
+        int backoffSeconds,
+        TopicNewestMessage? newestTopicMessage)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
@@ -48,14 +69,34 @@ public static class TopicStatusLine_Planner
         // to a raw parse with 630 tests staying green.
         var text = TopicStatusLine_Builder.Build(title, progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null);
 
-        var action = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
+        var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
+
+        // THE REPOST OVERRIDES THE DECIDER, and it has to. A buried line is USUALLY unchanged text —
+        // a quiet orchestration says the same thing minute after minute — and the identical-text rule
+        // answers None to exactly that. Behind that rule the repost would fire only for a topic that
+        // happened to change something in the same tick, which is never the quiet topic it was asked
+        // for. Emptiness is still refused: the builder emits the bare title whenever a message is up,
+        // so blank text here would mean sending nothing at all.
+        var action = !string.IsNullOrWhiteSpace(text) && Is_RepostDue(existingMessageId, newestTopicMessage, now, REPOST_AFTER_QUIET_SECONDS)
+            ? TopicStatusActions.Repost
+            : decided;
+
+        // THE DELIVERY GATE IS ON THE MESSAGES THAT NOTIFY — the POST, and now the REPOST, which is a
+        // delete followed by a send and so pushes to the phone exactly as a first post does. An edit
+        // notifies nobody, so silencing it buys nothing and costs a line frozen at pre-DND content for
+        // the whole period; a topic the owner silenced must not be the thing that wakes them.
+        //
+        // A BLOCKED REPOST FALLS BACK TO WHAT THE DECIDER SAID rather than to silence. The content
+        // still updates in place — Deferred's contract is that nothing is lost — and only the MOVE
+        // waits for the unmute. Falling back to a blanket Edit instead would rewrite identical text
+        // every tick for the whole DND period, which is the wasted-call spin the identical-text rule
+        // exists to stop.
+        if (action == TopicStatusActions.Repost && mode != TelegramDeliveryModes.Normal)
+            action = decided;
 
         if (action == TopicStatusActions.None)
             return new TopicStatusPlan(TopicStatusActions.None, text);
 
-        // THE DELIVERY GATE IS ON THE POST ONLY. An edit notifies nobody, so silencing it buys
-        // nothing and costs a line frozen at pre-DND content for the whole period; a POST does
-        // notify, and a topic the owner silenced must not be the thing that pushes to their phone.
         if (action == TopicStatusActions.Post && mode != TelegramDeliveryModes.Normal)
             return new TopicStatusPlan(TopicStatusActions.None, text);
 
@@ -139,6 +180,40 @@ public static class TopicStatusLine_Planner
     /// a backoff early and is harmless. The proper answer for an INTERVAL is a monotonic source
     /// rather than either wall clock; it is on the ledger and is not a tonight problem.
     /// </summary>
+    /// <summary>
+    /// Has the status line been BURIED, and has the topic gone quiet since? Both halves are required
+    /// and each answers a different failure.
+    ///
+    /// Buried is decided by comparing message IDS, not by a count or a flag: Telegram ids increase
+    /// within a chat, so an id above the status line's is a message that came after it. The engine
+    /// remembers every id it sends or receives per topic, which is the same set /clear deletes from.
+    ///
+    /// Quiet is what keeps this from being a waterfall. A repost NOTIFIES — Telegram cannot move a
+    /// message, so the only way to put the line at the bottom is to delete and send — and firing it
+    /// the instant a message lands would ping the owner in the middle of their own sentence. Every
+    /// message resets the window, so at most one notification arrives per quiet period.
+    ///
+    /// UNKNOWN IS NOT BURIED. The newest id lives in memory, so after a restart there is none for any
+    /// topic until traffic repopulates it, and a repost is a notification: "I do not know where the
+    /// line is" must not be answered by pushing to a phone. It edits in place, as it always did.
+    ///
+    /// The stamps are both LOCAL, from the one clock this file uses — read the Is_AttemptDue comment
+    /// before touching either. A message stamped in the FUTURE (a clock step, nothing else can do it)
+    /// yields a negative elapsed and holds the repost, which is the safe direction.
+    /// </summary>
+    public static bool Is_RepostDue(long? existingMessageId, TopicNewestMessage? newestTopicMessage, DateTime now, int quietSeconds)
+    {
+        if (existingMessageId == null || newestTopicMessage == null)
+            return false;
+
+        // EQUAL is not buried: the newest message the app knows of IS the status line, so nothing came
+        // after it. Only strictly-later ids bury it.
+        if (newestTopicMessage.Value.MessageId <= existingMessageId.Value)
+            return false;
+
+        return now - newestTopicMessage.Value.ArrivedAt >= TimeSpan.FromSeconds(quietSeconds);
+    }
+
     public static bool Is_AttemptDue(DateTime? lastFailedAttemptAt, DateTime now, int backoffSeconds)
     {
         if (lastFailedAttemptAt == null)

@@ -24,6 +24,7 @@ public class TopicStatusLinePlannerTests
 {
     static readonly DateTime NOW = new(2026, 8, 12, 15, 0, 0);
     const int BACKOFF = 30;
+    const long STATUS_ID = 4242;
 
     /// <summary>The ordinary case: something to say, nothing posted, delivery normal, no failures.</summary>
     [Fact]
@@ -185,16 +186,239 @@ public class TopicStatusLinePlannerTests
         Assert.DoesNotContain("older thing", lastLine);
     }
 
+    // ── THE REPOST, owner directive 2026-08-13 ────────────────────────────────────────────────────
+    //
+    // Posted once and edited forever meant the line SCROLLED AWAY: entering the topic showed whatever
+    // was last said, and the current state was somewhere above. The owner wants the status to be the
+    // thing they see without typing a command, so when it is no longer the last message AND the topic
+    // has been quiet for two minutes, it is rewritten at the bottom. While it IS the last message it
+    // keeps being edited exactly as before, because an edit notifies nobody.
+
+    /// <summary>
+    /// The rule as the owner stated it: buried by later traffic, and the topic has gone quiet.
+    /// </summary>
+    [Fact]
+    public void AStatusLineBuriedByLaterTrafficIsRepostedOnceTheTopicGoesQuiet()
+    {
+        var plan = Plan(
+            existingMessageId: STATUS_ID,
+            lastWrittenText: "an older line",
+            newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)));
+
+        Assert.Equal(TopicStatusActions.Repost, plan.Action);
+    }
+
+    /// <summary>
+    /// AND THE OTHER SIDE, which is the one that keeps this feature from becoming a waterfall: while
+    /// the status line IS the last message it is EDITED, silently, exactly as before. A repost
+    /// notifies — Telegram cannot move a message — so one that fires while the line is already at the
+    /// bottom would ping the owner for a duration ticking from 4 to 5 minutes.
+    /// </summary>
+    [Fact]
+    public void AStatusLineThatIsStillTheLastMessageIsEditedInPlace()
+    {
+        var plan = Plan(
+            existingMessageId: STATUS_ID,
+            lastWrittenText: "an older line",
+            newestTopicMessage: Newest(STATUS_ID - 20, NOW.AddHours(-1)));
+
+        Assert.Equal(TopicStatusActions.Edit, plan.Action);
+    }
+
+    /// <summary>
+    /// THE QUIET WINDOW, asserted THROUGH Plan and at its boundary — so it pins the wiring of the
+    /// constant as well as the arithmetic. Item: the derived bool, the clock and the picker call were
+    /// each moved somewhere reachable while the wiring that activates them stayed behind, unobserved.
+    ///
+    /// One second short holds; the window itself fires. Without the window a repost would land on the
+    /// owner's phone in the middle of their own conversation, which is the opposite of the ask.
+    /// </summary>
+    [Fact]
+    public void TheRepostWaitsForTheTopicToGoQuiet()
+    {
+        Assert.Equal(
+            TopicStatusActions.Edit,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddSeconds(-(TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS - 1)))).Action);
+
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddSeconds(-TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS))).Action);
+    }
+
+    /// <summary>
+    /// THE ONE THAT DECIDES WHETHER THE FEATURE WORKS AT ALL. A buried status line is USUALLY
+    /// unchanged text — a quiet orchestration says the same thing minute after minute — and the
+    /// identical-text rule answers None to exactly that. If the repost sat behind that rule it would
+    /// fire only for orchestrations that happened to change something in the same tick, which is the
+    /// quiet topic it was asked for, never reached.
+    ///
+    /// Both sides, from the SAME text: unchanged and not buried is still silence.
+    /// </summary>
+    [Fact]
+    public void TheRepostFiresEvenWhenTheTextHasNotChanged()
+    {
+        var current = Plan(existingMessageId: STATUS_ID).Text;
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
+                 newestTopicMessage: Newest(STATUS_ID - 20, NOW.AddHours(-1))).Action);
+
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// With no status message up there is nothing to move: the first line is still a POST, not a
+    /// repost, and it must not delete an id it does not have.
+    /// </summary>
+    [Fact]
+    public void WithNoStatusMessageUpThereIsNothingToRepost()
+    {
+        Assert.Equal(
+            TopicStatusActions.Post,
+            Plan(newestTopicMessage: Newest(9999, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// AN UNKNOWN TOPIC IS NOT A BURIED ONE. The newest id is remembered in memory, so after an app
+    /// restart it is absent for every topic until traffic repopulates it — and "I do not know" must
+    /// not be answered with a notification. It edits, as it always did, and the first message through
+    /// the mirror restores the knowledge.
+    /// </summary>
+    [Fact]
+    public void ATopicWithNoKnownTrafficIsNotReposted()
+    {
+        Assert.Equal(
+            TopicStatusActions.Edit,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line", newestTopicMessage: null).Action);
+    }
+
+    /// <summary>
+    /// THE DELIVERY GATE APPLIES, because a repost NOTIFIES and a topic the owner silenced must not
+    /// be the thing that pushes to their phone — the same rule the POST already obeys.
+    ///
+    /// It falls back to the EDIT rather than to silence: the edit notifies nobody, so Deferred's
+    /// contract that nothing is lost survives, and the line stays current instead of freezing at
+    /// pre-DND content for the whole period. The move to the bottom is what waits for the unmute.
+    /// </summary>
+    [Theory]
+    [InlineData(TelegramDeliveryModes.Silenced)]
+    [InlineData(TelegramDeliveryModes.Deferred)]
+    public void ASilencedTopicIsNotRepostedIntoAndFallsBackToTheEdit(TelegramDeliveryModes mode)
+    {
+        Assert.Equal(
+            TopicStatusActions.Edit,
+            Plan(mode: mode, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// And the fallback is to what the decider actually said, not to an edit regardless: silenced,
+    /// buried, and nothing new to say is NOTHING. Falling back to a blanket Edit would write the same
+    /// text every tick for the whole DND period — the wasted-call spin the identical-text rule exists
+    /// to stop, reintroduced through the back door of a feature that is supposed to be quiet.
+    /// </summary>
+    [Fact]
+    public void ASilencedTopicWithNothingNewToSayStaysSilent()
+    {
+        var current = Plan(existingMessageId: STATUS_ID).Text;
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(mode: TelegramDeliveryModes.Silenced, existingMessageId: STATUS_ID, lastWrittenText: current,
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// THE BACKOFF APPLIES TOO. A repost is a delete plus a post — two calls where an edit was one —
+    /// so a 429 answered at the tick rate costs double what it did before.
+    /// </summary>
+    [Fact]
+    public void ARecentFailureHoldsTheRepostAsWell()
+    {
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), lastFailedAttemptAt: NOW.AddSeconds(-5)).Action);
+
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), lastFailedAttemptAt: NOW.AddSeconds(-BACKOFF)).Action);
+    }
+
+    /// <summary>
+    /// The predicate on its own, at the three edges Plan cannot show as clearly. EQUAL ids are the
+    /// subtle one: the newest message the app knows of IS the status line itself, which means nothing
+    /// came after it.
+    /// </summary>
+    [Fact]
+    public void TheRepostPredicateAtItsEdges()
+    {
+        var quiet = NOW.AddMinutes(-5);
+
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(null, Newest(9999, quiet), NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, null, NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, Newest(STATUS_ID, quiet), NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+        Assert.True(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, Newest(STATUS_ID + 1, quiet), NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+    }
+
+    /// <summary>
+    /// A message stamped in the FUTURE is not a quiet topic. Both stamps are read off the same local
+    /// clock, so this can only come from a clock step — and it must hold the repost rather than
+    /// treat a negative elapsed as "long enough".
+    /// </summary>
+    [Fact]
+    public void AMessageStampedInTheFutureDoesNotCountAsQuiet()
+    {
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(
+            STATUS_ID, Newest(STATUS_ID + 1, NOW.AddMinutes(5)), NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+    }
+
+    /// <summary>
+    /// A REPOST STILL HAS TO HAVE SOMETHING TO SEND. The repost overrides the decider, and the
+    /// decider is where emptiness is refused — so overriding it without re-checking would hand the
+    /// engine a delete followed by a sendMessage with an empty body, which Telegram rejects outright.
+    /// The topic would lose the status line it had and get a 400 in exchange.
+    ///
+    /// Reached through a topic whose display name is blank with nothing else to report: the builder's
+    /// bare-title fallback is then a bare NOTHING.
+    /// </summary>
+    [Fact]
+    public void ARepostIsNotAttemptedWithNothingToSend()
+    {
+        var plan = Plan(
+            title: "",
+            members: [],
+            existingMessageId: STATUS_ID,
+            newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)));
+
+        Assert.Equal("", plan.Text);
+        Assert.Equal(TopicStatusActions.None, plan.Action);
+    }
+
+    static TopicStatusLine_Planner.TopicNewestMessage Newest(long messageId, DateTime arrivedAt)
+    {
+        return new TopicStatusLine_Planner.TopicNewestMessage(messageId, arrivedAt);
+    }
+
     static TopicStatusLine_Planner.TopicStatusPlan Plan(
         IReadOnlyList<ITopicStatusMember>? members = null,
         IPlanProgress? progress = null,
         long? existingMessageId = null,
         string? lastWrittenText = null,
         TelegramDeliveryModes mode = TelegramDeliveryModes.Normal,
-        DateTime? lastFailedAttemptAt = null)
+        DateTime? lastFailedAttemptAt = null,
+        TopicStatusLine_Planner.TopicNewestMessage? newestTopicMessage = null,
+        string title = "orch")
     {
         return TopicStatusLine_Planner.Plan(
-            "orch",
+            title,
             progress,
             members ?? [Member("imp-1", "fix the parser", "2026-08-12 14:50")],
             NOW,
@@ -202,7 +426,8 @@ public class TopicStatusLinePlannerTests
             lastWrittenText,
             mode,
             lastFailedAttemptAt,
-            BACKOFF);
+            BACKOFF,
+            newestTopicMessage);
     }
 
     static ITopicStatusMember Member(string memberId, string briefSubject, string stamp)
