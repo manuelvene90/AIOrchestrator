@@ -19,6 +19,7 @@ namespace AIOrchestratorCoreLib.Channels;
 /// channel does not deadlock outright — it burns its whole budget and returns false — but the
 /// symptom is a mysterious failed write, so take the lock at ONE level and call unlocked helpers
 /// inside it. <c>ChannelAppender</c> locks internally; do not wrap it in another acquire.
+/// </para>
 /// <para>
 /// WHAT IT GUARANTEES, exactly: writers that TAKE this lock are serialised against every other
 /// writer that takes it, including across processes. It cannot bind a writer that does not ask —
