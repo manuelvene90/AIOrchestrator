@@ -4162,10 +4162,18 @@ internal sealed class BridgeEngineModel(
                 // panel shows it live — which is the whole reason the app writes this and not the hook.
                 _log.Log_Warning(session.OrchId, description);
 
+                // The marker's own sentence, and NOTHING ELSE. This used to append a fixed tail
+                // blaming "the machine rather than the code — a machine that cannot fork cannot run
+                // them", then reassure with "nothing is wrong with your work". It was a literal,
+                // derived from no reason code, printed beside the REAL reason it contradicted: on
+                // 2026-08-13 the reason was a scanner that could not parse a redirect target, and
+                // three alerts said the machine could not fork. The correct diagnosis was in this
+                // process and was discarded at the last step, which is worse than having none — it
+                // sent a supervisor hunting a fault that did not exist.
                 ChannelAppender.Append_AppEntry(
                     _paths.Get_OwnerChannelFile(session.OrchId),
                     Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
-                    $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now.",
+                    description,
                     DateTime.Now);
 
                 File.Delete(markerFile);
