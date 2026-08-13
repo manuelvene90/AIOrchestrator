@@ -27,17 +27,25 @@ public interface IChannelTailer
     void Confirm_Append(string channelFilePath);
 
     /// <summary>
-    /// Whether this file still owes a delivery — the bridge must not rewrite it meanwhile. That
-    /// covers entries emitted but not yet acknowledged AND bytes already read that have not been
-    /// emitted yet: both are owed to the owner, and only the second survives a poll's rewind.
+    /// Whether anything this tailer has READ is still owed a delivery: entries emitted but not yet
+    /// acknowledged, and bytes read but not yet emitted — both are owed to the owner, and only the
+    /// second survives a poll's rewind. The bridge must not rewrite such a file meanwhile.
+    /// <para>
+    /// LIMIT, because the honest statement of it is worth more than a clean sentence: this answers
+    /// only for what was read. Bytes appended to the file since the last poll are owed too and are
+    /// invisible here, so a rewrite between a poll and this question can still strand them. Closing
+    /// that needs the cursor compared against the file's length, which is a separate open defect.
+    /// </para>
     /// </summary>
     bool Has_UndeliveredEntries(string channelFilePath);
 
     /// <summary>
     /// Whether this file was among the channels handed to the LAST <see cref="Poll"/>. A file the
     /// poll skipped has a frozen cursor — a deferred topic, an owner channel held mid-composition —
-    /// and everything it produced is owed to the owner as a catch-up burst. Nothing may re-anchor a
-    /// cursor that did not move: compaction must ask this first.
+    /// and everything it produced is owed to the owner as a catch-up burst, so compaction asks this
+    /// before rewriting anything. It reports whether the file was POLLED, which is not the same as
+    /// whether its cursor is current: a polled file can still have grown since (see the limit on
+    /// <see cref="Has_UndeliveredEntries"/>).
     /// </summary>
     bool Was_PolledInLastPoll(string channelFilePath);
 
