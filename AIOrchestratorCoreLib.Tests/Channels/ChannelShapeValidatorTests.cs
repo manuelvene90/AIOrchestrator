@@ -106,7 +106,7 @@ public class ChannelShapeValidatorTests
     [Fact]
     public void ReportBody_NamesTheOffendingLines_AndTheOnlyAcceptedFormat()
     {
-        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")]);
+        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")], nextFreeIndex: 3);
 
         Assert.Contains("line 7", body);
         Assert.Contains("## [2b] FROM supervisor", body);
@@ -114,6 +114,50 @@ public class ChannelShapeValidatorTests
 
         // Append-only: the fix is a NEW entry, never an edit of the broken line.
         Assert.Contains("append-only", body);
+    }
+
+    /// <summary>
+    /// THE REPORT MAY STATE ONLY WHAT IT OBSERVED. It used to open by asserting three consequences it
+    /// never computed — "they were never mirrored to the owner's phone, never counted as traffic, and
+    /// their index numbers are still free" — as a string literal, in a channel, with the app's
+    /// authority.
+    ///
+    /// For a line caught MID-WRITE all three are probably false: the tailer buffers an incomplete line
+    /// and delivers the entry once the rest arrives, so the entry was mirrored, was counted, and its
+    /// index was taken. On 2026-08-13 a supervisor believed that sentence about its own entry,
+    /// re-appended a duplicate, and spent three exchanges hunting a cause.
+    ///
+    /// Same defect as the guard alert's deleted tail, four hours apart in the same evening: that one
+    /// invented a CAUSE, this one invented CONSEQUENCES. The rule is decision 21's, applied to a
+    /// report — never state an answer you did not compute.
+    ///
+    /// The positives are what stop this being a negative-only assertion, which would admit an empty
+    /// body: the report must still NAME the line and say what to do about it.
+    /// </summary>
+    [Fact]
+    public void ReportBody_ClaimsNoDeliveryConsequencesItDidNotMeasure()
+    {
+        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")], nextFreeIndex: 3);
+
+        Assert.DoesNotContain("never mirrored", body);
+        Assert.DoesNotContain("never counted", body);
+        Assert.DoesNotContain("CANNOT SEE", body);
+
+        Assert.Contains("do not parse", body);
+        Assert.Contains("line 7", body);
+    }
+
+    /// <summary>
+    /// The one consequence the validator CAN compute, so it is the one it is allowed to state. It is
+    /// also the actionable half — a writer re-appending needs the number, and guessing it is how two
+    /// entries end up sharing an index.
+    /// </summary>
+    [Fact]
+    public void ReportBody_StatesTheMeasuredNextFreeIndex()
+    {
+        var body = ChannelShape_Validator.Build_ReportBody([(7, "## [2b] FROM supervisor — d — s")], nextFreeIndex: 12);
+
+        Assert.Contains("12", body);
     }
 
     [Fact]
