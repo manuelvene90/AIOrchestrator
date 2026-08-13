@@ -98,6 +98,81 @@ public class GuardNotInForceMarkerTests
         Assert.Contains(GuardNotInForce_Marker.FILE_NAME, File.ReadAllText(hookScript));
     }
 
+    /// <summary>
+    /// THE FIELDS THAT SEPARATE A TEST FROM AN INCIDENT. On 2026-08-13 three alerts named
+    /// `reviewer-readonly-check.sh` and were read as the shipped guard failing; the reason text they
+    /// carried existed only in an implementer's unmerged worktree copy, so a branch under test was
+    /// indistinguishable from a production failure, and a reviewer was sent after a payload that did
+    /// not exist.
+    /// </summary>
+    [Fact]
+    public void AWholeMarkerNamesWhoTrippedItAndWhichCopyWroteIt()
+    {
+        var description = GuardNotInForce_Marker.Describe_OrNull(
+            "reviewer-readonly-check.sh\nwhether this command mutates anything\na redirect target this scanner cannot resolve\nimp-1\n89c606d67e51fb6806e2b51fd394c5aa");
+
+        Assert.NotNull(description);
+        Assert.Contains("imp-1", description);
+        Assert.Contains("89c606d67e51fb6806e2b51fd394c5aa", description);
+        Assert.Contains("installed copy", description);
+    }
+
+    /// <summary>
+    /// The tolerance that already existed must survive the two new fields: a three-line marker from an
+    /// older hook, or a write that stopped early, still reports — and does so without a dangling
+    /// half-sentence where the missing fields would have gone.
+    /// </summary>
+    [Theory]
+    [InlineData("reviewer-readonly-check.sh\nthe predicate\nthe reason")]
+    [InlineData("reviewer-readonly-check.sh\nthe predicate\nthe reason\n\n")]
+    public void AMarkerWithoutTheNewFieldsReportsCleanly(string markerText)
+    {
+        var description = GuardNotInForce_Marker.Describe_OrNull(markerText);
+
+        Assert.NotNull(description);
+        Assert.Contains("the reason", description);
+        Assert.EndsWith("that guard is not in force.", description);
+    }
+
+    /// <summary>
+    /// Each field stands alone. A machine that cannot fork may have no md5sum, and a session outside
+    /// an orchestration has no member id — either one arriving without the other still says something
+    /// worth having, and neither may drag in the other's wording.
+    /// </summary>
+    [Fact]
+    public void EitherIdentifyingFieldAloneStillSpeaks()
+    {
+        var memberOnly = GuardNotInForce_Marker.Describe_OrNull("hook.sh\nthe predicate\nthe reason\nrev-6\n");
+
+        Assert.NotNull(memberOnly);
+        Assert.Contains("rev-6", memberOnly);
+        Assert.DoesNotContain("md5", memberOnly);
+
+        var fingerprintOnly = GuardNotInForce_Marker.Describe_OrNull("hook.sh\nthe predicate\nthe reason\n\nabc123");
+
+        Assert.NotNull(fingerprintOnly);
+        Assert.Contains("abc123", fingerprintOnly);
+        Assert.Contains("md5", fingerprintOnly);
+    }
+
+    /// <summary>
+    /// The two fields are written in bash and read in C#, so nothing but this asserts that the writer
+    /// still writes them. It fails LOUDLY when the script cannot be found rather than passing on an
+    /// empty read — a harness that cannot find what it tests must refuse to certify it.
+    /// </summary>
+    [Fact]
+    public void TheHookWritesTheIdentifyingFieldsTheAppReads()
+    {
+        var hookScript = Find_HookLogScript_OrNull();
+
+        Assert.NotNull(hookScript);
+
+        var shell = File.ReadAllText(hookScript);
+
+        Assert.Contains("AIORCH_MEMBER", shell);
+        Assert.Contains("md5sum", shell);
+    }
+
     static string? Find_HookLogScript_OrNull()
     {
         var folder = AppContext.BaseDirectory;

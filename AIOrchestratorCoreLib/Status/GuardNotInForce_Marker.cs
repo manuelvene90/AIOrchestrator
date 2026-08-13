@@ -43,13 +43,49 @@ public static class GuardNotInForce_Marker
         var predicate = Line_OrNull(lines, 1);
         var reason = Line_OrNull(lines, 2);
 
+        var identity = Describe_Identity(Line_OrNull(lines, 3), Line_OrNull(lines, 4));
+
         if (predicate == null)
-            return $"{hook} could not evaluate its rule and ALLOWED the call — that guard is not in force.";
+            return $"{hook} could not evaluate its rule and ALLOWED the call — that guard is not in force.{identity}";
 
         if (reason == null)
-            return $"{hook} could not evaluate {predicate} and ALLOWED the call — that guard is not in force.";
+            return $"{hook} could not evaluate {predicate} and ALLOWED the call — that guard is not in force.{identity}";
 
-        return $"{hook} could not evaluate {predicate} ({reason}) and ALLOWED the call — that guard is not in force.";
+        return $"{hook} could not evaluate {predicate} ({reason}) and ALLOWED the call — that guard is not in force.{identity}";
+    }
+
+    /// <summary>
+    /// WHO tripped the guard and WHICH COPY of the script wrote the marker — the fields whose absence
+    /// made a test indistinguishable from an incident.
+    ///
+    /// On 2026-08-13 three alerts named `reviewer-readonly-check.sh` and were read as the shipped
+    /// guard failing. They were not: the reason text they carried existed only in an implementer's
+    /// UNMERGED worktree copy, so what had actually happened was a branch being exercised. The alert
+    /// had no field capable of saying so, and a supervisor briefed a reviewer to hunt a payload that
+    /// did not exist.
+    ///
+    /// The md5 is what settles that question — compared against the installed copy it separates "a
+    /// session is testing its own build" from "the guard you are relying on is not running". The
+    /// comparison is deliberately left to the reader: this component cannot see the installed copy,
+    /// and a guess about which file is authoritative is exactly the invented cause the tail beside
+    /// this one was deleted for.
+    ///
+    /// BOTH ARE OPTIONAL. Older hooks write three lines, a truncated write may stop anywhere, and a
+    /// machine that cannot fork may have no md5sum — so a missing field drops its clause and changes
+    /// nothing else. A marker that exists at all is still a fact worth reporting.
+    /// </summary>
+    static string Describe_Identity(string? member, string? fingerprint)
+    {
+        if (member == null && fingerprint == null)
+            return "";
+
+        if (fingerprint == null)
+            return $" Tripped by {member}.";
+
+        if (member == null)
+            return $" The script that wrote this has md5 {fingerprint} — compare it with the installed copy before reading this as a live failure.";
+
+        return $" Tripped by {member}, from a script with md5 {fingerprint} — compare it with the installed copy before reading this as a live failure.";
     }
 
     static string? Line_OrNull(IReadOnlyList<string> lines, int index)

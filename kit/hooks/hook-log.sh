@@ -37,7 +37,7 @@
 # Names WHICH predicate could not be evaluated and WHY. "could not extract a tool name from the
 # payload" is actionable; "hook error" is the silence again.
 aiorch_log_undecidable() {
-  local predicate="$1" reason="$2" hook_name orch_folder
+  local predicate="$1" reason="$2" hook_name hook_path orch_folder member fingerprint
 
   # No orchestration id means no orchestration to tell — a hook running outside a session, e.g. in a
   # test.
@@ -53,12 +53,28 @@ aiorch_log_undecidable() {
     return 0
   fi
 
-  hook_name=$(basename "${BASH_SOURCE[1]:-hook}" 2>/dev/null || printf 'hook')
+  hook_path="${BASH_SOURCE[1]:-}"
+  hook_name=$(basename "${hook_path:-hook}" 2>/dev/null || printf 'hook')
+
+  # WHO tripped it and WHICH COPY of the script did. Without these two, a session deliberately
+  # exercising a guard on its own branch is indistinguishable from the shipped guard failing in
+  # production — and on 2026-08-13 that cost a supervisor a reviewer's round: three alerts named
+  # `reviewer-readonly-check.sh`, but the reason text existed only in an implementer's UNMERGED
+  # worktree copy, and nothing in the alert could say so.
+  #
+  # The md5 is the field that settles it: compared against the installed copy it separates "a branch
+  # is being tested" from "the guard you are relying on is not running".
+  #
+  # Both degrade to EMPTY rather than to a sentinel or an error. A machine that cannot fork may well
+  # have no md5sum either, and this function must never be the reason a call fails — every path here
+  # still returns 0, and the reader treats an empty line as an absent field.
+  member="${AIORCH_MEMBER:-}"
+  fingerprint=$(md5sum "$hook_path" 2>/dev/null | cut -d' ' -f1)
 
   # One marker, overwritten rather than appended: the app deletes it once recorded, so what matters
   # is that ONE exists to be found. Repeating the same inability a hundred times says nothing the
-  # first one did not, and the app is where any judgement about repetition belongs.
-  printf '%s\n%s\n%s\n' "$hook_name" "$predicate" "$reason" > "$orch_folder/.guard-not-in-force" 2>/dev/null
+  # first one did not, and the app is where any judgement about repetition belongs — it now has one.
+  printf '%s\n%s\n%s\n%s\n%s\n' "$hook_name" "$predicate" "$reason" "$member" "$fingerprint" > "$orch_folder/.guard-not-in-force" 2>/dev/null
 
   return 0
 }
