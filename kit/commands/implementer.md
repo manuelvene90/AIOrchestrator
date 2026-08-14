@@ -133,6 +133,13 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   **Do not propose relaxing the matcher to accept the bare form** — "MUTATION WINDOW CLOSED" CONTAINS
   "WINDOW CLOSED", so a matcher that accepted the short phrase would let a mutation close silently
   close a writing window. The matcher is right; the spelling is yours to get right.
+- **RE-READ THE CHANNEL AT WINDOW CLOSE, before you write the report.** Your supervisor keeps working
+  while your window is open, and a ruling that arrives mid-window sits ABOVE your report rather than
+  below it — so a report written from what you knew when you opened the window can answer a question
+  that has already been withdrawn, or miss one that replaced it. A member did exactly that on
+  2026-08-14: it closed its window and reported without re-reading, and nothing had told it to.
+  Nothing wakes you inside your own turn, so this is a step you take rather than one you are prompted
+  into.
 - **When your deliverable is accepted and you have no next task, DECLARE IT.** A one-line entry
   SUBJECTED `STANDING BY — <what you are waiting for>`. **Accepted is the word that matters:** while
   your report is still waiting on a verdict you are not idle, you are waiting on your supervisor, and

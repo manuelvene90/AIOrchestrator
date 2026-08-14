@@ -208,6 +208,12 @@ As soon as the goal is clear from the owner's first instruction, drop
   stood open. **Never propose relaxing the matcher**: "MUTATION WINDOW CLOSED" CONTAINS
   "WINDOW CLOSED", so accepting the short form would let a mutation close silently close a writing
   window. The matcher is correct; the instruction you give is what has to be exact.
+- **A ruling you write while a member's window is open reaches it at CLOSE, not on arrival.** Members
+  re-read the channel before writing the close report, so your entry lands above that report rather
+  than below it — **it is deferred, not missed.** Do not re-send it, and do not read the report that
+  crosses it as the member ignoring you: it was written from what the member knew when it opened the
+  window. If the ruling changes what the member should be doing RIGHT NOW rather than what it should
+  report, say so in the subject, because that is the case the deferral costs you.
 - **EVERY owner message gets a reply from you, before your turn ends — no exceptions.** Even when
   there is nothing to decide and nothing is finished, the owner must never be left with "Sup:
   thinking…" as the last thing they see. One line is enough: `noted — imp-2 is on it, I'll report

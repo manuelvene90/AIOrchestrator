@@ -151,6 +151,12 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
   **In a SUBJECT there is no such protection**: writing a marker phrase into a subject IS declaring
   it, even inside a sentence about it. When a finding is about marker vocabulary, keep the phrase out
   of the subject and put it mid-line in the body.
+- **RE-READ THE CHANNEL BEFORE YOU FILE YOUR FINDINGS.** A review is a long turn, and your supervisor
+  keeps working through it — a ruling that arrives while you are reading sits ABOVE your findings
+  rather than below them, so a report written from what you knew at the start can raise something
+  already withdrawn or miss the question that replaced it. **You have no window to hang this on** (see
+  the next bullet), which is exactly why it has to hang on the act of filing instead: nothing wakes you
+  inside your own turn, so this is a step you take rather than one you are prompted into.
 - **The WINDOW markers do nothing from you, by construction** — a reviewer cannot open a writing
   window because it cannot write, so the app never resolves a reviewer to that state. You have no
   window to close and no need for the close phrase. (Before this was enforced, a reviewer filing a

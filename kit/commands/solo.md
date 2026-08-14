@@ -93,6 +93,13 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
   You have no supervisor auditing your files mid-write, so the window is not protecting you from a
   reader here — it is what stops the app reporting you as busy when you are done.
 
+  **RE-READ THE CHANNEL AT WINDOW CLOSE, before you write the report.** The owner keeps texting while
+  your window is open, and what they sent mid-window sits ABOVE your report rather than below it — so
+  a report written from what you knew when you opened it can answer a question they have already
+  changed. Nothing wakes you inside your own turn, so this is a step you take rather than one you are
+  prompted into. It matters more here than for an implementer: the person who wrote while you were
+  busy is the owner, and they are watching for the answer.
+
 ## When a basic orchestration outgrows itself
 
 Work that merely needs to go WIDE you can now absorb yourself, by fanning out (above). But if it
