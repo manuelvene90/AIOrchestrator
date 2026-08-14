@@ -1844,9 +1844,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Nudge_IdleSupervisor(IOrchestrationSession session)
     {
-        var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE);
-
-        if (Is_SessionMidTurn(supervisorUsageFile))
+        if (Is_SessionMidTurn(OwnerFacingSession_Locator.Get_UsageFile(_paths, session.OrchId, session)))
             return;
 
         List<string> waitingMembers = [];
@@ -7445,14 +7443,16 @@ internal sealed class BridgeEngineModel(
     {
         var speaker = Describe_Speaker(orchId);
 
+        // The SESSION THAT TALKS TO THE OWNER, never "the supervisor": in a basic orchestration that
+        // is the solo, and reading the empty supervisor slot made a working solo look idle.
+        var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
+
         if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
         {
-            return Is_SessionMidTurn(Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE))
+            return Is_SessionMidTurn(supervisorUsageFile)
                 ? $"{speaker}: busy — will read this the moment the current turn ends"
                 : $"{speaker}: thinking…";
         }
-
-        var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
         if (!Is_SessionMidTurn(supervisorUsageFile))
             return $"{speaker}: thinking…";
@@ -8557,9 +8557,7 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
-            var supervisorUsageFile = orchId == ChannelDiscovery.GENERAL_ORCH_ID
-                ? Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE)
-                : Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE);
+            var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
 
             var supervisorBusy = Is_SessionMidTurn(supervisorUsageFile);
 
