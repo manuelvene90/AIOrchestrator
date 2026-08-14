@@ -2852,28 +2852,6 @@ internal sealed class BridgeEngineModel(
             _log.Log_Warning(confirmation.OrchId, $"answerCallbackQuery failed on a close confirmation: {ex.Message}");
         }
 
-        // Record the decision on the prompt itself BEFORE acting: confirming deletes the topic, and
-        // an edit sent afterwards would have nowhere to land.
-        if (tap.MessageId != null)
-        {
-            var decided = confirmation.Confirms
-                ? $"⚠️ Close '{confirmation.OrchId}'?\n\n✅ Closed — you confirmed."
-                : $"⚠️ Close '{confirmation.OrchId}'?\n\n✋ Kept open — you declined. Its sessions keep running.";
-
-            try
-            {
-                await client.Edit_MessageText_Async(tap.MessageId.Value, decided, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _log.Log_Warning(confirmation.OrchId, $"Could not record the close decision on the prompt: {ex.Message}");
-            }
-        }
-
         // A TAP IS THE OWNER SPEAKING, and this path returns before the generic routing that would
         // otherwise say so. Without it, declining a close woke the supervisor into a session where
         // the awaiting-answer hook denied every tool call until the flag expired — the owner would
@@ -2884,15 +2862,71 @@ internal sealed class BridgeEngineModel(
         Clear_OpenQuestions(confirmation.OrchId);
         Clear_AwaitingAnswerFlag(confirmation.OrchId);
 
+        CloseTapOutcomes outcome;
+
         if (confirmation.Confirms)
-            Execute_ConfirmedClose(confirmation);
+        {
+            outcome = Execute_ConfirmedClose(confirmation);
+        }
         else
+        {
             Decline_CloseConfirmation(confirmation);
+            outcome = CloseTapOutcomes.Declined;
+        }
+
+        // THE DECISION IS RECORDED AFTER THE OUTCOME IS KNOWN, and it used to be recorded before.
+        //
+        // The old order had a stated reason — "confirming deletes the topic, and an edit sent
+        // afterwards would have nowhere to land" — which does not survive being checked. It is false
+        // for member closes, which delete no topic; for orchestration closes the deletion is a
+        // fire-and-forget Task.Run, so the old order won a race rather than a guarantee; and when the
+        // topic HAS gone, a failed edit costs nothing because the message went with it. Set against
+        // that: writing it first told the owner "Closed — you confirmed" for a close that touched
+        // nothing, and for one that marked the orchestration closed while its sessions kept running.
+        //
+        // NOTHING IN THE SUITE PINS THIS ORDER. Which sentence belongs to which outcome is decided in
+        // CloseConfirmationPrompt_Builder.Describe_Decision and is covered there, one case per
+        // outcome; that this edit happens AFTER the outcome is known is a property of statement order
+        // in this method, which the suite cannot reach — BridgeEngineModel is `internal sealed` with
+        // no `InternalsVisibleTo`. Moving this block back above the execution compiles, passes every
+        // test, and restores the exact defect described above.
+        if (tap.MessageId != null)
+        {
+            try
+            {
+                await client.Edit_MessageText_Async(
+                    tap.MessageId.Value,
+                    CloseConfirmationPrompt_Builder.Describe_Decision(confirmation.OrchId, outcome),
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // ROUTINE ON A SUCCESSFUL CLOSE and only there: the topic is being deleted underneath
+                // this edit, so losing the race is the healthy path and a warning that fires on the
+                // healthy path is how a log stops being read. On every other outcome the topic is
+                // still standing, so a failed edit means the owner is looking at a stale prompt that
+                // says something untrue — which is the whole defect this change exists to fix.
+                var message = $"Could not record the close decision on the prompt: {ex.Message}";
+
+                if (outcome == CloseTapOutcomes.Closed)
+                    _log.Log_Info(confirmation.OrchId, message);
+                else
+                    _log.Log_Warning(confirmation.OrchId, message);
+            }
+        }
 
         return true;
     }
 
-    void Execute_ConfirmedClose(CloseConfirmation confirmation)
+    /// <summary>
+    /// Runs the close and SAYS WHAT HAPPENED. It returned void, which is precisely why its caller
+    /// could not wait for it and announced success up front instead.
+    /// </summary>
+    CloseTapOutcomes Execute_ConfirmedClose(CloseConfirmation confirmation)
     {
         var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
 
@@ -2919,7 +2953,7 @@ internal sealed class BridgeEngineModel(
                 "close NOT executed — the request could not be read just now",
                 "The owner's tap arrived, but your request file could not be read at that moment, so nothing was closed. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
-            return;
+            return CloseTapOutcomes.NotAttempted;
         }
 
         try
@@ -2939,12 +2973,21 @@ internal sealed class BridgeEngineModel(
                     request.Requester,
                     "The owner confirmed it with a tap.");
             }
+
+            return CloseTapOutcomes.Closed;
         }
         catch (Exception)
         {
             // Already logged and reported to the general channel by Execute_Close. Swallowed HERE
             // because this runs on the inbound loop with nobody watching, and a throw would take the
             // loop down; the owner's own close does the opposite and surfaces it.
+            //
+            // SWALLOWED IS NOT UNREPORTED, and it used to be. Execute_Close marks the orchestration
+            // closed before it kills the sessions, so a throw between those two can leave it flagged
+            // closed with its terminals alive — and nothing re-offers it, because the store already
+            // says closed. The caller now hears that and tells the owner we do not know, rather than
+            // telling them it worked.
+            return CloseTapOutcomes.Uncertain;
         }
         finally
         {

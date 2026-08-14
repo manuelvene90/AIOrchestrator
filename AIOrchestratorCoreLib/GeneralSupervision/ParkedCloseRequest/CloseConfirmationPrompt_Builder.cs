@@ -22,6 +22,35 @@ public static class CloseConfirmationPrompt_Builder
     }
 
     /// <summary>
+    /// What the prompt is REPLACED with once the tap has been acted on — the last thing the owner is
+    /// told about a close, and for a while the only thing that was untrue.
+    ///
+    /// It used to be written before the close was attempted, so "✅ Closed — you confirmed" appeared
+    /// whether or not anything closed. Two paths made it a lie: an unreadable request (nothing is
+    /// touched) and a throw partway through (marked closed, sessions alive). The first heals — the
+    /// request stays parked and the owner is asked again — so the sentence has to tell them the tap
+    /// did not take, or the fresh prompt arrives contradicting a success still on their screen.
+    ///
+    /// THE SECOND DOES NOT HEAL, and it is why this maps outcomes rather than a boolean. Nothing will
+    /// re-offer that request, so whatever this says is final. It must claim NEITHER success nor
+    /// failure and point at the one place that can answer, because "we do not know" rendered as either
+    /// is how the owner ends up believing live sessions are dead.
+    /// </summary>
+    public static string Describe_Decision(string orchId, CloseTapOutcomes outcome)
+    {
+        var line = outcome switch
+        {
+            CloseTapOutcomes.Declined => "✋ Kept open — you declined. Its sessions keep running.",
+            CloseTapOutcomes.Closed => "✅ Closed — you confirmed.",
+            CloseTapOutcomes.NotAttempted => "⚠️ NOT closed — your request could not be read just now, so nothing was changed. You will be asked again shortly.",
+            CloseTapOutcomes.Uncertain => "⚠️ Close did not complete. Some sessions may still be running — check the app.",
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), $"unhandled close outcome '{outcome}'"),
+        };
+
+        return $"⚠️ Close '{orchId}'?\n\n{line}";
+    }
+
+    /// <summary>
     /// WHAT a close would end, in the middle of a sentence — "close of X was declined", "X lapsed".
     ///
     /// One wording, because the held / declined / lapsed / failed notices all name it and they are
