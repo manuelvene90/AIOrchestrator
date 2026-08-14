@@ -68,6 +68,54 @@ public class BridgeStateStoreTests : IDisposable
         Assert.Empty(_log.Errors);
     }
 
+    /// <summary>
+    /// AN EMPTY CURSOR IS A HOLE, NOT DUPLICATES, and every path that produces one now says so. The
+    /// tailer baselines a file it has never seen at its CURRENT length, so entries appended between
+    /// the last saved offset and this start are never mirrored at all — the owner's phone simply
+    /// never receives them. Missing and empty were the two inputs that produced that silently, at no
+    /// log level: normal on a first run, and never normal afterwards, and the store cannot tell the
+    /// two apart from here — so it states the consequence and leaves the judgement to the reader.
+    /// </summary>
+    [Fact]
+    public void Load_OrEmpty_MissingFile_SaysTheStartIsBlind_RatherThanSayingNothing()
+    {
+        BridgeState_Store.Load_OrEmpty(_paths, _log);
+
+        var warning = Assert.Single(_log.Warnings);
+        Assert.Contains(_paths.BridgeStateFile, warning);
+        Assert.Contains("NOT mirrored", warning);
+    }
+
+    [Fact]
+    public void Load_OrEmpty_ZeroByteFile_SaysTheStartIsBlind_RatherThanSayingNothing()
+    {
+        File.WriteAllText(_paths.BridgeStateFile, string.Empty);
+
+        BridgeState_Store.Load_OrEmpty(_paths, _log);
+
+        var warning = Assert.Single(_log.Warnings);
+        Assert.Contains(_paths.BridgeStateFile, warning);
+        Assert.Contains("NOT mirrored", warning);
+    }
+
+    /// <summary>
+    /// The quarantine report used to promise the opposite of what happens — "may arrive a second
+    /// time" — which is worse than silence: a reader who believed it would go looking for duplicates
+    /// and conclude nothing was lost. Inbound is the only direction that can duplicate, and only
+    /// for updates Telegram still holds.
+    /// </summary>
+    [Fact]
+    public void Load_OrEmpty_CorruptFile_DoesNotPromiseDuplicates_ItReportsTheHole()
+    {
+        File.WriteAllText(_paths.BridgeStateFile, "[1, 2, 3]");
+
+        BridgeState_Store.Load_OrEmpty(_paths, _log);
+
+        var errorMessage = Assert.Single(_log.Errors);
+        Assert.Contains("NOT mirrored", errorMessage);
+        Assert.DoesNotContain("arrive a second time", errorMessage);
+    }
+
     [Fact]
     public void Load_OrEmpty_HalfWrittenJson_ReturnsEmptyStateAndQuarantinesTheBadFile()
     {

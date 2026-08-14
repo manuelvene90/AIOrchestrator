@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AIOrchestratorCoreLib.Spawning;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.WindowFocus;
 
@@ -77,8 +78,14 @@ public static class SessionTerminator
         }
     }
 
-    /// <summary>Derives the spawn title from the pid-file location (the layout is the contract).</summary>
-    static string? Build_TitleFragment_OrNull(string pidFilePath)
+    /// <summary>
+    /// Derives the spawn title from the pid-file location (the layout is the contract). Public so the
+    /// suite can assert it against what <see cref="Spawning.SpawnCommand_Builder"/> actually spawned:
+    /// this function used to spell the title itself, and its copy drifted from the spawner's for the
+    /// solo — "SOLO-1 · orch" here against "SOLO · orch" on the window, so that window was never
+    /// found and never closed. Both sides read <see cref="SessionWindowTitle_Builder"/> now.
+    /// </summary>
+    public static string? Build_TitleFragment_OrNull(string pidFilePath)
     {
         var containingFolder = Path.GetDirectoryName(pidFilePath);
         if (containingFolder == null)
@@ -88,19 +95,19 @@ public static class SessionTerminator
         var fileName = Path.GetFileName(pidFilePath);
 
         if (containingFolderName == "general")
-            return "GENERAL";
+            return SessionWindowTitle_Builder.GENERAL_TITLE;
 
         if (fileName == ".supervisor.pid")
-            return $"SUP · {containingFolderName}";
+            return SessionWindowTitle_Builder.Build_ForSupervisor(containingFolderName);
 
         if (fileName == ".communicator.pid")
-            return $"COM · {containingFolderName}";
+            return SessionWindowTitle_Builder.Build_ForCommunicator(containingFolderName);
 
         var orchFolderName = Path.GetFileName(Path.GetDirectoryName(containingFolder) ?? "");
         if (orchFolderName.Length == 0)
             return null;
 
-        return $"{containingFolderName.ToUpperInvariant()} · {orchFolderName}";
+        return SessionWindowTitle_Builder.Build_ForMember(containingFolderName, orchFolderName);
     }
 
     /// <summary>App shutdown: every session the orchestrator ever spawned dies with it.</summary>
