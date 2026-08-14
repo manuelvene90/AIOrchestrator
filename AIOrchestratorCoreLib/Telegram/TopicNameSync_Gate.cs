@@ -46,14 +46,27 @@ public static class TopicNameSync_Gate
     /// `TaskCanceledException`; `HttpRequestException` covers a dropped connection, a DNS failure, a
     /// reset and a TLS error. Anything else reached Telegram and came back refused.
     ///
-    /// THE LIMIT, BECAUSE IT IS NOT COMPLETE AND SAYING SO IS THE POINT: the Telegram client throws a
-    /// plain <see cref="Exception"/> for any non-2xx, so a 429 and every 5xx — which are also "we do not
-    /// know" — land in <see cref="TopicNameAttemptOutcomes.Rejected"/> here. The status code is not
-    /// unavailable, it is DISCARDED: every throw site formats it into the message text. Closing this
-    /// wants a typed exception at the client, not string parsing at the reader.
+    /// AND A RETRYABLE STATUS IS ALSO "WE DO NOT KNOW" — the limit this used to declare, now closed.
+    /// A 429 is Telegram asking us to slow down and every 5xx is Telegram failing on its own side; in
+    /// both cases the request may or may not have taken effect and a later attempt is worth making.
+    /// They used to land in <see cref="TopicNameAttemptOutcomes.Rejected"/> because the client threw a
+    /// plain <see cref="Exception"/> for any non-2xx and the status was formatted into a message string
+    /// and lost — NOT unavailable, DISCARDED. <see cref="TelegramApiClient.TelegramApiException"/> now
+    /// carries it, and no string is parsed anywhere.
+    ///
+    /// That mattered here more than anywhere: the app edits topic names every tick, so a rate limit is
+    /// an ordinary event rather than an exotic one, and a single 429 used to record a name as applied
+    /// for the life of the process.
     /// </summary>
     public static TopicNameAttemptOutcomes Classify_Failure(Exception failure)
     {
+        if (failure is TelegramApiClient.TelegramApiException answered)
+        {
+            return answered.Is_Retryable
+                ? TopicNameAttemptOutcomes.OutcomeUnknown
+                : TopicNameAttemptOutcomes.Rejected;
+        }
+
         return failure is OperationCanceledException or HttpRequestException
             ? TopicNameAttemptOutcomes.OutcomeUnknown
             : TopicNameAttemptOutcomes.Rejected;

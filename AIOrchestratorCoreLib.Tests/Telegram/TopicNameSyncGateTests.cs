@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Telegram;
+using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Telegram;
@@ -53,6 +54,42 @@ public class TopicNameSyncGateTests
         Assert.Equal(
             TopicNameAttemptOutcomes.Rejected,
             TopicNameSync_Gate.Classify_Failure(new Exception("Telegram 'editForumTopic' failed with HTTP 400: bad request")));
+    }
+
+    /// <summary>
+    /// A RATE LIMIT IS "WE DO NOT KNOW", and it is the case that made the typed exception worth taking:
+    /// the app edits topic names every tick, so a 429 is ordinary. Before the status code survived to
+    /// here, one of them recorded a name as applied for the life of the process.
+    /// </summary>
+    [Fact]
+    public void ARateLimitIsAnUnknownOutcome()
+    {
+        Assert.Equal(
+            TopicNameAttemptOutcomes.OutcomeUnknown,
+            TopicNameSync_Gate.Classify_Failure(new TelegramApiException(429, "Too Many Requests")));
+    }
+
+    /// <summary>Telegram failing on its own side says nothing about whether the edit took effect.</summary>
+    [Fact]
+    public void AServerErrorIsAnUnknownOutcome()
+    {
+        Assert.Equal(
+            TopicNameAttemptOutcomes.OutcomeUnknown,
+            TopicNameSync_Gate.Classify_Failure(new TelegramApiException(503, "Service Unavailable")));
+    }
+
+    /// <summary>
+    /// AND THE OTHER SIDE OF THE STATUS TEST, asserted apart. A 400 is a refusal on the merits: it will
+    /// not become valid by waiting, so it must NOT be stamped and retried. Without this case the
+    /// classifier could pass by calling every answered failure unknown, which would turn a permanent
+    /// refusal into a retry every 30 seconds for ever.
+    /// </summary>
+    [Fact]
+    public void ABadRequestIsRejectedRatherThanUnknown()
+    {
+        Assert.Equal(
+            TopicNameAttemptOutcomes.Rejected,
+            TopicNameSync_Gate.Classify_Failure(new TelegramApiException(400, "Bad Request: TOPIC_NAME_INVALID")));
     }
 
     /// <summary>Nothing holding it back is the ordinary case and must not need a stamp to proceed.</summary>

@@ -4026,6 +4026,20 @@ internal sealed class BridgeEngineModel(
                 // Is_MirrorAttemptDue, and a second magic number would be worse than the one being
                 // explained. Thirty seconds takes a failing sync from ~30 attempts a minute to 2, and
                 // bounds an owner-visible glyph delay at 30 s. Do not "fix" it into a bespoke constant.
+                // THE REFUSAL BRANCH NOW ONLY EVER SEES A GENUINE REFUSAL, which is what makes writing
+                // the applied name here defensible at all. rev-10's F1 was that this branch uses the
+                // applied-name dictionary as a retry suppressor — "this name is applied" written for a
+                // name Telegram just refused, the same conflation the unknown branch was split to end.
+                // Its owner-visible half is closed by the classification: a 429 and every 5xx are
+                // OutcomeUnknown now, so they are stamped and retried rather than recorded as applied
+                // for the life of the process.
+                //
+                // THE RESIDUAL, STATED RATHER THAN CLAIMED AWAY: for a real refusal this write is still
+                // a dictionary saying "applied" about a name that is not. The BEHAVIOUR is right — an
+                // invalid name will not become valid, so it must not be retried until the wanted name
+                // changes, and the guard above does exactly that — but the map is not honest about what
+                // it holds. Closing that wants a third memo keyed on the refused name, which is not
+                // taken here because nothing observable depends on it.
                 if (TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown)
                     _topicNameRetryAfterUtc[session.OrchId] = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, MIRROR_RETRY_BACKOFF_SECONDS);
                 else
@@ -6078,23 +6092,17 @@ internal sealed class BridgeEngineModel(
             var couldNotReachTelegram =
                 TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown;
 
-            // THE LIMIT, STATED, BECAUSE THE FIX IS INCOMPLETE AND SAYING SO IS THE POINT. The client
-            // throws a PLAIN Exception for any non-2xx, so a 429 and every 5xx — which are also "we do
-            // not know" — are indistinguishable here from a genuine "message is gone" 400, and they
-            // therefore still clear the ids.
+            // THE LIMIT THAT USED TO BE STATED HERE IS CLOSED. A 429 and every 5xx were
+            // indistinguishable from a genuine "the message is gone" 400, because the client threw a
+            // plain Exception for any non-2xx and the status was formatted into a message string and
+            // lost — not unavailable, DISCARDED. TelegramApiException now carries it, so a retryable
+            // status reaches this predicate as OutcomeUnknown and the ids are KEPT.
             //
-            // AND THE LIMIT IS NOT INHERENT, which an earlier version of this comment implied by saying
-            // the status code is unavailable. It is not unavailable — it is DISCARDED. The client is
-            // ours, and every throw site formats `(int)response.StatusCode` into the message string, so
-            // the code is in scope at the point the exception is constructed and is thrown away there.
-            // What is true is only that it cannot be recovered HERE: parsing English out of a message
-            // string to make a control-flow decision is a worse defect than the one it would fix.
-            //
-            // So the real fix is a TYPED exception at the client carrying the status code — no parsing
-            // anywhere, and this predicate becomes complete rather than "strictly better than master".
-            // It is a change to a shared client for one call site's benefit, which is why it is not
-            // taken here; saying it is one typed exception away is the difference between a limit a
-            // reader can close and one they will assume is permanent.
+            // That was the case rev-6's F5 described: a 429 during a burst cleared both ids, the next
+            // repeat SENT instead of EDITING, and the owner got the decision-14 waterfall — plus a third
+            // message, because a destroyed receipt id also pushes Announce_SupervisorFree down its
+            // null-receipt path. It took three findings from three reviewers before the shared-client
+            // change was priced against the whole pattern rather than one symptom at a time.
             //
             // It is strictly better than what it replaces — master cleared unconditionally on all of
             // these — and it is NOT the whole invariant. Do not read it as established.
