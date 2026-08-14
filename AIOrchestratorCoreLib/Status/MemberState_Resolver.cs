@@ -59,9 +59,25 @@ public static class MemberState_Resolver
         if (entries.Count == 0)
             return MemberStates.NewNoTraffic;
 
+        // A WINDOW IS A STATEMENT ABOUT THE PRESENT, so it is read from the LIVE entries alone while
+        // every other rule below reads the whole history. Those are different questions and answering
+        // both from one list is what made this state unclearable.
+        //
+        // The short-circuit here runs ahead of everything, and with no matching close anywhere
+        // Has_OpenWindow returns true for ANY opener. Reading the live file alone, an archived opener
+        // was invisible and the state healed the moment one real entry landed. Reading the whole
+        // history made it permanently visible — and nothing prunes an archive, so no later traffic
+        // could ever clear it. `da-vinci-fintech-suite-5/imp-6` and `imp-8` were both pinned that way.
+        //
+        // Compaction is the expiry: an opener that has been moved out sits behind at least
+        // KEEP_RECENT_ENTRIES later entries, and a member that has written 45 entries since is not
+        // mid-write — it forgot the close. This is the same no-exit latch Can_AnnounceAWindow's
+        // docstring already records for reviewers, reached by a different route.
+        var windowScanFrom = entries is ChannelHistory history ? history.LiveStartIndex : 0;
+
         foreach (var (open, closed) in WINDOW_MARKER_PAIRS)
         {
-            if (Has_OpenWindow(entries, open, closed))
+            if (Has_OpenWindow(entries, open, closed, windowScanFrom))
                 return MemberStates.WritingWindowOpen;
         }
 
@@ -371,9 +387,9 @@ public static class MemberState_Resolver
         return null;
     }
 
-    static bool Has_OpenWindow(IReadOnlyList<IChannelEntry> entries, string openMarker, string closedMarker)
+    static bool Has_OpenWindow(IReadOnlyList<IChannelEntry> entries, string openMarker, string closedMarker, int scanFrom = 0)
     {
-        var lastOpen = Find_LastEntryIndex_WithMarker(entries, openMarker);
+        var lastOpen = Find_LastEntryIndex_WithMarker(entries, openMarker, scanFrom: scanFrom);
 
         if (lastOpen < 0)
             return false;
@@ -387,7 +403,7 @@ public static class MemberState_Resolver
         //
         // Only UNKNOWN is accepted, never a supervisor: an unrecognised author word may well BE the
         // member (a drifted header), whereas a supervisor is known not to be.
-        var lastClosed = Find_LastEntryIndex_WithMarker(entries, closedMarker, acceptUncertainAuthor: true);
+        var lastClosed = Find_LastEntryIndex_WithMarker(entries, closedMarker, acceptUncertainAuthor: true, scanFrom: scanFrom);
 
         return lastClosed < lastOpen;
     }
@@ -404,9 +420,9 @@ public static class MemberState_Resolver
     ///
     /// This kills the entire supervisor-discussion class on its own, independently of any anchoring.
     /// </summary>
-    static int Find_LastEntryIndex_WithMarker(IReadOnlyList<IChannelEntry> entries, string marker, bool acceptUncertainAuthor = false)
+    static int Find_LastEntryIndex_WithMarker(IReadOnlyList<IChannelEntry> entries, string marker, bool acceptUncertainAuthor = false, int scanFrom = 0)
     {
-        for (var i = entries.Count - 1; i >= 0; i--)
+        for (var i = entries.Count - 1; i >= scanFrom; i--)
         {
             if (!Can_AnnounceAWindow(entries[i].Author, acceptUncertainAuthor))
                 continue;

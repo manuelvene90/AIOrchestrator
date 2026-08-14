@@ -96,7 +96,9 @@ public static class SessionRows_Builder
         var memberId = member.MemberId;
         var channelFile = paths.Get_ImplementerChannelFile(session.OrchId, memberId);
 
-        var entries = ChannelEntry_Parser.Parse_All(SafeFile_Reader.Read_Text_Safe(channelFile));
+        // WHOLE HISTORY: the card's state chip is the same question the Telegram surfaces ask, and the
+        // two must not disagree about a member because one of them stopped reading at the compaction.
+        var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
         var state = MemberState_Resolver.Resolve(entries);
         var usageFile = paths.Get_ImplementerPidFile(session.OrchId, memberId).Replace(".pid", ".usage.json");
 

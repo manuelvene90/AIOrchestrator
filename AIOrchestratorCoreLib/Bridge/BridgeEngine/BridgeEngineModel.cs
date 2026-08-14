@@ -206,9 +206,20 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
 
     /// <summary>
-    /// WHICH unanswered thing each member was last nudged about — the raw text of the conversation
-    /// entry, never its index or stamp (see Nudge_Decider.Identify_LastConversationEntry_OrNull for
-    /// why those are silent failures).
+    /// WHICH unanswered thing each member was last nudged about — whatever
+    /// `Nudge_Decider.Identify_NudgeSubject` returns for the channel, and NEVER an index or a stamp
+    /// (see `Identify_LastConversationEntry_OrNull` for why those two are silent failures: both are
+    /// agent-written and neither is unique, so a genuinely new entry can compare equal to a remembered
+    /// one and lose the nudge it earned).
+    ///
+    /// IT IS NOT ALWAYS A CONVERSATION ENTRY'S RAW TEXT, which is what this said until `5f3dc1f` and
+    /// was then false for two commits. `Identify_NudgeSubject` answers in three shapes: the last
+    /// conversation entry's raw text (the ordinary case), the last entry the app did not write while
+    /// WAKING this member, or the `NO_CONVERSATION_YET` sentinel when there is nothing of either kind.
+    /// The last two exist because a null identity skipped the gate AND the record together, which was
+    /// the loop. Read the value as an OPAQUE KEY: the only property this map needs is that it stops
+    /// matching when the thing owed changes, and the sentinel is deliberately constant-per-channel
+    /// rather than per-entry for exactly that reason.
     ///
     /// A SECOND DICTIONARY, DELIBERATELY, AND IT IS THE POINT OF THE FIX. `_nudgedMemberUtc` is
     /// ESCALATION state: it dates the nudge so the orphan probe can run six minutes later, and the
@@ -1154,18 +1165,20 @@ internal sealed class BridgeEngineModel(
                     // as long as nobody needs it: the moment anyone writes, the conversation moves,
                     // the nudge fires and the probe runs six minutes later. Detected when it matters
                     // rather than polled forever.
-                    var conversationIdentity = Nudge_Decider.Identify_LastConversationEntry_OrNull(entries);
+                    // ALWAYS ANSWERABLE, and the two null guards that used to be here were the second
+                    // route back into the loop: a null skipped the gate AND skipped the record, so a
+                    // channel with no conversation entry was nudged forever. It is now keyed on a
+                    // sentinel — see Nudge_Decider.NO_CONVERSATION_YET, including why it cannot be
+                    // one of the channel's own entries.
+                    var conversationIdentity = Nudge_Decider.Identify_NudgeSubject(entries, channelFile);
 
-                    if (conversationIdentity != null
-                        && _nudgedAboutEntry.TryGetValue(memberKey, out var alreadyNudgedAbout)
+                    if (_nudgedAboutEntry.TryGetValue(memberKey, out var alreadyNudgedAbout)
                         && alreadyNudgedAbout == conversationIdentity)
                         continue;
 
                     await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, dormantMidWork, cancellationToken);
                     _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
-
-                    if (conversationIdentity != null)
-                        _nudgedAboutEntry[memberKey] = conversationIdentity;
+                    _nudgedAboutEntry[memberKey] = conversationIdentity;
 
                     continue;
                 }
@@ -1451,7 +1464,10 @@ internal sealed class BridgeEngineModel(
 
             ChannelAppender.Append_AppEntry(
                 _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
-                "session was orphaned and has been respawned",
+                // The constant, not the text: Nudge_Decider has to recognise this entry as the app's
+                // own wake rather than something to nudge the member about, and two copies of a string
+                // are two copies that can drift.
+                Nudge_Wording.RESPAWN_SUBJECT,
                 "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
                 DateTime.Now);
 
@@ -4759,8 +4775,11 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
-            var entries = ChannelEntry_Parser.Parse_All(
-                UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));
+            // WHOLE HISTORY, not the live file: both consumers of this list ask a question about the
+            // channel's story — the status line picks the last real subject, the builder resolves the
+            // member's state — and a compacted channel answers neither from its live half alone.
+            var entries = ChannelHistory_Counter.Read_AllEntries(
+                _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId));
 
             members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false));
         }
@@ -4797,7 +4816,7 @@ internal sealed class BridgeEngineModel(
 
             var memberFolder = _paths.Get_ImplementerFolder(session.OrchId, member.MemberId);
             var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var declared = MemberState_Resolver.Resolve(entries);
             var workingNow = SessionActivity_Probe.Is_MidTurn(Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
 
@@ -6276,7 +6295,7 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
             memberLines.Add($"{member.MemberId}: {Describe_AwayMemberState(entries, usageFile)}");

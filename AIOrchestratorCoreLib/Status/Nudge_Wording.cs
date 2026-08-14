@@ -40,12 +40,37 @@ public static class Nudge_Wording
             : SessionDuration_Formatter.Describe(quietFor.Value);
     }
 
+    /// <summary>
+    /// The subject of the entry the app appends when it respawns an orphaned member. It lives here,
+    /// beside the nudge subjects, because <see cref="Is_WakeSubject"/> has to recognise it and a
+    /// predicate that RE-TYPES the text it recognises is a drift waiting to happen — the writer moves,
+    /// the recogniser does not, and nothing says so.
+    /// </summary>
+    public const string RESPAWN_SUBJECT = "session was orphaned and has been respawned";
+
     public static string Subject_For(bool dormantMidWork)
     {
         if (dormantMidWork)
             return "your writing window is still open — close it or resume";
 
         return "unread traffic — you have not answered";
+    }
+
+    /// <summary>
+    /// Is this an entry the app wrote while WAKING a member, rather than something the member is being
+    /// woken ABOUT? The distinction only matters on a channel with no conversation in it at all, where
+    /// there is nothing else to key the "already nudged" memo on.
+    ///
+    /// Everything the app appends to a member channel to wake it belongs here: both nudge subjects and
+    /// the respawn notice. A `/resume` broadcast deliberately does NOT — that is the owner speaking
+    /// through the app, it is the one thing such a member is genuinely supposed to act on, and treating
+    /// it as the app's own noise is what let one nudge per PROCESS look like one nudge per thing.
+    /// </summary>
+    public static bool Is_WakeSubject(string subject)
+    {
+        return subject == Subject_For(true)
+            || subject == Subject_For(false)
+            || subject == RESPAWN_SUBJECT;
     }
 
     /// <summary>
