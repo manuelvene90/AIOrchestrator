@@ -153,4 +153,18 @@ public static class ChannelIndexSequence_Screen
     {
         return $"{crossing.Earlier.Line}\n{crossing.Later.Line}";
     }
+
+    /// <summary>
+    /// The same key scoped to its channel, which is what every caller actually stores — two channels
+    /// carrying an identical pair are two facts.
+    ///
+    /// ONE COMPOSITION, because there were two: the engine's screen and the baseline pass each wrapped
+    /// <see cref="Build_DedupeKey"/> the same way with nothing holding them together. A memo keyed
+    /// differently from the one that reads it never matches, so every crossing would be reported for
+    /// ever (decision 12, rev-10 F3).
+    /// </summary>
+    public static string Build_MemoKey(string channelFilePath, ChannelIndexCrossing crossing)
+    {
+        return $"{channelFilePath}|{Build_DedupeKey(crossing)}";
+    }
 }

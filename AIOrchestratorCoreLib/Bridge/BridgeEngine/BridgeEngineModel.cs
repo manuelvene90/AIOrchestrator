@@ -158,12 +158,6 @@ internal sealed class BridgeEngineModel(
     readonly HashSet<string> _screenedIndexCrossings = [];
     readonly HashSet<string> _channelsIndexBaselined = [];
 
-    /// <summary>
-    /// Channels whose CONTENTS the silent baseline pass has read. Its own set, and not one of the two
-    /// above, because those are written by their sweeps under conditions of their own — a channel with
-    /// no offence never enters either — while this one means exactly "the pass has been here once".
-    /// </summary>
-    readonly HashSet<string> _channelsContentBaselined = [];
     readonly Lock _buttonLock = new();
     long _buttonSequence;
     long _buttonGroupSequence;
@@ -1129,7 +1123,7 @@ internal sealed class BridgeEngineModel(
 
             foreach (var entry in malformed)
             {
-                var isNew = _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
+                var isNew = _reportedMalformedHeaders.Add(ChannelShape_Validator.Build_MemoKey(channel.FilePath, entry.Line));
 
                 if (isNew && !isFirstSight)
                     unreported.Add(entry);
@@ -1198,7 +1192,7 @@ internal sealed class BridgeEngineModel(
 
             foreach (var crossing in crossings)
             {
-                var isNew = _screenedIndexCrossings.Add($"{channel.FilePath}|{ChannelIndexSequence_Screen.Build_DedupeKey(crossing)}");
+                var isNew = _screenedIndexCrossings.Add(ChannelIndexSequence_Screen.Build_MemoKey(channel.FilePath, crossing));
 
                 if (isNew && !isFirstSight)
                     _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {ChannelIndexSequence_Screen.Describe_Crossing(crossing)}");
@@ -1248,27 +1242,21 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Baseline_UnseenChannels_Silently()
     {
-        foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
+        var baselines = ChannelBaseline_Pass.Build_ForUnseenChannels(
+            ChannelDiscovery.Find_ChannelFiles(_paths),
+            _channelsShapeBaselined,
+            _channelsIndexBaselined);
+
+        foreach (var baseline in baselines)
         {
-            if (!_channelsContentBaselined.Add(channel.FilePath))
-                continue;
+            _channelsShapeBaselined.Add(baseline.ChannelFilePath);
+            _channelsIndexBaselined.Add(baseline.ChannelFilePath);
 
-            var liveText = UsageTotals_Reader.Read_Text_Safe(channel.FilePath);
+            foreach (var key in baseline.MalformedKeys)
+                _reportedMalformedHeaders.Add(key);
 
-            _channelsShapeBaselined.Add(channel.FilePath);
-
-            foreach (var entry in ChannelShape_Validator.Find_MalformedHeaders(liveText))
-                _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
-
-            _channelsIndexBaselined.Add(channel.FilePath);
-
-            var crossings = ChannelIndexSequence_Screen.Find_Crossings(
-                ChannelIndexSequence_Screen.Read_Headers(
-                    UsageTotals_Reader.Read_Text_Safe(Channel_Compactor.Build_ArchiveFilePath(channel.FilePath)),
-                    liveText));
-
-            foreach (var crossing in crossings)
-                _screenedIndexCrossings.Add($"{channel.FilePath}|{ChannelIndexSequence_Screen.Build_DedupeKey(crossing)}");
+            foreach (var key in baseline.CrossingKeys)
+                _screenedIndexCrossings.Add(key);
         }
     }
 
