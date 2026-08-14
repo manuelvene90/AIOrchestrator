@@ -29,4 +29,33 @@ public static class CloseTapOutcome_Decider
 
         return failure == null ? CloseTapOutcomes.Closed : CloseTapOutcomes.Uncertain;
     }
+
+    /// <summary>
+    /// What the RESOLVED archive records — the one artefact that outlives the prompt, and the thing a
+    /// person reconstructing an incident actually reads.
+    ///
+    /// It filed "closed" whether or not the executor threw, so a half-close was archived
+    /// indistinguishably from a clean one: the record asserted precisely what the owner's sentence was
+    /// changed to stop asserting. The vocabulary already separates `unreadable`, `moot`, `declined` and
+    /// `expired`, so it distinguishes everywhere except the one case that cannot be told apart later.
+    /// </summary>
+    public static string Describe_ForArchive(CloseTapOutcomes outcome)
+    {
+        return outcome switch
+        {
+            CloseTapOutcomes.Closed => "closed",
+            CloseTapOutcomes.Uncertain => "uncertain",
+            CloseTapOutcomes.Declined => "declined",
+
+            // NOT AN OVERSIGHT — this path archives NOTHING. An unreadable request is deliberately
+            // left parked so the owner can be asked again, and archiving it would throw away a close
+            // they had already approved. The invariant is worth stating as a throw rather than leaving
+            // as an absence somebody later fills in with a plausible-looking string.
+            CloseTapOutcomes.NotAttempted => throw new ArgumentOutOfRangeException(
+                nameof(outcome),
+                "a close that was never attempted is left parked, not archived"),
+
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), $"unhandled close outcome '{outcome}'"),
+        };
+    }
 }

@@ -53,6 +53,36 @@ public class CloseTapOutcomeDeciderTests
     /// A confirmed tap never yields Declined — that outcome belongs to the other branch entirely, and
     /// the two must not be reachable from one another.
     /// </summary>
+    /// <summary>
+    /// THE ARCHIVE IS THE ARTEFACT THAT OUTLIVES THE PROMPT. It recorded "closed" whether or not the
+    /// executor threw, so a half-close was filed indistinguishably from a clean one — the record a
+    /// person reads while reconstructing an incident asserted exactly what the owner's sentence was
+    /// changed to stop asserting.
+    /// </summary>
+    [Fact]
+    public void TheArchiveDistinguishesAHalfCloseFromACleanOne()
+    {
+        Assert.Equal("closed", CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Closed));
+        Assert.Equal("uncertain", CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Uncertain));
+        Assert.Equal("declined", CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Declined));
+
+        Assert.NotEqual(
+            CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Closed),
+            CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Uncertain));
+    }
+
+    /// <summary>
+    /// A close that was never attempted is LEFT PARKED, not archived — archiving it would throw away a
+    /// close the owner had already approved, with no way back. Stated as a throw so the invariant is
+    /// visible rather than an absence somebody later fills with a plausible-looking string.
+    /// </summary>
+    [Fact]
+    public void ACloseThatWasNeverAttemptedHasNoArchiveWord()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.NotAttempted));
+    }
+
     [Fact]
     public void AConfirmedTapNeverReportsADecline()
     {

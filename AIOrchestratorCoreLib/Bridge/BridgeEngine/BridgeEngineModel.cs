@@ -2996,7 +2996,16 @@ internal sealed class BridgeEngineModel(
         }
         finally
         {
-            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "closed");
+            // The audit record says which of the two happened, because it is what outlives the prompt.
+            // It filed "closed" either way, so the artefact a person reads while reconstructing an
+            // incident asserted the very thing the owner's sentence was changed to stop asserting.
+            //
+            // Decide is called here and again below rather than hoisted: it is pure and both calls
+            // pass the same two values, so they cannot disagree — and restructuring a try/finally that
+            // has just been reviewed is the larger risk of the two.
+            Archive_ResolvedRequest_BestEffort(
+                confirmation.ParkedPath,
+                CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcome_Decider.Decide(request, failure)));
         }
 
         return new CloseTapResult(CloseTapOutcome_Decider.Decide(request, failure), request);
