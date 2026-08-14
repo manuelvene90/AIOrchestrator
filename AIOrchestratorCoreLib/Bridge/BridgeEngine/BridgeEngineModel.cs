@@ -1132,7 +1132,7 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             ChannelAppender.Append_AppEntry(
-                channel.FilePath,
+                channel.FilePath, AppEntryAudiences.Agent,
                 $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
                 ChannelShape_Validator.Build_ReportBody(unreported),
                 DateTime.Now);
@@ -1223,7 +1223,7 @@ internal sealed class BridgeEngineModel(
         _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
 
         ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
+            _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
             $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
             $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
             DateTime.Now);
@@ -1265,7 +1265,7 @@ internal sealed class BridgeEngineModel(
                 lastEntry.Author.ToString().ToLowerInvariant(),
                 SessionDuration_Formatter.Describe(quietFor));
 
-        ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
+        ChannelAppender.Append_AppEntry(channelFile, AppEntryAudiences.Agent, subject, body, DateTime.Now);
 
         var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
         _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
@@ -1297,7 +1297,7 @@ internal sealed class BridgeEngineModel(
             _launcher.Respawn_Implementer(session.OrchId, memberId);
 
             ChannelAppender.Append_AppEntry(
-                _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
+                _paths.Get_ImplementerChannelFile(session.OrchId, memberId), AppEntryAudiences.Agent,
                 "session was orphaned and has been respawned",
                 "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
                 DateTime.Now);
@@ -1369,7 +1369,7 @@ internal sealed class BridgeEngineModel(
             else if (_ledgerBehindReportedOrchIds.Add(session.OrchId))
             {
                 ChannelAppender.Append_AppEntry(
-                    _paths.Get_OwnerChannelFile(session.OrchId),
+                    _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
                     "PLAN.md is behind your verdicts",
                     "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
                     DateTime.Now);
@@ -1426,7 +1426,7 @@ internal sealed class BridgeEngineModel(
             return;
 
         ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
+            _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
             "PLAN.md has lines that cannot show progress",
             $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
             DateTime.Now);
@@ -2158,7 +2158,7 @@ internal sealed class BridgeEngineModel(
             // Tell the AGENT why, in its own channel — a silently deleted request file used to
             // look to the supervisor like an action that simply never happened.
             if (malformedRequest.OrchId != null && _store.Get_Session_OrNull(malformedRequest.OrchId) != null)
-                Append_OrchestrationAppEntry(malformedRequest.OrchId, "request REJECTED", $"Your request file was rejected: {malformedRequest.Reason}. Fix it and drop a new file (same action string).");
+                Append_OrchestrationAppEntry(malformedRequest.OrchId, AppEntryAudiences.Owner, "request REJECTED", $"Your request file was rejected: {malformedRequest.Reason}. Fix it and drop a new file (same action string).");
 
             Delete_RequestFile(malformedRequest.FilePath);
         }
@@ -2205,14 +2205,14 @@ internal sealed class BridgeEngineModel(
                 }
 
                 Append_OrchestrationAppEntry(
-                    request.OrchId,
+                    request.OrchId, AppEntryAudiences.Owner,
                     $"model set: {request.Role} → {request.Model} — {request.Reason}",
                     "Affected sessions respawned on the new model; they resume from their channels.");
             }
             catch (Exception ex)
             {
                 _log.Log_Error(request.OrchId, $"set-model {request.Role} → '{request.Model}' failed", ex);
-                Append_OrchestrationAppEntry(request.OrchId, $"set-model FAILED: {request.Role} → {request.Model}", $"Error: {ex.Message}");
+                Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Owner, $"set-model FAILED: {request.Role} → {request.Model}", $"Error: {ex.Message}");
             }
             finally
             {
@@ -2334,7 +2334,7 @@ internal sealed class BridgeEngineModel(
                 if (repo == null)
                 {
                     var known = string.Join(", ", repos.Select(r => r.Name));
-                    Append_GeneralAppEntry(
+                    Append_GeneralAppEntry(AppEntryAudiences.Owner,
                         $"start-orchestration FAILED: '{request.RepoQuery}'",
                         $"Could not resolve repo '{request.RepoQuery}' to exactly one configured repo. Known repos: {known}. Ask the owner which one is meant, then drop a new request.");
                     continue;
@@ -2348,14 +2348,14 @@ internal sealed class BridgeEngineModel(
                     ? "One solo session spawned — no supervisor, no implementers; you talk to it directly."
                     : "Supervisor and implementer imp-1 spawned;";
 
-                Append_GeneralAppEntry(
+                Append_GeneralAppEntry(AppEntryAudiences.Owner,
                     $"orchestration '{session.OrchId}' started",
                     $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). {crew} its Telegram topic appears on its first channel entry.");
             }
             catch (Exception ex)
             {
                 _log.Log_Error(GLOBAL_ORCH_ID, $"start-orchestration for '{request.RepoQuery}' failed", ex);
-                Append_GeneralAppEntry(
+                Append_GeneralAppEntry(AppEntryAudiences.Owner,
                     $"start-orchestration FAILED for repo '{request.RepoQuery}'",
                     $"Error: {ex.Message}");
             }
@@ -2383,14 +2383,14 @@ internal sealed class BridgeEngineModel(
                 // The REASON rides in the subject because App entries mirror subject-only — the
                 // owner must never see a session appear (and burn tokens) without knowing why.
                 Append_OrchestrationAppEntry(
-                    request.OrchId,
+                    request.OrchId, AppEntryAudiences.Owner,
                     $"{kindWord} '{newMember.MemberId}' added — {request.Reason}",
                     briefingHint);
             }
             catch (Exception ex)
             {
                 _log.Log_Error(request.OrchId, $"add-{request.Kind.ToString().ToLowerInvariant()} failed", ex);
-                Append_OrchestrationAppEntry(request.OrchId, $"add-{request.Kind.ToString().ToLowerInvariant()} FAILED", $"Error: {ex.Message}");
+                Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Owner, $"add-{request.Kind.ToString().ToLowerInvariant()} FAILED", $"Error: {ex.Message}");
             }
             finally
             {
@@ -2420,7 +2420,7 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Info(request.OrchId, $"close-implementer '{request.MemberId}' held for the owner's confirmation ({parkedPath})");
 
                 Append_OrchestrationAppEntry(
-                    request.OrchId,
+                    request.OrchId, AppEntryAudiences.Owner,
                     $"close of '{request.MemberId}' HELD — the owner confirms every close with a tap now",
                     $"Nothing has been closed and '{request.MemberId}' is still running. The owner has been asked to confirm.\n\n"
                     + $"Reason relayed: {request.Reason}\n\n"
@@ -2435,7 +2435,7 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Error(request.OrchId, $"close-implementer '{request.MemberId}' could not be held for confirmation — NOT closed", ex);
 
                 Append_OrchestrationAppEntry(
-                    request.OrchId,
+                    request.OrchId, AppEntryAudiences.Owner,
                     $"close of '{request.MemberId}' NOT held — nothing was closed",
                     $"Your close request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and '{request.MemberId}' is still running. Ask again if the close is still wanted.");
 
@@ -2463,7 +2463,7 @@ internal sealed class BridgeEngineModel(
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, memberId));
 
             Append_OrchestrationAppEntry(
-                orchId,
+                orchId, AppEntryAudiences.Owner,
                 $"member '{memberId}' closed — {reason}",
                 $"'{memberId}' is retired: the owner confirmed it with a tap, its terminal was closed, and its channel stays on disk as audit trail.");
         }
@@ -2472,7 +2472,7 @@ internal sealed class BridgeEngineModel(
             _log.Log_Error(orchId, $"close-implementer '{memberId}' failed after the owner confirmed it", ex);
 
             Append_OrchestrationAppEntry(
-                orchId,
+                orchId, AppEntryAudiences.Owner,
                 $"close of '{memberId}' FAILED — it may still be running",
                 $"The owner confirmed the close, but it did not complete ({ex.Message}). Check whether '{memberId}' is still alive before asking again.");
 
@@ -2506,7 +2506,7 @@ internal sealed class BridgeEngineModel(
                 // killed seconds later. A supervisor that posts a farewell and then keeps running
                 // with no explanation is a worse failure than the one being fixed.
                 Append_OrchestrationAppEntry(
-                    request.OrchId,
+                    request.OrchId, AppEntryAudiences.Owner,
                     "close request HELD — the owner confirms every close with a tap now",
                     $"Nothing has been closed and your sessions are still running. The owner has been asked to confirm.\n\n"
                     + $"Asked by: {request.Requester}\nReason relayed: {request.Reason}\n\n"
@@ -2524,7 +2524,7 @@ internal sealed class BridgeEngineModel(
                 // who asked" is the hole this whole unit exists to close — a failure path is exactly
                 // where it would have reopened.
                 Append_OrchestrationAppEntry(
-                    request.OrchId,
+                    request.OrchId, AppEntryAudiences.Owner,
                     "close request NOT held — nothing was closed",
                     $"Your close request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and nothing was closed. Everything is still running. Ask again if the close is still wanted.");
 
@@ -2562,14 +2562,14 @@ internal sealed class BridgeEngineModel(
             if (_telegramClient != null && session.TelegramTopicId != null)
                 Delete_TelegramTopic_FireAndForget(orchId, session.TelegramTopicId.Value);
 
-            Append_GeneralAppEntry(
+            Append_GeneralAppEntry(AppEntryAudiences.Owner,
                 $"orchestration '{orchId}' closed — {reason}",
                 $"{authorisation} Asked by: {requester}. Sessions ended; folder kept as audit trail; Telegram topic deleted.");
         }
         catch (Exception ex)
         {
             _log.Log_Error(orchId, "close-orchestration failed", ex);
-            Append_GeneralAppEntry($"close-orchestration FAILED: '{orchId}'", $"Error: {ex.Message}");
+            Append_GeneralAppEntry(AppEntryAudiences.Owner, $"close-orchestration FAILED: '{orchId}'", $"Error: {ex.Message}");
 
             // Reported, but NOT absorbed — whoever asked has to be able to find out.
             throw;
@@ -2594,7 +2594,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        Append_OrchestrationAppEntry(orchId, $"close request {what} — nothing was closed", advice);
+        Append_OrchestrationAppEntry(orchId, AppEntryAudiences.Owner, $"close request {what} — nothing was closed", advice);
     }
 
     void Archive_ResolvedRequest_BestEffort(string requestFilePath, string outcome)
@@ -2936,7 +2936,7 @@ internal sealed class BridgeEngineModel(
             // Told to the REQUESTER, in its own channel, because that is where this guard promised
             // an answer either way — the general channel cannot be read by the session waiting.
             Append_OrchestrationAppEntry(
-                confirmation.OrchId,
+                confirmation.OrchId, AppEntryAudiences.Owner,
                 "close NOT executed — the request could not be read just now",
                 "The owner's tap arrived, but your request file could not be read at that moment, so nothing was closed. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
@@ -2984,7 +2984,7 @@ internal sealed class BridgeEngineModel(
         _log.Log_Info(confirmation.OrchId, "The owner declined a close request");
 
         Append_OrchestrationAppEntry(
-            confirmation.OrchId,
+            confirmation.OrchId, AppEntryAudiences.Owner,
             "close DECLINED by the owner — keep working",
             $"You asked to close {subject} ({request?.Reason ?? "no reason recorded"}) and the owner said no. Nothing was closed and every session is still running.\n\n"
             + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
@@ -3012,7 +3012,7 @@ internal sealed class BridgeEngineModel(
             ? $"'{orchId}'"
             : $"'{request.MemberId}' in '{orchId}'";
 
-        Append_GeneralAppEntry(
+        Append_GeneralAppEntry(AppEntryAudiences.Owner,
             $"close of {what} {outcome} — nothing was closed",
             $"Asked by: {request?.Requester ?? "unrecorded"}. Reason given: {request?.Reason ?? "none recorded"}. Its sessions are all still running.");
     }
@@ -3032,7 +3032,7 @@ internal sealed class BridgeEngineModel(
             _log.Log_Info(request.OrchId, $"A close request lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h");
 
             Append_OrchestrationAppEntry(
-                request.OrchId,
+                request.OrchId, AppEntryAudiences.Owner,
                 $"close of {CloseConfirmationPrompt_Builder.Describe_Subject(request)} LAPSED — the owner never answered",
                 $"Your close request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and nothing was closed. "
                 + "It is not carried over: a close must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
@@ -3074,13 +3074,13 @@ internal sealed class BridgeEngineModel(
         });
     }
 
-    void Append_GeneralAppEntry(string subject, string body)
+    void Append_GeneralAppEntry(AppEntryAudiences audience, string subject, string body)
     {
-        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, subject, body, DateTime.Now);
+        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, audience, subject, body, DateTime.Now);
         Raise_OrchestrationActivity(ChannelDiscovery.GENERAL_ORCH_ID);
     }
 
-    void Append_OrchestrationAppEntry(string orchId, string subject, string body)
+    void Append_OrchestrationAppEntry(string orchId, AppEntryAudiences audience, string subject, string body)
     {
         var ownerChannel = _paths.Get_OwnerChannelFile(orchId);
 
@@ -3090,7 +3090,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        ChannelAppender.Append_AppEntry(ownerChannel, subject, body, DateTime.Now);
+        ChannelAppender.Append_AppEntry(ownerChannel, audience, subject, body, DateTime.Now);
         Raise_OrchestrationActivity(orchId);
     }
 
@@ -3948,7 +3948,7 @@ internal sealed class BridgeEngineModel(
 
             wokenOrchestrations++;
 
-            ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), SUBJECT, body, DateTime.Now);
+            ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now);
             wokenSessions++;
 
             foreach (var member in session.Members)
@@ -3957,7 +3957,7 @@ internal sealed class BridgeEngineModel(
                     continue;
 
                 ChannelAppender.Append_AppEntry(
-                    _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), SUBJECT, body, DateTime.Now);
+                    _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now);
 
                 wokenSessions++;
             }
@@ -3966,7 +3966,7 @@ internal sealed class BridgeEngineModel(
         }
 
         // The general supervisor too — it has the same problem and its own channel.
-        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, SUBJECT, body, DateTime.Now);
+        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now);
         wokenSessions++;
 
         _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — woke {wokenSessions} session(s) across {wokenOrchestrations} orchestration(s)");
@@ -4207,7 +4207,7 @@ internal sealed class BridgeEngineModel(
                 // process and was discarded at the last step, which is worse than having none — it
                 // sent a supervisor hunting a fault that did not exist.
                 ChannelAppender.Append_AppEntry(
-                    _paths.Get_OwnerChannelFile(session.OrchId),
+                    _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
                     Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
                     description,
                     DateTime.Now);
@@ -4281,7 +4281,7 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(session.OrchId),
+                _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
                 Status.Retirement_Advisor.FLAG_SUBJECT,
                 Status.Retirement_Advisor.Build_FlagBody(idle),
                 DateTime.Now);
@@ -5472,7 +5472,7 @@ internal sealed class BridgeEngineModel(
         }
 
         ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(orchId),
+            _paths.Get_OwnerChannelFile(orchId), AppEntryAudiences.Agent,
             "that message was too long for a phone",
             Brevity_Policy.Build_NudgeBody(mirroredText),
             DateTime.Now);
@@ -5493,7 +5493,7 @@ internal sealed class BridgeEngineModel(
         if (newMode == TelegramDeliveryModes.Deferred)
         {
             ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(orchId),
+                _paths.Get_OwnerChannelFile(orchId), AppEntryAudiences.Agent,
                 "the owner switched this topic to Do-Not-Disturb — treat it as AWAY",
                 "They set DND deliberately, so this is not a guess: they are away and nothing you write reaches them "
                 + "until they switch back.\n\n"
@@ -5510,7 +5510,7 @@ internal sealed class BridgeEngineModel(
         if (previousMode == TelegramDeliveryModes.Deferred && newMode == TelegramDeliveryModes.Normal)
         {
             ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(orchId),
+                _paths.Get_OwnerChannelFile(orchId), AppEntryAudiences.Agent,
                 "Do-Not-Disturb is off — the owner is back",
                 "Normal mode. Re-ask ONLY what still matters, rewritten against the CURRENT state, and drop what "
                 + "events have overtaken. One line on what you decided while they were away.",
@@ -5542,7 +5542,7 @@ internal sealed class BridgeEngineModel(
         _log.Log_Info(orchId, $"QUIET — {AwayMode_Policy.QUIET_THRESHOLD} unanswered messages; supervisor told to hold further questions");
 
         ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(orchId),
+            _paths.Get_OwnerChannelFile(orchId), AppEntryAudiences.Agent,
             "HOLD — the owner has not answered your last messages",
             $"{AwayMode_Policy.QUIET_THRESHOLD} of your messages are unanswered. They may simply be mid-task, so nothing is being "
             + "assumed yet — but STOP sending them anything more for now: no questions, no options, no updates.\n\n"
@@ -5594,7 +5594,7 @@ internal sealed class BridgeEngineModel(
         _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE ON (app-wide) — owner unresponsive; every supervisor told to proceed without questions");
 
         ChannelAppender.Append_AppEntry(
-            _paths.GeneralChannelFile,
+            _paths.GeneralChannelFile, AppEntryAudiences.Agent,
             "AWAY MODE ON — the owner is not reading",
             "Every orchestration has been told directly; you do not need to relay it. Ask them nothing until the "
             + "AWAY MODE OFF entry arrives.",
@@ -5606,7 +5606,7 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(session.OrchId),
+                _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
                 "AWAY MODE ON — the owner is not reading",
                 "They have not answered. Assume they are unavailable, NOT ignoring you.\n\n"
                 + "Until further notice: ask NOTHING. Park every question you would have asked (keep a list — you will "
@@ -5630,7 +5630,7 @@ internal sealed class BridgeEngineModel(
         _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE OFF (app-wide) — owner is back");
 
         ChannelAppender.Append_AppEntry(
-            _paths.GeneralChannelFile,
+            _paths.GeneralChannelFile, AppEntryAudiences.Agent,
             "AWAY MODE OFF — the owner is back",
             "Every orchestration has been told directly.",
             DateTime.Now);
@@ -5641,7 +5641,7 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(session.OrchId),
+                _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
                 "AWAY MODE OFF — the owner is back",
                 "Normal mode: they are reading and can answer within a short time.\n\n"
                 + "Go through the questions you parked. Re-ask ONLY the ones that still matter, rewritten against the "
@@ -5727,7 +5727,7 @@ internal sealed class BridgeEngineModel(
     void Post_StatusEntry(string orchId, string text)
     {
         ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(orchId),
+            _paths.Get_OwnerChannelFile(orchId), AppEntryAudiences.Owner,
             MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
             text,
             DateTime.Now);
@@ -6039,7 +6039,7 @@ internal sealed class BridgeEngineModel(
             pending.Nudged = true;
 
             ChannelAppender.Append_AppEntry(
-                ownerChannel,
+                ownerChannel, AppEntryAudiences.Agent,
                 "the owner is still waiting for your reply",
                 "Your turn ended without answering the owner's message above. Reply now, even one line (what you are doing / what you are waiting on). The owner is looking at an unanswered receipt.",
                 DateTime.Now);

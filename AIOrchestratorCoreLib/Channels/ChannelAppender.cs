@@ -11,10 +11,17 @@ public static class ChannelAppender
         Append_Entry(channelFilePath, "owner", "via Telegram", messageText, nowLocal);
     }
 
-    /// <summary>App-authored entries: request confirmations/failures on the general channel.</summary>
-    public static void Append_AppEntry(string channelFilePath, string subject, string body, DateTime nowLocal)
+    /// <summary>
+    /// App-authored entries: request confirmations/failures, nudges, alerts.
+    ///
+    /// <paramref name="audience"/> is REQUIRED and has no default on purpose — see
+    /// <see cref="AppEntryAudiences"/>. It decides whether the entry also reaches the owner's phone,
+    /// and it is written into the subject because the mirror re-reads entries from the file and cannot
+    /// see this call.
+    /// </summary>
+    public static void Append_AppEntry(string channelFilePath, AppEntryAudiences audience, string subject, string body, DateTime nowLocal)
     {
-        Append_Entry(channelFilePath, "app", subject, body, nowLocal);
+        Append_Entry(channelFilePath, "app", AppEntryAudience_Tag.Apply(subject, audience), body, nowLocal);
     }
 
     static void Append_Entry(string channelFilePath, string authorWord, string subject, string body, DateTime nowLocal)

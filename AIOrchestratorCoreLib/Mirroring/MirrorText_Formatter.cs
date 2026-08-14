@@ -30,8 +30,17 @@ public static class MirrorText_Formatter
         // is how "⚙ App: unread reports waiting on you — rev-2" ended up on their phone, reading as
         // if it were addressed to them. The owner-facing app notices are sent separately and
         // directly, so nothing is lost by keeping these internal.
-        if (entry.Author == ChannelAuthors.App && Is_AgentCoaching(entry.Subject))
+        // TWO ROUTES, and the tag is the one that is meant to survive. AGENT_COACHING_SUBJECTS matches
+        // a claim's WORDING, so it is a second copy of a decision that lives at the call site: it has
+        // already drifted in both directions at once — four of its entries matched nothing written any
+        // more, while "the owner is still waiting for your reply" was written and never listed, and was
+        // texted to the owner for a day. The tag replaces it. The list stays only until every writer is
+        // tagged, and it is an OR rather than a fallback so that neither route can be silently lost.
+        if (entry.Author == ChannelAuthors.App
+            && (Channels.AppEntryAudience_Tag.Is_AgentTagged(entry.Subject) || Is_AgentCoaching(entry.Subject)))
+        {
             return false;
+        }
 
         // Owner entries came FROM Telegram (or the owner's own terminal) — never echoed back.
         return entry.Author != ChannelAuthors.Owner;

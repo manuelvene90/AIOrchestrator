@@ -38,6 +38,52 @@ public class MirrorTextFormatterTests
         Assert.False(MirrorText_Formatter.Should_Mirror(ownerChannel, Build_Entry(ChannelAuthors.Owner, "via Telegram", "hello")));
     }
 
+    /// <summary>
+    /// Routing on the TAG, not on the wording of the claim. The subject after the tag is then free to be
+    /// corrected, reworded or translated without changing where the entry goes — which is the whole
+    /// point, because the list it replaces was a second copy of a decision that lives at the call site
+    /// and had drifted in both directions at once.
+    /// </summary>
+    [Fact]
+    public void Should_Mirror_TaggedAppEntry_IsNeverTexted_WhateverTheSubjectSays()
+    {
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("crm-2", "unused");
+
+        // Wording that appears in no list anywhere: the tag alone decides.
+        var tagged = Build_Entry(ChannelAuthors.App, $"{AppEntryAudience_Tag.AGENT_TAG} a claim nobody has ever written before", "b");
+
+        Assert.False(MirrorText_Formatter.Should_Mirror(ownerChannel, tagged));
+    }
+
+    /// <summary>
+    /// The tag is read as a PREFIX, so an entry that merely DISCUSSES it stays owner-facing. A supervisor
+    /// quoting the vocabulary into a message must not make that message vanish — the same line the
+    /// marker rules draw between declaring and talking about a declaration.
+    /// </summary>
+    [Fact]
+    public void Should_Mirror_AppEntryThatMentionsTheTagMidSubject_IsStillTexted()
+    {
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("crm-2", "unused");
+        var discussing = Build_Entry(ChannelAuthors.App, $"orchestration 'crm-2' closed — see the {AppEntryAudience_Tag.AGENT_TAG} convention", "b");
+
+        Assert.True(MirrorText_Formatter.Should_Mirror(ownerChannel, discussing));
+    }
+
+    /// <summary>
+    /// STATUS and the tag are now both prefixes of the same field, and they must never collide: STATUS
+    /// rides the owner channel precisely so Do-Not-Disturb queues and collapses it, so tagging one would
+    /// silently disable that. It is owner-facing by design and therefore never tagged — pinned here
+    /// rather than left as a comment, because the two are only kept apart by that fact.
+    /// </summary>
+    [Fact]
+    public void Is_StatusEntry_StillMatches_AndATaggedSubjectIsNotAStatus()
+    {
+        Assert.True(MirrorText_Formatter.Is_StatusEntry(Build_Entry(ChannelAuthors.App, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, "report")));
+
+        var tagged = Build_Entry(ChannelAuthors.App, $"{AppEntryAudience_Tag.AGENT_TAG} {MirrorText_Formatter.STATUS_SUBJECT_PREFIX}", "report");
+        Assert.False(MirrorText_Formatter.Is_StatusEntry(tagged));
+    }
+
     [Fact]
     public void Format_Supervisor_BarePrefixAndBodyOnly_NoCeremony()
     {
