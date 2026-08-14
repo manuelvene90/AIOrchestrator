@@ -217,6 +217,54 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
         Assert.Equal(1, occurrences);
     }
 
+    /// <summary>
+    /// THE DRAIN IS THE ONLY WRITER, PINNED BY PROVENANCE — the sibling case pins COUNT and that is
+    /// not enough. rev-10 measured the gap: restoring the pre-one-writer shape (append, and RETURN on
+    /// success, so nothing is ever queued) reddened NOTHING, including the count case.
+    /// <para>
+    /// WHY COUNT MISSES IT. The count case defeats a mutant that writes TWICE — a direct append plus
+    /// the queued copy through the exit drain. But the regression that matters writes ONCE: a single
+    /// marker, out of order relative to a concurrent announcement on the other loop. One write, wrong
+    /// order, count of one, suite green. <b>The case pinned "not written twice"; the failure mode is
+    /// "written once, too early."</b>
+    /// </para>
+    /// <para>
+    /// WHY PROVENANCE RATHER THAN ORDER. Order is the CONSEQUENCE; "the drain is the only writer" is
+    /// the property. Observing the consequence needs two announcements from two loops with a
+    /// contention window between them — racing the 2 s tick against the inbound loop, which is the
+    /// flaky timing test this repo has twice refused. Provenance is the property itself and it is
+    /// deterministic: an announcement that reached the channel through the drain has a delivery
+    /// behind it, and one written directly does not.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheAnnouncementReachesTheChannelTHROUGHTheDrain_NotByADirectWrite()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        Seed_OwnerChannel(session.OrchId);
+
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        // FREE channel, as the sibling case establishes: on a locked one a direct append fails and
+        // falls through to the queue, so the mutant becomes indistinguishable from the real thing.
+        _telegram.Queue_OwnerMessage(Build_OwnerMessageJson("/dnd"));
+
+        // ARRIVAL FIRST, so a run where nothing happened cannot pass the provenance assertion below.
+        Assert.True(
+            await Run_Until_Async(() => File.ReadAllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
+            $"the announcement never arrived, so there is no provenance to check.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.True(
+            _log.Has_Line_Containing("queued announcement(s)"),
+            "THE DEFECT: the announcement is in the channel but the drain never delivered anything, so "
+            + "something else wrote it. That is the one-writer property gone — and its consequence is an "
+            + "announcement landing out of order against one from the other loop, which no count of markers "
+            + "can see."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+    }
+
     static string Hold_Locked(string channelFile)
     {
         var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(channelFile);
