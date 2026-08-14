@@ -1,4 +1,4 @@
-namespace AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+﻿namespace AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 
 /// <summary>
 /// One announcement that could not be written, waiting for a later tick.
@@ -30,12 +30,18 @@ public interface IPendingAnnouncement
 /// stop. The fix therefore has to be a mechanism that survives to the next tick, not a check.
 /// </para>
 /// <para>
-/// ORDER IS THE HARD PART AND IT IS PER CHANNEL. Once anything is queued for a channel, later
-/// announcements for that channel must queue too, or the new one overtakes the old and the
-/// supervisor reads "the owner is back" above "the owner went away" — two instructions in the wrong
-/// order, which is worse than the later one arriving late. <see cref="Has_Queued_For"/> is what the
-/// caller asks to honour that, and <see cref="Drain"/> stops at the first failure per channel for
-/// the same reason.
+/// ORDER IS THE HARD PART AND IT IS PER CHANNEL. "The owner is back" above "the owner went away"
+/// tells the supervisor to behave as if the owner is present when they are away: reordered actively
+/// misleads, whereas late merely delays. Order holds because EVERY announcement comes through here
+/// and ONE writer drains it — a single writer over a per-channel FIFO cannot interleave with itself.
+/// <see cref="Drain"/> also stops at the first failure per channel, so a still-locked channel cannot
+/// let what is behind it overtake.
+/// </para>
+/// <para>
+/// A <c>Has_Queued_For</c> check used to serve this, with the caller appending directly when nothing
+/// was queued. It could not work: an append still WAITING on the channel lock is in neither state,
+/// so a concurrent announcement saw an empty queue and overtook it. Removing the direct write removed
+/// the race instead of guarding it.
 /// </para>
 /// <para>
 /// BOUNDED ON PURPOSE. A retry queue with no cap is a leak the moment a channel stays wedged, so
@@ -47,12 +53,6 @@ public interface IPendingAnnouncements
 {
     /// <summary>How many announcements are waiting, across every channel.</summary>
     int Count { get; }
-
-    /// <summary>
-    /// Whether this channel already has something waiting. A caller with a fresh announcement MUST
-    /// ask this first and queue rather than append when it is true, or it overtakes what is waiting.
-    /// </summary>
-    bool Has_Queued_For(string channelFile);
 
     /// <summary>
     /// Adds an announcement to the back of its channel's queue. Returns the announcement that was

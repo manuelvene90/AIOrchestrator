@@ -107,6 +107,68 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
     }
 
+    /// <summary>
+    /// THE EXIT DRAIN. <c>Announce</c> no longer writes, so anything queued when the loops stop would
+    /// die with the process — the one real cost of making the drain the single writer. <c>Run_Async</c>
+    /// drains once more in a <c>finally</c>, which is what keeps this change an improvement rather
+    /// than a straight trade.
+    /// <para>
+    /// The control is deleting that <c>finally</c>: the announcement then never appears, because
+    /// nothing else will ever write it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AnAnnouncementQueuedWhenTheEngineStops_IsStillWrittenOnTheWayOut()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        Seed_OwnerChannel(session.OrchId);
+
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+        var lockDirectory = Hold_Locked(ownerChannel);
+
+        _telegram.Queue_OwnerMessage(Build_OwnerMessageJson("/dnd"));
+
+        using var cancellation = new CancellationTokenSource();
+
+        var loop = _engine.Run_Async(cancellation.Token);
+
+        // Wait for it to be QUEUED and blocked, so there is something for the exit drain to find.
+        for (var waited = 0; waited < 40_000; waited += 100)
+        {
+            if (_log.Has_Line_Containing("it is queued and the next tick retries"))
+                break;
+
+            await Task.Delay(100);
+        }
+
+        Assert.True(
+            _log.Has_Line_Containing("it is queued and the next tick retries"),
+            $"nothing was ever queued, so the exit drain has nothing to prove.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.DoesNotContain(ANNOUNCEMENT_MARKER, File.ReadAllText(ownerChannel));
+
+        // Free the channel and stop the engine in the same breath: the ONLY remaining chance to write
+        // this announcement is the drain on the way out.
+        Directory.Delete(lockDirectory, recursive: true);
+
+        await cancellation.CancelAsync();
+
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+            // The only way these loops end.
+        }
+
+        Assert.Contains(
+            ANNOUNCEMENT_MARKER,
+            File.ReadAllText(ownerChannel));
+    }
+
     static string Hold_Locked(string channelFile)
     {
         var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(channelFile);

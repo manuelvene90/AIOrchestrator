@@ -1,4 +1,4 @@
-namespace AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+﻿namespace AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 
 /// <summary>One queued announcement. Immutable: nothing may edit what is waiting to be written.</summary>
 internal sealed record PendingAnnouncementModel(
@@ -25,12 +25,6 @@ internal sealed class PendingAnnouncementsModel : IPendingAnnouncements
             lock (_gate)
                 return _byChannel.Values.Sum(queued => queued.Count);
         }
-    }
-
-    public bool Has_Queued_For(string channelFile)
-    {
-        lock (_gate)
-            return _byChannel.TryGetValue(channelFile, out var queued) && queued.Count > 0;
     }
 
     public IPendingAnnouncement? Queue(string orchId, string channelFile, string subject, string body, DateTime nowUtc)

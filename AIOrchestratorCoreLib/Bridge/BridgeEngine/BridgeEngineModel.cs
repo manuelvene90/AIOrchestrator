@@ -493,7 +493,22 @@ internal sealed class BridgeEngineModel(
             ? "Bridge started (file-only mode — Telegram not configured)"
             : "Bridge started (Telegram mirror + inbound routing active)");
 
-        await Task.WhenAll(loops);
+        try
+        {
+            await Task.WhenAll(loops);
+        }
+        finally
+        {
+            // ONE LAST DRAIN. Announce no longer writes, so anything queued when the loops stop would
+            // otherwise die with the process — the one real cost of making the drain the single
+            // writer. This does not eliminate that cost: an announcement made while this final drain
+            // is itself blocked is still lost. It narrows it to the exposure the process already has
+            // for any write in flight when it dies, rather than adding a new one.
+            //
+            // In a finally so it runs on the cancellation path too, which is the ordinary way this
+            // method ends.
+            Drain_PendingAnnouncements();
+        }
     }
 
     /// <summary>
@@ -5670,8 +5685,8 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Writes an announcement, or QUEUES it when the channel is locked so a lost one becomes a late
-    /// one. Every mode-transition announcement goes through here.
+    /// QUEUES an announcement. It never writes — <see cref="Drain_PendingAnnouncements"/> is the only
+    /// thing that writes one, and that is the entire ordering guarantee.
     /// <para>
     /// These are the one class of channel write a return-value check cannot save: they fire on the
     /// EDGE, and by the time the append runs the transition is already recorded in the mode state,
@@ -5680,22 +5695,26 @@ internal sealed class BridgeEngineModel(
     /// questions, which is what away mode exists to stop.
     /// </para>
     /// <para>
-    /// THE QUEUE CHECK COMES FIRST AND IT IS NOT AN OPTIMISATION. If anything is already waiting for
-    /// this channel, a fresh announcement must queue BEHIND it rather than append — otherwise it
-    /// overtakes what is waiting and the supervisor reads "the owner is back" above "the owner went
-    /// away". Two instructions in the wrong order are worse than the later one arriving late.
+    /// THIS USED TO APPEND DIRECTLY AND GUARD THE ORDER WITH A <c>Has_Queued_For</c> CHECK, and that
+    /// guard could not work: an announcement whose append is still WAITING on the channel lock is in
+    /// neither state — not written, not queued — so a concurrent announcement saw an empty queue and
+    /// overtook it. The two producers really do sit on different loops (away mode is ENTERED on the
+    /// mirror tick and EXITED on the inbound loop) and the thing that ends away mode is the owner
+    /// texting, which IS the inbound loop's traffic. The supervisor's last word would be "went away"
+    /// while the owner was present, so it would stop asking a present owner questions — the inversion
+    /// away mode exists to manage. (rev-10, F1 on d0054fb.)
+    /// </para>
+    /// <para>
+    /// ONE WRITER REMOVES THE RACE RATHER THAN GUARDING IT. A single writer draining a per-channel
+    /// FIFO cannot interleave with itself, and there is no state an announcement can be in that the
+    /// next writer cannot see. The cost is that every announcement waits up to one tick (≤2 s, against
+    /// a supervisor watcher polling at 5 s) and that anything still queued at exit is lost — which is
+    /// why <see cref="Run_Async"/> drains once more on the way out.
     /// </para>
     /// </summary>
     void Announce(string orchId, string channelFile, string subject, string body)
     {
-        if (!_pendingAnnouncements.Has_Queued_For(channelFile)
-            && ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now))
-            return;
-
         var dropped = _pendingAnnouncements.Queue(orchId, channelFile, subject, body, DateTime.UtcNow);
-
-        _log.Log_Warning(orchId,
-            $"Announcement '{subject}' could not be written to {Path.GetFileName(channelFile)} (locked, or queued behind one that was) — it is queued and the next tick retries it");
 
         if (dropped != null)
             _log.Log_Error(orchId,
@@ -5716,7 +5735,17 @@ internal sealed class BridgeEngineModel(
             ChannelAppender.Append_AppEntry(pending.ChannelFile, pending.Subject, pending.Body, DateTime.Now));
 
         if (delivered > 0)
-            _log.Log_Info(GLOBAL_ORCH_ID, $"Delivered {delivered} queued announcement(s) that an earlier lock had blocked");
+            _log.Log_Info(GLOBAL_ORCH_ID, $"Delivered {delivered} queued announcement(s)");
+
+        // THE FAILURE IS REPORTED HERE, not at Announce. Queuing is now the ordinary path — every
+        // announcement is queued — so a line there would say nothing and fire constantly. What is
+        // worth saying is that something is STILL waiting after a drain, which means a channel is
+        // genuinely locked against us rather than merely behind by a tick.
+        var stillWaiting = _pendingAnnouncements.Count;
+
+        if (stillWaiting > 0)
+            _log.Log_Warning(GLOBAL_ORCH_ID,
+                $"{stillWaiting} announcement(s) could not be written — the channel stayed locked; it is queued and the next tick retries it");
     }
 
     /// <summary>

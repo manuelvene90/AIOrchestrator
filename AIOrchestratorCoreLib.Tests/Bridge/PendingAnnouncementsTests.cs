@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+﻿using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
@@ -117,30 +117,53 @@ public class PendingAnnouncementsTests
 
         Assert.Equal(1, count);
         Assert.Equal(["fine"], delivered);
-        Assert.True(queue.Has_Queued_For(CHANNEL));
-        Assert.False(queue.Has_Queued_For(OTHER_CHANNEL));
+
+        // The wedged one is still waiting and the healthy one is gone: exactly one left.
+        Assert.Equal(1, queue.Count);
+
+        var retried = new List<string>();
+
+        queue.Drain(pending =>
+        {
+            retried.Add(pending.Subject);
+            return true;
+        });
+
+        Assert.Equal(["stuck"], retried);
     }
 
     /// <summary>
-    /// <c>Has_Queued_For</c> is what the caller asks before appending directly. Without it a fresh
-    /// announcement writes immediately and overtakes everything waiting — the reorder this queue
-    /// exists to prevent, caused by the queue itself.
+    /// THE ORDERING PROPERTY THAT ONE-WRITER BUYS: a second announcement arriving for a channel while
+    /// the first is still queued comes out BEHIND it, never in front.
+    /// <para>
+    /// This is the case the old <c>Has_Queued_For</c> guard was meant to serve and could not — an
+    /// append still WAITING on the lock was in neither state, so a concurrent announcement saw an
+    /// empty queue and overtook it. With <c>Announce</c> unable to write at all there is no such
+    /// state: everything is queued, so everything is ordered.
+    /// </para>
     /// </summary>
     [Fact]
-    public void HasQueuedFor_IsTrueOnlyWhileSomethingWaitsForThatChannel()
+    public void ASecondAnnouncementArrivingWhileTheFirstIsStuck_ComesOutBehindIt()
     {
         var queue = PendingAnnouncements_Factory.Create();
 
-        Assert.False(queue.Has_Queued_For(CHANNEL));
+        queue.Queue("orch-1", CHANNEL, "the owner went away", "body", NOW);
 
-        queue.Queue("orch-1", CHANNEL, "waiting", "body", NOW);
+        // The channel is locked, so the first does not land.
+        Assert.Equal(0, queue.Drain(_ => false));
 
-        Assert.True(queue.Has_Queued_For(CHANNEL));
-        Assert.False(queue.Has_Queued_For(OTHER_CHANNEL));
+        // The owner texts, which is what ENDS away mode — the real sequence, on the other loop.
+        queue.Queue("orch-1", CHANNEL, "the owner is back", "body", NOW.AddSeconds(3));
 
-        queue.Drain(_ => true);
+        var delivered = new List<string>();
 
-        Assert.False(queue.Has_Queued_For(CHANNEL));
+        queue.Drain(pending =>
+        {
+            delivered.Add(pending.Subject);
+            return true;
+        });
+
+        Assert.Equal(["the owner went away", "the owner is back"], delivered);
     }
 
     /// <summary>
