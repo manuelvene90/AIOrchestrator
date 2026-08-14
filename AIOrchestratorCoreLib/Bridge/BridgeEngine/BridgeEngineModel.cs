@@ -1877,11 +1877,32 @@ internal sealed class BridgeEngineModel(
             {
                 return await client.Send_HtmlMessage_Async(threadId, MonospaceBlocks_Formatter.Build_Html(chunk), cancellationToken);
             }
-            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
-            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
-            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
-            // Cost HERE: the rest of a chunked entry, so the owner reads a message that stops mid-sentence and nothing is logged as failed.
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            // DELIBERATELY BARE — DO NOT "COMPLETE" THE SWEEP HERE. It was filtered once, in the
+            // sixteen-site pass, and that was a REGRESSION which rev-6 caught; this comment replaces
+            // the wrong one.
+            //
+            // The sweep's premise does not hold at this site. It assumed a bare rethrow kills the tick.
+            // Here it does not: the ONLY caller is Mirror_Append_Async, whose own OperationCanceled
+            // catch is ALREADY filtered, with a generic sibling that logs at ERROR and returns false so
+            // the tailer re-emits the entry. A timeout was therefore caught one frame up and turned
+            // into an orderly retry — the desired behaviour, already in place.
+            //
+            // Filtering here made a timeout fall into the catch below, which is written for "Telegram
+            // rejected malformed HTML" — an instant 400 — and which FALLS THROUGH TO A SECOND LIVE CALL
+            // (the plain-text send at the end of this method) against a host that has just proved it
+            // does not answer. Two ~90-second waits inside a loop that ticks every 2 seconds. It also
+            // misdiagnosed a network timeout as "HTML mockup send rejected", dropped the severity from
+            // ERROR to WARNING, and — if the HTML send reached Telegram and only the RESPONSE timed out
+            // — posted a DUPLICATE to the owner's topic.
+            //
+            // This is the rule stated ~100 lines below at Announce_SupervisorFree_Async and applied
+            // there and at Publish_DeliveryReceipt_Async: A FALLBACK IS FOR "THAT CALL FAILED", NOT FOR
+            // "THE ENDPOINT IS UNREACHABLE". Three identical shapes; two were reasoned about correctly
+            // and this one was swept.
+            //
+            // THE TEST BEFORE FILTERING ANY SITE IS NOT "is it bare" — it is "does an escape here reach
+            // an UNFILTERED frame, and does the generic catch below make another live call".
+            catch (OperationCanceledException)
             {
                 throw;
             }
@@ -5993,7 +6014,31 @@ internal sealed class BridgeEngineModel(
         // silence is the same defect wearing a different hat.
         if (pending.ReceiptMessageId == null)
         {
-            await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
+            // WRAPPED AT THE CALL SITE, NOT IN THE SHARED METHOD. This call sat outside any try, and
+            // Send_DirectReply_BestEffort_Async's own OperationCanceled catch is bare — so a Telegram
+            // timeout escaped this method, escaped Resolve_PendingOwnerReplies_Async, and killed the
+            // rest of the tick, from a method whose name promises BEST EFFORT.
+            //
+            // The shared method's catch is deliberately left alone: it has callers this change has not
+            // read, and filtering it would decide for all of them at once. The narrow fix belongs where
+            // the unprotected call is.
+            //
+            // The route here is reached when the receipt id is null, which is what a failed narration
+            // edit produces — so the two sites compound, and the conditional reset in
+            // Narrate_BusySupervisor_Async narrows how often that happens without closing it.
+            try
+            {
+                await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(orchId, $"Turn-ended announcement send failed: {ex.Message}");
+            }
+
             return;
         }
 
