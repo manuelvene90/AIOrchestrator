@@ -266,6 +266,39 @@ internal sealed class BridgeEngineModel(
     readonly Lock _knownMessageIdsLock = new();
 
     /// <summary>
+    /// The NEWEST message id seen in each topic and when it was seen — the two facts the status-line
+    /// planner needs to know whether its message has been buried, and whether the topic has since
+    /// gone quiet. Written by the same one method that records every id, so nothing can be recorded
+    /// as known without also being recorded as newest. Key 0 = the General topic.
+    ///
+    /// IN MEMORY ON PURPOSE, not in session.json. It is a fact about a conversation that is still
+    /// happening; after a restart the planner is told nothing rather than something stale, and it
+    /// answers that by editing in place until the first message repopulates this.
+    ///
+    /// The STATUS LINE'S OWN message is deliberately absent — it is posted through
+    /// Refresh_TopicStatusLines_Async, which does not record it. It must not count as traffic that
+    /// buries itself.
+    /// </summary>
+    readonly Dictionary<long, Telegram.TopicStatusLine_Planner.TopicNewestMessage> _newestTopicMessageByThread = [];
+
+    /// <summary>
+    /// Orchestrations whose status line can never be MOVED, because Telegram refused to delete it —
+    /// past the 48-hour deletion window, or without `can_delete_messages`. A refusal is permanent for
+    /// that message, and it is not a gone message, so nothing else clears it: without this latch the
+    /// delete throws ahead of the send on every tick and starves the edit with it, leaving the line
+    /// buried AND stale where before the repost existed it was merely buried.
+    ///
+    /// Latched, the topic keeps editing its line in place — master's behaviour, which is the right
+    /// floor to degrade to.
+    ///
+    /// It is CLEARED whenever the message it applies to stops existing: `/clear` recreates the topic,
+    /// and a message reported gone is replaced by a fresh post. The 48-hour reason dies with the old
+    /// message, so a new one deserves one attempt. In-memory for the same reason — a restart retries
+    /// once, and a permission granted meanwhile takes effect without anybody remembering to say so.
+    /// </summary>
+    readonly HashSet<string> _repostImpossibleOrchIds = [];
+
+    /// <summary>
     /// Owner messages handed over and NOT yet answered by their supervisor. Tracked so a receipt
     /// can never stay frozen on "thinking…" — the owner always learns what became of what they
     /// sent, even if the supervisor goes idle without replying.
@@ -3145,7 +3178,7 @@ internal sealed class BridgeEngineModel(
                     {
                         // Answered by the APP straight from PLAN.md — instant, and it works even
                         // while the supervisor is mid-turn (which is exactly when it gets asked).
-                        await Send_ProgressReport_Async(client, message.MessageThreadId, cancellationToken);
+                        await Send_ProgressReport_Async(client, message.MessageThreadId, command, cancellationToken);
                     }
                     // NOT an alias of /progress: the owner asked to KEEP the full detail when the
                     // short form was built, so this is the second RENDERING of the same parse.
@@ -3275,10 +3308,21 @@ internal sealed class BridgeEngineModel(
             await client.Set_MyCommands_Async(
                 [
                     ("status", "What every session of this orchestration is doing"),
-                    ("progress", "What's LEFT to do here (all orchestrations in General)"),
-                    ("left", "What's left to do — same as /progress"),
+                    // NOT "what's LEFT" any more, since 2026-08-13: in a topic the command prints the
+                    // whole ledger, done and dropped rows included. Same class as the kit line that
+                    // told supervisors it would shorten a long ledger for them — text promising the
+                    // old behaviour, in the one place the owner reads BEFORE running the command.
+                    //
+                    // BOTH SCOPES, and the first attempt at this string got that wrong. "every row"
+                    // is true in a topic and false in General, where Build_ProgressReportText emits
+                    // one counts line per open orchestration and no rows at all. The phrasing it
+                    // replaced — "what's LEFT to do" — happened to be true in both, because a count
+                    // IS an answer to what is left. A correction has to be checked in every scope the
+                    // thing it corrects runs in, or it is the same defect with a newer date.
+                    ("progress", "This topic's task ledger, every row — in General, one line per orchestration"),
+                    ("left", "Same as /progress"),
                     ("tasks", "The FULL ledger of this orchestration, done lines included"),
-                    ("cost", "What this has cost, per session, and the burn rate"),
+                    ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
@@ -3287,8 +3331,17 @@ internal sealed class BridgeEngineModel(
                     ("pending", "Open questions awaiting me"),
                     ("resume", "Wake EVERY session — use when the usage limit resets"),
                     ("clear", "Wipe THIS topic's messages (the sessions keep running)"),
-                    ("mute", "Toggle 🔕 THIS topic — drop its messages (I'm in its terminal)"),
-                    ("dnd", "Toggle 🌙 THIS topic — hold its messages for later"),
+                    // "THIS topic" WAS A LIE IN GENERAL, and this is the worst instance of the class
+                    // the two entries above were fixed for: in General the BARE command takes the
+                    // app-wide path (`Apply_ModeCommand_Async` — `session == null` routes to
+                    // `Apply_AppWideMode_Async`, as that method's own docstring already said). So an
+                    // owner reading "THIS topic — drop its messages" in the pinned General topic and
+                    // tapping /mute silences EVERY orchestration — and Silenced DROPS rather than
+                    // defers, so traffic from every session is destroyed until they notice. The reply
+                    // does say "everywhere", but a correction after the fact is exactly what the
+                    // /progress fix rejected as sufficient: the menu is what they read BEFORE tapping.
+                    ("mute", "Toggle 🔕 this topic — drop its messages (in General: everywhere)"),
+                    ("dnd", "Toggle 🌙 this topic — hold its messages for later (in General: everywhere)"),
                     ("mute_all", "Toggle 🔕 everywhere"),
                     ("dnd_all", "Toggle 🌙 everywhere"),
                     ("italian", "Toggle 🇮🇹 — translate what I send you"),
@@ -3334,15 +3387,78 @@ internal sealed class BridgeEngineModel(
     /// full ledger; in General: one line per open orchestration. Deliberately NOT routed to the
     /// supervisor: this is asked precisely when the supervisor is mid-turn and cannot answer.
     /// </summary>
-    async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, string command, CancellationToken cancellationToken)
     {
-        var text = Build_ProgressReportText(messageThreadId);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+        var text = await Translate_LedgerText_Async(Build_ProgressReportText(messageThreadId), command, messageThreadId, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    /// <summary>
+    /// The Italian layer, with the ledger's SHAPE checked on the way back — and the English original
+    /// sent instead if it did not survive.
+    ///
+    /// This is the last step on the owner's directive path and was the only one with no guarantee:
+    /// the whole message went through a `claude -p` subprocess and nothing compared what returned. A
+    /// model handed forty rows, several near-identical, is being invited to summarise — and rule 11
+    /// makes the Italian layer persisted and the owner's normal mode, so this is the production path
+    /// rather than an edge case.
+    ///
+    /// The DECISION is in Planning.LedgerTranslation_Verifier, where the suite can reach it. This
+    /// method is left with the call and the fallback, deliberately: two findings in a row landed
+    /// inside this class, which is internal sealed and unreachable from the tests.
+    ///
+    /// THE FALLBACK IS NOT ANNOUNCED TO THE OWNER (rule 15): they cannot act on it, and the English
+    /// text arriving in place of Italian is the signal. The log line is for us.
+    /// </summary>
+    async Task<string> Translate_LedgerText_Async(string englishText, string command, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        if (!_configProvider.Get_Current().TelegramItalianLayer)
+            return englishText;
+
+        var translated = await _translator.Translate_ToItalian_Async(englishText, cancellationToken);
+
+        // The translator returns the ORIGINAL on failure or timeout, by contract, so that case passes
+        // the check rather than tripping a fallback for a translation that never happened.
+        var shapeChange = Planning.LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(englishText, translated);
+
+        if (shapeChange == null)
+            return translated;
+
+        // WHICH command, WHICH orchestration, and WHAT changed. This line is the whole diagnostic
+        // surface for the failure the verifier exists to detect, because rule 15 correctly keeps it
+        // off the owner's phone — so an unattributable "shape changed" would mean reproducing it by
+        // hand to learn anything. The General topic names itself: see Resolve_LogScope_ForTopic.
+        _log.Log_Warning(
+            Resolve_LogScope_ForTopic(messageThreadId),
+            $"/{command}: the Italian layer changed the ledger's shape ({shapeChange}) — sending the English original rather than a rearranged ledger");
+
+        return englishText;
+    }
+
+    /// <summary>
+    /// Which log scope a message sent in this topic belongs to. Named for the QUESTION it answers
+    /// rather than for the lookup it performs: the same `Find_ByTelegramTopicId_OrNull` appears
+    /// inline all over this file answering "which session is this", and this one answers "where does
+    /// a line ABOUT it get written" — which has a different answer when there is no session.
+    ///
+    /// GENERAL IS NOT GLOBAL, and the first version of this got that wrong. `GLOBAL_ORCH_ID` is the
+    /// EMPTY string, and `OrchestrationLogModel` writes a per-orchestration file only for a non-empty
+    /// id while the app's log panel renders an empty one as no scope at all — so a diagnostic about
+    /// the General topic reached neither the general log nor the eye, in exactly the scope the
+    /// commit beside it exists to police. `ChannelDiscovery.GENERAL_ORCH_ID` is "general", it has a
+    /// real folder, and the launcher and the watchdog already log General-scope lines under it.
+    ///
+    /// A topic bound to NO session keeps the global id, and that is not the same oversight: an
+    /// unrecognised topic genuinely has no orchestration to name, where General has one.
+    /// </summary>
+    string Resolve_LogScope_ForTopic(long? messageThreadId)
+    {
+        if (messageThreadId == null)
+            return ChannelDiscovery.GENERAL_ORCH_ID;
+
+        return _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value)?.OrchId ?? GLOBAL_ORCH_ID;
     }
 
     /// <summary>
@@ -3352,10 +3468,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_TaskListReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var text = Build_TaskListText(messageThreadId);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+        var text = await Translate_LedgerText_Async(Build_TaskListText(messageThreadId), "tasks", messageThreadId, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -3413,10 +3526,13 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>Full ledger for one orchestration — the raw '- [x]' lines are the point of the command.</summary>
     /// <summary>
-    /// WHAT IS LEFT first, then the counts — the owner asked for "a slash command that lets me know
-    /// what's left to do", and this used to answer with up to forty raw ledger lines including
-    /// everything already finished. On a 207-line ledger that is a message nobody reads, and their
-    /// rule all evening has been that a long message is a useless one.
+    /// The counts, then the ledger as written — every row, in the file's own order.
+    ///
+    /// It began as "what's left to do" and answered with up to forty raw lines including everything
+    /// finished, which on a 207-line ledger is a message nobody reads. The answer to that was to hide
+    /// rows; the owner overruled it on 2026-08-13 — "I want to see all the rows, it must not be
+    /// truncated" — because hiding them hides the ledger author's failure to group into 7-8 macro
+    /// tasks. Short message, short LEDGER: the length is the supervisor's problem, upstream of here.
     /// </summary>
     string Build_OrchestrationLedgerText(string orchId, string displayName)
     {
@@ -3425,7 +3541,11 @@ internal sealed class BridgeEngineModel(
         if (progress == null)
             return $"{displayName}: no task ledger yet — the supervisor writes PLAN.md once you approve a direction";
 
-        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n\nLEFT:\n{Planning.PlanProgress_Formatter.Describe_Remaining(progress)}";
+        // NO `LEFT:` HEADER, since 2026-08-13: the block underneath now carries `[x]` and `[-]` rows
+        // by the owner's own directive, so a header announcing what is left contradicts its own
+        // content — and they would read that as a bug in the same breath as the fix they asked for.
+        // The counts line above already says how much is left, in numbers.
+        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{Planning.PlanProgress_Formatter.Describe_Ledger(progress)}";
     }
 
     string Build_OrchestrationCountsLine(string orchId, string displayName)
@@ -3988,14 +4108,22 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// ONE status message per topic: posted the first time there is anything to say, then EDITED
-    /// forever. It never notifies and never scrolls away, which is why it can be kept current at all.
+    /// silently for as long as it is the last thing in the topic.
     ///
-    /// Three properties matter and each has a test:
+    /// Four properties matter and each has a test:
     ///   - a change edits;
     ///   - an IDENTICAL line does nothing, because an edit that writes the same text is a wasted API
     ///     call and, against the 429 limit we already have open on the ledger, a real cost;
     ///   - a RESTART edits the existing message rather than posting a second one — the id is read
-    ///     from session.json, not from memory.
+    ///     from session.json, not from memory;
+    ///   - a line BURIED by later traffic, in a topic that has since been quiet for two minutes, is
+    ///     deleted and written again at the bottom. Telegram cannot move a message, so this is the
+    ///     only way to put the current state where the owner is looking when they enter the chat.
+    ///
+    /// The repost is the ONE action here that notifies, and everything about it is arranged so that
+    /// it cannot become a waterfall: the quiet window bounds it to one ping per quiet period, the
+    /// delivery gate blocks it in a silenced topic exactly as it blocks a first post, and it never
+    /// fires while the line is already last.
     /// </summary>
     async Task Refresh_TopicStatusLines_Async(CancellationToken cancellationToken)
     {
@@ -4028,13 +4156,27 @@ internal sealed class BridgeEngineModel(
                 lastText,
                 Resolve_EffectiveMode(session.OrchId),
                 _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
-                MIRROR_RETRY_BACKOFF_SECONDS);
+                MIRROR_RETRY_BACKOFF_SECONDS,
+                Find_NewestTopicMessage_OrNull(session.TelegramTopicId),
+                _repostImpossibleOrchIds.Contains(session.OrchId));
 
             var action = plan.Action;
             var text = plan.Text;
 
             if (action == Telegram.TopicStatusActions.None)
                 continue;
+
+            // WHETHER THE OLD MESSAGE IS ALREADY GONE. Once the delete has succeeded the stored id
+            // names nothing, so a later failure must forget it — otherwise a quiet orchestration,
+            // whose text never changes, never attempts the edit that would discover the dead id, and
+            // loses its status line for good.
+            //
+            // WHICH HANDLERS HONOUR IT, precisely — the earlier wording claimed "every failure path
+            // below", and two of the four do not. `Is_MessageGone` forgets the id anyway, so it needs
+            // nothing; the not-modified catch and the generic catch each check it below; and the
+            // cancellation rethrow deliberately does not, because the app is stopping and the id in
+            // session.json is discovered dead by the first edit after the restart.
+            var oldStatusMessageDeleted = false;
 
             try
             {
@@ -4046,10 +4188,67 @@ internal sealed class BridgeEngineModel(
                 }
                 else
                 {
+                    // DELETE FIRST, AND ONLY THEN SEND. Telegram cannot move a message, so a repost is
+                    // a delete plus a post — and the order is the whole invariant: exactly ONE status
+                    // message per topic, always. Posting first and deleting after leaves two of them
+                    // up for as long as the second call takes, and leaves two of them up FOREVER if it
+                    // fails, which is the precise defect this feature was built to prevent.
+                    //
+                    // A FAILED DELETE THEREFORE MUST NOT POST, and none of the three ways it can fail
+                    // does: a REFUSAL latches this topic and returns, just below; a message already
+                    // GONE reaches Is_MessageGone, which forgets the id so the next tick posts fresh;
+                    // anything else reaches the generic catch, which keeps the message and its id
+                    // untouched and retries behind the backoff.
+                    if (action == Telegram.TopicStatusActions.Repost && session.StatusLineMessageId != null)
+                    {
+                        // THE REFUSAL IS CAUGHT AROUND THE DELETE ITSELF, not around the whole
+                        // attempt. Guarding the outer catch on `action == Repost` instead read as
+                        // "this action does a delete, so a refusal wording must have come from it" —
+                        // and `not enough rights` is wording Telegram also emits on the SEND. A repost
+                        // whose delete SUCCEEDED and whose send then threw it would latch the topic
+                        // while the stored id pointed at a message that had just been deleted: the
+                        // exact hazard the null-return branch below already guards, entered by the
+                        // door beside it. Which CALL threw is a fact; which action was attempted is an
+                        // inference, and the inference was wrong.
+                        try
+                        {
+                            await _telegramClient.Delete_Message_Async(session.StatusLineMessageId.Value, cancellationToken);
+                        }
+                        catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_DeleteRefused(exception.Message))
+                        {
+                            // REFUSED, not failed: this message can never be deleted, so it can never
+                            // be moved. Retrying is the loop rev-1 found, and the loop starves the
+                            // EDIT with it because the repost overrides the decider. Latch it and the
+                            // topic goes back to editing in place — master's behaviour.
+                            //
+                            // The message is STILL UP and its id is still good, so nothing is
+                            // forgotten here, and no backoff is stamped: there is nothing to retry,
+                            // and stamping one would delay the very edit this falls back to.
+                            _repostImpossibleOrchIds.Add(session.OrchId);
+                            _log.Log_Warning(session.OrchId, $"Topic status line cannot be moved — it will be edited in place from now on ({exception.Message})");
+                            continue;
+                        }
+
+                        // Everything else the delete can throw — transient, or a message already gone
+                        // — deliberately propagates to the outer catches, which know how to clear an
+                        // id and how to back off.
+                        oldStatusMessageDeleted = true;
+                    }
+
                     var messageId = await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
 
                     if (messageId == null)
+                    {
+                        // The old message is already deleted by now, so keeping its id would leave the
+                        // topic pointing at nothing. Forget the id AND the remembered text (which
+                        // would otherwise silence the fresh post as identical) and let the next tick
+                        // start over. On a first POST there is nothing to undo, which is why this is
+                        // not unconditional.
+                        if (oldStatusMessageDeleted)
+                            Forget_StatusLineMessage(session.OrchId);
+
                         continue;
+                    }
 
                     _store.Set_StatusLineMessageId(session.OrchId, messageId.Value);
                 }
@@ -4079,7 +4278,22 @@ internal sealed class BridgeEngineModel(
                 // Sync_TopicNames_BestEffort_Async fixed this exact case 150 lines above and its
                 // comment says a real failure still must not spin. I took the shape of that catch and
                 // inverted its conclusion.
-                _statusLineTextByOrchId[session.OrchId] = text;
+                //
+                // UNLESS THE OLD MESSAGE IS ALREADY DELETED, which is the worst combination in this
+                // method and the reason the check is here rather than argued away: advancing the cache
+                // while the id is dead makes Decide answer None on every later tick, so no edit is
+                // ever attempted, the dead id is never discovered, and the topic holds ZERO status
+                // lines permanently — the precise failure the flag exists to close, through the one
+                // door that did not check it.
+                //
+                // UNREACHABLE TODAY: "message is not modified" is an editMessageText error and this
+                // branch is only reached after a send. It is written anyway because the guarantee then
+                // rests on the code rather than on Telegram's choice of wording, which nothing here
+                // controls and no test can see.
+                if (oldStatusMessageDeleted)
+                    Forget_StatusLineMessage(session.OrchId);
+                else
+                    _statusLineTextByOrchId[session.OrchId] = text;
             }
             catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_MessageGone(exception.Message))
             {
@@ -4088,8 +4302,12 @@ internal sealed class BridgeEngineModel(
                 // session.json. Retrying could never succeed, so the id is FORGOTTEN and the next tick
                 // posts a fresh line. Without this the orchestration never gets a status line again
                 // for the life of the machine.
-                _store.Clear_StatusLineMessageId(session.OrchId);
-                _statusLineTextByOrchId.Remove(session.OrchId);
+                Forget_StatusLineMessage(session.OrchId);
+
+                // The latch belonged to the message that has just stopped existing: a 48-hour window
+                // dies with it, so the fresh line posted next tick deserves its one attempt.
+                _repostImpossibleOrchIds.Remove(session.OrchId);
+
                 _log.Log_Warning(session.OrchId, $"Topic status message is gone — posting a new one next tick ({exception.Message})");
             }
             catch (Exception exception)
@@ -4098,10 +4316,34 @@ internal sealed class BridgeEngineModel(
                 // remembered text is deliberately NOT updated, so the next tick retries — but BACKED
                 // OFF, because a 429 answered at the tick rate inverts the cadence from once a minute
                 // to thirty times a minute per topic and sustains the throttling that caused it.
+                //
+                // UNLESS THE OLD MESSAGE IS ALREADY GONE. A repost deletes before it sends, so a send
+                // that throws here leaves the stored id naming a deleted message — and retrying an
+                // EDIT against it is not the recovery it looks like: a quiet orchestration's text
+                // never changes, so the edit is never attempted and the id is never discovered dead.
+                // Forgetting it costs one extra post; keeping it costs the status line permanently.
+                if (oldStatusMessageDeleted)
+                    Forget_StatusLineMessage(session.OrchId);
+
                 _statusLineFailedAtByOrchId[session.OrchId] = DateTime.Now;
                 _log.Log_Warning(session.OrchId, $"Topic status line could not be updated — {exception.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// Drops everything remembered about a topic's status message, for when the message it refers to
+    /// no longer exists.
+    ///
+    /// BOTH HALVES, ALWAYS, which is why this is one method and not two lines repeated three times:
+    /// clearing the id without the remembered text leaves the next tick comparing the same text
+    /// against itself, answering None, and never posting the replacement — the id is forgotten and
+    /// the line never comes back, which is the failure this is supposed to prevent.
+    /// </summary>
+    void Forget_StatusLineMessage(string orchId)
+    {
+        _store.Clear_StatusLineMessageId(orchId);
+        _statusLineTextByOrchId.Remove(orchId);
     }
 
 
@@ -4383,6 +4625,9 @@ internal sealed class BridgeEngineModel(
             _store.Clear_StatusLineMessageId(session.OrchId);
             _statusLineTextByOrchId.Remove(session.OrchId);
             _statusLineFailedAtByOrchId.Remove(session.OrchId);
+
+            // The undeletable message went with the old topic — the new one starts unlatched.
+            _repostImpossibleOrchIds.Remove(session.OrchId);
 
             await client.Remove_TopicCreationPin_Async(newTopicId, cancellationToken);
 
@@ -4943,12 +5188,16 @@ internal sealed class BridgeEngineModel(
         return session == null ? null : _paths.Get_OwnerChannelFile(session.OrchId);
     }
 
+    /// <summary>
+    /// The log scope for an owner message, which is the topic question with the thread id already in
+    /// hand. A THIN ADAPTER, not a second implementation: this method and the one used by the ledger
+    /// translator answered the identical question forty lines apart and DISAGREED on the General
+    /// branch — one returned "general", the other the empty string, and the empty one silently lost
+    /// its diagnostic. Rule 12 is what makes that possible; one body is what closes it.
+    /// </summary>
     string Describe_MessageOrch(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message)
     {
-        if (message.MessageThreadId == null)
-            return ChannelDiscovery.GENERAL_ORCH_ID;
-
-        return _store.Find_ByTelegramTopicId_OrNull(message.MessageThreadId.Value)?.OrchId ?? GLOBAL_ORCH_ID;
+        return Resolve_LogScope_ForTopic(message.MessageThreadId);
     }
 
     async Task Route_OwnerMessage_Async(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
@@ -5209,6 +5458,32 @@ internal sealed class BridgeEngineModel(
 
             if (ids.Count > KNOWN_IDS_PER_TOPIC_CAP)
                 ids.RemoveRange(0, ids.Count - KNOWN_IDS_PER_TOPIC_CAP);
+
+            // THE HIGHEST id wins, not the last one recorded: these arrive from a batch of updates
+            // and from concurrent sends, so "most recently handed to this method" is not "latest in
+            // the chat". An out-of-order id overwriting a higher one would tell the status line it is
+            // no longer buried when it still is.
+            //
+            // DateTime.Now, LOCAL, because the planner compares it against the one local clock this
+            // file uses everywhere — read the Is_AttemptDue comment before changing that. Arrival is
+            // when the app learned of the message rather than Telegram's own `date`: for the quiet
+            // window, which asks whether the conversation has stopped, they differ by the poll
+            // latency and never by enough to matter.
+            if (!_newestTopicMessageByThread.TryGetValue(key, out var newest) || messageId.Value > newest.MessageId)
+                _newestTopicMessageByThread[key] = new Telegram.TopicStatusLine_Planner.TopicNewestMessage(messageId.Value, DateTime.Now);
+        }
+    }
+
+    /// <summary>
+    /// What the status-line planner is told about the topic's traffic. Absent means the app knows
+    /// nothing about this topic yet — a fresh start, or a topic that has said nothing since — and the
+    /// planner treats that as "not buried" rather than guessing.
+    /// </summary>
+    Telegram.TopicStatusLine_Planner.TopicNewestMessage? Find_NewestTopicMessage_OrNull(long? messageThreadId)
+    {
+        lock (_knownMessageIdsLock)
+        {
+            return _newestTopicMessageByThread.TryGetValue(messageThreadId ?? 0, out var newest) ? newest : null;
         }
     }
 

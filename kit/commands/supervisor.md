@@ -634,8 +634,15 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   reason tells them nothing they can act on.
 - **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
   the owner → `[!]`. A stale ledger is worse than none — the owner can pull it up at any moment
-  from their phone with `/progress` (or `/left`), which the APP answers straight from this file — it
-  leads with what is LEFT, so a ledger full of finished lines still gives them a short answer.
+  from their phone with `/progress` (or `/left`), which the APP answers straight from this file.
+- **It prints EVERY line, in your order, with nothing hidden, capped or truncated** — `[x]` and
+  `[-]` rows included. So the length of what they read is the length of what you wrote, and a ledger
+  full of finished lines gives them a LONG answer, not a short one. **Keeping it to 7-8 macro lines
+  is YOUR job, not the command's.** Owner, 2026-08-13: *"the done rows must not be hidden. I want to
+  see all the rows, it must not be truncated. If all the tasks don't fit in 8/9 rows it means you
+  haven't managed to group the tasks sufficiently into macrotasks."* Until that day the command DID
+  shorten it for you — it led with what was left and collapsed the rest — and this line said so,
+  which is exactly the reassurance that would now hand the owner forty rows.
 - Re-read it as your fast resume point after a respawn — it beats replaying the whole channel
   narrative.
 - **One line = one reviewable deliverable — parallel units NEVER become their own lines.** When you
