@@ -450,6 +450,58 @@ rm -rf obj/
 That is what I am reporting on.
 EOF")" reviewer)")"
 
+# ── THE PAYLOADS THAT ACTUALLY BLOCKED TWO REVIEWERS, BYTE-EXACT ─────────────────────────────────
+#
+# Every case below is a real command that a reviewer really ran and really had refused by the copy
+# installed on this machine — recovered from rev-8's and rev-9's own reports as base64, not
+# reconstructed from a description. That matters: five constructions written from a PARAGRAPH about
+# rev-9's finding all passed, because the paragraph described a defect it never had. Exact bytes
+# ended a whole round of measuring the wrong thing.
+#
+# They are here because they are better than anything the author of the fix would invent. Each one
+# names its real-world origin so a later reader cannot mistake them for padding.
+#
+# rev-8: an ordinary English word ending in the two letters of the removal command. Every one of
+# these was refused, and it had to hyphenate its report to file at all.
+check "the word alarm in a report" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'the alarm fired at noon' >> $REV_CHANNEL")" reviewer)")"
+check "the word confirm in a report" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'I confirm the finding' >> $REV_CHANNEL")" reviewer)")"
+check "the word perform in a report" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'perform the check' >> $REV_CHANNEL")" reviewer)")"
+
+# rev-9 ROW A, and its own control: the SAME sentence with two words changed. The pair is the point —
+# one word of ordinary English decided whether a reviewer could file, and nothing in the shape of the
+# command differs at all.
+check "rev-9 ROW A: the word add in a body" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> $REV_CHANNEL <<'EOF'
+          Not a reason to hold the commit — a reason to add one sentence to the docstring.
+EOF")" reviewer)")"
+check "rev-9 ROW A control: the same, reworded" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> $REV_CHANNEL <<'EOF'
+          Not a reason to hold the commit — a reason to put one sentence in the docstring.
+EOF")" reviewer)")"
+
+# rev-9 ROWS C and D: read-only git, as commands and as prose. One finds a common ancestor, the other
+# lists linked checkouts; neither can mutate anything.
+check "rev-9 ROW C: git merge-base" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'git merge-base fix/reviewer-hook-substring-match master')" reviewer)")"
+check "rev-9 ROW C: the same command in PROSE" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> $REV_CHANNEL <<'EOF'
+I ran git merge-base fix/reviewer-hook-substring-match master to find the ancestor.
+EOF")" reviewer)")"
+
+# rev-9 ROW E, the sharpest of the set: a pure READ, denied for what its PATTERN was searching for. On
+# a branch whose subject is substring matching, the guard forbade searching for the tokens under
+# review. Bracketing each token made the identical command pass — which is the control.
+check "rev-9 ROW E: grep FOR the mutating names" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' abc | grep -oE 'rm|mv|git commit' | sort")" reviewer)")"
+check "rev-9 ROW E control: the bracketed spelling" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' abc | grep -oE '[r]m|[m]v' | sort")" reviewer)")"
+
+# rev-9 ROW B, BOTH HALVES, and they go opposite ways on purpose.
+#
+# The `>` sits inside a single-quoted argument in a C# loop condition. Where nothing mutates, that is
+# text and must be allowed. Where the command is `perl -i`, the file IS rewritten in place and the
+# denial is CORRECT — a reviewer may not run a mutation whatever text it carries.
+#
+# The installed copy denied both with "redirects output into a file", reaching the right verdict on
+# the perl run for the wrong reason. Asserting the REASON here is what keeps that distinction: if this
+# ever denies as `redirect` again, the redirect rule has started reading quoted text.
+check "rev-9 ROW B: the C# line as a grep pattern" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "for (var index = entries.Count - 1; index >= 0; index--)" src/')" reviewer)")"
+check "rev-9 ROW B: perl -i is denied as an EDIT" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -0777 -i -pe 's/old/for (var index = entries.Count - 1; index >= 0; index--)/' Foo.cs")" reviewer)")"
+
 # ── INDIRECT EXECUTION ───────────────────────────────────────────────────────────────────────────
 #
 # All four of these were DENIED by the crude substring matcher BY ACCIDENT — the token appeared
