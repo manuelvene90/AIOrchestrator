@@ -229,7 +229,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
-            throw new Exception($"Telegram 'sendPhoto' failed with HTTP {(int)response.StatusCode} for '{filePath}': {body}");
+            throw new TelegramApiException((int)response.StatusCode, $"Telegram 'sendPhoto' failed with HTTP {(int)response.StatusCode} for '{filePath}': {body}");
     }
 
     public async Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken)
@@ -275,7 +275,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
-            throw new Exception($"getUpdates failed with HTTP {(int)response.StatusCode}: {body}");
+            throw new TelegramApiException((int)response.StatusCode, $"getUpdates failed with HTTP {(int)response.StatusCode}: {body}");
 
         return body;
     }
@@ -299,7 +299,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         var response = await _httpClient.GetAsync(downloadUrl, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
-            throw new Exception($"Telegram file download failed with HTTP {(int)response.StatusCode} for file id '{fileId}'");
+            throw new TelegramApiException((int)response.StatusCode, $"Telegram file download failed with HTTP {(int)response.StatusCode} for file id '{fileId}'");
 
         return await response.Content.ReadAsByteArrayAsync(cancellationToken);
     }
@@ -310,7 +310,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
-            throw new Exception($"Telegram '{method}' failed with HTTP {(int)response.StatusCode}: {body}");
+            throw new TelegramApiException((int)response.StatusCode, $"Telegram '{method}' failed with HTTP {(int)response.StatusCode}: {body}");
 
         return body;
     }

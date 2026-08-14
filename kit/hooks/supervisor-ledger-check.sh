@@ -12,6 +12,12 @@
 # Only supervisor sessions are affected (AIORCH_ROLE is set by the spawner); everything else exits
 # silently, and any unexpected condition ALLOWS the turn — an enforcement bug must never wedge a
 # session.
+#
+# THE MARKER LIST BELOW IS A COPY, and it is the one copy that cannot import the C# original: this is
+# bash, and PlanLedger_Markers is the single definition everything else builds from. It lost `- [-]`
+# once already, because that marker was added to the parser additively and nothing updated the lists
+# that had copied it. `LedgerLegendTests` reads THIS FILE and fails if the five stop matching, which
+# is the only join available between the two languages.
 
 set -u
 
@@ -46,5 +52,5 @@ fi
 PLAN_FILE="$HOME/.claude/supervision/$AIORCH_ID/PLAN.md"
 
 cat <<JSON
-{"decision":"block","reason":"TASK LEDGER BEHIND. You posted a verdict to an implementer channel without updating $PLAN_FILE, so the owner's progress bar is now wrong. Update the ledger to match what is actually done (one task per line: - [ ] open, - [>] in progress, - [x] done, - [!] blocked), then end your turn. This block clears automatically once the file is written."}
+{"decision":"block","reason":"TASK LEDGER BEHIND. You posted a verdict to an implementer channel without updating $PLAN_FILE, so the owner's progress bar is now wrong. Update the ledger to match what is actually done (one task per line: - [ ] open, - [>] in progress, - [x] done, - [!] blocked, - [-] not doing), then end your turn. This block clears automatically once the file is written."}
 JSON

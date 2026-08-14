@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Tailing.CompletedChannelAppend;
+﻿using AIOrchestratorCoreLib.Tailing.CompletedChannelAppend;
 
 namespace AIOrchestratorCoreLib.Tailing.TailerPollResult;
 
@@ -8,7 +8,7 @@ public static class TailerPollResult_Factory
         IReadOnlyList<ICompletedChannelAppend> completedAppends,
         IReadOnlyList<string> truncatedFiles)
     {
-        return Create(completedAppends, truncatedFiles, []);
+        return Create(completedAppends, truncatedFiles, [], []);
     }
 
     public static ITailerPollResult Create(
@@ -16,6 +16,15 @@ public static class TailerPollResult_Factory
         IReadOnlyList<string> truncatedFiles,
         IReadOnlyList<string> unreadableFiles)
     {
-        return new TailerPollResultModel(completedAppends, truncatedFiles, unreadableFiles);
+        return Create(completedAppends, truncatedFiles, unreadableFiles, []);
+    }
+
+    public static ITailerPollResult Create(
+        IReadOnlyList<ICompletedChannelAppend> completedAppends,
+        IReadOnlyList<string> truncatedFiles,
+        IReadOnlyList<string> unreadableFiles,
+        IReadOnlyList<string> heldTrailingEntryFiles)
+    {
+        return new TailerPollResultModel(completedAppends, truncatedFiles, unreadableFiles, heldTrailingEntryFiles);
     }
 }

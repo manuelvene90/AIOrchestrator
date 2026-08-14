@@ -34,4 +34,41 @@ public class TelegramDeliveryModeGlyphsTests
     {
         Assert.Equal("release 🔔 candidate", TelegramDeliveryMode_Glyphs.Strip_Glyph("release 🔔 candidate"));
     }
+
+    [Fact]
+    public void Terminal_ReplacesTheModeGlyphInsteadOfStackingWithIt()
+    {
+        // Terminal already silences the topic, so 💻 🔕 would say one thing twice — the
+        // presence/delivery conflation this mode removes, drawn on the title bar.
+        var decorated = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+            "crm bug",
+            TelegramDeliveryModes.Silenced,
+            isAway: false,
+            isQuiet: false,
+            OwnerPresenceModes.Terminal);
+
+        Assert.Equal("💻 crm bug", decorated);
+    }
+
+    [Fact]
+    public void Terminal_StillShowsAway_BecauseTheyAreDifferentFacts()
+    {
+        // Away is app-wide and about the owner's phone; terminal is about where they are sitting
+        // for THIS orchestration. One does not imply the other.
+        var decorated = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+            "crm bug",
+            TelegramDeliveryModes.Normal,
+            isAway: true,
+            isQuiet: false,
+            OwnerPresenceModes.Terminal);
+
+        Assert.Equal("✈ 💻 crm bug", decorated);
+    }
+
+    [Fact]
+    public void Strip_RemovesTheTerminalGlyph_SoARenameDoesNotAccumulate()
+    {
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("💻 crm bug"));
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("✈ 💻 crm bug"));
+    }
 }

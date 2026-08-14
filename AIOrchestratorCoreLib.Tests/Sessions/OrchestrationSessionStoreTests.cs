@@ -75,6 +75,51 @@ public class OrchestrationSessionStoreTests : IDisposable
     }
 
     [Fact]
+    public void Set_OwnerPresence_SurvivesAReload_AndDoesNotDisturbTheDeliveryMode()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+        _store.Set_DisplayName("arb-fix", "drift guard");
+        _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Deferred);
+
+        Assert.Equal(OwnerPresenceModes.Remote, _store.Get_Session("arb-fix").OwnerPresence);
+
+        _store.Set_OwnerPresence("arb-fix", OwnerPresenceModes.Terminal);
+
+        // Persisted, because an app restart does not move the owner out of their chair — and a
+        // presence lost on restart re-wedges the supervisor at the worst possible moment.
+        var reloaded = OrchestrationSessionStore_Factory.Create(_paths).Get_Session("arb-fix");
+        Assert.Equal(OwnerPresenceModes.Terminal, reloaded.OwnerPresence);
+
+        // Orthogonal: the delivery mode the owner chose is still exactly what they chose.
+        Assert.Equal(TelegramDeliveryModes.Deferred, reloaded.TelegramMode);
+        Assert.Equal("drift guard", reloaded.DisplayName);
+
+        _store.Set_OwnerPresence("arb-fix", OwnerPresenceModes.Remote);
+        Assert.Equal(OwnerPresenceModes.Remote, _store.Get_Session("arb-fix").OwnerPresence);
+    }
+
+    [Fact]
+    public void Get_Session_SessionWrittenBeforePresenceExisted_IsRemote()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+
+        var sessionFile = _paths.Get_SessionFile("arb-fix");
+
+        // Asserted before removing it: without this the test would pass just as well if the field
+        // were never written at all, and would then be pinning nothing.
+        Assert.Contains("\"ownerPresence\"", File.ReadAllText(sessionFile), StringComparison.Ordinal);
+
+        var withoutPresence = File.ReadAllLines(sessionFile)
+            .Where(line => !line.Contains("\"ownerPresence\"", StringComparison.Ordinal));
+
+        File.WriteAllLines(sessionFile, withoutPresence);
+
+        // A missing key must never read as "the owner is at the terminal": that would suppress the
+        // awaiting-answer flag for every orchestration written before this field existed.
+        Assert.Equal(OwnerPresenceModes.Remote, _store.Get_Session("arb-fix").OwnerPresence);
+    }
+
+    [Fact]
     public void Get_Session_LegacySilencedBoolean_IsReadAsSilenced()
     {
         _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");

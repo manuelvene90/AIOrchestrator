@@ -293,28 +293,15 @@ public partial class MainWindow : Window
     /// tokens without producing code, so a card that hides them behind an implementer count lies
     /// about where the spend is going.
     /// </summary>
+    /// <summary>
+    /// MOVED TO CoreLib so it can be tested. It counted a solo as an implementer — everything that
+    /// was not a reviewer fell into that bucket — so a basic orchestration's card read "1 implementer"
+    /// for something with no implementer and no supervisor. This project has no suite, and a counting
+    /// rule the owner reads before deciding whether to spend more should not be untestable.
+    /// </summary>
     static string Describe_OpenMembers(IOrchestrationSession session)
     {
-        var implementers = 0;
-        var reviewers = 0;
-
-        foreach (var member in session.Members)
-        {
-            if (member.ClosedUtc != null)
-                continue;
-
-            if (MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Reviewer)
-                reviewers++;
-            else
-                implementers++;
-        }
-
-        var text = $"{implementers} implementer{(implementers == 1 ? "" : "s")}";
-
-        if (reviewers > 0)
-            text += $" · {reviewers} reviewer{(reviewers == 1 ? "" : "s")}";
-
-        return text;
+        return MemberRoster_Describer.Describe_OpenMembers(session.Members);
     }
 
     OrchestrationCardView Build_Card(IOrchestrationSession session)
@@ -336,6 +323,13 @@ public partial class MainWindow : Window
             OrchId = session.OrchId,
             Title = session.DisplayName ?? session.OrchId,
             RepoName = session.RepoName,
+
+            // A basic orchestration has no supervisor, so an implementer added here would wait for a
+            // brief that cannot come. The launcher refuses it either way — this stops the owner being
+            // offered it at all.
+            AddMemberButtonVisibility = AIOrchestratorCoreLib.Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc)
+                ? Visibility.Collapsed
+                : Visibility.Visible,
             SummaryText = $"{orchIdSuffix}· {Describe_OpenMembers(session)} · {ranWord} {Describe_Duration(age)}{Build_UsageTotalText(session)}",
             IsClosed = session.ClosedUtc != null,
             ClosedLabel = session.ClosedUtc == null ? "" : $"CLOSED {session.ClosedUtc.Value.ToLocalTime():dd/MM HH:mm}",

@@ -72,6 +72,27 @@ public class CloseTapOutcomeDeciderTests
     }
 
     /// <summary>
+    /// TWO QUESTIONS, TWO ANSWERERS, and the archive word needs both. WHAT the tap authorised is the
+    /// running arm's to say — "closed", "promoted", or "unexecuted" for a kind this build cannot act
+    /// on — because deriving it from the kind afterwards is what filed a promotion under "closed".
+    /// WHETHER it completed is the outcome's, and it wins: a run that threw is "uncertain" whichever
+    /// arm it was in, or the audit trail says a promotion happened when nobody knows that it did.
+    ///
+    /// The two are separable only if the label cannot leak past the Closed case, which is the half a
+    /// pair of Equal assertions on Closed alone would not pin.
+    /// </summary>
+    [Fact]
+    public void TheArchiveWordSaysWhatWasAuthorisedOnlyWhenItCompleted()
+    {
+        Assert.Equal("promoted", CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Closed, "promoted"));
+        Assert.Equal("unexecuted", CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Closed, "unexecuted"));
+
+        // The outcome overrides the arm on both of the non-completing words.
+        Assert.Equal("uncertain", CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Uncertain, "promoted"));
+        Assert.Equal("declined", CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Declined, "promoted"));
+    }
+
+    /// <summary>
     /// A close that was never attempted is LEFT PARKED, not archived — archiving it would throw away a
     /// close the owner had already approved, with no way back. Stated as a throw so the invariant is
     /// visible rather than an absence somebody later fills with a plausible-looking string.

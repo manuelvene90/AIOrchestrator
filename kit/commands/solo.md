@@ -38,11 +38,40 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
 
 - Entries start EXACTLY: `## [n] FROM solo — YYYY-MM-DD HH:mm — subject`. `n` increments per
   channel. A header in any other shape is INVISIBLE to the app — never mirrored, never counted.
-- **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
-  immediately before appending and add one (the app appends while you work, so a remembered number
-  collides — real duplicates happened on 2026-08-10), and take the time from the system clock
-  (`date +'%Y-%m-%d %H:%M'`). The app measures time-on-task from that field and now BLANKS it when
-  the stamp is in the future, so guessing costs you the display.
+- **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
+
+  ```bash
+  bash ~/.claude/commands/channel-append.sh \
+    --channel "$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md" \
+    --author  solo \
+    --subject "fix landed — 214 tests green, branch ready" \
+    --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
+  ```
+
+  It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the app takes the same one
+  from .NET), **allocates `n` and stamps the time itself INSIDE that lock**, and prints the index it
+  used. **You compute NEITHER.** "Re-read the last header and add one" cannot be made safe by trying
+  harder — the window it leaves open IS the write: two writers both read `[71]` and both wrote
+  `[72]`. Hand-stamping failed the same way, ten hours ahead of the entry it sat on; the app measures
+  time-on-task from that field and BLANKS a future stamp.
+- **Exit code 3 means NOTHING WAS WRITTEN** — "could not acquire the lock within the budget". Never
+  read it as success: the entry is not in the file and the owner never saw it. Retry the call (raise
+  `--budget-seconds` if the channel is busy). **Never fall back to a bare `>>` redirect** — an
+  unlocked append under contention is the exact collision this prevents. `2` (usage) and `4` (I/O)
+  also wrote nothing; only `0` did.
+- **Exit code 127 is the opposite case — never handle it like `3`.** `3` means the protocol EXISTS
+  and someone else holds the lock, so an unlocked append is the collision itself. `127` (or the helper
+  simply not being there) means the protocol is ABSENT on this machine — a fresh bootstrap, or a
+  session started before the app's build output was refreshed. Nobody is locking, so a direct append
+  to the owner-channel is no worse than how channels were written before the helper existed, and
+  writing nothing leaves the owner with silence, which is strictly worse. Then: build the whole entry
+  in a temp file and append it with a single `cat tmp >> <channel>` (header and body as separate
+  writes is how an entry ends up with another author's header inside it), and **say in the body that
+  it went in without the lock because the helper is not installed**. The owner sees the degradation;
+  it is never silent.
+- **The honest limit: this serialises the writers that USE it, and nothing else.** A session
+  appending with a bare redirect is stopped by nothing here — a protocol to follow, not a boundary
+  that binds.
 - **APPEND ONLY — never `Write` the channel file.** A whole-file write destroys entries.
 - **ENGLISH always**, even when the owner writes in Italian (the app translates for their phone).
 - **Everything you write lands on a PHONE. THREE lines is the norm, FIVE the hard ceiling, 600
@@ -71,12 +100,87 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
   suite yourself before you report. Full rules: read `~/.claude/commands/implementer.md`, section
   "Fan out" — read the file, never invoke the command.
 
-## When a basic orchestration outgrows itself
+## The task ledger — PLAN.md (yours here, not a supervisor's)
 
-Work that merely needs to go WIDE you can now absorb yourself, by fanning out (above). But if it
-needs a genuinely independent review, or more coordination than one session can hold — **say so in
-one line and let the owner decide.** Do not quietly start behaving like an orchestration; they chose
-this mode deliberately, and switching is theirs to choose too.
+`~/.claude/supervision/$ARGUMENTS/PLAN.md` exists from the moment this orchestration was created —
+the app seeds it, reads it for the card's progress bar, and answers the owner's `/progress` and
+`/left` straight from it. In a basic orchestration there is no supervisor, so **it is yours**. Its
+seed text says "maintained by the SUPERVISOR"; read that as "maintained by whoever talks to the
+owner", which here is you.
+
+One task per line: `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked` ·
+`- [-] not doing`. One line = one deliverable that can be FINISHED — "fix the staleness bug" is a
+line, "audited the tailer, 9 findings" is a diary entry that can never be marked done and so sits in
+the denominator forever. Update it at every real boundary; a stale ledger is worse than none,
+because the owner is being shown it without you in between.
+
+**DONE MEANS READY TO MERGE, and here is what that means READY TO MERGE WITHOUT A REVIEWER**
+(owner directive, 2026-08-13): `- [x]` is built, tested, diff read, evidence stated — finished to the
+point where the only thing left is the owner merging it. *"The merge doesn't count, it's not work,
+it's just a merge."* Do not hold a finished deliverable at `[>]` waiting to land: that makes the bar
+read as nothing while the work is done.
+
+**But you are the one case with nobody independent, so be exact about what `[x]` claims.** It says
+YOU are finished and have shown your evidence. It does NOT say the work was reviewed — the owner is
+your reviewer here, and you never call your own work reviewed or approved. Marking `[x]` is a
+statement about your work being complete, never a clearance you have issued yourself. If a
+deliverable genuinely needs an independent read before anyone should trust it, say so in one line and
+let the owner decide (see below) rather than promoting it on your own say-so.
+
+## When a basic orchestration outgrows itself — asking for a crew
+
+Work that merely needs to go WIDE you can absorb yourself, by fanning out (above). **Width is not a
+reason to ask.** Two things are:
+
+- the work needs a genuinely INDEPENDENT review — you cannot review your own work, and in this mode
+  nobody else does;
+- it needs more coordination than one session can hold: several deliverables in flight, each with its
+  own review cycle, briefed and verified separately.
+
+Do not quietly start behaving like an orchestration. They chose this mode deliberately, it is the
+cheap one, and switching costs a supervisor and an implementer indefinitely — so it is **the owner's
+call, confirmed with a tap**, and the app will not do it without one.
+
+### FIRST write your handover entry — this is a requirement, not a courtesy
+
+**Your session ENDS when the promotion happens, and everything you know that is not in the channel
+dies with it.** The supervisor that replaces you inherits this file — the whole conversation, with
+nothing copied and nothing lost, because it reads the very file you have been writing. What it cannot
+inherit is what you never wrote down.
+
+So append an entry whose SUBJECT carries `HANDOVER`, and put in it what the next crew needs and the
+channel does not already say:
+
+- where the work actually stands, as opposed to where the last report left it;
+- what you tried that did NOT work, and why — the most expensive thing to rediscover;
+- what is half-done, and in which files;
+- the traps: what looks fine and is not, what the tests do not cover, what you were about to do next.
+
+**The app refuses a promotion request with no handover entry**, and it refuses it to YOU rather than
+bothering the owner with it — you get an entry saying so, and you can file the handover and ask again.
+The marker is read the way every marker in this system is: in the SUBJECT anywhere, or at the START of
+a body line. Mentioning the word mid-sentence is discussion, not a handover.
+
+### Then ask
+
+```json
+{"action":"promote-orchestration","orchId":"<your orch id>","reason":"<why one session is not enough>"}
+```
+
+Write it into `~/.claude/supervision/.requests/<anything>.json`. The `reason` is mandatory and the
+owner reads it — they are being asked to spend, so tell them what on, in one line.
+
+Then tell the owner in one line that you have asked, and go back to work. **Do not re-drop it**: it is
+held until they answer, and asking twice does not make them answer sooner.
+
+### What happens if they say yes
+
+Your session ends, and a supervisor starts on THIS channel with your whole history in front of it.
+An implementer spawns empty beside it, and the supervisor briefs it from what it reads here. The
+Telegram topic does not change — the owner keeps reading the same thread.
+
+**Treat it as one-way.** There is no demotion: if a crew turns out to be too much, the answer is to
+close the orchestration and start a basic one, which loses this channel.
 
 ## The monitor — ONE persistent Monitor, armed at boot
 

@@ -39,11 +39,18 @@ public static class CloseTapOutcome_Decider
     /// changed to stop asserting. The vocabulary already separates `unreadable`, `moot`, `declined` and
     /// `expired`, so it distinguishes everywhere except the one case that cannot be told apart later.
     /// </summary>
-    public static string Describe_ForArchive(CloseTapOutcomes outcome)
+    /// <param name="authorisedLabel">
+    /// WHAT THE TAP AUTHORISED, supplied by the arm that actually ran — "closed", "promoted", or
+    /// "unexecuted" for a kind this build cannot act on. Only a COMPLETED run gets it: the outcome
+    /// decides whether the run completed, the arm decides what it was, and neither can answer the
+    /// other's question. Deriving the word from the kind afterwards is what filed a promotion — and
+    /// the arm that deliberately does nothing — under "closed".
+    /// </param>
+    public static string Describe_ForArchive(CloseTapOutcomes outcome, string authorisedLabel = "closed")
     {
         return outcome switch
         {
-            CloseTapOutcomes.Closed => "closed",
+            CloseTapOutcomes.Closed => authorisedLabel,
             CloseTapOutcomes.Uncertain => "uncertain",
             CloseTapOutcomes.Declined => "declined",
 

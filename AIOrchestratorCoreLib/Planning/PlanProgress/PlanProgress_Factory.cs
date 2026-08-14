@@ -12,8 +12,9 @@ public static class PlanProgress_Factory
         IReadOnlyList<string> inProgressTasks,
         IReadOnlyList<string> blockedTasks,
         IReadOnlyList<string> openTasks,
-        IReadOnlyList<string>? doneTasks = null)
+        IReadOnlyList<string>? doneTasks = null,
+        IReadOnlyList<PlanLedgerLine>? lines = null)
     {
-        return new PlanProgressModel(done, inProgress, blocked, notDoing, total, currentTaskText, inProgressTasks, blockedTasks, openTasks, doneTasks ?? []);
+        return new PlanProgressModel(done, inProgress, blocked, notDoing, total, currentTaskText, inProgressTasks, blockedTasks, openTasks, doneTasks ?? [], lines ?? []);
     }
 }

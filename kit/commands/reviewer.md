@@ -25,7 +25,7 @@ must change, you say so in a finding — someone else changes it.
 
 Duplex and append-only, between you and your SUPERVISOR. You never read other members' channels
 and **never address the owner** — everything routes through the supervisor. Appending to your own
-channel is the one write you are allowed (via `>>`).
+channel is the one write you are allowed (via the append helper, below).
 
 ## Boot sequence
 
@@ -128,13 +128,42 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 ## Channel protocol
 
 - Entries start: `## [n] FROM reviewer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
-- **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
-  immediately before appending and add one (the supervisor and the app append while you work, so a
-  remembered number collides — real duplicates happened on 2026-08-10), and take the time from the
-  system clock (`date +'%Y-%m-%d %H:%M'`). The app measures time-on-task from that field and now
-  BLANKS it when the stamp is in the future, so guessing costs you the display.
+- **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
+
+  ```bash
+  bash ~/.claude/commands/channel-append.sh \
+    --channel "$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md" \
+    --author  reviewer \
+    --subject "review filed — 3 findings, one blocking" \
+    --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
+  ```
+
+  It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the app takes the same one
+  from .NET), **allocates `n` and stamps the time itself INSIDE that lock**, and writes the entry in
+  a single append. It prints the index it used.
+- **You compute NEITHER `n` NOR the timestamp.** "Re-read the last header and add one" cannot be made
+  safe by trying harder — the window it leaves open IS the write: two writers both read `[71]` and
+  both wrote `[72]`, and the multi-write shape it goes with put a reviewer's nine findings under the
+  supervisor's header. Hand-stamping failed the same day, ten hours ahead of the entry it sat on; the
+  app measures time-on-task from that field and BLANKS a future stamp.
+- **Exit code 3 means NOTHING WAS WRITTEN** — "could not acquire the lock within the budget". It is
+  never a success and your report is not in the file: retry the call (raise `--budget-seconds` if the
+  channel is busy). **Never fall back to a bare `>>` redirect**; an unlocked append under contention
+  is the exact collision this prevents. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
+- **Exit code 127 is the opposite case, and must not be handled like `3`.** `3` says the protocol
+  EXISTS and another writer holds the lock — appending anyway IS the collision it prevents. `127` (or
+  the helper simply not being there) says the protocol is ABSENT on this machine — a fresh bootstrap,
+  or a session older than the app's build output. Nobody is locking, so a direct append is no worse
+  than how every channel was written before the helper existed, and filing nothing would leave your
+  findings unwritten. So: build the whole entry in a temp file and append it with one
+  `cat tmp >> <channel>` — header and body as separate writes is what put nine findings under the
+  supervisor's header — and **say in the body that it went in without the lock because the helper is
+  not installed**. Degraded in the open, never silently.
+- **The honest limit: this serialises the writers that USE it, and nothing else.** A session that
+  appends with a bare redirect is stopped by nothing here — a protocol to follow, not a boundary that
+  binds.
 - **APPEND ONLY — never `Write` a channel file** (a whole-file write DESTROYS earlier entries; this
-  really happened and cost 35 minutes). Append with `>>`.
+  really happened and cost 35 minutes). Every entry goes through the helper.
 - **ENGLISH, always**, even when the traffic reaching you is Italian.
 - No acknowledgment-only entries — silence is acknowledgment. One exception, below.
 - **Where a marker may go, exactly:** in the entry's SUBJECT anywhere — the app matches the whole

@@ -43,8 +43,214 @@ public class PlanProgressFormatterTests
         Assert.Equal("0/0 done", PlanProgress_Formatter.Describe_Counts(Build(done: 0, total: 0)));
     }
 
+    // ── /progress AS A LEDGER, owner directive 2026-08-13 ─────────────────────────────────────────
+    //
+    // It rendered as PROSE: every task of a kind joined onto one line with ` · `, so four tasks became
+    // roughly fifteen wrapped visual lines on their phone. Their words: "I want it to be a list of the
+    // main macro tasks, not detailed low level list of tens of tasks, the main macro elements, let's
+    // say 7/8 max, and it should be in the [-], [>], [X] format."
+    //
+    // AND THEN, 11:14, correcting the reading of the 7/8: "The done rows must not be hidden. I want to
+    // see all the rows, it must not be truncated. If all the tasks don't fit in 8/9 rows it means you
+    // haven't managed to group the tasks sufficiently into macrotasks."
+    //
+    // So 7/8 is a statement about how many macro tasks a LEDGER should have, not a rendering limit.
+    // The answer to a ledger of hundreds is a shorter ledger, not a shorter message — a renderer that
+    // truncated would hide the author's failure to group, which is the opposite of what was asked.
+    // Nothing here caps, counts a remainder, or reorders: one line per ledger line, as written.
+
+    /// <summary>THE SHAPE, exactly — one line per task, each carrying the ledger's own marker.</summary>
+    [Fact]
+    public void Describe_Ledger_IsOneLinePerTaskCarryingItsLedgerMarker()
+    {
+        var progress = Parse(
+            "- [>] fix R1 — clear the awaiting-answer flag only after a confirmed send",
+            "- [>] restyle the topic status line",
+            "- [ ] rebase fix/quiet-clock-ignores-app onto master",
+            "- [x] audit R2–R8 against current master",
+            "- [-] rewrite the mirror loop — superseded")!;
+
+        Assert.Equal(
+            string.Join('\n', new[]
+            {
+                "[>] fix R1 — clear the awaiting-answer flag only after a confirmed send",
+                "[>] restyle the topic status line",
+                "[ ] rebase fix/quiet-clock-ignores-app onto master",
+                "[x] audit R2–R8 against current master",
+                "[-] rewrite the mirror loop — superseded",
+            }),
+            PlanProgress_Formatter.Describe_Ledger(progress));
+    }
+
+    /// <summary>
+    /// THE DEFECT ITSELF, as a property rather than as one more fixture: no printed line may carry
+    /// more than one task. The old renderer joined a whole kind with ` · `, and a fixture only ever
+    /// pins the arrangement it was written for — this asks the question of every line.
+    ///
+    /// Each line minus its four-character marker must be EXACTLY one of the ledger's task texts.
+    /// A joined line is not equal to any of them, so it cannot pass.
+    /// </summary>
+    [Fact]
+    public void Describe_Ledger_NeverPutsTwoTasksOnOneLine()
+    {
+        string[] tasks =
+        [
+            "fix the parser",
+            "rebase the branch",
+            "audit the hooks",
+            "rewrite the mirror loop",
+        ];
+
+        var progress = Parse(
+            $"- [>] {tasks[0]}",
+            $"- [ ] {tasks[1]}",
+            $"- [x] {tasks[2]}",
+            $"- [-] {tasks[3]}")!;
+
+        var lines = PlanProgress_Formatter.Describe_Ledger(progress).Split('\n');
+
+        Assert.Equal(tasks.Length, lines.Length);
+
+        foreach (var line in lines)
+            Assert.Contains(line[4..], tasks);
+    }
+
+    /// <summary>EVERY line opens with one of the ledger's five markers, over a mixed ledger.</summary>
+    [Fact]
+    public void Describe_Ledger_OpensEveryLineWithALedgerMarker()
+    {
+        var lines = PlanProgress_Formatter.Describe_Ledger(Mixed(blocked: 2, inProgress: 3, open: 4, done: 5, notDoing: 6)).Split('\n');
+
+        foreach (var line in lines)
+            Assert.Contains(line[..3], new[] { "[!]", "[>]", "[ ]", "[x]", "[-]" });
+    }
+
+    /// <summary>
+    /// NOTHING IS EVER OMITTED, at any size — the owner's correction of 11:14, and the property that
+    /// replaces the cap I had been briefed to build. 292 lines in, 292 lines out.
+    ///
+    /// Asserted on a ledger far past any plausible "macro" one on purpose: the guarantee has to hold
+    /// exactly where a truncating renderer would have been tempting, because that is where hiding
+    /// rows would have hidden the ledger author's failure to group them.
+    /// </summary>
+    [Fact]
+    public void Describe_Ledger_PrintsEveryLineHoweverBigTheLedgerIs()
+    {
+        var progress = Mixed(blocked: 9, inProgress: 40, open: 36, done: 178, notDoing: 29);
+
+        Assert.Equal(292, PlanProgress_Formatter.Describe_Ledger(progress).Split('\n').Length);
+    }
+
+    /// <summary>
+    /// AND NO REMAINDER LINE, ever. A truncating renderer announces itself with a counted tail, so
+    /// the absence of one is the observable difference — asserted separately from the count above,
+    /// which a renderer that printed 291 rows plus a "+1 more" would otherwise satisfy.
+    /// </summary>
+    [Fact]
+    public void Describe_Ledger_NeverCollapsesARemainderIntoACount()
+    {
+        var text = PlanProgress_Formatter.Describe_Ledger(Mixed(open: 40));
+
+        Assert.DoesNotContain("more", text);
+        Assert.Contains("[ ] open 39", text);
+    }
+
+    /// <summary>
+    /// DONE ROWS STAY, and this is a straight owner decision of 2026-08-13 rather than a balance
+    /// struck against the older rule. "A done line is never printed under any circumstance" was
+    /// written when /progress showed 593 of 683 lines; the answer to that ledger is a shorter LEDGER,
+    /// and the owner has taken responsibility for grouping it. Dropped rows stay for the same reason.
+    /// </summary>
+    [Fact]
+    public void Describe_Ledger_ShowsDoneAndDroppedRows()
+    {
+        var text = PlanProgress_Formatter.Describe_Ledger(Mixed(inProgress: 3, done: 2, notDoing: 1));
+
+        Assert.Contains("[x] done 0", text);
+        Assert.Contains("[-] not doing 0", text);
+    }
+
+    /// <summary>
+    /// LEDGER ORDER, not kind order. The ledger is a document somebody wrote in an order that means
+    /// something — grouping the five states on the way out reorders their rows, and the owner asked
+    /// to see their rows.
+    ///
+    /// The fixture interleaves states so that no grouping can pass: a renderer that emitted blocked
+    /// first, or done last, produces a different sequence from this one.
+    /// </summary>
+    [Fact]
+    public void Describe_Ledger_KeepsTheLedgersOwnOrder()
+    {
+        var progress = Parse(
+            "- [x] first, and finished",
+            "- [ ] second, and open",
+            "- [!] third, and blocked",
+            "- [x] fourth, also finished",
+            "- [>] fifth, and running")!;
+
+        Assert.Equal(
+            string.Join('\n', new[]
+            {
+                "[x] first, and finished",
+                "[ ] second, and open",
+                "[!] third, and blocked",
+                "[x] fourth, also finished",
+                "[>] fifth, and running",
+            }),
+            PlanProgress_Formatter.Describe_Ledger(progress));
+    }
+
+    /// <summary>
+    /// ONE VOCABULARY OUT, whatever went in. `- [X]` and `- [x]` are one state written by two hands
+    /// — the parser has always folded them for the COUNTS, and printing the raw capture would put
+    /// both spellings in front of the owner inside a single message.
+    /// </summary>
+    [Fact]
+    public void Describe_Ledger_NormalisesTheDoneMarkerToOneSpelling()
+    {
+        var text = PlanProgress_Formatter.Describe_Ledger(Parse("- [X] shouted", "- [x] quiet")!);
+
+        Assert.Equal("[x] shouted\n[x] quiet", text);
+    }
+
+    /// <summary>A ledger with no lines to render says so rather than printing an empty message.</summary>
+    [Fact]
+    public void Describe_Ledger_SaysSoWhenThereIsNothingToRender()
+    {
+        Assert.Equal("the ledger is empty", PlanProgress_Formatter.Describe_Ledger(Build(done: 3, total: 3)));
+    }
+
+    /// <summary>
+    /// A ledger built from counts alone, for the wording tests. Its task LISTS are empty, which is
+    /// why it is not used for the rendering ones.
+    /// </summary>
     static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0, int notDoing = 0)
     {
         return PlanProgress_Factory.Create(done, inProgress, blocked, notDoing, total, null, [], [], []);
+    }
+
+    /// <summary>A ledger of N lines per kind, named so each one is identifiable in an assertion.</summary>
+    static IPlanProgress Mixed(int blocked = 0, int inProgress = 0, int open = 0, int done = 0, int notDoing = 0)
+    {
+        List<string> lines = [];
+
+        Add(lines, "!", "blocked", blocked);
+        Add(lines, ">", "in progress", inProgress);
+        Add(lines, " ", "open", open);
+        Add(lines, "x", "done", done);
+        Add(lines, "-", "not doing", notDoing);
+
+        return Parse([.. lines])!;
+
+        static void Add(List<string> lines, string marker, string label, int count)
+        {
+            for (var index = 0; index < count; index++)
+                lines.Add($"- [{marker}] {label} {index}");
+        }
+    }
+
+    static IPlanProgress? Parse(params string[] lines)
+    {
+        return PlanLedger_Parser.Parse_OrNull(string.Join('\n', lines));
     }
 }

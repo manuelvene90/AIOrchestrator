@@ -22,4 +22,18 @@ public static class ParkedCloseRequest_Factory
 
         return new ParkedCloseRequestModel(ParkedCloseKinds.Implementer, orchId, memberId, requester, reason, parkedFilePath);
     }
+
+    /// <summary>
+    /// A promotion names no member, and that is not the same silence as an orchestration close naming
+    /// none: WHICH solo ends is not the requester's to choose, it is whichever one the orchestration
+    /// has. Carrying a member id here would invite a request to name a different session and have it
+    /// honoured.
+    /// </summary>
+    public static IParkedCloseRequest Create_ForPromotion(string orchId, string requester, string reason, string parkedFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(orchId))
+            throw new ArgumentException($"a parked promote-orchestration request needs an orchId (file '{parkedFilePath}')");
+
+        return new ParkedCloseRequestModel(ParkedCloseKinds.Promotion, orchId, null, requester, reason, parkedFilePath);
+    }
 }

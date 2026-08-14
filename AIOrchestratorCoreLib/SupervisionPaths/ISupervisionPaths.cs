@@ -33,6 +33,14 @@ public interface ISupervisionPaths
 
     /// <summary>The supervisor-maintained task ledger (PLAN.md) the card's progress bar reads.</summary>
     string Get_PlanFile(string orchId);
+
+    /// <summary>
+    /// The app's PRECOMPUTED reading of that ledger, for the supervisor's terminal status line to
+    /// render. It exists so the status line never parses PLAN.md itself: a second reader of that file
+    /// is a second answer to "how far along is this", and the terminal and the owner's phone would
+    /// disagree the first time either arithmetic changed.
+    /// </summary>
+    string Get_ProgressFile(string orchId);
     string Get_OwnerChannelFile(string orchId);
     string Get_OrchestrationLogFile(string orchId);
     string Get_ImplementerFolder(string orchId, string memberId);

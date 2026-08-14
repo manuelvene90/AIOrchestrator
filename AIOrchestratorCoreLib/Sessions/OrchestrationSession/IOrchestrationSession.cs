@@ -50,6 +50,14 @@ public interface IOrchestrationSession
     /// </summary>
     Telegram.TelegramDeliveryModes TelegramMode { get; }
 
+    /// <summary>
+    /// WHERE THE OWNER IS for this orchestration. TERMINAL means they are in its terminal: nothing
+    /// is pushed to Telegram and — the half that matters — no question raises the awaiting-answer
+    /// flag, so the supervisor never freezes waiting for a tap that is being typed at it instead.
+    /// Persisted, because an app restart does not move the owner out of their chair.
+    /// </summary>
+    Telegram.OwnerPresenceModes OwnerPresence { get; }
+
     /// <summary>Set when the general supervisor closed this orchestration. Folder stays as audit trail.</summary>
     DateTime? ClosedUtc { get; }
 }

@@ -78,12 +78,16 @@ public class CloseConfirmationPromptTests
     /// The mid-sentence wording the held / declined / lapsed notices all share. One source, because
     /// four copies of "this orchestration" is how the notice about retiring one member comes to tell
     /// a supervisor its whole orchestration was up for closure.
+    ///
+    /// IT CARRIES ITS OWN VERB NOW. The earlier version named only the object and let each caller
+    /// supply the verb, which is fine while every request is a close and produced "You asked to close
+    /// the promotion to a full crew" the day one was not.
     /// </summary>
     [Fact]
-    public void TheSubjectDescriptionNamesTheMemberButNotForAnOrchestration()
+    public void TheAskDescriptionNamesTheMemberButNotForAnOrchestration()
     {
-        Assert.Equal("'imp-2'", CloseConfirmationPrompt_Builder.Describe_Subject(MEMBER));
-        Assert.Equal("this orchestration", CloseConfirmationPrompt_Builder.Describe_Subject(ORCHESTRATION));
+        Assert.Equal("the close of 'imp-2'", CloseConfirmationPrompt_Builder.Describe_AskedFor(MEMBER));
+        Assert.Equal("the close of this orchestration", CloseConfirmationPrompt_Builder.Describe_AskedFor(ORCHESTRATION));
     }
 
     /// <summary>
@@ -148,15 +152,24 @@ public class CloseConfirmationPromptTests
 
     /// <summary>
     /// An unreadable request is the ONE case where nobody can say what the tap was about, so the
-    /// wording falls back to the orchestration rather than guessing at a member.
+    /// wording names NEITHER a member nor a verb.
+    ///
+    /// It used to fall back to the orchestration's close wording, and that was defensible while every
+    /// parked request was a close. A PROMOTION request is one too, and it arrives on this same path:
+    /// the file that could not be read is precisely the one whose kind is unknowable, so "Close
+    /// 'crm-2'?" is a guess in front of a solo that had asked to be promoted — the same wrong-record
+    /// failure the archive label and the button labels were both corrected for. Falling back to a
+    /// GUESS is not the same as falling back to a default.
     /// </summary>
     [Fact]
-    public void WithNoReadableRequestTheWordingFallsBackToTheOrchestration()
+    public void WithNoReadableRequestTheWordingGuessesNeitherAMemberNorAVerb()
     {
         var text = CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", null, CloseTapOutcomes.NotAttempted);
 
-        Assert.Contains("⚠️ Close 'crm-2'?", text);
+        Assert.Contains("crm-2", text);
         Assert.DoesNotContain("member", text);
+        Assert.DoesNotContain("clos", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("promot", text, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -175,7 +188,9 @@ public class CloseConfirmationPromptTests
     {
         var text = Decide(CloseTapOutcomes.NotAttempted);
 
-        Assert.Contains("NOT closed", text);
+        // "NOT done", not "NOT closed": this outcome is produced only when the request could not be
+        // read, so the verb is the one thing that cannot be known — see the neutrality test above.
+        Assert.Contains("NOT done", text);
         Assert.Contains("nothing was changed", text);
         Assert.Contains("if it can be read", text);
         Assert.DoesNotContain("asked again shortly", text);
