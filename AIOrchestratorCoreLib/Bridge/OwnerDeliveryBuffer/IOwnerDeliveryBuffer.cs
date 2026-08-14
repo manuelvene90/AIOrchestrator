@@ -50,6 +50,21 @@ public interface IOwnerDeliveryBuffer
     /// it was false.
     /// </para>
     /// <para>
+    /// WHY THAT ACTUALLY HOLDS, because "sorted by ordinal" alone does not explain it and the next
+    /// reader will otherwise simplify this back: <b>anything arriving after a take has a HIGHER
+    /// ordinal than everything in that take</b>, since ordinals are assigned at ARRIVAL. So restoring
+    /// a whole aggregated batch under its LOWEST ordinal keeps it ahead of everything that arrived
+    /// while it was out — and it stays right for two batches in flight from two different loops,
+    /// because every ordinal in the second batch is higher than every ordinal in the first. That is
+    /// the property, and it is a fact about when ordinals are minted rather than about who calls
+    /// what. (rev-10 re-derived it; it was true before it was written down.)
+    /// </para>
+    /// <para>
+    /// The only obligation left on a caller is to hand back the ordinal it was given — and that is not
+    /// quietly violable, because <c>Text</c> and <c>FirstOrdinal</c> travel together in one
+    /// <see cref="IReadyDelivery"/>.
+    /// </para>
+    /// <para>
     /// Unlike <c>Add_Segment</c> this does NOT refresh <c>LastArrivalUtc</c>: the owner already served
     /// one aggregation window for this text and must not serve another for a failure they know nothing
     /// about.

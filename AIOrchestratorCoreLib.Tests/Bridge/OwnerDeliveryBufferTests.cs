@@ -104,6 +104,14 @@ public class OwnerDeliveryBufferTests
     /// guarding it" means in practice. Both orders are asserted below; without the ordinal ONE of
     /// them reddens whichever way the buffer is written.
     /// </para>
+    /// <para>
+    /// BOTH ORDERS BELONG IN ONE METHOD, deliberately. Each position rule fails a DIFFERENT half of
+    /// it — appending fails newer-first, prepending fails older-first — so at method granularity both
+    /// mutants redden this one case, and neither can pass it. Splitting it into two methods would
+    /// hide that: each would look individually satisfiable, when the point is that no single rule
+    /// satisfies both at once. (rev-10 measured the red sets rather than taking my description of
+    /// them, and corrected me: they are disjoint by sub-case, not by method.)
+    /// </para>
     /// </summary>
     [Fact]
     public void TwoPutBacksComeOutChronological_WHICHEVEROfThemLandsFirst()
