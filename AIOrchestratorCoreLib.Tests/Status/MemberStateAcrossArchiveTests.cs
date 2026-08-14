@@ -39,28 +39,86 @@ public class MemberStateAcrossArchiveTests : IDisposable
     }
 
     /// <summary>
-    /// THE WINDOW-SEMANTICS CHANGE, PINNED RATHER THAN LEFT TO A COMMIT MESSAGE. A member announced a
-    /// writing window, the announcement has since been compacted into the archive, and it never closed
-    /// one — so the files are still in flight and the supervisor must not audit them.
+    /// AN UNCLOSED WINDOW EXPIRES BY BEING COMPACTED, and this case previously asserted the OPPOSITE.
     ///
-    /// Reading the live file alone, the opener is invisible and the member reads as ordinary work: the
-    /// window silently expires by being archived, which is the opposite of what an unclosed window
-    /// means. An unclosed window is precisely the stalled case the marker exists to catch, and the
-    /// longer a channel runs — the very channels that compact — the more certain it was to be missed.
+    /// I argued that an archived unclosed opener should stay open because "an unclosed window is
+    /// precisely the stalled case the marker exists to catch", and that argument was accepted. IT WAS
+    /// WRONG, and rev-6 found why: `Has_OpenWindow` short-circuits ahead of every other rule, so an
+    /// opener with no matching close pins the member in this state — and NOTHING PRUNES AN ARCHIVE, so
+    /// no later traffic of any kind can ever clear it. That is not a stricter reading, it is an
+    /// unclearable one, and it replaced a wrong state that healed with a wrong state that cannot.
+    ///
+    /// It was not hypothetical for a single day: `da-vinci-fintech-suite-5/imp-6` and `imp-8` were both
+    /// pinned by it, out of the three channels the original commit named as its evidence.
+    ///
+    /// A window is a statement about the PRESENT. An opener that has been moved out sits behind at
+    /// least `KEEP_RECENT_ENTRIES` later entries, and a member that has written 45 entries since is not
+    /// mid-write — it forgot the close. Compaction IS the expiry.
     /// </summary>
     [Fact]
-    public void AnUnclosedWritingWindowSurvivesBeingCompactedIntoTheArchive()
+    public void AnUnclosedWindowExpiresOnceItHasBeenCompactedOut()
     {
         Write_Live(("app", 178), ("app", 179));
         Write_Archive(
             ("supervisor", 1, "the brief"),
             ("implementer", 2, $"{MemberState_Resolver.WRITING_WINDOW_OPEN_MARKER} — editing the engine"));
 
+        Assert.NotEqual(
+            MemberStates.WritingWindowOpen,
+            MemberState_Resolver.Resolve(ChannelHistory_Counter.Read_AllEntries(_channelFile)));
+    }
+
+    /// <summary>
+    /// AND THE LIVE WINDOW STILL WORKS — asserted apart, because the fix above is a narrowing and a
+    /// narrowing that went one step too far would silence the load-bearing case: a member that really
+    /// is mid-write must still read as such, or the supervisor audits files in flight.
+    /// </summary>
+    [Fact]
+    public void AWindowOpenedInTheLiveFileIsStillOpen()
+    {
+        Write_Live(("implementer", 91, $"{MemberState_Resolver.WRITING_WINDOW_OPEN_MARKER} — editing the engine"));
+        Write_Archive(("supervisor", 1, "the brief"));
+
+        Assert.Equal(
+            MemberStates.WritingWindowOpen,
+            MemberState_Resolver.Resolve(ChannelHistory_Counter.Read_AllEntries(_channelFile)));
+    }
+
+    /// <summary>
+    /// THE REAL-WORLD MISS THAT MADE imp-6 LATCH, pinned as CURRENT BEHAVIOUR rather than fixed.
+    ///
+    /// That member closed its window with the subject `WINDOW CLOSED` — no `WRITING` prefix — so the
+    /// marker never matched and its earlier opener stood.
+    ///
+    /// RELAXING THE MATCHER TO ACCEPT A BARE `WINDOW CLOSED` WOULD BE WRONG, which is why this asserts
+    /// the miss instead of removing it: `MUTATION WINDOW CLOSED` CONTAINS that substring, so a mutation
+    /// close would silently close a writing window. That is the superset-by-substring defect this
+    /// orchestration has met repeatedly — most recently in a count of `catch` clauses that matched the
+    /// filtered form because the bare string is a prefix of it.
+    ///
+    /// Members writing the close wrong is a protocol problem and belongs in the role commands. With the
+    /// expiry above it now costs one stale live entry rather than a permanent state.
+    /// </summary>
+    [Fact]
+    public void ACloseWrittenWithoutTheWritingPrefixDoesNotMatchTheMarker()
+    {
+        Write_Live(
+            ("implementer", 26, $"{MemberState_Resolver.WRITING_WINDOW_OPEN_MARKER} — both verified as mine"),
+            ("implementer", 27, "WINDOW CLOSED. Both fixed — seven commits."));
+
         Assert.Equal(
             MemberStates.WritingWindowOpen,
             MemberState_Resolver.Resolve(ChannelHistory_Counter.Read_AllEntries(_channelFile)));
 
-        Assert.NotEqual(MemberStates.WritingWindowOpen, MemberState_Resolver.Resolve(Read_LiveOnly()));
+        // And the properly-spelled close DOES clear it — so the case above pins the SPELLING and not
+        // some unrelated reason the state happened to stick.
+        Write_Live(
+            ("implementer", 26, $"{MemberState_Resolver.WRITING_WINDOW_OPEN_MARKER} — both verified as mine"),
+            ("implementer", 27, $"{MemberState_Resolver.WRITING_WINDOW_CLOSED_MARKER}. Both fixed — seven commits."));
+
+        Assert.NotEqual(
+            MemberStates.WritingWindowOpen,
+            MemberState_Resolver.Resolve(ChannelHistory_Counter.Read_AllEntries(_channelFile)));
     }
 
     /// <summary>

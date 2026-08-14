@@ -65,15 +65,20 @@ public static class ChannelHistory_Counter
     /// <see cref="Status.MemberState_Resolver.Resolve"/>, reading the live file alone, called them
     /// `ImplementerWorking`.
     /// </summary>
-    public static IReadOnlyList<IChannelEntry> Read_AllEntries(string channelFilePath)
+    /// <summary>
+    /// IT CARRIES THE ARCHIVE/LIVE BOUNDARY, and that is not a convenience — see
+    /// <see cref="ChannelHistory"/> for the defect it exists to close. Returning a bare list here
+    /// pinned two live channels in `WritingWindowOpen` with nothing able to clear them.
+    /// </summary>
+    public static ChannelHistory Read_AllEntries(string channelFilePath)
     {
         var archived = Read_ArchivedEntries(channelFilePath);
         var live = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFilePath));
 
         if (archived.Count == 0)
-            return live;
+            return new ChannelHistory(live, 0);
 
-        return [.. archived, .. live];
+        return new ChannelHistory([.. archived, .. live], archived.Count);
     }
 
     static int Count_In(string filePath, ChannelAuthors author)
