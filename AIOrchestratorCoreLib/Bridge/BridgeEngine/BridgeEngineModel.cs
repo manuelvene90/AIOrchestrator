@@ -5305,7 +5305,14 @@ internal sealed class BridgeEngineModel(
         {
             // Put it back and mark it ready: the owner has already waited out one aggregation
             // window and must not serve a second one for a lock they know nothing about.
-            _ownerDeliveryBuffer.Add_Segment(delivery.Key, deliveryText, DateTime.UtcNow);
+            //
+            // delivery.Value, THE ORIGINAL — not deliveryText. This put back the TRANSLATED string
+            // until rev-9 caught it: with the Italian layer on, the buffer stopped holding the
+            // owner's message and started holding a machine translation of it, which the retry then
+            // ran through the translator AGAIN. The owner's words were replaced by a paraphrase of
+            // themselves and re-paraphrased on every subsequent lock. Translation belongs on the way
+            // OUT; nothing may put an output of that pipeline back into the input side.
+            _ownerDeliveryBuffer.Add_Segment(delivery.Key, delivery.Value, DateTime.UtcNow);
             _ownerDeliveryBuffer.Release(delivery.Key);
 
             _log.Log_Warning(target.OrchId,

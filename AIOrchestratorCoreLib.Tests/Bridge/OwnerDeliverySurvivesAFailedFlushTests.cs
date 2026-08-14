@@ -1,4 +1,5 @@
-using AIOrchestratorCoreLib.Bridge.BridgeEngine;
+﻿using AIOrchestratorCoreLib.Bridge.BridgeEngine;
+using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -207,6 +208,57 @@ public class OwnerDeliverySurvivesAFailedFlushTests : IDisposable
             $"the first delivery did not fail, so this proves nothing.{Environment.NewLine}{_log.Dump()}");
     }
 
+    /// <summary>
+    /// THE PUT-BACK MUST RESTORE THE OWNER'S WORDS, NOT THE TRANSLATION OF THEM. rev-9's F1.
+    /// <para>
+    /// The locked-channel route put back <c>deliveryText</c>, which with the Italian layer on is the
+    /// translator's OUTPUT. The buffer then held a machine translation instead of the owner's message,
+    /// and the retry ran that through the translator again — the owner's words replaced by a
+    /// paraphrase of themselves, and re-paraphrased on every subsequent lock.
+    /// </para>
+    /// <para>
+    /// The translator here MARKS its output, so a second pass is visible as a second mark. Counting
+    /// marks is what makes this an assertion about fidelity rather than about delivery: the message
+    /// arrives either way, which is exactly why the defect survived a route classified as covered.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ALockedChannelPutsBackTheOWNERSWords_NotTheTranslationOfThem()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        Seed_OwnerChannel(session.OrchId);
+
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+        var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(ownerChannel);
+
+        Directory.CreateDirectory(lockDirectory);
+        File.WriteAllText(
+            Path.Combine(lockDirectory, ChannelFile_Lock.OWNER_FILE_NAME),
+            ChannelFile_Lock.Build_OwnerFileContent(4242, DateTime.UtcNow, "session", "another-writer"));
+
+        // Translates rather than throws: this route is about fidelity, not about escaping.
+        _translator.Stop_Throwing();
+        _translator.Mark_Translations();
+
+        _telegram.Queue_OwnerMessage(Build_OwnerMessageJson(FIRST_TEXT, 4301));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Line_Containing("stayed locked by another writer"), 40_000),
+            $"the delivery never hit a locked channel, so nothing below means anything.{Environment.NewLine}{_log.Dump()}");
+
+        Directory.Delete(lockDirectory, recursive: true);
+
+        Assert.True(
+            await Run_Until_Async(() => File.ReadAllText(ownerChannel).Contains(FIRST_TEXT), 40_000),
+            $"the message never arrived at all.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        var marks = File.ReadAllText(ownerChannel).Split(ThrowingTranslator_Fake.TRANSLATION_MARK).Length - 1;
+
+        Assert.Equal(1, marks);
+    }
+
     void Seed_OwnerChannel(string orchId)
     {
         var channelFile = _paths.Get_OwnerChannelFile(orchId);
@@ -277,10 +329,20 @@ public class OwnerDeliverySurvivesAFailedFlushTests : IDisposable
 /// </summary>
 internal sealed class ThrowingTranslator_Fake : IMessageTranslator
 {
+    /// <summary>Appended to every translation, so a SECOND pass over the same text is countable.</summary>
+    public const string TRANSLATION_MARK = " [EN]";
+
     readonly object _lock = new();
     bool _throwing = true;
     bool _asCancellation;
+    bool _marking;
     string? _onlyForText;
+
+    public void Mark_Translations()
+    {
+        lock (_lock)
+            _marking = true;
+    }
 
     public void Stop_Throwing()
     {
@@ -314,7 +376,8 @@ internal sealed class ThrowingTranslator_Fake : IMessageTranslator
             }
         }
 
-        return Task.FromResult(text);
+        lock (_lock)
+            return Task.FromResult(_marking ? text + TRANSLATION_MARK : text);
     }
 
     public Task<string> Translate_ToItalian_Async(string text, CancellationToken cancellationToken)

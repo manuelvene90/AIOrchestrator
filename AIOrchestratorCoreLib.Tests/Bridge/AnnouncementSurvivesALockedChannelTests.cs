@@ -169,6 +169,48 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
             File.ReadAllText(ownerChannel));
     }
 
+    /// <summary>
+    /// THE DRAIN IS THE ONLY WRITER, PINNED ON A **FREE** CHANNEL — rev-10's F1.
+    /// <para>
+    /// "Only the drain writes an announcement" is the whole ordering guarantee, and it is
+    /// CONVENTIONAL: <c>ChannelAppender.Append_AppEntry</c> stays callable from anywhere, so the
+    /// guarantee rests on every announce site going through <c>Announce</c>. rev-10 measured that
+    /// nothing detected a violation — it mutated <c>Announce</c> to append directly before queuing,
+    /// and the whole suite stayed green.
+    /// </para>
+    /// <para>
+    /// WHY THE OTHER TWO CASES ARE BLIND, and this one is not: both of them lock the channel, where a
+    /// direct append could not have written anyway. On a FREE channel a direct append SUCCEEDS and the
+    /// queued copy is then drained too — so the violation's signature is the announcement appearing
+    /// TWICE. Counting is the detector.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task OnAFreeChannelTheAnnouncementIsWrittenEXACTLYONCE_BecauseOnlyTheDrainWrites()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        Seed_OwnerChannel(session.OrchId);
+
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        // NO lock. That is the entire point: this is the state the other two cases cannot observe.
+        _telegram.Queue_OwnerMessage(Build_OwnerMessageJson("/dnd"));
+
+        Assert.True(
+            await Run_Until_Async(() => File.ReadAllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
+            $"the announcement never arrived, so there is nothing to count.{Environment.NewLine}{_log.Dump()}");
+
+        // Let further ticks run: a direct append plus a drained copy may land in different ticks, and
+        // stopping at the first sighting would miss the second.
+        await Task.Delay(3_000);
+
+        var occurrences = File.ReadAllText(ownerChannel).Split(ANNOUNCEMENT_MARKER).Length - 1;
+
+        Assert.Equal(1, occurrences);
+    }
+
     static string Hold_Locked(string channelFile)
     {
         var lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(channelFile);
