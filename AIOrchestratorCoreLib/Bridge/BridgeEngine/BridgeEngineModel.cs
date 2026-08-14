@@ -1,4 +1,5 @@
 ﻿using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
+using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Configuration;
@@ -221,6 +222,13 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS, OWNER_HOLD_CAP_SECONDS);
+
+    /// <summary>
+    /// Announcements whose channel was locked. These are the one class of write a return check
+    /// cannot save — they fire on the EDGE, with the transition already recorded in the mode state,
+    /// so there is no memo to withhold. See <see cref="IPendingAnnouncements"/>.
+    /// </summary>
+    readonly IPendingAnnouncements _pendingAnnouncements = PendingAnnouncements_Factory.Create();
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
     readonly Lock _deliveryLock = new();
 
@@ -631,6 +639,11 @@ internal sealed class BridgeEngineModel(
         using var tickAllowance = ChannelWrite_Lock.Open_TickAllowance(ChannelWrite_Lock.DEFAULT_TICK_ALLOWANCE);
 
         Process_PendingRequests();
+
+        // Before anything that might announce, so a queued announcement keeps its place ahead of one
+        // this tick produces. Inside the allowance opened above, so the retries draw on the tick's
+        // waiting rather than adding a second budget on top of it.
+        Drain_PendingAnnouncements();
 
         // After closes are processed, so a freshly-closed session is not immediately revived.
         _watchdog.Check_AndRestart_DeadSessions();
@@ -5609,6 +5622,56 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// Writes an announcement, or QUEUES it when the channel is locked so a lost one becomes a late
+    /// one. Every mode-transition announcement goes through here.
+    /// <para>
+    /// These are the one class of channel write a return-value check cannot save: they fire on the
+    /// EDGE, and by the time the append runs the transition is already recorded in the mode state,
+    /// so there is no memo to withhold — withholding one would mean refusing to change the mode.
+    /// A lost entry means the supervisor is never told the owner went away and keeps asking them
+    /// questions, which is what away mode exists to stop.
+    /// </para>
+    /// <para>
+    /// THE QUEUE CHECK COMES FIRST AND IT IS NOT AN OPTIMISATION. If anything is already waiting for
+    /// this channel, a fresh announcement must queue BEHIND it rather than append — otherwise it
+    /// overtakes what is waiting and the supervisor reads "the owner is back" above "the owner went
+    /// away". Two instructions in the wrong order are worse than the later one arriving late.
+    /// </para>
+    /// </summary>
+    void Announce(string orchId, string channelFile, string subject, string body)
+    {
+        if (!_pendingAnnouncements.Has_Queued_For(channelFile)
+            && ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now))
+            return;
+
+        var dropped = _pendingAnnouncements.Queue(orchId, channelFile, subject, body, DateTime.UtcNow);
+
+        _log.Log_Warning(orchId,
+            $"Announcement '{subject}' could not be written to {Path.GetFileName(channelFile)} (locked, or queued behind one that was) — it is queued and the next tick retries it");
+
+        if (dropped != null)
+            _log.Log_Error(orchId,
+                $"Announcement queue for {Path.GetFileName(channelFile)} is full ({IPendingAnnouncements.PER_CHANNEL_CAP}) — DROPPED the oldest, '{dropped.Subject}' queued at {dropped.QueuedUtc:HH:mm:ss}Z. That channel has been unwritable long enough to lose announcements.",
+                null);
+    }
+
+    /// <summary>
+    /// Retries queued announcements. Runs inside the mirror tick, so its waiting is drawn from the
+    /// tick's own allowance rather than added on top of it.
+    /// </summary>
+    void Drain_PendingAnnouncements()
+    {
+        if (_pendingAnnouncements.Count == 0)
+            return;
+
+        var delivered = _pendingAnnouncements.Drain(pending =>
+            ChannelAppender.Append_AppEntry(pending.ChannelFile, pending.Subject, pending.Body, DateTime.Now));
+
+        if (delivered > 0)
+            _log.Log_Info(GLOBAL_ORCH_ID, $"Delivered {delivered} queued announcement(s) that an earlier lock had blocked");
+    }
+
+    /// <summary>
     /// Do-Not-Disturb is the owner SAYING they are away, so it needs no detection and no 15-minute
     /// wait: the supervisor is told at once to behave exactly as in away mode. (Silenced is the
     /// opposite — they are reading the terminal live, so nothing changes for the supervisor.)
@@ -5632,7 +5695,7 @@ internal sealed class BridgeEngineModel(
         // so none of these is silent — only unretried.
         if (newMode == TelegramDeliveryModes.Deferred)
         {
-            ChannelAppender.Append_AppEntry(
+            Announce(orchId,
                 _paths.Get_OwnerChannelFile(orchId),
                 "the owner switched this topic to Do-Not-Disturb — treat it as AWAY",
                 "They set DND deliberately, so this is not a guess: they are away and nothing you write reaches them "
@@ -5640,8 +5703,7 @@ internal sealed class BridgeEngineModel(
                 + "Behave exactly as in AWAY MODE: ask NOTHING, park what you need from them, decide and delegate "
                 + "everything you safely can, and leave the owner-approval and merge gates standing. The app queues a "
                 + "short status for them and keeps only the newest, so they return to the CURRENT state instead of a "
-                + "backlog. You get an entry here when they switch back.",
-                DateTime.Now);
+                + "backlog. You get an entry here when they switch back.");
 
             Raise_OrchestrationActivity(orchId);
             return;
@@ -5649,12 +5711,11 @@ internal sealed class BridgeEngineModel(
 
         if (previousMode == TelegramDeliveryModes.Deferred && newMode == TelegramDeliveryModes.Normal)
         {
-            ChannelAppender.Append_AppEntry(
+            Announce(orchId,
                 _paths.Get_OwnerChannelFile(orchId),
                 "Do-Not-Disturb is off — the owner is back",
                 "Normal mode. Re-ask ONLY what still matters, rewritten against the CURRENT state, and drop what "
-                + "events have overtaken. One line on what you decided while they were away.",
-                DateTime.Now);
+                + "events have overtaken. One line on what you decided while they were away.");
 
             Raise_OrchestrationActivity(orchId);
         }
@@ -5681,15 +5742,14 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(orchId, $"QUIET — {AwayMode_Policy.QUIET_THRESHOLD} unanswered messages; supervisor told to hold further questions");
 
-        ChannelAppender.Append_AppEntry(
+        Announce(orchId,
             _paths.Get_OwnerChannelFile(orchId),
             "HOLD — the owner has not answered your last messages",
             $"{AwayMode_Policy.QUIET_THRESHOLD} of your messages are unanswered. They may simply be mid-task, so nothing is being "
             + "assumed yet — but STOP sending them anything more for now: no questions, no options, no updates.\n\n"
             + "Park what you would have asked (keep the list; you will re-ask from it) and carry on with what you can "
             + $"decide and delegate yourself. If they stay silent for {AwayMode_Policy.AWAY_AFTER_MINUTES} minutes you will get an "
-            + "AWAY MODE ON entry; if they reply, everything returns to normal on its own.",
-            DateTime.Now);
+            + "AWAY MODE ON entry; if they reply, everything returns to normal on its own.");
 
         Raise_OrchestrationActivity(orchId);
 
@@ -5733,19 +5793,18 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE ON (app-wide) — owner unresponsive; every supervisor told to proceed without questions");
 
-        ChannelAppender.Append_AppEntry(
+        Announce(GLOBAL_ORCH_ID,
             _paths.GeneralChannelFile,
             "AWAY MODE ON — the owner is not reading",
             "Every orchestration has been told directly; you do not need to relay it. Ask them nothing until the "
-            + "AWAY MODE OFF entry arrives.",
-            DateTime.Now);
+            + "AWAY MODE OFF entry arrives.");
 
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
+            Announce(session.OrchId,
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 "AWAY MODE ON — the owner is not reading",
                 "They have not answered. Assume they are unavailable, NOT ignoring you.\n\n"
@@ -5755,8 +5814,7 @@ internal sealed class BridgeEngineModel(
                 + "needs their decision waits rather than proceeding without it.\n\n"
                 + "The app posts a short update to them every 30 min — you do not need to. When they return you get an "
                 + "AWAY MODE OFF entry; then re-ask ONLY what is still relevant, updated to the current state, and drop "
-                + "what events have overtaken.",
-                DateTime.Now);
+                + "what events have overtaken.");
 
             Raise_OrchestrationActivity(session.OrchId);
 
@@ -5769,26 +5827,24 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE OFF (app-wide) — owner is back");
 
-        ChannelAppender.Append_AppEntry(
+        Announce(GLOBAL_ORCH_ID,
             _paths.GeneralChannelFile,
             "AWAY MODE OFF — the owner is back",
-            "Every orchestration has been told directly.",
-            DateTime.Now);
+            "Every orchestration has been told directly.");
 
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
+            Announce(session.OrchId,
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 "AWAY MODE OFF — the owner is back",
                 "Normal mode: they are reading and can answer within a short time.\n\n"
                 + "Go through the questions you parked. Re-ask ONLY the ones that still matter, rewritten against the "
                 + "CURRENT state (facts may have moved while they were away), and say in one line what you decided "
                 + "yourself in the meantime. Drop the rest without ceremony — a re-asked obsolete question is exactly "
-                + "the mess this mode exists to prevent.",
-                DateTime.Now);
+                + "the mess this mode exists to prevent.");
 
             Raise_OrchestrationActivity(session.OrchId);
 
