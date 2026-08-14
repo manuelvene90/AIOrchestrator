@@ -1,4 +1,4 @@
-﻿namespace AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+namespace AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 
 /// <summary>
 /// One announcement that could not be written, waiting for a later tick.

@@ -27,8 +27,11 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
     const long OWNER_USER_ID = 555000111;
     const long TOPIC_ID = 4242;
 
-    /// <summary>Distinctive enough that finding it in the channel cannot be a coincidence.</summary>
-    const string ANNOUNCEMENT_MARKER = "Do-Not-Disturb";
+    /// <summary>
+    /// From the DND-ON subject ONLY. "Do-Not-Disturb" appears in the OFF subject too, so counting it
+    /// was stable only because nothing auto-reverts the mode — a coincidence, not a property.
+    /// </summary>
+    const string ANNOUNCEMENT_MARKER = "treat it as AWAY";
 
     readonly string _tempRoot;
     readonly string _tempRepo;
@@ -202,9 +205,12 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
             await Run_Until_Async(() => File.ReadAllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
             $"the announcement never arrived, so there is nothing to count.{Environment.NewLine}{_log.Dump()}");
 
-        // Let further ticks run: a direct append plus a drained copy may land in different ticks, and
-        // stopping at the first sighting would miss the second.
-        await Task.Delay(3_000);
+        // NOT "let more ticks run" — the harness has already cancelled the token and awaited the loop,
+        // so the engine is stopped by now. What materialises a duplicate is Run_Async's EXIT DRAIN in
+        // its finally: the mutant's direct append lands during the run, and the queued copy is written
+        // on the way out. Naming the right mechanism matters because a sibling case pins the exit
+        // drain, so removing it would look safely covered while silently making THIS case vacuous.
+        await Task.Delay(500);
 
         var occurrences = File.ReadAllText(ownerChannel).Split(ANNOUNCEMENT_MARKER).Length - 1;
 

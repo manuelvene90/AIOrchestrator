@@ -1,4 +1,4 @@
-﻿using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
+using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
@@ -92,16 +92,19 @@ public class OwnerDeliveryBufferTests
     }
 
     /// <summary>
-    /// THE INVARIANT PREPEND RESTS ON: the key is GONE while its delivery is in flight, so a second
-    /// put-back for the same key cannot exist to be ordered against. If two could, prepend would land
-    /// them in reverse order against each other and would be worse than appending.
+    /// PINS THE HALF OF THE INVARIANT THAT ACTUALLY HOLDS: taking a delivery removes its key
+    /// atomically, so no second caller can take that key while the delivery is out.
     /// <para>
-    /// This pins the buffer half. The caller half is that the mirror loop awaits each tick before
-    /// starting the next, so two flushes never overlap — structural, and stated at the method.
+    /// THE NAME USED TO CLAIM THE CONSEQUENCE — "so no second put-back can exist" — AND THAT DOES NOT
+    /// FOLLOW. <c>Add_Segment</c> recreates the key and <c>Release</c> makes it instantly takeable,
+    /// which is exactly what the GO path does on the inbound loop. Nothing here pins the
+    /// two-in-flight case and nothing anywhere does; see <c>Prepend_Segment</c> for why that window is
+    /// accepted rather than closed. A test named after a property it does not test is a green light
+    /// for the next reader to stop looking.
     /// </para>
     /// </summary>
     [Fact]
-    public void TakingADeliveryREMOVESTheKey_SoNoSecondPutBackCanExist()
+    public void TakingADeliveryREMOVESTheKeyAtomically()
     {
         var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
 

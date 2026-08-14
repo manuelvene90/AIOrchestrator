@@ -1,4 +1,4 @@
-﻿namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
+namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 
 /// <summary>
 /// Debounces the owner's inbound texts: messages arriving in quick succession (the owner often
@@ -25,11 +25,35 @@ public interface IOwnerDeliveryBuffer
     /// actively misleads where late merely delays.
     /// </para>
     /// <para>
-    /// SAFE BECAUSE AT MOST ONE PUT-BACK PER KEY CAN BE IN FLIGHT — two would land in reverse order
-    /// against each other, which would make this worse than appending. The key is REMOVED by
-    /// <c>Take_ReadyDeliveries</c> (pinned by its own case), so nothing else can take it while the
-    /// delivery is out, and the mirror loop awaits each tick before starting the next, so two flushes
-    /// never overlap. If either of those ever stops holding, this method stops being safe.
+    /// TWO PUT-BACKS FOR ONE KEY WOULD LAND IN REVERSE ORDER AGAINST EACH OTHER, so it matters how
+    /// nearly that is excluded — and it is NOT excluded structurally. The two halves of the argument
+    /// are different in kind and this comment used to assert both as structural, which was false:
+    /// <list type="bullet">
+    /// <item>
+    /// HOLDS BY CONSTRUCTION — <c>Take_ReadyDeliveries</c> removes every returned key atomically under
+    /// the one lock, so no second caller can take a key while its delivery is out.
+    /// </item>
+    /// <item>
+    /// DOES NOT HOLD — "only the mirror loop flushes". There is a SECOND entry point:
+    /// <c>Apply_HoldControlWord_Async</c>'s GO branch flushes on the INBOUND loop, deliberately, so the
+    /// owner's GO is not left waiting up to 2 s for the next tick. It RELEASES first, which makes a
+    /// newly-arrived segment immediately takeable. So when the owner types GO while a delivery is in
+    /// flight, and both fail on the same correlated cause, two put-backs are reachable and the later
+    /// one wins the front.
+    /// </item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// THAT WINDOW IS KNOWN, ACCEPTED AND NARROW, not impossible. It needs a GO inside a failing
+    /// delivery; the single-put-back case is overwhelmingly the common one and this method is a
+    /// straight improvement to it. Appending is not the safer fallback — it is wrong in the mirror
+    /// case AND wrong in the common single case, which is the defect this replaced.
+    /// </para>
+    /// <para>
+    /// WHAT WOULD MAKE IT STRUCTURAL: serialising the two flush entry points. That is deliberately not
+    /// done — it puts a lock on the owner's delivery path and would make GO wait behind an in-flight
+    /// mirror flush holding a translator subprocess, defeating the feature to fix the ordering. It is
+    /// recorded as post-merge work rather than left for the next reader to re-derive.
     /// </para>
     /// <para>
     /// Unlike <c>Add_Segment</c> this does NOT refresh <c>LastArrivalUtc</c>: the owner already served

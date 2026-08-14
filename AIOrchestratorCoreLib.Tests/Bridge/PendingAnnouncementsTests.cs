@@ -1,4 +1,4 @@
-﻿using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;

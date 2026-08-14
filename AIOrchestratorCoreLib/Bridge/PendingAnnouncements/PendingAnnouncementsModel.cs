@@ -1,4 +1,4 @@
-﻿namespace AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+namespace AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 
 /// <summary>One queued announcement. Immutable: nothing may edit what is waiting to be written.</summary>
 internal sealed record PendingAnnouncementModel(

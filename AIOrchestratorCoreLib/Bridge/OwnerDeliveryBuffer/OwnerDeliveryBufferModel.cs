@@ -1,4 +1,4 @@
-﻿namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
+namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 
 internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdCapSeconds) : IOwnerDeliveryBuffer
 {
