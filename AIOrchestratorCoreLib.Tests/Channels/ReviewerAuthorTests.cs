@@ -32,6 +32,9 @@ public class ReviewerAuthorTests
     // past this test exactly as the original wording slipped past every other one. That gap is the
     // reason for the audience tag, not something this fix closes.
     [InlineData("the owner is still waiting for your reply")]
+    // The request-reply family, now carried by the tag rather than by any wording in the list.
+    [InlineData("[agent] request REJECTED")]
+    [InlineData("[agent] close DECLINED by the owner — keep working")]
     public void AgentCoaching_IsNotTextedToTheOwner(string subject)
     {
         var channel = DiscoveredChannel_Factory.Create_ForOwner("orch-1", "path/owner-channel.md");
@@ -40,12 +43,21 @@ public class ReviewerAuthorTests
         Assert.False(MirrorText_Formatter.Should_Mirror(channel, entry));
     }
 
-    /// <summary>Real owner news must still get through — losing these is worse than the noise.</summary>
+    /// <summary>
+    /// Real owner news must still get through — losing these is worse than the noise.
+    ///
+    /// "request REJECTED" used to be listed here and is gone on purpose: it is the app telling an AGENT
+    /// its request file was malformed ("Fix it and drop a new file"), which the owner cannot act on, so
+    /// it now writes with the Agent audience and reaches the phone no more. Note what that means about
+    /// this file — the case kept PASSING after the call site changed, because it builds a subject by
+    /// hand instead of observing what the call site writes. Ten sites changed what the owner receives
+    /// and the suite stayed green. That is why the audience is a required parameter the compiler
+    /// enforces rather than a fact tests are expected to notice.
+    /// </summary>
     [Theory]
     [InlineData("implementer 'imp-2' added — adversarial review of the pid fix")]
     [InlineData("orchestration 'crm-2' closed")]
     [InlineData("add-implementer FAILED")]
-    [InlineData("request REJECTED")]
     public void OwnerFacingAppNews_IsStillTexted(string subject)
     {
         var channel = DiscoveredChannel_Factory.Create_ForOwner("orch-1", "path/owner-channel.md");

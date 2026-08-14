@@ -2158,7 +2158,7 @@ internal sealed class BridgeEngineModel(
             // Tell the AGENT why, in its own channel — a silently deleted request file used to
             // look to the supervisor like an action that simply never happened.
             if (malformedRequest.OrchId != null && _store.Get_Session_OrNull(malformedRequest.OrchId) != null)
-                Append_OrchestrationAppEntry(malformedRequest.OrchId, AppEntryAudiences.Owner, "request REJECTED", $"Your request file was rejected: {malformedRequest.Reason}. Fix it and drop a new file (same action string).");
+                Append_OrchestrationAppEntry(malformedRequest.OrchId, AppEntryAudiences.Agent, "request REJECTED", $"Your request file was rejected: {malformedRequest.Reason}. Fix it and drop a new file (same action string).");
 
             Delete_RequestFile(malformedRequest.FilePath);
         }
@@ -2420,7 +2420,7 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Info(request.OrchId, $"close-implementer '{request.MemberId}' held for the owner's confirmation ({parkedPath})");
 
                 Append_OrchestrationAppEntry(
-                    request.OrchId, AppEntryAudiences.Owner,
+                    request.OrchId, AppEntryAudiences.Agent,
                     $"close of '{request.MemberId}' HELD — the owner confirms every close with a tap now",
                     $"Nothing has been closed and '{request.MemberId}' is still running. The owner has been asked to confirm.\n\n"
                     + $"Reason relayed: {request.Reason}\n\n"
@@ -2435,7 +2435,7 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Error(request.OrchId, $"close-implementer '{request.MemberId}' could not be held for confirmation — NOT closed", ex);
 
                 Append_OrchestrationAppEntry(
-                    request.OrchId, AppEntryAudiences.Owner,
+                    request.OrchId, AppEntryAudiences.Agent,
                     $"close of '{request.MemberId}' NOT held — nothing was closed",
                     $"Your close request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and '{request.MemberId}' is still running. Ask again if the close is still wanted.");
 
@@ -2506,7 +2506,7 @@ internal sealed class BridgeEngineModel(
                 // killed seconds later. A supervisor that posts a farewell and then keeps running
                 // with no explanation is a worse failure than the one being fixed.
                 Append_OrchestrationAppEntry(
-                    request.OrchId, AppEntryAudiences.Owner,
+                    request.OrchId, AppEntryAudiences.Agent,
                     "close request HELD — the owner confirms every close with a tap now",
                     $"Nothing has been closed and your sessions are still running. The owner has been asked to confirm.\n\n"
                     + $"Asked by: {request.Requester}\nReason relayed: {request.Reason}\n\n"
@@ -2524,7 +2524,7 @@ internal sealed class BridgeEngineModel(
                 // who asked" is the hole this whole unit exists to close — a failure path is exactly
                 // where it would have reopened.
                 Append_OrchestrationAppEntry(
-                    request.OrchId, AppEntryAudiences.Owner,
+                    request.OrchId, AppEntryAudiences.Agent,
                     "close request NOT held — nothing was closed",
                     $"Your close request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and nothing was closed. Everything is still running. Ask again if the close is still wanted.");
 
@@ -2594,7 +2594,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        Append_OrchestrationAppEntry(orchId, AppEntryAudiences.Owner, $"close request {what} — nothing was closed", advice);
+        Append_OrchestrationAppEntry(orchId, AppEntryAudiences.Agent, $"close request {what} — nothing was closed", advice);
     }
 
     void Archive_ResolvedRequest_BestEffort(string requestFilePath, string outcome)
@@ -2936,7 +2936,7 @@ internal sealed class BridgeEngineModel(
             // Told to the REQUESTER, in its own channel, because that is where this guard promised
             // an answer either way — the general channel cannot be read by the session waiting.
             Append_OrchestrationAppEntry(
-                confirmation.OrchId, AppEntryAudiences.Owner,
+                confirmation.OrchId, AppEntryAudiences.Agent,
                 "close NOT executed — the request could not be read just now",
                 "The owner's tap arrived, but your request file could not be read at that moment, so nothing was closed. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
@@ -2984,7 +2984,7 @@ internal sealed class BridgeEngineModel(
         _log.Log_Info(confirmation.OrchId, "The owner declined a close request");
 
         Append_OrchestrationAppEntry(
-            confirmation.OrchId, AppEntryAudiences.Owner,
+            confirmation.OrchId, AppEntryAudiences.Agent,
             "close DECLINED by the owner — keep working",
             $"You asked to close {subject} ({request?.Reason ?? "no reason recorded"}) and the owner said no. Nothing was closed and every session is still running.\n\n"
             + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
@@ -3012,7 +3012,7 @@ internal sealed class BridgeEngineModel(
             ? $"'{orchId}'"
             : $"'{request.MemberId}' in '{orchId}'";
 
-        Append_GeneralAppEntry(AppEntryAudiences.Owner,
+        Append_GeneralAppEntry(AppEntryAudiences.Agent,
             $"close of {what} {outcome} — nothing was closed",
             $"Asked by: {request?.Requester ?? "unrecorded"}. Reason given: {request?.Reason ?? "none recorded"}. Its sessions are all still running.");
     }
@@ -3032,7 +3032,7 @@ internal sealed class BridgeEngineModel(
             _log.Log_Info(request.OrchId, $"A close request lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h");
 
             Append_OrchestrationAppEntry(
-                request.OrchId, AppEntryAudiences.Owner,
+                request.OrchId, AppEntryAudiences.Agent,
                 $"close of {CloseConfirmationPrompt_Builder.Describe_Subject(request)} LAPSED — the owner never answered",
                 $"Your close request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and nothing was closed. "
                 + "It is not carried over: a close must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
