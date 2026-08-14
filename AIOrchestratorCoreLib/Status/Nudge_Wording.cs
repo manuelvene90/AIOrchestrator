@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Formatting;
+
 namespace AIOrchestratorCoreLib.Status;
 
 /// <summary>
@@ -17,12 +19,58 @@ namespace AIOrchestratorCoreLib.Status;
 /// </summary>
 public static class Nudge_Wording
 {
+    /// <summary>
+    /// How long the channel has been quiet, in words — or that it could not be worked out.
+    ///
+    /// <see cref="Nudge_Decider.Measure_QuietFor"/> returns null when nothing in the channel can be
+    /// dated, and this text goes into the entry the member reads. Printing a number there would be
+    /// the same defect the clock just stopped committing: a confident figure standing in for an
+    /// answer nobody has. Item 12 settled this shape once already —
+    /// <see cref="SessionDuration_Formatter.Describe_SinceStamp_OrNull"/> returns null for a stamp it
+    /// cannot trust rather than a wrong duration — and this is that rule reaching the wording.
+    ///
+    /// It DELEGATES to <see cref="SessionDuration_Formatter.Describe"/> for the ordinary case rather
+    /// than formatting its own, because a second copy of a duration formatter is exactly what item 12
+    /// forbids: the UI once grew one and rendered a future stamp as "under a minute".
+    /// </summary>
+    public static string Describe_QuietFor(TimeSpan? quietFor)
+    {
+        return quietFor == null
+            ? "an unknown time — nothing in this channel carries a stamp I can read"
+            : SessionDuration_Formatter.Describe(quietFor.Value);
+    }
+
+    /// <summary>
+    /// The subject of the entry the app appends when it respawns an orphaned member. It lives here,
+    /// beside the nudge subjects, because <see cref="Is_WakeSubject"/> has to recognise it and a
+    /// predicate that RE-TYPES the text it recognises is a drift waiting to happen — the writer moves,
+    /// the recogniser does not, and nothing says so.
+    /// </summary>
+    public const string RESPAWN_SUBJECT = "session was orphaned and has been respawned";
+
     public static string Subject_For(bool dormantMidWork)
     {
         if (dormantMidWork)
             return "your writing window is still open — close it or resume";
 
         return "unread traffic — you have not answered";
+    }
+
+    /// <summary>
+    /// Is this an entry the app wrote while WAKING a member, rather than something the member is being
+    /// woken ABOUT? The distinction only matters on a channel with no conversation in it at all, where
+    /// there is nothing else to key the "already nudged" memo on.
+    ///
+    /// Everything the app appends to a member channel to wake it belongs here: both nudge subjects and
+    /// the respawn notice. A `/resume` broadcast deliberately does NOT — that is the owner speaking
+    /// through the app, it is the one thing such a member is genuinely supposed to act on, and treating
+    /// it as the app's own noise is what let one nudge per PROCESS look like one nudge per thing.
+    /// </summary>
+    public static bool Is_WakeSubject(string subject)
+    {
+        return subject == Subject_For(true)
+            || subject == Subject_For(false)
+            || subject == RESPAWN_SUBJECT;
     }
 
     /// <summary>

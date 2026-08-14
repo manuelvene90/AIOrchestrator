@@ -73,6 +73,21 @@ public static class Nudge_Decider
     /// writes never change the last CONVERSATION entry, so nothing the app says can ever qualify a
     /// member for another nudge. One nudge per unanswered thing.
     ///
+    /// THAT GUARANTEE HOLDS ONLY WHILE AN IDENTITY CAN BE FOUND, and stating it as an absolute is how
+    /// it went wrong: a null here is not "nothing to compare", it is NO MEMORY — the caller skips the
+    /// gate and records nothing, so the loop is back. There were TWO routes to that null and both are
+    /// now closed: compaction, below, and a channel holding only app entries with no conversation
+    /// anywhere — reachable with no compaction at all, when the app writes to a member channel before
+    /// its first brief (a `/resume` broadcast will do it), leaving the member eligible through
+    /// <see cref="Has_UnansweredInboundTraffic"/> with nothing to key on. That second one is answered
+    /// by <see cref="NO_CONVERSATION_YET"/> and <see cref="Identify_NudgeSubject"/>, which is what the
+    /// engine actually calls — this function may still return null, and its caller is why that is safe.
+    ///
+    /// NOTHING BELOW THIS LINE MAY SAY THE SECOND ROUTE IS OPEN. It was described as open here, and in
+    /// HANDOFF.md, for two commits after `5f3dc1f` closed it — including through a docs-only commit
+    /// whose whole job was tidying this docstring and which moved the stale paragraph instead of
+    /// deleting it. A docs-only commit is the one nobody re-reads for truth.
+    ///
     /// IT IS THE RAW TEXT AND IT MUST NEVER BE THE INDEX OR THE TIMESTAMP. Both are agent-written and
     /// neither is unique: `option-lab-2` carried two `[80]`s and two `[81]`s on 2026-08-10, and one
     /// evening's traffic produced two duplicate indices in a single channel. A genuinely NEW entry
@@ -82,12 +97,131 @@ public static class Nudge_Decider
     /// the other mask. The next person to touch this will reach for the index because it is smaller;
     /// this paragraph is why they should not.
     ///
-    /// Null when the channel holds nothing but app entries: there is no conversation to be nudged
-    /// about, and the caller treats that as "no memory", which nudges rather than suppresses.
+    /// IT SPANS THE ARCHIVE, AND READING ONLY THE LIVE FILE WAS THE WHOLE LOOP COMING BACK — CLAUDE.md
+    /// item 13, thirty lines from <see cref="Has_BeenBriefed"/>, which already gets this right.
+    /// <see cref="Channel_Compactor"/> moves older entries into a sibling archive, so once the last
+    /// conversation entry is compacted out, a live-only read returns null. Null means "no memory": the
+    /// caller skips the gate AND records nothing, so it nudges — and that nudge becomes the next
+    /// round's unanswered thing. Every 8 minutes, forever, needing nobody, on exactly the channels that
+    /// have been running longest.
+    ///
+    /// Measured, not feared: `ai-orchestrator-3/imp-1` ends at entry [395] whose body reads *"Entry
+    /// [394] FROM app has been waiting 8 min with no reply from you"* — the app nudging a member about
+    /// its own previous nudge. Two `da-vinci-fintech-suite-5` channels show the same shape.
+    ///
+    /// The previous docstring called the null case harmless and named only "a channel holding nothing
+    /// but app entries". That case is real and still returns null — but it was never the only route to
+    /// one, and the other route restarted the defect this gate exists to end.
+    ///
+    /// LIVE WINS OVER ARCHIVE, because the compactor only ever moves from the front: anything archived
+    /// is older than anything live. Preferring the archive would pin every member to an ancient entry
+    /// and stop a genuinely new brief from earning its own nudge — the mute switch, from the far side.
     /// </summary>
-    public static string? Identify_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
+    public static string? Identify_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
     {
-        return MemberState_Resolver.Find_LastConversationEntry_OrNull(entries)?.RawText;
+        var live = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
+
+        if (live != null)
+            return live.RawText;
+
+        return MemberState_Resolver
+            .Find_LastConversationEntry_OrNull(ChannelHistory_Counter.Read_ArchivedEntries(channelFilePath))
+            ?.RawText;
+    }
+
+    /// <summary>
+    /// What a channel with NO conversation entry anywhere is keyed on, so it can be nudged once
+    /// instead of forever.
+    ///
+    /// AT MOST ONCE, NOT NEVER (owner-facing ruling 2026-08-13). "Never nudge an app-only channel"
+    /// was the tempting rule and it drops the one wake that matters: a `/resume` broadcast is an app
+    /// entry a respawned member is genuinely supposed to act on, and it may be the only thing telling
+    /// it to start. So the channel gets its one nudge, remembered, and never a second.
+    ///
+    /// IT IS A SENTINEL RATHER THAN AN ENTRY'S TEXT, AND THAT IS FORCED — the brief asked for the raw
+    /// text the gate already uses, and for app-only channels there is none that holds still. Keying on
+    /// the LAST entry is the obvious reading and it rebuilds the exact loop being fixed: the nudge is
+    /// itself an app entry, so the last entry changes the moment the nudge lands, the next round reads
+    /// a different key, and it nudges again forever. Any key derived from "the newest app entry" has
+    /// that property. The state being remembered is not an entry, it is "this channel had nothing to
+    /// be nudged about when I nudged it", so the sentinel says exactly that and stops moving.
+    ///
+    /// It cannot collide with a real identity: those are whole entries and always begin `## [`.
+    /// </summary>
+    public const string NO_CONVERSATION_YET = "<no conversation entry in this channel>";
+
+    /// <summary>
+    /// What a member is being nudged ABOUT, always answerable — the last conversation entry above; on a
+    /// channel that has none, the last entry the app did not write while WAKING this member; and
+    /// <see cref="NO_CONVERSATION_YET"/> only when there is nothing of either kind.
+    ///
+    /// This is what the engine compares and records. It never returns null, and that is the point: a
+    /// null identity used to skip the gate AND skip the record together, which was the loop.
+    ///
+    /// THE CONSTANT SENTINEL WAS ONE NUDGE PER PROCESS, NOT ONE PER THING (rev-5's R1). Being constant,
+    /// it matched for ever once recorded — so a second `/resume` could not earn the wake the sentinel's
+    /// own docstring promises it, and after the single orphan recovery the member stayed silent for the
+    /// life of the app run. The owner's unstick command was the one thing that could not unstick such a
+    /// member: the same `/resume` path as the delayed-nudge finding, one layer down.
+    ///
+    /// WHY NOT A CLEAR ON `/resume`, which is the obvious fix: that adds a RELEASE site — a second
+    /// place that must fire at the right moment, on a memo that today has none — and a value the engine
+    /// must remember to commit at the right moment is a value it can commit at the wrong one. This
+    /// keeps the single write site and lets the subject stop matching because REALITY MOVED.
+    ///
+    /// WHAT COUNTS AS THE APP'S OWN WAKE is <see cref="Nudge_Wording.Is_WakeSubject"/>, sharing its
+    /// constants with the code that writes them. A `/resume` is deliberately not one: it is the owner
+    /// speaking through the app and is exactly what such a member is supposed to act on.
+    ///
+    /// SKIPPING RATHER THAN TAKING THE NEWEST ENTRY is what keeps the loop closed. Any key derived from
+    /// the newest app entry moves the instant the nudge lands — the nudge IS an app entry — so the next
+    /// round reads a different key and nudges again, rebuilding the exact defect. Measured, not argued:
+    /// <c>AnAppOnlyChannelKeepsOneSubjectAsFurtherAppEntriesArrive</c> is the case that reddens.
+    ///
+    /// THE ENGINE WIRING OF `5f3dc1f` HAS NO TEST, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT
+    /// (rev-5's R2, ruled 2026-08-14 — do not re-raise it without reading this).
+    ///
+    /// R2 asked for the guards to be restored as a mutation and a fixture written against it. **That
+    /// mutation is INERT.** This function never returns null — every path ends in a conversation
+    /// identity, a non-wake entry's text, or <see cref="NO_CONVERSATION_YET"/> — so restoring
+    /// `&amp;&amp; conversationIdentity != null` to the gate or to the record adds a condition that is
+    /// always true. "Putting either guard back reddens nothing" is what an inert mutation does at ANY
+    /// level of coverage, so it measures nothing about this code. Before believing a control's result,
+    /// establish that the mutation changed something.
+    ///
+    /// The mutation that WOULD reinstate the loop is reverting the whole engine hunk — the call back to
+    /// the nullable <see cref="Identify_LastConversationEntry_OrNull"/> TOGETHER with both guards.
+    /// Against that, old and new differ **only on the SECOND nudge**: the first fires identically in
+    /// both, and only what gets RECORDED differs. So the fixture R2 proposed — an app-only channel plus
+    /// an assertion on the app-entry count — passes under old and new alike; it would pin a state with
+    /// two routes to it, which is rev-5's own R7 finding arriving from the other side.
+    ///
+    /// Reaching the second nudge needs `_nudgedMemberUtc` cleared, which happens in the escalation path
+    /// after `ORPHAN_CONFIRM_MINUTES`. Both windows are `const int` (`IMPLEMENTER_NUDGE_MINUTES = 8`,
+    /// `ORPHAN_CONFIRM_MINUTES = 6`) with no seam, so a test would have to wait six real minutes against
+    /// a suite that runs in about eighty seconds — and a slow suite stops being run.
+    ///
+    /// **So the gap is real and is recorded here rather than papered over with a green test that proves
+    /// nothing.** Closing it properly wants the two windows made injectable, the way the Telegram client
+    /// was; that is a seam, not a marker-gate fix, and it belongs on its own branch off master where it
+    /// would also unblock the other engine rules recorded as "unpinnable, needs a seam".
+    /// </summary>
+    public static string Identify_NudgeSubject(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
+    {
+        var conversation = Identify_LastConversationEntry_OrNull(entries, channelFilePath);
+
+        if (conversation != null)
+            return conversation;
+
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            if (Nudge_Wording.Is_WakeSubject(entries[index].Subject))
+                continue;
+
+            return entries[index].RawText;
+        }
+
+        return NO_CONVERSATION_YET;
     }
 
     /// <summary>
@@ -119,10 +253,14 @@ public static class Nudge_Decider
     /// legitimate nudge by up to the full 8 minutes, for a member that was genuinely stalled.
     ///
     /// The stamp is AGENT-WRITTEN and therefore not trusted: it goes through the one trusted reader,
-    /// which refuses a future date. When it cannot be read the file stamp is used exactly as before —
-    /// the old behaviour, which is noisy rather than silent, and that is the right direction to fall
-    /// back in. A quiet clock that cannot be computed must never make a member look busy: that would
-    /// suppress the nudge for a session that really had stopped.
+    /// which refuses a future date. **When nothing here can be dated this returns NULL, and null means
+    /// PAST THE THRESHOLD at every call site** — a quiet clock that cannot be computed must never make
+    /// a member look busy, because that suppresses the nudge for a session that really had stopped.
+    ///
+    /// That sentence used to sit above a fallback that did the opposite. The file's age was described
+    /// here as "the old behaviour, noisy rather than silent"; it is neither, because the file stamp
+    /// moves on every app write and on a compaction that says nothing, so the member read as busy. The
+    /// rule was right and had simply never been implemented.
     ///
     /// ONE CLOCK, and `now` must be LOCAL because both sources are: agent stamps are local wall time
     /// and so is the file stamp read here. It is the same mismatch that once made a 30-second backoff
@@ -146,7 +284,14 @@ public static class Nudge_Decider
     /// the nudge threshold, and every alarm in the system goes silent while the suite stays green.
     /// <c>NudgeClockProbeTests</c> exists for that one mutation.
     /// </param>
-    public static TimeSpan Measure_QuietFor(IReadOnlyList<IChannelEntry> entries, string channelFilePath, DateTime now)
+    /// <remarks>
+    /// THE CHANNEL PATH IS GONE FROM THIS SIGNATURE and that is part of the fix, not tidying. It
+    /// existed only to stat the file, and a parameter that no longer does anything is a signature
+    /// claiming a source the code has stopped reading — the same species as a docstring that outruns
+    /// its function, one level up. Removing it makes "this clock does not touch the filesystem"
+    /// checkable by anyone who reads the first line.
+    /// </remarks>
+    public static TimeSpan? Measure_QuietFor(IReadOnlyList<IChannelEntry> entries, DateTime now)
     {
         var lastConversationEntry = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
 
@@ -154,7 +299,51 @@ public static class Nudge_Decider
             && SessionDuration_Formatter.Try_ReadTrustedStamp(lastConversationEntry.DateText, now, out var spokenAt))
             return now - spokenAt;
 
-        return now - File.GetLastWriteTime(channelFilePath);
+        // THE CONVERSATION IS THE ONLY THING THIS COUNTS, AND THERE IS NO SECOND SOURCE (rev-8's F1).
+        //
+        // A step here once measured the last ENTRY of any author when no conversation could be found.
+        // It was meant for R9 — a clock immune to compaction, since entry stamps survive a rename-over
+        // and the file's does not — and it bought that with the wrong half: on a channel holding only
+        // app entries, THE APP'S OWN WRITE BECAME THE CLOCK. Measuring the conversation is immune to
+        // compaction AND to the app, which is what R9 should have asked for.
+        //
+        // What that cost, live in this orchestration on 2026-08-13: a member that died at boot without
+        // writing has a channel of zero entries; a `/resume` gives it exactly one, FROM app, stamped
+        // now; every nudge appends another and resets this clock; and because
+        // Get_OrchestrationQuietFor takes the MINIMUM across channels, the whole orchestration read as
+        // quiet for at most 8 minutes against a 25-minute threshold. The stall alert could never fire
+        // for an orchestration in which a session died silently — the one case it exists for — and the
+        // write holding it down was the app's own.
+        //
+        // THE THROTTLE THIS REMOVES WAS NEVER DESIGNED. For app-only channels the one-nudge gate is
+        // skipped (no conversation identity to record), so the only thing preventing a nudge every
+        // tick was this clock being reset by the nudge itself — a throttle made of the defect it
+        // throttles. It moves to the gate, which is `5f3dc1f`'s sentinel plus `25060c9`; see this
+        // commit's message for the merge ordering that requires.
+        //
+        // NOT TOUCHED, DELIBERATELY: <see cref="Has_UnansweredInboundTraffic"/> still counts app
+        // entries. Two readers, two purposes, one set of entries — the clock must stop treating the
+        // app's writes as LIFE without eligibility losing them, or a nudged member falls out of the
+        // eligible set and a genuinely dead session can never escalate. Two fixes have been withdrawn
+        // for exactly that, and they reinterpreted the PREDICATE, not this.
+
+        // NULL IS "CANNOT BE COMPUTED", AND EVERY CALLER MUST READ IT AS PAST THE THRESHOLD.
+        //
+        // This used to return the FILE's age, described one paragraph above as "the old behaviour,
+        // which is noisy rather than silent". It was neither: the file stamp moves on every app write
+        // and on a compaction's rename-over, so the fallback reported "quiet for ~0" for a member
+        // nobody had heard from — the member looked BUSY, which is the one outcome the rule above
+        // forbids. A guarantee stated in a docstring and contradicted by the line under it is worse
+        // than no guarantee, because it is the one the next reader relies on.
+        //
+        // Reachable through documented behaviour rather than in theory: a single future-dated stamp on
+        // the last entry defeats both steps above — it is a conversation entry, so the first refuses
+        // it, and it is also the last entry, so the second refuses the same text — and item 12 records
+        // future stamps happening twice in this orchestration's own channels in one day.
+        //
+        // There is no third source worth inventing. The honest answer is that the conversation cannot
+        // be dated, and the safe direction for that answer is to wake somebody.
+        return null;
     }
 
     /// <summary>

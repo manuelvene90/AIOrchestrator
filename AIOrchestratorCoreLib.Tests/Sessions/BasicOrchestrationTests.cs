@@ -71,7 +71,7 @@ public class BasicOrchestrationTests : IDisposable
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
 
         Assert.Equal(3, _spawner.SpawnedCommands.Count);
-        Assert.False(MemberKind_Ids.Is_BasicOrchestration(session.Members.Select(m => m.MemberId)));
+        Assert.False(OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc));
     }
 
     [Theory]
@@ -84,12 +84,21 @@ public class BasicOrchestrationTests : IDisposable
         Assert.Equal(expected, MemberKind_Ids.Resolve_Kind(memberId));
     }
 
+    /// <summary>
+    /// IT READS THE SPAWN STAMP NOW, not the member ids, and the reason is promotion: member folders
+    /// are audit trail and never leave the roster, so an orchestration promoted by closing its solo
+    /// and spawning a supervisor read as basic for ever — and its supervisor was therefore never
+    /// respawned. This used to assert `["solo-1"]` is basic and `["imp-1", "rev-1"]` is not.
+    ///
+    /// The behaviour that matters is in `BasicOrchestrationWatchdogTests`, which drives the real
+    /// watchdog: this pins only the predicate.
+    /// </summary>
     [Fact]
-    public void Is_BasicOrchestration_ReadsItOffTheMembers()
+    public void Is_BasicOrchestration_ReadsTheSupervisorSpawnStamp()
     {
-        Assert.True(MemberKind_Ids.Is_BasicOrchestration(["solo-1"]));
-        Assert.False(MemberKind_Ids.Is_BasicOrchestration(["imp-1", "rev-1"]));
-        Assert.False(MemberKind_Ids.Is_BasicOrchestration([]));
+        Assert.True(OrchestrationShape.Is_BasicOrchestration(null));
+        Assert.False(OrchestrationShape.Is_BasicOrchestration(DateTime.UtcNow));
+        Assert.False(OrchestrationShape.Is_BasicOrchestration(DateTime.UtcNow.AddDays(-30)));
     }
 
     /// <summary>

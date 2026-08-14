@@ -68,6 +68,59 @@ public class ChannelHistoryCounterTests : IDisposable
             Path.Combine(_tempFolder, "absent.md"), ChannelAuthors.Supervisor));
     }
 
+    /// <summary>
+    /// THE ORDER IS THE CONTRACT, asserted on its own rather than inside a behaviour case. Every
+    /// consumer of the whole history scans BACKWARDS for "the last X", so a reversed concatenation
+    /// hands them the OLDEST match while still returning the right entries and the right count. That
+    /// failure is invisible to any test that only checks membership, which is why this one checks
+    /// position.
+    /// </summary>
+    [Fact]
+    public void Read_AllEntries_PutsTheArchiveBeforeTheLiveFile()
+    {
+        File.WriteAllText(_channelFile, Build_Entries(("supervisor", 40), ("implementer", 41)));
+        File.WriteAllText(Channel_Compactor.Build_ArchiveFilePath(_channelFile), Build_Entries(("supervisor", 1), ("owner", 2)));
+
+        var all = ChannelHistory_Counter.Read_AllEntries(_channelFile);
+
+        Assert.Equal(4, all.Count);
+        Assert.Equal([1, 2, 40, 41], all.Select(entry => entry.Index));
+    }
+
+    /// <summary>
+    /// The ordinary case — nothing archived yet — must be exactly the live file, not the live file
+    /// plus an empty prefix that some caller then has to reason about.
+    /// </summary>
+    [Fact]
+    public void Read_AllEntries_IsJustTheLiveFile_WhenNothingHasBeenArchived()
+    {
+        File.WriteAllText(_channelFile, Build_Entries(("supervisor", 1), ("implementer", 2)));
+
+        Assert.Equal([1, 2], ChannelHistory_Counter.Read_AllEntries(_channelFile).Select(entry => entry.Index));
+    }
+
+    /// <summary>
+    /// THE STATE THE WHOLE FIX IS ABOUT: a live file holding no conversation entry at all, every one of
+    /// them compacted out. Three real member channels were in it on 2026-08-14 with a null `closedUtc`.
+    /// A live-only read answers "there is no conversation here"; the whole history answers correctly.
+    /// </summary>
+    [Fact]
+    public void Read_AllEntries_FindsTheConversation_WhenTheLiveFileIsAppOnly()
+    {
+        File.WriteAllText(_channelFile, Build_Entries(("app", 178), ("app", 179)));
+        File.WriteAllText(Channel_Compactor.Build_ArchiveFilePath(_channelFile), Build_Entries(("supervisor", 68), ("app", 69)));
+
+        var all = ChannelHistory_Counter.Read_AllEntries(_channelFile);
+
+        Assert.Equal(68, all.Last(entry => entry.Author != ChannelAuthors.App).Index);
+    }
+
+    [Fact]
+    public void Read_AllEntries_IsEmpty_ForAChannelThatDoesNotExistYet()
+    {
+        Assert.Empty(ChannelHistory_Counter.Read_AllEntries(Path.Combine(_tempFolder, "absent.md")));
+    }
+
     static string Build_Entries(params (string Author, int Index)[] entries)
     {
         var text = "";

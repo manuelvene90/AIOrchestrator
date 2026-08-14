@@ -33,6 +33,11 @@ public static partial class PlanLedger_Parser
         List<string> blockedTasks = [];
         List<string> openTasks = [];
 
+        // THE LEDGER AS WRITTEN, alongside the buckets — /progress prints one line per ledger line in
+        // FILE ORDER, and the buckets cannot answer that: they are five lists, and interleaving them
+        // back into a document's order is not possible once the order has been thrown away.
+        List<PlanLedgerLine> lines = [];
+
         foreach (var rawLine in planText.Split('\n'))
         {
             var match = TaskLine_Regex().Match(rawLine.TrimEnd('\r'));
@@ -77,6 +82,14 @@ public static partial class PlanLedger_Parser
                     throw new Exception($"Unhandled task marker '{marker}' — the regex and this switch disagree");
                 }
             }
+
+            // AFTER the switch, so only a marker the switch recognises is ever recorded as a line —
+            // the unhandled case throws rather than reaching this.
+            //
+            // NORMALISED ONCE, HERE: `[X]` and `[x]` are one state written by two hands, and the
+            // switch above already folds them. Printing the raw capture would put both spellings in
+            // front of the owner inside a single message.
+            lines.Add(new PlanLedgerLine(marker == "X" ? "x" : marker, taskText));
         }
 
         var total = doneTasks.Count + inProgressTasks.Count + blockedTasks.Count + openTasks.Count;
@@ -95,6 +108,7 @@ public static partial class PlanLedger_Parser
             inProgressTasks,
             blockedTasks,
             openTasks,
-            doneTasks);
+            doneTasks,
+            lines);
     }
 }

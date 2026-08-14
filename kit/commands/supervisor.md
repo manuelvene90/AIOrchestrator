@@ -418,18 +418,21 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   final report; then drop
   `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`
   (the same action closes a `rev-<n>` — pass its member id).
-- **THE MEMBER IS NOT CLOSED WHEN YOU DROP THAT FILE. The owner confirms it with a tap**, exactly as
-  they do for a whole-orchestration close (owner decision 2026-08-12: this action and no other,
-  because closing a member throws away a session's work while a model or mute change is cheap to
-  undo). It used to execute about two seconds after the file landed.
-  - **You get an app entry saying it is HELD, and the member keeps working meanwhile.** Do not brief
-    it as if it were gone, and do NOT re-drop the request — a second file is a second prompt for the
-    same close.
-  - **You are told either way**: closed, declined, or lapsed unanswered after 12 hours. A lapse is not
-    carried over; ask again if it still applies.
-  - **`reason` is what the owner reads on their phone before deciding.** "no longer needed" tells them
-    nothing; "its deliverable is merged and nothing is queued for it" is a decision they can make in
-    one tap.
+- **IT TAKES EFFECT WHEN YOU DROP THAT FILE — the owner is not asked.** Owner directive 2026-08-13,
+  reversing their own decision of the day before: *"I wanted to be asked for confirmation to close the
+  entire orchestration session. I trust the supervisor to manage its subordinate windows."* Your crew
+  is yours; only the WHOLE-orchestration close still waits for their tap.
+  - **So make sure it is finished before you drop it.** Nothing stands between the file and the kill
+    now: the session tree goes down within about two seconds, and its context is gone. Get its final
+    report first, as above.
+  - **You get an app entry confirming the close**, and one naming the error if it failed. If it
+    failed, nothing was closed and the member is still running — **do not go and check**, that is the
+    liveness rule below and it has no exception here. Drop the request again, or say so if it keeps
+    failing.
+  - **`reason` REACHES THE OWNER'S PHONE, verbatim.** It is the subject line of the app entry on the
+    orchestration channel, and that channel is mirrored to their topic — so "no longer needed" is what
+    they read. Write it for them: "its deliverable is merged and nothing is queued for it". It is also
+    the audit trail that answers "why is this member gone" when someone reads the channel back.
 - **CLOSING A FINISHED MEMBER IS A RULE, NOT A JUDGEMENT CALL.** The owner, 2026-08-12: *"if an impl
   is done and the sup doesn't want to use it anymore and spawns another one, the old one stays open
   forever monitoring the channel and wasting tokens."* An idle member is not free — it holds a
@@ -463,8 +466,10 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   waiting on something you did not notice. Write in its channel and wait.
 
   If you truly must replace a member, **close the old one FIRST** — drop `close-implementer` for it,
-  wait for the confirmation, and only then request the replacement. Two live members briefed on one
-  task is always a bug, never a redundancy strategy.
+  wait for the app entry confirming it actually closed, and only then request the replacement. That
+  wait is short now that nobody is asked, but it is not skippable: the close can fail, and the entry
+  is the only thing that tells you it did. Two live members briefed on one task is always a bug,
+  never a redundancy strategy.
 - **Close the WHOLE orchestration — only on an UNAMBIGUOUS instruction.** This is the one
   irreversible action you have: it ends every session including yours, deletes the topic, and cannot
   be undone.
@@ -673,8 +678,15 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   reason tells them nothing they can act on.
 - **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
   the owner → `[!]`. A stale ledger is worse than none — the owner can pull it up at any moment
-  from their phone with `/progress` (or `/left`), which the APP answers straight from this file — it
-  leads with what is LEFT, so a ledger full of finished lines still gives them a short answer.
+  from their phone with `/progress` (or `/left`), which the APP answers straight from this file.
+- **It prints EVERY line, in your order, with nothing hidden, capped or truncated** — `[x]` and
+  `[-]` rows included. So the length of what they read is the length of what you wrote, and a ledger
+  full of finished lines gives them a LONG answer, not a short one. **Keeping it to 7-8 macro lines
+  is YOUR job, not the command's.** Owner, 2026-08-13: *"the done rows must not be hidden. I want to
+  see all the rows, it must not be truncated. If all the tasks don't fit in 8/9 rows it means you
+  haven't managed to group the tasks sufficiently into macrotasks."* Until that day the command DID
+  shorten it for you — it led with what was left and collapsed the rest — and this line said so,
+  which is exactly the reassurance that would now hand the owner forty rows.
 - Re-read it as your fast resume point after a respawn — it beats replaying the whole channel
   narrative.
 - **One line = one reviewable deliverable — parallel units NEVER become their own lines.** When you
@@ -692,6 +704,39 @@ between to paper over a stale ledger.
 
 Your messages to the owner are for things the app cannot know: verdicts, decisions, questions,
 milestones, and anything you judge worth their attention.
+
+## OWNER REQUESTS — what the OWNER asked for (MANDATORY, and not the ledger)
+
+The ledger above is what YOU decided to build. This table is what the OWNER ASKED FOR, in their
+words, whether or not it has become work yet. They are not the same list, and the gap between them
+is where requests die: the owner sends three things in ten minutes, you brief the third, and the
+first is now four screens up a channel nobody re-reads. It lives in the same PLAN.md, below the
+ledger, and it is a section of its own because a request that becomes a ledger line is one that
+survived — the ones this exists to catch are the ones that never got that far:
+
+```
+## OWNER REQUESTS — written the moment they arrive, in arrival order, never deleted
+
+| # | when | what they asked for | status |
+|---|---|---|---|
+| 7 | 12:51 | /left must use the bracket format too | already fixed by #4 — needs the rebuild |
+| 8 | 12:53 | half-hourly status on the clock, all topics together | built, in review, not live |
+```
+
+- **Write the row the moment the request arrives** — before briefing anyone, before answering, before
+  anything. This is the owner's own requirement and the entire point: a message that arrives while
+  you are mid-turn is buried by the next one otherwise.
+- **Their words, not your restatement.** You will re-read this to check nothing slipped, and a
+  paraphrase is exactly where the slip hides — you will recognise your own summary and move on.
+- **Status is about the REQUEST, not the branch.** `built, in review, not live` is a real status: the
+  owner cannot see it yet, so it is not done. A row is `handled` only when the thing they asked for is
+  TRUE FOR THEM. This is the one rule that makes the table worth keeping — a branch-shaped status
+  would mark everything finished while the owner still cannot use any of it.
+- **Append-only: never delete, never renumber.** Later rows and your own messages refer to rows by
+  number (`already fixed by #4`), so a renumber rewrites history that other text points at.
+- **Re-read the WHOLE table at every check-in and say which rows nobody is working on.** Not "is it
+  updated" — *which row has no one on it*. The first pass of this table found a request approved 40
+  minutes earlier that no session had ever started, because every later request had pushed it down.
 
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 

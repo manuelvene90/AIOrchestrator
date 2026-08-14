@@ -27,7 +27,7 @@ public class TopicStatusLineBuilderTests
     {
         var line = TopicStatusLine_Builder.Build("Telegram UX + limits", Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Equal("Telegram UX + limits          72/113 · 63%", line);
+        Assert.Equal("Telegram UX + limits · 72/113 · 63%", line);
     }
 
     /// <summary>
@@ -45,7 +45,7 @@ public class TopicStatusLineBuilderTests
     [Fact]
     public void ATitleWithALedgerIsWorthWriting()
     {
-        Assert.Equal("CRM invoice crash          3/4 · 75%", TopicStatusLine_Builder.Build("CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false));
+        Assert.Equal("CRM invoice crash · 3/4 · 75%", TopicStatusLine_Builder.Build("CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
@@ -130,7 +130,7 @@ public class TopicStatusLineBuilderTests
 
         var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Contains("rev-3   idle", line);
+        Assert.Contains("• rev-3 · idle", line);
         Assert.DoesNotContain("hold — nothing queued", line);
     }
 
@@ -157,8 +157,10 @@ public class TopicStatusLineBuilderTests
 
         var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.DoesNotContain("rev-3   idle", line);
-        Assert.Contains("review the marker fix", line);
+        // Asserted POSITIVELY as well, on the whole row: "does not contain idle" is also satisfied by
+        // a row that does not exist, so on its own it would survive the member vanishing entirely.
+        Assert.DoesNotContain("• rev-3 · idle", line);
+        Assert.StartsWith("• rev-3 · review the marker fix", line.Split('\n')[1]);
     }
 
     /// <summary>
@@ -191,7 +193,7 @@ public class TopicStatusLineBuilderTests
             null,
             NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Contains("rev-1   idle", line);
+        Assert.Contains("• rev-1 · idle", line);
     }
 
     /// <summary>Contract item 4: a closed member drops off rather than lingering as a stale row.</summary>
@@ -228,7 +230,7 @@ public class TopicStatusLineBuilderTests
 
         // Asserted as the WHOLE member ROW, not as "contains the task": a duration appended after it
         // is exactly what must not happen, and a Contains check cannot see a trailing anything.
-        Assert.Equal("imp-1   the task", line.Split('\n')[1]);
+        Assert.Equal("• imp-1 · the task", line.Split('\n')[1]);
     }
 
     [Fact]
@@ -242,6 +244,15 @@ public class TopicStatusLineBuilderTests
     /// <summary>
     /// THE WHOLE SHAPE, as the owner approved it. Pinned here because the individual assertions above
     /// can all pass while the line reads as something nobody would want on their phone.
+    ///
+    /// RESTYLED 2026-08-13 on the owner's directive, from a screenshot: the old shape padded its
+    /// columns with runs of spaces, and Telegram renders the body in a PROPORTIONAL font where
+    /// columns cannot align — so the runs bought nothing and pushed every row past a phone's width.
+    /// `rev-1 · audit R2–R8 against current master · 2 min` wrapped onto THREE visual lines and the
+    /// 28-dash divider wrapped onto a second line of its own.
+    ///
+    /// The bullet is what divides the rows now, which is also why the divider could go: a wrapped
+    /// bullet still reads as one row, because the `•` marks where it started.
     /// </summary>
     [Fact]
     public void TheApprovedShape()
@@ -259,14 +270,110 @@ public class TopicStatusLineBuilderTests
 
         var lines = line.Split('\n');
 
-        Assert.Equal(6, lines.Length);
-        Assert.Equal("Telegram UX + limits          72/113 · 63%", lines[0]);
-        Assert.StartsWith("imp-1", lines[1]);
-        Assert.EndsWith("4 min", lines[1]);
-        Assert.StartsWith("rev-2", lines[2]);
-        Assert.EndsWith("12 min", lines[2]);
-        Assert.Equal("rev-3   idle", lines[3]);
-        Assert.StartsWith("last", lines[5]);
+        Assert.Equal(5, lines.Length);
+        Assert.Equal("Telegram UX + limits · 72/113 · 63%", lines[0]);
+        Assert.Equal("• imp-1 · committing the marker fix · 4 min", lines[1]);
+        Assert.Equal("• rev-2 · reviewing the hooks branch · 12 min", lines[2]);
+        Assert.Equal("• rev-3 · idle", lines[3]);
+        Assert.Equal("last · gate cleared on 34e5515", lines[4]);
+    }
+
+    /// <summary>
+    /// THE HEADLINE OF THE RESTYLE, and until now invisible to the suite. rev-1 F3, which I
+    /// reproduced before writing this: NO fixture anywhere had a brief longer than FOUR words, so
+    /// `Summarize_Task` never truncated in a single test — `MEMBER_TASK_WORDS` could be set to 40 and
+    /// 695 tests stayed green. The whole point of the change (a row that fits a phone) rested on a
+    /// number nothing observed.
+    ///
+    /// Seven words in, and BOTH budgets come out of one fixture: four on the member row, six on the
+    /// `last` row, which is what the `+2` means and is otherwise a constant nobody can see either.
+    ///
+    /// The subject is chosen to survive `Summarize_Task`'s other passes so the count is the only
+    /// thing under test: no bookkeeping prefix, no clause break (no comma, dash, "so", "because"),
+    /// and not one word from FILLER_WORDS — "onto" is deliberately not "into", which IS filler.
+    /// </summary>
+    [Fact]
+    public void ALongBriefIsCutToTheRowBudget()
+    {
+        const string sevenWords = "migrate every supervisor session onto worktree isolation";
+
+        var lines = TopicStatusLine_Builder.Build(
+            "orch",
+            null,
+            [Member("imp-9", Brief(sevenWords, "2026-08-12 12:26"))],
+            sevenWords,
+            NOW, aMessageIsAlreadyPosted: false).Split('\n');
+
+        Assert.Equal("• imp-9 · migrate every supervisor session · 4 min", lines[1]);
+        Assert.Equal("last · migrate every supervisor session onto worktree", lines[2]);
+    }
+
+    /// <summary>
+    /// THE OWNER'S FIRST COMPLAINT: "wide spaces". Asserted as a PROPERTY over every row rather than
+    /// as one expected string, because the padding can come back in any one of four places — the
+    /// title, the idle row, the task column, the duration column — and a fixture only ever pins the
+    /// one shape it was written for.
+    ///
+    /// Two spaces is the whole test: a proportional font cannot align columns, so any run of them is
+    /// width spent on nothing.
+    /// </summary>
+    [Fact]
+    public void NoRowIsPaddedWithASpaceRun()
+    {
+        var line = TopicStatusLine_Builder.Build(
+            "Telegram UX + limits",
+            Progress(72, 113),
+            [
+                Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26")),
+                Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
+                Member("imp-4", Brief("the task", "2026-08-13 23:00")),
+            ],
+            "gate cleared on 34e5515",
+            NOW, aMessageIsAlreadyPosted: false);
+
+        Assert.DoesNotContain("  ", line);
+    }
+
+    /// <summary>
+    /// THE OWNER'S SECOND COMPLAINT: the rows did not read as rows. Every member row now opens with
+    /// its own bullet — and the `last` row deliberately does NOT, so it cannot be misread as a member
+    /// that is somehow called "last".
+    /// </summary>
+    [Fact]
+    public void EveryMemberRowOpensWithABulletAndTheLastRowDoesNot()
+    {
+        var lines = TopicStatusLine_Builder.Build(
+            "orch",
+            null,
+            [
+                Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26")),
+                Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
+            ],
+            "gate cleared on 34e5515",
+            NOW, aMessageIsAlreadyPosted: false).Split('\n');
+
+        Assert.StartsWith("• imp-1", lines[1]);
+        Assert.StartsWith("• rev-3", lines[2]);
+        Assert.StartsWith("last ", lines[3]);
+    }
+
+    /// <summary>
+    /// THE OWNER'S THIRD COMPLAINT: 28 box-drawing dashes wrapped onto a second line of their own, so
+    /// the divider that was meant to separate two rows was itself two rows. It is gone, and the
+    /// bullets do that job. Asserted on the CHARACTER, not on the old 28-dash constant, so bringing
+    /// the divider back at any width still reddens this.
+    /// </summary>
+    [Fact]
+    public void TheWideDividerIsGone()
+    {
+        var line = TopicStatusLine_Builder.Build(
+            "orch",
+            Progress(3, 4),
+            [Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26"))],
+            "gate cleared on 34e5515",
+            NOW, aMessageIsAlreadyPosted: false);
+
+        Assert.DoesNotContain("─", line);
     }
 
     /// <summary>

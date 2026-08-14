@@ -1,8 +1,17 @@
 namespace AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 
 /// <summary>
-/// What kind of close is waiting for the owner's tap. The parked folder holds both, and the
+/// What kind of decision is waiting for the owner's tap. The parked folder holds all of them, and the
 /// difference decides what is asked, what is executed, and what the requester is told.
+///
+/// **THE NAME IS NOW WRONG AND THAT IS ACKNOWLEDGED DEBT, NOT A CHOICE.** Since 2026-08-13 this also
+/// carries a PROMOTION, which is not a close. What these types model is "a request parked for the
+/// owner's tap", so the family should be `ParkedConfirmation*`.
+///
+/// The rename is DEFERRED deliberately: `imp-4` is deleting member closes from these same files, and
+/// a rename colliding with a deletion, in the machine that closes orchestrations, is the worst place
+/// to spend merge risk. It follows once that branch lands. Written here so the next reader knows the
+/// name is owed rather than intended.
 /// </summary>
 public enum ParkedCloseKinds
 {
@@ -11,6 +20,14 @@ public enum ParkedCloseKinds
 
     /// <summary>Retires ONE member — its terminal is killed, the orchestration keeps running.</summary>
     Implementer,
+
+    /// <summary>
+    /// A basic orchestration becomes a full crew: the solo ends, a supervisor takes over its channel,
+    /// imp-1 spawns empty. It fits this lifecycle unchanged because it DOES close something — the solo
+    /// — and because it is the same shape of decision: expensive, effectively one-way, and the owner's
+    /// to make.
+    /// </summary>
+    Promotion,
 }
 
 /// <summary>
