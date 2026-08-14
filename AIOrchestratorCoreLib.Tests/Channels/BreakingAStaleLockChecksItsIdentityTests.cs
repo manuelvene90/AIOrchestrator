@@ -111,6 +111,44 @@ public class BreakingAStaleLockChecksItsIdentityTests : IDisposable
     }
 
     /// <summary>
+    /// THE FOURTH CELL OF THE MATRIX — judged token PRESENT, broken token ABSENT. rev-10's F1.
+    /// <para>
+    /// The other three cells were covered and this one was not, which is how the identity check came
+    /// to treat "no token on the broken side" as a match. It is not a match: it is a DIFFERENT
+    /// acquisition whose metadata is not written yet.
+    /// </para>
+    /// <para>
+    /// THE WINDOW IS DOCUMENTED BY OUR OWN SHIPPED SCRIPT. <c>kit/channel-append.sh</c> does
+    /// <c>mkdir "$LOCK_DIR"</c> and writes the owner file on the NEXT line, so a session that has
+    /// just acquired holds a real lock with no owner file for that instant. Judged stale, released,
+    /// re-acquired by a session mid-write of its metadata, and the app breaks a live lock while
+    /// logging "broke a stale lock" — a true-sounding statement about a writer that is very much
+    /// alive. Both then write, <c>File.AppendAllText</c> opens deny-write, and one entry is lost.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ALockReAcquiredButNotYETCarryingItsOwnerFile_IsNotMistakenForTheJudgedOne()
+    {
+        // A real lock the way bash makes one, in the instant between mkdir and the owner file.
+        Directory.CreateDirectory(_lockDirectory);
+
+        var broke = ChannelFile_Lock.Try_BreakStale(_lockDirectory, "token-A-the-one-we-judged");
+
+        Assert.False(
+            broke,
+            "THE DEFECT: a live lock whose owner file was not written yet was accepted as the acquisition "
+            + "judged stale, so it was broken and never restored.");
+
+        Assert.True(
+            Directory.Exists(_lockDirectory),
+            "the live lock was renamed away and not put back — the session holding it will write believing it "
+            + "is serialised, and so will whoever takes the freed path.");
+
+        Assert.Contains(_lines, line => line.Contains("NEAR MISS"));
+        Assert.DoesNotContain(_lines, line => line.Contains("broke a stale lock"));
+    }
+
+    /// <summary>
     /// The second breaker of the pair finds the source gone. This is what actually serialises two
     /// breakers — the thing the old comment credited to the destination.
     /// </summary>

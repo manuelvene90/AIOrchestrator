@@ -277,18 +277,34 @@ public static class ChannelFile_Lock
     }
 
     /// <summary>
-    /// Whether the directory just broken still carries the token that was judged stale. An
-    /// unreadable token on either side is treated as a match — see <see cref="Try_BreakStale"/> for
-    /// why a metadata-less lock must stay breakable.
+    /// Whether the directory just broken still carries the token that was judged stale.
+    /// <para>
+    /// A NULL JUDGED TOKEN — the lock we judged had no readable metadata — verifies nothing and
+    /// returns a match, which is what keeps a metadata-less lock breakable (see
+    /// <see cref="Try_BreakStale"/>; refusing would revive d39ad14's unbreakable lock).
+    /// </para>
+    /// <para>
+    /// A NULL TOKEN ON THE BROKEN SIDE IS NOT A MATCH, and this used to say it was. That second null
+    /// route accepted a lock that is a DIFFERENT acquisition by construction: <c>kit/channel-append.sh</c>
+    /// does <c>mkdir "$LOCK_DIR"</c> and writes the owner file on the NEXT line, so a session that has
+    /// just acquired holds a real lock with no owner file for that instant. Judged stale, released,
+    /// re-acquired by that session, and the break destroyed a live lock while reporting "broke a stale
+    /// lock" — a true-sounding line about a writer that was very much alive. Both sides then wrote,
+    /// and <c>File.AppendAllText</c> opens deny-write, so one entry was lost. (rev-10, F1 on 106047b.)
+    /// </para>
+    /// <para>
+    /// The metadata-less case never needed it: that returns at the top on the judged token, so this
+    /// route was load-bearing for nothing. Treating an unreadable broken side as a mismatch also errs
+    /// in the safe direction — a needless restore puts back a lock the next tick judges stale again,
+    /// while a needless break destroys one that is live.
+    /// </para>
     /// </summary>
     static bool Is_TheLockWeJudged(string brokenPath, string? judgedToken)
     {
         if (judgedToken == null)
             return true;
 
-        var brokenToken = Read_OwnerField_OrNull(Path.Combine(brokenPath, OWNER_FILE_NAME), "token");
-
-        return brokenToken == null || brokenToken == judgedToken;
+        return Read_OwnerField_OrNull(Path.Combine(brokenPath, OWNER_FILE_NAME), "token") == judgedToken;
     }
 
     /// <summary>
@@ -309,10 +325,15 @@ public static class ChannelFile_Lock
         {
             Directory.Move(brokenPath, lockDirectory);
 
+            // Says what was OBSERVED, not what is assumed. The usual cause is a release and a
+            // re-acquire in the gap, but an owner file that could not be read reaches here too — and
+            // claiming a re-acquire that did not happen would be the confident-wrong-diagnosis
+            // failure this subsystem keeps paying for.
             ChannelLock_Diagnostics.Report(
-                $"Channel lock: NEAR MISS on '{channelName}' — a lock judged stale was released and RE-ACQUIRED by "
-                + "another writer before it could be broken, so the break hit a live lock. It has been put back and "
-                + "no writer lost its lock. This is the narrow window documented on Break_IfStale.");
+                $"Channel lock: NEAR MISS on '{channelName}' — the lock at that path was NOT the acquisition judged "
+                + "stale (it was released and re-acquired in the gap, or its owner file could not be read), so the "
+                + "break hit a lock that may be live. It has been put back and no writer lost its lock. This is the "
+                + "narrow window documented on Break_IfStale.");
 
             return true;
         }

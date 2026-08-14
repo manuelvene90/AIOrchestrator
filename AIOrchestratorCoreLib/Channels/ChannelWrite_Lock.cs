@@ -56,10 +56,26 @@ public static class ChannelWrite_Lock
     /// The allowance in force for the current async flow, or null when nobody opened one.
     /// <para>
     /// <c>AsyncLocal</c> rather than a static: it flows down into everything the tick awaits without
-    /// threading a parameter through the ~35 append call sites, and it does NOT leak sideways into
-    /// other flows — the inbound loop, a session's own write, or a second test running in parallel
-    /// each see their own. A static would have made the test suite's parallelism a source of
-    /// cross-talk, which is the failure this repo has spent the week removing rather than adding.
+    /// threading a parameter through the ~35 append call sites. A static would have made the test
+    /// suite's parallelism a source of cross-talk, which is the failure this repo has spent the week
+    /// removing rather than adding.
+    /// </para>
+    /// <para>
+    /// WHAT THE ISOLATION IS, EXACTLY — the loose version of this paragraph claimed more than the
+    /// mechanism delivers. Guaranteed: a flow that never opened an allowance sees none, and the
+    /// INBOUND loop is safe by ORDERING rather than by anything about AsyncLocal — <c>Run_Async</c>
+    /// creates its task before any allowance exists, so there is no ambient context for it to
+    /// capture. NOT guaranteed: <c>Task.Run</c> CAPTURES the ambient execution context, so a lambda
+    /// detached from inside the tick inherits the allowance and outlives the scope that owns it. The
+    /// engine has three such detached starts, one reachable from request processing, which runs
+    /// inside the allowance.
+    /// </para>
+    /// <para>
+    /// That is inert TODAY only because those three lambdas call Telegram and log, and the only
+    /// production callers of the serialised write are <c>ChannelAppender</c> and
+    /// <c>Channel_Compactor</c>. It is a property of what that code happens to do, NOT of this
+    /// mechanism — so anyone adding a channel write to a detached lambda should know it may charge a
+    /// tick that has already ended. (rev-10, F2 on 106047b.)
     /// </para>
     /// </summary>
     static readonly AsyncLocal<TickAllowance?> CURRENT_TICK_ALLOWANCE = new();
