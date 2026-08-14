@@ -6018,10 +6018,21 @@ internal sealed class BridgeEngineModel(
 
             // THE LIMIT, STATED, BECAUSE THE FIX IS INCOMPLETE AND SAYING SO IS THE POINT. The client
             // throws a PLAIN Exception for any non-2xx, so a 429 and every 5xx — which are also "we do
-            // not know" — are indistinguishable here from a genuine "message is gone" 400. Telling
-            // them apart needs the STATUS CODE, which the client currently discards into the message
-            // text, and parsing English out of a message string to make a control-flow decision is a
-            // worse defect than the one it would fix. So this bucket is transport-level only.
+            // not know" — are indistinguishable here from a genuine "message is gone" 400, and they
+            // therefore still clear the ids.
+            //
+            // AND THE LIMIT IS NOT INHERENT, which an earlier version of this comment implied by saying
+            // the status code is unavailable. It is not unavailable — it is DISCARDED. The client is
+            // ours, and every throw site formats `(int)response.StatusCode` into the message string, so
+            // the code is in scope at the point the exception is constructed and is thrown away there.
+            // What is true is only that it cannot be recovered HERE: parsing English out of a message
+            // string to make a control-flow decision is a worse defect than the one it would fix.
+            //
+            // So the real fix is a TYPED exception at the client carrying the status code — no parsing
+            // anywhere, and this predicate becomes complete rather than "strictly better than master".
+            // It is a change to a shared client for one call site's benefit, which is why it is not
+            // taken here; saying it is one typed exception away is the difference between a limit a
+            // reader can close and one they will assume is permanent.
             //
             // It is strictly better than what it replaces — master cleared unconditionally on all of
             // these — and it is NOT the whole invariant. Do not read it as established.
