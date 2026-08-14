@@ -287,6 +287,13 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _flaggedIdleMembersByOrchId = [];
 
     /// <summary>
+    /// The progress artefact last written per orchestration, so an unchanged ledger costs no disk
+    /// write. Same shape and same reasoning as <see cref="_statusLineTextByOrchId"/> above: in memory,
+    /// so the first tick after a restart rewrites once with whatever is current.
+    /// </summary>
+    readonly Dictionary<string, string> _progressArtefactByOrchId = [];
+
+    /// <summary>
     /// When the status line last FAILED per orchestration, so a real error backs off. Stored in
     /// LOCAL time because the planner compares it against the same clock the durations use — it
     /// held UtcNow while being compared against DateTime.Now, which cleared a 30-second backoff
@@ -717,6 +724,18 @@ internal sealed class BridgeEngineModel(
         // history (rev-6 F2). Same reasoning as the two calls above it — inbound flows, lapsing sends
         // nothing — and it is the sweeps minus their reporting.
         Baseline_UnseenChannels_Silently();
+        // ABOVE THE DND GATE ON PURPOSE. This writes a local file for the supervisor's own terminal
+        // status line and sends nothing anywhere. Below the gate it would freeze the moment the owner
+        // pressed 🔕 — and DND means "pause OUTBOUND Telegram", not "stop the app from telling this
+        // machine what the ledger says". The same placement is what keeps it working when Telegram is
+        // not configured at all, and for orchestrations that have no topic.
+        //
+        // NOTHING IN THE SUITE PINS THIS LINE'S POSITION. What to write is decided in
+        // Planning.ProgressArtefact_Decider and is covered there; WHERE the decision is asked from is
+        // a property of the order of statements in this method, which no pure function can observe.
+        // Moving this call below the return seven lines down compiles, passes every test, and quietly
+        // reintroduces exactly the bug described above. If you are that edit: don't.
+        Refresh_ProgressArtefacts();
 
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
@@ -4333,6 +4352,62 @@ internal sealed class BridgeEngineModel(
             return $"{displayName}: no task ledger yet";
 
         return $"{displayName}: {Planning.PlanProgress_Formatter.Describe_Counts(progress)}";
+    }
+
+    /// <summary>
+    /// Publishes each live orchestration's ledger reading for the supervisor's terminal status line.
+    /// Local files only — nothing here talks to Telegram, which is why it runs above the DND gate.
+    ///
+    /// WHAT TO DO lives in <see cref="Planning.ProgressArtefact_Decider"/>; this is left with doing
+    /// it. The engine is `internal sealed` with no `InternalsVisibleTo`, so a rule decided in here
+    /// cannot be reached by the suite at all — which is how three guards were once deleted at once
+    /// without reddening anything.
+    /// </summary>
+    void Refresh_ProgressArtefacts()
+    {
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            try
+            {
+                Refresh_ProgressArtefact(session.OrchId);
+            }
+            catch (Exception ex)
+            {
+                // One unreadable orchestration folder must not cost every other one its progress.
+                _log.Log_Error(session.OrchId, "Progress artefact refresh failed", ex);
+            }
+        }
+    }
+
+    void Refresh_ProgressArtefact(string orchId)
+    {
+        var artefactFile = _paths.Get_ProgressFile(orchId);
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
+        var json = progress == null ? null : Planning.ProgressArtefact_Builder.Build_Json(progress);
+
+        _progressArtefactByOrchId.TryGetValue(orchId, out var lastWritten);
+
+        var action = Planning.ProgressArtefact_Decider.Decide(
+            json,
+            lastWritten,
+            File.Exists(artefactFile) ? File.GetLastWriteTime(artefactFile) : null,
+            DateTime.Now);
+
+        if (action == Planning.ProgressArtefactActions.None)
+            return;
+
+        if (action == Planning.ProgressArtefactActions.Delete)
+        {
+            _progressArtefactByOrchId.Remove(orchId);
+            File.Delete(artefactFile);
+            return;
+        }
+
+        Storage.Atomic_FileWriter.Write_AllText(artefactFile, json!);
+        _progressArtefactByOrchId[orchId] = json!;
     }
 
     static string Read_FileText_Safe(string filePath)
