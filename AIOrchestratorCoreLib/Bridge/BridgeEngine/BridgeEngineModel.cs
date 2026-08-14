@@ -3057,7 +3057,14 @@ internal sealed class BridgeEngineModel(
             + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
 
         Report_CloseOutcome_ToGeneral(confirmation.OrchId, "declined by the owner", request);
-        Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "declined");
+        // THE WORD COMES FROM THE DECIDER, not from a literal here. This was the one archive site
+        // still choosing its own, which left Describe_ForArchive's Declined case reachable only from
+        // the confirmed path — where it can never be selected — so the suite was asserting a branch
+        // production does not call while the branch production DOES call went unpinned. Changing that
+        // literal to "closed" filed every refused close as a completed one, and nothing reddened.
+        Archive_ResolvedRequest_BestEffort(
+            confirmation.ParkedPath,
+            CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Declined));
 
         // The request travels back for the same reason it does on the confirmed path: the sentence
         // replacing the prompt has to name what the prompt named. It is null here when the file could

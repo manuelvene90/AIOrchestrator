@@ -147,6 +147,32 @@ public class CloseTapArchiveProbeTests : IDisposable
     }
 
     /// <summary>
+    /// A REFUSED CLOSE MUST NOT FILE AS A COMPLETED ONE, and until now nothing checked it.
+    ///
+    /// The decline path chose its archive word with a literal of its own, so the decider's `Declined`
+    /// case was reachable only from the confirmed path — where it can never be selected. The suite was
+    /// asserting a branch production does not call, while the branch production DOES call was pinned by
+    /// nothing: changing that literal to "closed" filed every refused close as a completed one and left
+    /// the whole suite green.
+    ///
+    /// This taps the OTHER button on the same prompt and reads what reached the archive, so it fails on
+    /// the produced word rather than on a string a test handed in.
+    /// </summary>
+    [Fact]
+    public async Task ADeclinedCloseIsArchivedAsDeclined()
+    {
+        var archived = await Drive_ToTheTap_Async(
+            beforeTap: null,
+            until: () => Archived_Names().Any(name => name.StartsWith("declined-")),
+            declining: true);
+
+        Assert.True(archived, $"the resolved folder never received a 'declined-' record — archived: {string.Join(", ", Archived_Names())}");
+
+        Assert.DoesNotContain(Archived_Names(), name => name.StartsWith("closed-"));
+        Assert.DoesNotContain(Archived_Names(), name => name.StartsWith("uncertain-"));
+    }
+
+    /// <summary>
     /// Ask, tap and outcome all inside ONE engine loop, and that is not tidiness.
     ///
     /// The registered callback data lives in memory. Cancelling the loop between the ask and the tap
@@ -158,7 +184,7 @@ public class CloseTapArchiveProbeTests : IDisposable
     /// The file also disappears when the request is unreadable, and a wait with two routes to success
     /// pins neither.
     /// </summary>
-    async Task<bool> Drive_ToTheTap_Async(Action? beforeTap, Func<bool> until, int maxMilliseconds = 20_000)
+    async Task<bool> Drive_ToTheTap_Async(Action? beforeTap, Func<bool> until, bool declining = false, int maxMilliseconds = 20_000)
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
@@ -181,7 +207,12 @@ public class CloseTapArchiveProbeTests : IDisposable
                 if (_telegram.ConfirmData != null)
                 {
                     beforeTap?.Invoke();
-                    Queue_ConfirmingTap();
+
+                    if (declining)
+                        Queue_Tap(_telegram.DeclineData);
+                    else
+                        Queue_ConfirmingTap();
+
                     tapped = true;
                 }
             }
@@ -226,9 +257,14 @@ public class CloseTapArchiveProbeTests : IDisposable
 
     void Queue_ConfirmingTap()
     {
+        Queue_Tap(_telegram.ConfirmData);
+    }
+
+    void Queue_Tap(string? data)
+    {
         _telegram.Queue_Updates(
             "{\"ok\":true,\"result\":[{\"update_id\":2001,\"callback_query\":{\"id\":\"cbq-1\","
-            + $"\"data\":\"{_telegram.ConfirmData}\",\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"data\":\"{data}\",\"from\":{{\"id\":{OWNER_USER_ID}}},"
             + $"\"message\":{{\"message_id\":9100,\"message_thread_id\":{TOPIC_ID}}}}}}}]}}");
     }
 
@@ -266,6 +302,8 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
 
     public string? ConfirmData { get; private set; }
 
+    public string? DeclineData { get; private set; }
+
     /// <summary>
     /// What the prompt was REPLACED with. This is the only place the ordering of the fix is visible
     /// from outside: an edit written before the close was attempted can only ever say it succeeded.
@@ -299,6 +337,9 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
             {
                 if (button.Label.Contains("Close", StringComparison.OrdinalIgnoreCase))
                     ConfirmData = button.Data;
+
+                if (button.Label.Contains("Keep", StringComparison.OrdinalIgnoreCase))
+                    DeclineData = button.Data;
             }
 
             return Task.FromResult<long?>(_nextMessageId++);
