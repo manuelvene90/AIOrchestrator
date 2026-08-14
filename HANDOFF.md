@@ -3,6 +3,12 @@
 Written by the supervisor of `ai-orchestrator-3` at the end of a long session, for whoever picks
 this up next. **Everything below was verified against the code at `801eb4d`, not remembered.**
 
+> **AS-OF WARNING, added 2026-08-14 from `fix/marker-gate-spans-archive`.** Master has since advanced
+> to `2110c56` and the figures below are the ones that were true at `801eb4d`. At least one section —
+> the "do this first" defect — went from true to false in that interval and was still phrased as an
+> instruction. **Re-check any claim here against master before acting on it**, including the ones this
+> commit did not touch. What has been re-verified on 2026-08-14 is marked in place.
+
 ## Where things stand
 
 - **master is `801eb4d`. 668 tests green**, run on the merge commit itself.
@@ -14,28 +20,33 @@ this up next. **Everything below was verified against the code at `801eb4d`, not
   `~/.claude/supervision/ai-orchestrator-3/PLAN.md`. The channels in that folder are the log — read
   them as history, not as a to-do list.
 
-## Do this first: R1 is a live critical defect on master
+## ~~Do this first: R1 is a live critical defect on master~~ — FIXED, merged as `f347916`
 
-**A failed Telegram send can silently drop the answer to the owner's own question.** Traced through
-`AIOrchestratorCoreLib/Bridge/BridgeEngine/BridgeEngineModel.cs`:
+**DO NOT ACT ON THIS SECTION. It is kept as a record, not as an instruction.** Read as written it sends
+the next crew to fix something that has been fixed since 2026-08-14, which is the most expensive kind of
+staleness a handoff can carry — it is the FIRST thing the document tells anyone to do.
 
-```
-:1730   _ownerAwaitingAnswer.Remove(orchId)      the flag is cleared HERE
-        ...the Telegram send happens AFTER this
-:1795   send fails -> return false -> the append is left unconfirmed -> the tailer RE-EMITS it
-:1706   on the re-emission, ownerIsWaiting reads FALSE
-        -> OwnerPush_Policy.Should_Push re-evaluates under the NARRATION policy
-        -> the answer is suppressed, and nothing anywhere says so
-```
+**What it said:** a failed Telegram send could silently drop the answer to the owner's own question,
+because `_ownerAwaitingAnswer.Remove` cleared the flag BEFORE the send; on the tailer's re-emission
+`ownerIsWaiting` then read false, `OwnerPush_Policy.Should_Push` re-evaluated under the NARRATION
+policy, and the answer was suppressed with nothing anywhere saying so.
 
-The comment at `:1795` records that the owner already reported this class of failure once — a
-supervisor's message that never arrived.
+**Status: fixed on master.** `git merge-base --is-ancestor f347916 master` — the fix is an ancestor of
+master `2110c56`. Verified by reading master's code, not the merge title: in
+`AIOrchestratorCoreLib/Bridge/BridgeEngine/BridgeEngineModel.cs` the `_ownerAwaitingAnswer.Remove` now
+sits AFTER the question-buttons send and the photo sends, under a comment reading *"ONLY NOW is the
+owner's wait consumed … Anything that threw above skipped this line with the flag still raised, which is
+what makes the retry deliver the answer instead of re-classifying it."* That is the fix this section
+asked for.
 
-**Fix:** clear the flag only after a *confirmed* send. It is small, it is in the engine, and it wants
-a test that fails for its own reason plus a review. The engine is reachable from tests — see
-`NudgeOncePerThingProbeTests` for the harness shape that works (interfaces via
-`BridgeEngine_Factory.Create`, `RecordingSpawner_Fake`, a temp root so no Telegram client and no
-network).
+**Why it survived here:** this branch (`fix/marker-gate-spans-archive`) is based on `3a84c84` and does
+NOT contain `f347916`, so nothing in the branch's own tree contradicted the text.
+
+**CITED BY SYMBOL, AND THAT IS THE POINT OF THIS EDIT.** The three line numbers that used to sit in the
+block above (`:1730`, `:1795`, `:1706`) were correct at `801eb4d`, went off by TWO at this branch's own
+`5f3dc1f`, and off by FIVE at `25060c9` — drifting twice inside the branch that was documenting them.
+`rev-5` filed them as off by two, which is exactly what they were in the tree it reviewed. Renumbering
+would have been wrong again within one commit. Symbols and anchors only, from here.
 
 ## Then: the two unmerged branches
 
@@ -92,9 +103,17 @@ notice rather than a merge plan.
   FALLBACK inherits the entire defect while its own docstring promises it fails noisy, and the
   supervisor-nudge path still reads a member's channel by raw `File.GetLastWriteTimeUtc`. Both are
   being fixed on a branch off `2110c56`; until it lands, "the quiet clock is fixed" is half true.
+  ***WHICH COPY: `Measure_QuietFor` is MASTER's symbol** (`Nudge_Decider.cs`, post-`2110c56`) and does
+  not exist anywhere in this branch's tree — grep it in the `-imp-4-marker` worktree and you get this
+  line and nothing else. The bullet is about master's post-merge code, deliberately, because that is
+  where the residual lives. Naming the copy is the whole of CLAUDE.md item 18, and this citation was
+  the counter-example: the commit that introduced it (`813f991`) swapped line numbers for symbols
+  precisely because the numbers were master's rather than the branch's, and then reached for a symbol
+  that was master's too.*
 - **Nothing here should be believed without re-reading the code it cites — including this bullet.**
-  Reasoning about this file's subject has now outrun it five times, twice inside paragraphs written to
-  correct the previous time.
+  Reasoning about this file's subject has now outrun it **six** times, twice inside paragraphs written
+  to correct the previous time — and the sixth is the bullet immediately above this one, which cited a
+  symbol from a tree it does not ship in while making the case for citing symbols.
 
 `f2485cf` is worth keeping either way: it catches the engine passing `UtcNow` where `Now` is meant,
 which on a machine at UTC+2 makes `quietFor` negative and **silences every nudge in the system with a
@@ -111,7 +130,7 @@ the test or the fix is wrong was never settled).
 
 | id | what it says | status |
 |---|---|---|
-| R1 | awaiting-answer flag cleared before the send | **VERIFIED STILL LIVE** — see above |
+| R1 | awaiting-answer flag cleared before the send | **FIXED on master, merged `f347916`** — see above |
 | R2 | unfiltered `catch (OperationCanceledException)` escaping the append, skipping the settle and switching compaction off system-wide | not checked |
 | R3 | the compaction guard reads the wrong buffer after `Rewind_Unconfirmed` | not checked |
 | R4 | silent empty/missing cursor; messages promise duplicates when the real failure is a one-way hole | not checked |
@@ -120,6 +139,12 @@ the test or the fix is wrong was never settled).
 
 **Check each against master before fixing anything** — some may have been fixed incidentally in the
 72 commits since, and a fix for a defect that no longer exists is worse than none.
+
+*That instruction was right and this table did not follow it: the R1 row read **VERIFIED STILL LIVE**
+for a defect merged as `f347916`. The row was true when written and nothing re-checked it. **Treat every
+`not checked` above as untested against TODAY's master, and re-check the checked ones too.** Note also
+that this table's `R1`–`R8` are `wip/bridge-critical-fixes`' own numbering and have nothing to do with
+`rev-5`'s `R1`–`R9` on `fix/marker-gate-spans-archive`; two unrelated schemes, same letters.*
 
 ## The rebuild
 
