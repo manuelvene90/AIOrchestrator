@@ -2877,8 +2877,15 @@ internal sealed class BridgeEngineModel(
         // THE TRADE IS STILL RIGHT: the guarantee protected a message being destroyed in the same
         // breath — the prompt lives IN the topic the close deletes, so nothing durable was bought by
         // it, while the durable record goes to the General topic, which is never deleted. And on every
-        // outcome where the topic SURVIVES (member closes, declines, NotAttempted, Uncertain, and
-        // orchestration closes whose delete fails) this order is the only one that can tell the truth.
+        // outcome where the topic SURVIVES (member closes, declines, NotAttempted, and orchestration
+        // closes whose delete fails) this order is the only one that can tell the truth.
+        //
+        // Uncertain is NOT in that list, and it was: rev-6 corrected its own argument after this
+        // comment quoted it. Where the topic stands depends on WHERE the throw landed —
+        // Execute_Close deletes the topic at :2542 and appends to the general channel at :2544, so the
+        // canonical Uncertain (that append failing) has the topic already being torn down, exactly as
+        // Closed does. A throw at :2537-:2539 leaves it standing. It belongs on neither side of an
+        // unconditional list, so it is on neither; the argument only ever needed one member.
         //
         // THIS ORDER IS PINNED, and an earlier version of this comment claimed it could not be. Which
         // sentence belongs to which outcome is covered in CloseConfirmationPrompt_Builder; that the
