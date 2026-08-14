@@ -201,9 +201,20 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
 
     /// <summary>
-    /// WHICH unanswered thing each member was last nudged about — the raw text of the conversation
-    /// entry, never its index or stamp (see Nudge_Decider.Identify_LastConversationEntry_OrNull for
-    /// why those are silent failures).
+    /// WHICH unanswered thing each member was last nudged about — whatever
+    /// `Nudge_Decider.Identify_NudgeSubject` returns for the channel, and NEVER an index or a stamp
+    /// (see `Identify_LastConversationEntry_OrNull` for why those two are silent failures: both are
+    /// agent-written and neither is unique, so a genuinely new entry can compare equal to a remembered
+    /// one and lose the nudge it earned).
+    ///
+    /// IT IS NOT ALWAYS A CONVERSATION ENTRY'S RAW TEXT, which is what this said until `5f3dc1f` and
+    /// was then false for two commits. `Identify_NudgeSubject` answers in three shapes: the last
+    /// conversation entry's raw text (the ordinary case), the last entry the app did not write while
+    /// WAKING this member, or the `NO_CONVERSATION_YET` sentinel when there is nothing of either kind.
+    /// The last two exist because a null identity skipped the gate AND the record together, which was
+    /// the loop. Read the value as an OPAQUE KEY: the only property this map needs is that it stops
+    /// matching when the thing owed changes, and the sentinel is deliberately constant-per-channel
+    /// rather than per-entry for exactly that reason.
     ///
     /// A SECOND DICTIONARY, DELIBERATELY, AND IT IS THE POINT OF THE FIX. `_nudgedMemberUtc` is
     /// ESCALATION state: it dates the nudge so the orphan probe can run six minutes later, and the
