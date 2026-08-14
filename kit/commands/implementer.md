@@ -39,6 +39,13 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
 
 - Entries start: `## [n] FROM implementer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
   Never edit past entries.
+- **`FROM app` entries are the ORCHESTRATOR APP writing to you**, not your supervisor — the idle nudge,
+  the orphan-respawn notice, and `GO AHEAD — resume` all arrive this way. Treat them as instructions
+  from the system: act on them, and do not reply to them as though a person had written.
+  **A leading `[agent]` in the subject means the entry is addressed to you and was never texted to the
+  owner** — `## [12] FROM app — … — [agent] your writing window is still open`. An app entry without it
+  is owner-facing and reached their phone too. The tag is set by the app where the entry is written,
+  never inferred from its wording. You never need to write it; it is there so you know who else saw it.
 - **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
   immediately before appending and add one (the supervisor and the app append while you work, so a
   remembered number collides — real duplicates happened on 2026-08-10), and take the time from the

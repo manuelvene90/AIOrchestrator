@@ -128,6 +128,13 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 ## Channel protocol
 
 - Entries start: `## [n] FROM reviewer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
+- **`FROM app` entries are the ORCHESTRATOR APP writing to you**, not your supervisor — the idle nudge
+  and `GO AHEAD — resume` arrive this way. Act on them; do not answer them as though a person wrote.
+  **A leading `[agent]` in the subject means the entry is addressed to you and was never texted to the
+  owner**; an app entry without it is owner-facing and reached their phone too. The tag is set by the
+  app where the entry is written, never inferred from its wording, and you never write it yourself.
+  **Quoting one in a finding is safe** — it is read as a prefix, so a tag mentioned mid-subject or in a
+  body is not a tag, exactly as the window markers work.
 - **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
   immediately before appending and add one (the supervisor and the app append while you work, so a
   remembered number collides — real duplicates happened on 2026-08-10), and take the time from the

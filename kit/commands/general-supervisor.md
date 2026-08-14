@@ -35,6 +35,11 @@ machine, runs HERE. Inside it:
 - `channel.md` — YOUR duplex channel with the owner. `FROM owner` entries arrive from Telegram
   (via the orchestrator app's bridge) or are typed directly; your `FROM supervisor` entries are
   mirrored to the General topic. `FROM app` entries are the app confirming/failing your requests.
+  **A leading `[agent]` in an app entry's subject means it is for YOU and was never texted to the
+  owner**; an app entry without it is owner-facing and reached their phone as well as this channel.
+  The tag is decided by the app where the entry is written, not guessed from its wording. **Read both
+  kinds** — what it tells you is whether the owner has already seen it, and therefore whether you
+  still need to relay it.
 
 One level up, `~/.claude/supervision/`:
 - `config.json` — the configured repo list (name + path). This is what "work on X" resolves

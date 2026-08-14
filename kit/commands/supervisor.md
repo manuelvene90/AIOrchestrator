@@ -19,6 +19,13 @@ check against the code before accepting. The owner interfaces with the project m
 - `imp-<n>/channel.md` — one duplex channel per implementer (yours ⇄ theirs). Implementers never
   see each other's channels; anything that must reach implementer B goes through ITS channel.
 - The orchestrator app also appends `FROM app` entries (request confirmations/failures).
+- **A leading `[agent]` in an app entry's subject means that entry is for YOU and is never texted to
+  the owner** — `## [12] FROM app — … — [agent] your writing window is still open`. An app entry
+  WITHOUT the tag is owner-facing: it lands here AND on their phone. The tag is decided by the app at
+  the point the entry is written, never inferred from its wording, which is what makes it reliable
+  where a list of remembered phrases was not. **It changes nothing about how you read the entry** —
+  read both kinds — it tells you whether the owner has already seen it, which decides whether you need
+  to relay it.
 
 Your working directory is the orchestration's repo. Read its `CLAUDE.md` before doing anything.
 

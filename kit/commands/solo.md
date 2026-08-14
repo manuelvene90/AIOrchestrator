@@ -38,6 +38,13 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
 
 - Entries start EXACTLY: `## [n] FROM solo — YYYY-MM-DD HH:mm — subject`. `n` increments per
   channel. A header in any other shape is INVISIBLE to the app — never mirrored, never counted.
+- **`FROM app` entries are the ORCHESTRATOR APP writing to you**, not the owner — `GO AHEAD — resume`
+  and the idle nudge arrive that way. Act on them; never answer them as though the owner had spoken.
+  **A leading `[agent]` in the subject means the entry is for you alone and was never texted** — an app
+  entry without it is owner-facing and reached their phone as well as this channel. That distinction
+  matters more to you than to anyone: this is the owner's channel, so an untagged app entry is
+  something they have ALREADY seen and you should not repeat it back to them. The tag is set by the
+  app where the entry is written, never inferred from wording, and you never write it yourself.
 - **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
   immediately before appending and add one (the app appends while you work, so a remembered number
   collides — real duplicates happened on 2026-08-10), and take the time from the system clock
