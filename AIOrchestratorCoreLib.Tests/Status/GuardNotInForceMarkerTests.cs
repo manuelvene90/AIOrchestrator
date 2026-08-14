@@ -32,6 +32,45 @@ public class GuardNotInForceMarkerTests
     }
 
     /// <summary>
+    /// A writer that is not a hook says what it actually did.
+    ///
+    /// The watcher became the second writer of this marker on 2026-08-14 and it allows no call —
+    /// there is no call. Rendering its failed read as "ALLOWED the call" would put a confident false
+    /// clause in front of a true one, which is the class of defect this whole marker exists to stop.
+    /// </summary>
+    [Fact]
+    public void AWriterThatIsNotAHookSaysWhatItDidInstead()
+    {
+        var description = GuardNotInForce_Marker.Describe_OrNull(
+            "watcher\nthe channel fingerprint\nmd5sum failed\nimp-8\n\ntook the fingerprint as unknown");
+
+        Assert.NotNull(description);
+        Assert.Contains("took the fingerprint as unknown", description);
+        Assert.DoesNotContain(GuardNotInForce_Marker.ALLOWED_THE_CALL, description);
+        Assert.Contains("not in force", description);
+        Assert.Contains("Tripped by imp-8", description);
+    }
+
+    /// <summary>
+    /// And a marker that does NOT carry one still reads exactly as it always did. Every hook writes
+    /// three or five lines and none of them will be changed to add a sixth: allowing IS the hook
+    /// contract, so the default is true for them. Asserted across all three sentence shapes, because
+    /// the consequence is interpolated into each of them separately.
+    /// </summary>
+    [Theory]
+    [InlineData("hook.sh")]
+    [InlineData("hook.sh\nwhich tool is being called")]
+    [InlineData("hook.sh\nwhich tool is being called\nno tool name could be extracted")]
+    [InlineData("hook.sh\nwhich tool is being called\nno tool name could be extracted\nimp-1\nabc123")]
+    public void AMarkerWithoutAConsequenceStillSaysTheCallWasAllowed(string markerText)
+    {
+        var description = GuardNotInForce_Marker.Describe_OrNull(markerText);
+
+        Assert.NotNull(description);
+        Assert.Contains($"and {GuardNotInForce_Marker.ALLOWED_THE_CALL} —", description);
+    }
+
+    /// <summary>
     /// A marker cut off mid-write still reports. The machine that truncates it is the machine the
     /// marker is about, so discarding it would lose the evidence exactly when it is most true.
     /// </summary>

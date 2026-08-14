@@ -223,8 +223,8 @@ read_fp() {
 mark_unreadable() {
   local orch="$HOME/.claude/supervision/${AIORCH_ID:-}"
   [ -n "${AIORCH_ID:-}" ] && [ -d "$orch" ] || return 0
-  printf '%s\n%s\n%s\n%s\n\n' "watcher" "the channel fingerprint" \
-    "$1 failed — fingerprint taken as unknown, not as a change" "${AIORCH_MEMBER:-}" \
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "watcher" "the channel fingerprint" "$1 failed" \
+    "${AIORCH_MEMBER:-}" "" "took the fingerprint as unknown rather than as a change" \
     > "$orch/.guard-not-in-force" 2>/dev/null
   return 0
 }

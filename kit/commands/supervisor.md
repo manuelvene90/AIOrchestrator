@@ -683,8 +683,8 @@ read_fp() {
 # The watcher drops a FACT; the APP writes the record. Never write the log file from here.
 mark_unreadable() {
   [ -d "$sup" ] || return 0
-  printf '%s\n%s\n%s\n%s\n\n' "watcher" "the channel fingerprints" \
-    "$1 failed — fingerprint taken as unknown, not as a change" "supervisor" \
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "watcher" "the channel fingerprints" "$1 failed" \
+    "supervisor" "" "took the fingerprint as unknown rather than as a change" \
     > "$sup/.guard-not-in-force" 2>/dev/null
   return 0
 }

@@ -180,8 +180,12 @@ PREAMBLE
 
   if [ -f "$orch/.guard-not-in-force" ]; then
     marker_reason="$(sed -n '3p' "$orch/.guard-not-in-force")"
-    check "$role: the marker names the command that failed" "md5sum failed — fingerprint taken as unknown, not as a change" "$marker_reason"
+    check "$role: the marker names the command that failed" "md5sum failed" "$marker_reason"
     check "$role: the marker names the watcher" "watcher" "$(sed -n '1p' "$orch/.guard-not-in-force")"
+    # Line 6 is the consequence. Without it the app renders every marker as "ALLOWED the call", which
+    # is the hooks' contract and false of a watcher — there is no call.
+    check "$role: the marker says what it did instead of allowing a call" \
+      "took the fingerprint as unknown rather than as a change" "$(sed -n '6p' "$orch/.guard-not-in-force")"
   else
     check "$role: drops the guard marker when it cannot read" "marker present" "marker absent"
   fi

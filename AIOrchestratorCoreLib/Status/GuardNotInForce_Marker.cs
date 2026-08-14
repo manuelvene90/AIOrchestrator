@@ -1,9 +1,10 @@
 namespace AIOrchestratorCoreLib.Status;
 
 /// <summary>
-/// The marker a hook drops when it cannot evaluate its predicate, and the app's reading of it.
+/// The marker a hook — or, since 2026-08-14, a watcher — drops when it cannot evaluate its predicate,
+/// and the app's reading of it.
 ///
-/// The hook writes a FACT — three lines, no timestamp, no JSON — and the APP writes the record. That
+/// The writer writes a FACT — a few lines, no timestamp, no JSON — and the APP writes the record. That
 /// split is structural rather than stylistic. The log panel is fed by an in-process event that a
 /// separate process can never raise, so anything a hook writes to the log file is invisible until
 /// somebody goes looking; and a record nobody sees until they already suspect a problem preserves
@@ -25,6 +26,18 @@ public static class GuardNotInForce_Marker
     public const string ENTRY_SUBJECT = "a guard stopped working";
 
     /// <summary>
+    /// What the marker's writer did when it could not decide, used when the marker does not say.
+    ///
+    /// It is the hooks' consequence and it is true of them by contract — a hook that cannot evaluate
+    /// its predicate ALLOWS, because hooks advise and the app enforces. It stopped being true of every
+    /// writer on 2026-08-14, when the watcher became the second one: a watcher allows no call, there
+    /// is no call, and describing its failed read that way would put a confident false clause in front
+    /// of a true one. Writers that are not hooks say what they did on the marker's sixth line; older
+    /// three- and five-line markers keep rendering exactly as they did.
+    /// </summary>
+    public const string ALLOWED_THE_CALL = "ALLOWED the call";
+
+    /// <summary>
     /// Reads the marker into one sentence, or null when there is nothing to say.
     ///
     /// TOLERANT ON PURPOSE. The writer is a shell script running on a machine that, by the very
@@ -44,14 +57,15 @@ public static class GuardNotInForce_Marker
         var reason = Line_OrNull(lines, 2);
 
         var identity = Describe_Identity(Line_OrNull(lines, 3), Line_OrNull(lines, 4));
+        var consequence = Line_OrNull(lines, 5) ?? ALLOWED_THE_CALL;
 
         if (predicate == null)
-            return $"{hook} could not evaluate its rule and ALLOWED the call — that guard is not in force.{identity}";
+            return $"{hook} could not evaluate its rule and {consequence} — that guard is not in force.{identity}";
 
         if (reason == null)
-            return $"{hook} could not evaluate {predicate} and ALLOWED the call — that guard is not in force.{identity}";
+            return $"{hook} could not evaluate {predicate} and {consequence} — that guard is not in force.{identity}";
 
-        return $"{hook} could not evaluate {predicate} ({reason}) and ALLOWED the call — that guard is not in force.{identity}";
+        return $"{hook} could not evaluate {predicate} ({reason}) and {consequence} — that guard is not in force.{identity}";
     }
 
     /// <summary>
