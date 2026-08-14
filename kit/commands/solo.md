@@ -34,6 +34,18 @@ any code.
 
 Do NOT study the repo at boot. Read what the task needs when the task arrives.
 
+## Name the orchestration (do this at the FIRST task)
+
+As soon as the goal is clear from the owner's first message, drop
+`{"action":"set-orchestration-name","orchId":"$ARGUMENTS","name":"<2-4 words, 3 is best>"}` into
+`~/.claude/supervision/.requests/` — it renames the app card, the Telegram topic and your terminal
+window (e.g. "CRM invoice crash").
+
+**This is yours here.** The instruction used to live only in the supervisor's command, so basic
+orchestrations were never named at all: the owner watched their topics stop being renamed and
+reported it as a regression, because from the phone a basic orchestration looks like any other.
+`$ARGUMENTS` in a topic full of unnamed ids tells them nothing about which is which.
+
 ## Channel protocol
 
 - Entries start EXACTLY: `## [n] FROM solo — YYYY-MM-DD HH:mm — subject`. `n` increments per
