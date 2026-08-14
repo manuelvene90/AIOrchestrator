@@ -1092,14 +1092,23 @@ internal sealed class BridgeEngineModel(
         {
             var malformed = ChannelShape_Validator.Find_MalformedHeaders(UsageTotals_Reader.Read_Text_Safe(channel.FilePath));
 
+            // FIRST SIGHT OF THE FILE, registered before anything can skip it — every malformed
+            // header already in it is HISTORY, recorded silently. This warning means "the entry you
+            // just wrote was invisible", and it is actionable only then: an entry from days ago
+            // cannot be re-appended usefully, and re-announcing it at every startup trains the owner
+            // to ignore the one that matters.
+            //
+            // IT REGISTERS ON SIGHT, NOT ON THE FIRST OFFENCE. This line used to sit BELOW the
+            // `continue` — so a channel that was CLEAN when the app started was never registered at
+            // all, and its first real malformed header arrived on a sweep that was still "first
+            // sight". It was recorded as history and suppressed, and since the memo has no release
+            // it could never be reported on any later sweep either. A header written at 14:00 in a
+            // file that was clean at 10:00 is not history; it is the event (rev-8 F1, 2026-08-13,
+            // filed against the index screen below and true of this sweep it was copied from).
+            var isFirstSight = _channelsShapeBaselined.Add(channel.FilePath);
+
             if (malformed.Count == 0)
                 continue;
-
-            // FIRST sight of this file — every malformed header in it is HISTORY. Record it
-            // silently. This warning means "the entry you just wrote was invisible", and it is
-            // actionable only then: an entry from days ago cannot be re-appended usefully, and
-            // re-announcing it at every startup trains the owner to ignore the one that matters.
-            var isFirstSight = _channelsShapeBaselined.Add(channel.FilePath);
 
             List<(int LineNumber, string Line)> unreported = [];
 
@@ -1154,15 +1163,23 @@ internal sealed class BridgeEngineModel(
                     UsageTotals_Reader.Read_Text_Safe(Channel_Compactor.Build_ArchiveFilePath(channel.FilePath)),
                     UsageTotals_Reader.Read_Text_Safe(channel.FilePath)));
 
-            if (crossings.Count == 0)
-                continue;
-
             // Same two-set discipline as the malformed sweep, and for its reason: everything already
             // in a file when the app starts is HISTORY, recorded silently. A channel carrying an old
             // legitimate crossing would otherwise re-log the same pair on every sweep for as long as
             // the app runs — the waterfall this system exists to prevent, in the log instead of the
             // owner's phone.
+            //
+            // ON SIGHT, ABOVE THE `continue`, and the placement is the whole guarantee: registering
+            // below it meant a channel was baselined on the first sweep in which it HAD a crossing
+            // rather than on first sight of the file. So the first crossing on a channel that was
+            // clean at startup was suppressed as history AND recorded in `_screenedIndexCrossings`,
+            // which has no release — it could never log on any later sweep either. For a new
+            // orchestration that is 100% of first crossings, a fresh channel being clean at creation,
+            // and the first crossing is exactly what this screen exists to catch (rev-8 F1).
             var isFirstSight = _channelsIndexBaselined.Add(channel.FilePath);
+
+            if (crossings.Count == 0)
+                continue;
 
             foreach (var crossing in crossings)
             {
