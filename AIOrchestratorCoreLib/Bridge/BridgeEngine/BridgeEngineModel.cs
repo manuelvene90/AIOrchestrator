@@ -864,12 +864,15 @@ internal sealed class BridgeEngineModel(
 
             // A CLOSED orchestration's held alert is dropped, and BOTH reasons are real.
             //
-            // Close_Orchestration DELETES the Telegram topic — Delete_TelegramTopic_FireAndForget,
-            // called immediately after _store.Close_Orchestration — so once that completes the
-            // stored topic id is gone and every send against it fails, for ever. The deletion is
-            // fire-and-forget, so there is also a short window before it lands in which the alert
-            // WOULD arrive: the owner texted that a session is crash-looping in an orchestration
-            // they just ended. Undeliverable after, over-delivery before.
+            // Close_Orchestration asks for the Telegram topic to be DELETED —
+            // Delete_TelegramTopic_FireAndForget, called immediately after _store.Close_Orchestration.
+            // Stated precisely, because the looser version of this sentence was itself a finding
+            // (rev-6 F7): the call is conditional on there being a topic id, it is fire-and-forget,
+            // and it swallows-and-logs its failure — so a delete refused for want of rights leaves
+            // the topic alive. The stored TelegramTopicId is never cleared by any of this; what goes
+            // is the topic, not the id. When the delete does land, every later send against that id
+            // fails for ever; before it lands there is a window in which the alert WOULD arrive —
+            // the owner texted that a session is crash-looping in an orchestration they just ended.
             //
             // It is still NOT the bound below: that covers the cases nothing here can see — a topic
             // the owner deleted from their phone, revoked bot rights — which Telegram answers 400
@@ -888,13 +891,24 @@ internal sealed class BridgeEngineModel(
             if (key.OrchId != ChannelDiscovery.GENERAL_ORCH_ID && (heldSession == null || heldSession.ClosedUtc != null))
             {
                 _heldCrashLoopAlerts.Remove(key);
-                // States what was COMPUTED — the orchestration is closed — and not the deletion,
-                // which this line never checked. Close_Orchestration deletes the topic only if there
-                // was one and only if the call succeeds (fire-and-forget, swallow-and-log), so a
-                // close with no topic, or a delete refused for want of rights, both satisfied this
-                // condition while the old message asserted a deletion that had not happened
-                // (rev-7 G4, 2026-08-14).
-                _log.Log_Info(key.OrchId, $"Crash-loop alert dropped — the orchestration is closed, so nothing is watching its topic: {key.AlertText}");
+
+                // TWO STATES, TWO MESSAGES, because only one of them is a close. Get_Session_OrNull
+                // returns null on exactly one condition — session.json is not there — and
+                // Close_Orchestration PRESERVES that file (CreateFrom_Existing_Closed, saved back).
+                // So a closed orchestration always has a session.json, and an absent one was never
+                // closed: the single message asserted "the orchestration is closed" on the one
+                // disjunct where closure is definitionally impossible (rev-6 F6).
+                //
+                // G4 removed a deletion this line never checked, and replaced it with "so nothing is
+                // watching its topic" — which this line never checked either, and which is LESS
+                // checkable than the claim it replaced: several states satisfy ClosedUtc != null with
+                // the topic alive and readable (rev-6 F5). Each message now stops at what was
+                // computed, which for the closed case is the closure and nothing else.
+                if (heldSession == null)
+                    _log.Log_Warning(key.OrchId, $"Crash-loop alert dropped — there is no session.json for this orchestration: {key.AlertText}");
+                else
+                    _log.Log_Info(key.OrchId, $"Crash-loop alert dropped — the orchestration is closed: {key.AlertText}");
+
                 continue;
             }
 
@@ -951,17 +965,30 @@ internal sealed class BridgeEngineModel(
             {
                 // FILTERED, and the filter is the fix. An HttpClient TIMEOUT throws
                 // TaskCanceledException, which IS an OperationCanceledException — so the unfiltered
-                // form rethrew a timeout as if the app were shutting down: it escaped this loop and
-                // the whole mirror tick with it, taking the stall alerts, the budget alerts, the idle
-                // nudges, the status refresh and the channel poll along for that tick.
+                // form rethrew a timeout as if the app were shutting down, and this loop died with
+                // the mirror tick around it.
                 //
-                // Worse for this method specifically: the attempt was already counted one line above,
-                // so the give-up budget was being spent by the one failure path that logged nothing.
-                // Ten timeouts retired an alert in silence, and the GIVEN UP line was the first
-                // evidence anything had happened.
+                // WHAT THAT BUYS, narrowed to what it delivers (rev-6, 2026-08-14). The tick survives
+                // a timeout here only when it had nothing else to send: the very next call,
+                // Send_StallAlerts_Async, rethrows bare on the same shape, and so do the budget
+                // alerts and the channel poll. Against a wedged endpoint every send times out, so
+                // the tick still dies one call later. One site is fixed, not the tick.
                 //
-                // Matches the loop-level handlers at the top of this file, every one of which filters
-                // on the token; this site was the outlier (rev-7 G2, 2026-08-14).
+                // NOR WAS THIS THE PATH THAT LOGGED NOTHING. The rethrow reached
+                // Run_MirrorLoop_Async's `catch (Exception ex)` and was logged as an ERROR carrying
+                // the whole exception. The real gain is ATTRIBUTION — which orchestration, which
+                // alert — and the price is a LEVEL: an ERROR with a stack becomes a WARNING with
+                // ex.Message. Worth it, and said out loud so nobody meets it as a surprise.
+                //
+                // What is unchanged and was always true: the attempt is counted one line above the
+                // send, so a timeout spent the give-up budget while this handler added nothing of its
+                // own to the log.
+                //
+                // AND THIS SITE WAS NOT THE OUTLIER — counted in this file at this sha rather than
+                // asserted: 43 `catch (OperationCanceledException`, 6 filtered, 37 unfiltered (5 and
+                // 38 before this change). Two unfiltered handlers sit 13 lines below a filtered one
+                // near the top, so even "the handlers at the top" does not hold. The 37 are their own
+                // ledger line, not this commit's (rev-7 G2, rev-6 F1/F2/F3, 2026-08-14).
                 throw;
             }
             catch (Exception ex)
