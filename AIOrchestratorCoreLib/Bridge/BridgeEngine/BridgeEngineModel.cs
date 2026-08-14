@@ -157,6 +157,13 @@ internal sealed class BridgeEngineModel(
     /// <summary>The same pair for the index screen — say a crossing once, and absorb the ones already there.</summary>
     readonly HashSet<string> _screenedIndexCrossings = [];
     readonly HashSet<string> _channelsIndexBaselined = [];
+
+    /// <summary>
+    /// Channels whose CONTENTS the silent baseline pass has read. Its own set, and not one of the two
+    /// above, because those are written by their sweeps under conditions of their own — a channel with
+    /// no offence never enters either — while this one means exactly "the pass has been here once".
+    /// </summary>
+    readonly HashSet<string> _channelsContentBaselined = [];
     readonly Lock _buttonLock = new();
     long _buttonSequence;
     long _buttonGroupSequence;
@@ -629,6 +636,14 @@ internal sealed class BridgeEngineModel(
         // Lapsing a stale close sends the owner nothing and closes nothing, so it runs even while
         // muted. Behind the gate, DND froze the only thing that disarms a live confirmation button.
         Expire_StaleCloseConfirmations();
+
+        // ABOVE THE GATE because it emits nothing — no Telegram, no channel entry, not even a log
+        // line. What it does is record what each channel already contained the first time the app saw
+        // it, and a mute must not delay that: everything below returns while muted, so a channel born
+        // during a mute was first seen hours later and its whole accumulated content was absorbed as
+        // history (rev-6 F2). Same reasoning as the two calls above it — inbound flows, lapsing sends
+        // nothing — and it is the sweeps minus their reporting.
+        Baseline_UnseenChannels_Silently();
 
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
@@ -1188,6 +1203,72 @@ internal sealed class BridgeEngineModel(
                 if (isNew && !isFirstSight)
                     _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {ChannelIndexSequence_Screen.Describe_Crossing(crossing)}");
             }
+        }
+    }
+
+    /// <summary>
+    /// FIRST SIGHT MUST NOT WAIT FOR THE UNMUTE. Both sweeps above run BELOW the DND gate, so while
+    /// Telegram is muted neither of them sees anything — but orchestrations can still be CREATED under
+    /// DND. A channel born during a mute was therefore first SEEN at unmute, hours later, and
+    /// everything that had accumulated in it meanwhile was absorbed as "history" and could never be
+    /// reported (rev-6 F2 against `27b216c`).
+    ///
+    /// <para>
+    /// THIS PASS RUNS ONCE PER CHANNEL AND NEVER AGAIN, and that is the correctness core rather than an
+    /// optimisation. Running it on every muted tick would read each new offence as it appeared and
+    /// record it as history — F2's own failure, moved from the unmute to the mute and made invisible in
+    /// a different place. Once per channel means the history is what was there when the app first saw
+    /// the file, and anything that arrives afterwards is genuinely new to the sweeps.
+    /// </para>
+    /// <para>
+    /// IT READS. Registering sight WITHOUT reading would change what the two sets MEAN — from "the app
+    /// has seen this file's contents" to "the app has seen this file exists" — and at unmute every
+    /// historical crossing and malformed header in a pre-existing channel would be reported as new.
+    /// That is the same waterfall from the other direction, and it hits hardest on a machine that
+    /// starts muted.
+    /// </para>
+    /// <para>
+    /// IT COMPOSES NOTHING ITSELF. The keys come from `Find_MalformedHeaders` and `Build_DedupeKey` —
+    /// the sweeps' own functions — because a baseline that computed a key even slightly differently
+    /// would record keys that never match, and every offence would be reported for ever. That failure
+    /// would look exactly like the bug this closes (decision 12).
+    /// </para>
+    /// <para>
+    /// UNCONDITIONAL, not muted-only: unmuted the outcome is identical to before — the pass records the
+    /// history that each sweep's own first-sight branch would have recorded, and the sweeps then find
+    /// nothing new — so DND and normal operation share one path and cannot drift apart. The cost is one
+    /// read of the live file and its archive, ONCE per channel for the life of the process; a channel
+    /// already baselined costs a set lookup and no I/O.
+    /// </para>
+    /// <para>
+    /// The sweeps' own first-sight branches stay, and are not dead: each of them walks
+    /// `Find_ChannelFiles` separately, so a channel created between this pass and a sweep within the
+    /// same tick still reaches the sweep unbaselined.
+    /// </para>
+    /// </summary>
+    void Baseline_UnseenChannels_Silently()
+    {
+        foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
+        {
+            if (!_channelsContentBaselined.Add(channel.FilePath))
+                continue;
+
+            var liveText = UsageTotals_Reader.Read_Text_Safe(channel.FilePath);
+
+            _channelsShapeBaselined.Add(channel.FilePath);
+
+            foreach (var entry in ChannelShape_Validator.Find_MalformedHeaders(liveText))
+                _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
+
+            _channelsIndexBaselined.Add(channel.FilePath);
+
+            var crossings = ChannelIndexSequence_Screen.Find_Crossings(
+                ChannelIndexSequence_Screen.Read_Headers(
+                    UsageTotals_Reader.Read_Text_Safe(Channel_Compactor.Build_ArchiveFilePath(channel.FilePath)),
+                    liveText));
+
+            foreach (var crossing in crossings)
+                _screenedIndexCrossings.Add($"{channel.FilePath}|{ChannelIndexSequence_Screen.Build_DedupeKey(crossing)}");
         }
     }
 
