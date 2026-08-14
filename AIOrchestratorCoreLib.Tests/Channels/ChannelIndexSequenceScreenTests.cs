@@ -289,6 +289,89 @@ public class ChannelIndexSequenceScreenTests
         Assert.Equal(ChannelIndexSequence_Screen.Build_DedupeKey(first), ChannelIndexSequence_Screen.Build_DedupeKey(second));
     }
 
+    /// <summary>
+    /// AND IT SURVIVES A COMPACTION, which is the move that actually breaks a key here. The old key
+    /// carried Source and LineNumber, and `Channel_Compactor` changes BOTH when it moves entries from
+    /// the live file into the `.archive.md` sibling: same two lines, new key, so a crossing already
+    /// absorbed as history came back as NEW on the next sweep — with the channel no longer at first
+    /// sight, so it logged. That is the waterfall the key exists to prevent, arriving by the one
+    /// route the append test could not see (rev-8 F5).
+    ///
+    /// Decision 13 is why this is the realistic case rather than a corner: compaction runs on these
+    /// channels routinely, and it is the reason the screen reads the archive at all.
+    /// </summary>
+    [Fact]
+    public void TheDedupeKeySurvivesACOMPACTION()
+    {
+        const string EARLIER = "## [7] FROM s — 2026-08-13 09:00 — real";
+        const string QUOTED = "## [6] FROM s — 2026-08-13 08:55 — quoted";
+
+        // Before: the pair is in the live file, near its top.
+        var beforeCompaction = Assert.Single(ChannelIndexSequence_Screen.Find_Crossings(
+            ChannelIndexSequence_Screen.Read_Headers(archiveText: "", liveText: $"{EARLIER}\n{QUOTED}\n## [8] FROM s — d — b")));
+
+        // After: the compactor has moved those entries into the archive, so both lines carry a
+        // different Source AND a different LineNumber while being the same two lines.
+        var afterCompaction = Assert.Single(ChannelIndexSequence_Screen.Find_Crossings(
+            ChannelIndexSequence_Screen.Read_Headers(
+                archiveText: $"## [1] FROM s — d — older\n## [2] FROM s — d — older\n{EARLIER}\n{QUOTED}\n## [8] FROM s — d — b",
+                liveText: "## [9] FROM s — d — the live file starts here now")));
+
+        Assert.NotEqual(beforeCompaction.Earlier.LineNumber, afterCompaction.Earlier.LineNumber);
+        Assert.NotEqual(beforeCompaction.Earlier.Source, afterCompaction.Earlier.Source);
+
+        Assert.Equal(
+            ChannelIndexSequence_Screen.Build_DedupeKey(beforeCompaction),
+            ChannelIndexSequence_Screen.Build_DedupeKey(afterCompaction));
+    }
+
+    /// <summary>
+    /// BOTH LINES ARE IN THE KEY — pinned by two crossings that differ in only one of them. The old
+    /// test compared two keys built from the SAME crossing, so it passed with either half dropped, or
+    /// with the whole key replaced by a constant (rev-8 F5). A control that reddens nothing is not
+    /// coverage.
+    /// </summary>
+    [Fact]
+    public void CrossingsDifferingInOnlyONELineKeepDifferentKeys()
+    {
+        var sharedEarlier = new ChannelHeaderLine(ChannelIndexSequence_Screen.LIVE_SOURCE, 1, 7, "## [7] FROM s — d — real");
+        var firstQuote = new ChannelHeaderLine(ChannelIndexSequence_Screen.LIVE_SOURCE, 3, 6, "## [6] FROM s — d — first quotation");
+        var secondQuote = new ChannelHeaderLine(ChannelIndexSequence_Screen.LIVE_SOURCE, 3, 6, "## [6] FROM s — d — a DIFFERENT quotation");
+
+        Assert.NotEqual(
+            ChannelIndexSequence_Screen.Build_DedupeKey(new ChannelIndexCrossing(sharedEarlier, firstQuote)),
+            ChannelIndexSequence_Screen.Build_DedupeKey(new ChannelIndexCrossing(sharedEarlier, secondQuote)));
+
+        // And the mirror case: the same quotation reached from two different entries.
+        var otherEarlier = new ChannelHeaderLine(ChannelIndexSequence_Screen.LIVE_SOURCE, 1, 7, "## [7] FROM s — d — a DIFFERENT real entry");
+
+        Assert.NotEqual(
+            ChannelIndexSequence_Screen.Build_DedupeKey(new ChannelIndexCrossing(sharedEarlier, firstQuote)),
+            ChannelIndexSequence_Screen.Build_DedupeKey(new ChannelIndexCrossing(otherEarlier, firstQuote)));
+    }
+
+    /// <summary>
+    /// THE SEPARATOR CANNOT BE FORGED. Two different pairs whose concatenations are identical must
+    /// still key differently — that is the entire job of the separator, and it was the mutation
+    /// nothing in the suite could see. A newline is used because a header line provably cannot
+    /// contain one; every printable separator can appear inside a subject.
+    /// </summary>
+    [Fact]
+    public void TwoPairsThatConcatenateIdenticallyKeepDifferentKeys()
+    {
+        var crossing = new ChannelIndexCrossing(
+            new ChannelHeaderLine(ChannelIndexSequence_Screen.LIVE_SOURCE, 1, 7, "## [7] FROM s — d — ab"),
+            new ChannelHeaderLine(ChannelIndexSequence_Screen.LIVE_SOURCE, 3, 6, "## [6] FROM s — d — c"));
+
+        var recut = new ChannelIndexCrossing(
+            new ChannelHeaderLine(ChannelIndexSequence_Screen.LIVE_SOURCE, 1, 7, "## [7] FROM s — d — a"),
+            new ChannelHeaderLine(ChannelIndexSequence_Screen.LIVE_SOURCE, 3, 6, "b## [6] FROM s — d — c"));
+
+        Assert.NotEqual(
+            ChannelIndexSequence_Screen.Build_DedupeKey(crossing),
+            ChannelIndexSequence_Screen.Build_DedupeKey(recut));
+    }
+
     /// <summary>And two DIFFERENT crossings are not collapsed into one key.</summary>
     [Fact]
     public void TwoDifferentCrossingsKeepDifferentKeys()

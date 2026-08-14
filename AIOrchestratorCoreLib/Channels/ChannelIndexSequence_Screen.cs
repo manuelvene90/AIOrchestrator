@@ -123,11 +123,23 @@ public static class ChannelIndexSequence_Screen
     /// It names BOTH lines, because either may be the intruder and neither alone identifies the pair.
     /// A channel carrying an old legitimate crossing would otherwise re-log for as long as the app
     /// runs — the waterfall this system exists to prevent, in the log rather than on a phone.
+    ///
+    /// TEXT ONLY, AND THE EXCLUSIONS ARE THE WHOLE POINT. This key used to carry
+    /// <see cref="ChannelHeaderLine.Source"/> and <see cref="ChannelHeaderLine.LineNumber"/>, and
+    /// BOTH change when <see cref="Channel_Compactor"/> moves entries from the live file into the
+    /// `.archive.md` sibling — the same pair of lines, re-keyed by a move nobody wrote. A crossing
+    /// absorbed as history was then NEW again on the next sweep, with the channel no longer at first
+    /// sight, so it logged: the waterfall arriving by the one route the old test did not cover, since
+    /// it pinned stability under APPENDS only (rev-8 F5, 2026-08-13). Compaction is not exotic here —
+    /// decision 13 exists because it runs on these channels routinely.
+    ///
+    /// The line TEXT is what does not move, so the key is the two lines and nothing else. The
+    /// separator is a NEWLINE because a header line provably cannot contain one — the parser splits
+    /// on it — so no pair of lines can be re-cut to forge another pair's key. Any printable separator
+    /// can appear inside a subject and is forgeable.
     /// </summary>
     public static string Build_DedupeKey(ChannelIndexCrossing crossing)
     {
-        return
-            $"{crossing.Earlier.Source}|{crossing.Earlier.LineNumber}|{crossing.Earlier.Line}"
-            + $"||{crossing.Later.Source}|{crossing.Later.LineNumber}|{crossing.Later.Line}";
+        return $"{crossing.Earlier.Line}\n{crossing.Later.Line}";
     }
 }
