@@ -90,9 +90,75 @@ public class ChannelIndexSequenceScreenTests
         Assert.Contains("line 1", text);
         Assert.Contains("line 3", text);
 
-        // It never claims to have found a defect, and never singles one line out.
-        Assert.Contains("SCREEN, not a verdict", text);
-        Assert.DoesNotContain("SUSPECT", text);
+        // ORDERED, not merely present (rev-8 F6). "Contains line 1" and "contains line 3" both survive
+        // swapping Earlier and Later throughout the format string, and the printed indices survive
+        // deleting their clause outright — so the two assertions above pass while every printed
+        // pairing is wrong. The class's own line says a screen that misstates which line it means
+        // costs more than it saves; this is that sentence pinned.
+        Assert.Contains("[107] then [106]", text);
+        Assert.True(text.IndexOf("line 1:") < text.IndexOf("line 3:"), $"the pair is printed in the wrong order: {text}");
+    }
+
+    /// <summary>
+    /// THE FOUNDING SHAPE, and the screen could not see it: two adjacent headers carrying the SAME
+    /// index. CLAUDE.md decision 12 records `option-lab-2` carrying two `[80]` and two `[81]` — the
+    /// incident this whole class descends from — and `rev-8` counted 320 adjacent EQUAL pairs against
+    /// 125 decreasing ones across the live channels on this machine.
+    ///
+    /// The comparison was `&lt;`, so equal produced nothing while two sentences of the class's own
+    /// documentation promised it was caught. Its purpose line is "consuming an index that a later
+    /// entry will collide with"; the collision itself was the invisible shape.
+    /// </summary>
+    [Fact]
+    public void ARepeatedIndexIsFound()
+    {
+        var crossing = Assert.Single(Screen(
+            """
+            ## [80] FROM supervisor — 2026-08-10 15:20 — first entry to claim the number
+            ## [80] FROM implementer — 2026-08-10 15:20 — same number, same minute, other author
+            """));
+
+        Assert.Equal(80, crossing.Earlier.Index);
+        Assert.Equal(80, crossing.Later.Index);
+    }
+
+    /// <summary>
+    /// AND THE NEXT COMPARISON DOES NOT RESCUE IT — the reason a strict test loses the pair entirely
+    /// rather than reporting it one entry late. `80 &lt; 80` is false, then `81 &lt; 80` is false: with
+    /// `&lt;` nothing fires anywhere, so the duplicate is not delayed, it is gone.
+    /// </summary>
+    [Fact]
+    public void ARepeatedIndexFollowedByAResumedSequence_ProducesExactlyOneCrossing()
+    {
+        var crossing = Assert.Single(Screen(
+            """
+            ## [80] FROM supervisor — 2026-08-10 15:20 — a
+            ## [80] FROM implementer — 2026-08-10 15:20 — b
+            ## [81] FROM supervisor — 2026-08-10 15:25 — the sequence resumes
+            """));
+
+        Assert.Equal(80, crossing.Later.Index);
+    }
+
+    /// <summary>
+    /// A REPEAT IS NAMED AS A REPEAT. "index runs backwards" is false about `[80]`, `[80]`, and it is
+    /// the line a human reads in the log — the same class of defect as the docstring that claimed the
+    /// repeat was caught, arriving through the fix for it.
+    /// </summary>
+    [Fact]
+    public void ARepeatIsDescribedAsARepeat_NotAsRunningBackwards()
+    {
+        var repeat = ChannelIndexSequence_Screen.Describe_Crossing(Assert.Single(Screen(
+            "## [80] FROM s — d — a\n## [80] FROM i — d — b")));
+
+        Assert.Contains("index REPEATS: [80] then [80]", repeat);
+        Assert.DoesNotContain("runs backwards", repeat);
+
+        // And the decreasing case keeps its own true wording.
+        var backwards = ChannelIndexSequence_Screen.Describe_Crossing(Assert.Single(Screen(
+            "## [107] FROM s — d — a\n## [106] FROM s — d — quoted\n## [108] FROM s — d — b")));
+
+        Assert.Contains("index runs backwards: [107] then [106]", backwards);
     }
 
     /// <summary>

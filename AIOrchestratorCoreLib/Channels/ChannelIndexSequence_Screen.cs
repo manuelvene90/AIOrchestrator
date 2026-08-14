@@ -63,9 +63,20 @@ public static class ChannelIndexSequence_Screen
     }
 
     /// <summary>
-    /// Every place the index sequence goes backwards. Consecutive comparison only: it catches a
-    /// repeated index and an out-of-range one in either direction, because a too-HIGH intruder is
+    /// Every place the index sequence FAILS TO ADVANCE — backwards or flat. Consecutive comparison
+    /// only: an out-of-range index is caught in either direction, because a too-HIGH intruder is
     /// caught by the next real entry falling back below it.
+    ///
+    /// NOT STRICT, and it was. `&lt;` cannot see `[80]`, `[80]` — equal is not backwards — while two
+    /// sentences of this class's own documentation promised that it could, one calling a repeated
+    /// index caught and the other naming same-minute double allocation as the very population being
+    /// handed to a human. The purpose line says "consuming an index that a later entry will collide
+    /// with"; the collision itself was the shape it could not see.
+    ///
+    /// It is also the MAJORITY shape, which is what makes it a defect rather than a wording slip: on
+    /// this machine, adjacent EQUAL pairs outnumber adjacent DECREASING ones 320 to 125 across the
+    /// live channels (rev-8's count). And it is the founding incident — CLAUDE.md decision 12 records
+    /// `option-lab-2` carrying two `[80]` and two `[81]`.
     /// </summary>
     public static IReadOnlyList<ChannelIndexCrossing> Find_Crossings(IReadOnlyList<ChannelHeaderLine> headers)
     {
@@ -73,7 +84,7 @@ public static class ChannelIndexSequence_Screen
 
         for (var i = 1; i < headers.Count; i++)
         {
-            if (headers[i].Index < headers[i - 1].Index)
+            if (headers[i].Index <= headers[i - 1].Index)
                 crossings.Add(new ChannelIndexCrossing(headers[i - 1], headers[i]));
         }
 
@@ -88,11 +99,18 @@ public static class ChannelIndexSequence_Screen
     /// against and false of the case that actually occurred here, so it would have pointed a reader at
     /// the innocent entry roughly half the time — worse than pointing at neither, because it reads as
     /// knowledge.
+    ///
+    /// A REPEAT IS NAMED AS A REPEAT. `Find_Crossings` stopped being strict so that `[80]`, `[80]`
+    /// would surface at all — 72% of the anomalies on this machine and the founding incident of
+    /// decision 12 — and "index runs backwards" is simply false about that pair. A line that describes
+    /// the majority shape wrongly is the same defect as the docstring that claimed it was caught.
     /// </summary>
     public static string Describe_Crossing(ChannelIndexCrossing crossing)
     {
+        var movement = crossing.Later.Index == crossing.Earlier.Index ? "index REPEATS" : "index runs backwards";
+
         return
-            $"index runs backwards: [{crossing.Earlier.Index}] then [{crossing.Later.Index}]. "
+            $"{movement}: [{crossing.Earlier.Index}] then [{crossing.Later.Index}]. "
             + $"{crossing.Earlier.Source} line {crossing.Earlier.LineNumber}: {crossing.Earlier.Line} — "
             + $"{crossing.Later.Source} line {crossing.Later.LineNumber}: {crossing.Later.Line}. "
             + "SCREEN, not a verdict: ONE of these two may be a header quoted inside another entry's body — which one depends on what was quoted — "
