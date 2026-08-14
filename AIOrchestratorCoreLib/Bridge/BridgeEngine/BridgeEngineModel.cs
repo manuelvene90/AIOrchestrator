@@ -846,7 +846,14 @@ internal sealed class BridgeEngineModel(
 
         if (_telegramClient == null)
         {
-            // Nothing will ever deliver these, so holding them is a leak rather than a promise.
+            // Nothing will ever deliver these, so holding them is a leak rather than a promise —
+            // but it is still a DROP, and this was the one exit of four that took it silently, in a
+            // method whose whole point is that a lost alert says so (rev-7). Logged per alert, and
+            // only when there is something to lose: on a machine with no bot configured this path
+            // runs every tick, and an unconditional line would bury the log it lives in.
+            foreach (var (orchId, alertText) in _heldCrashLoopAlerts.Keys)
+                _log.Log_Warning(orchId, $"Crash-loop alert dropped undelivered — Telegram is not configured, so nothing can ever deliver it: {alertText}");
+
             _heldCrashLoopAlerts.Clear();
             return;
         }
@@ -867,7 +874,18 @@ internal sealed class BridgeEngineModel(
             // It is still NOT the bound below: that covers the cases nothing here can see — a topic
             // the owner deleted from their phone, revoked bot rights — which Telegram answers 400
             // for ever regardless of what this session thinks its state is.
-            if (heldSession == null || heldSession.ClosedUtc != null)
+            // GENERAL IS NOT A CLOSED ORCHESTRATION, and treating it as one silenced the session
+            // that is the owner's own counterpart. General keeps no session.json and never gets
+            // one, so Get_Session_OrNull("general") returns null ALWAYS — not on an edge, on every
+            // tick — and this exit read that null as "closed, topic deleted". Its crash-loop alert
+            // was therefore discarded every single time, logged at INFO as an expected ending, for
+            // the one orchestration that is never closed and whose topic is alive and receiving.
+            // The watchdog emits once per episode, so the escalation was gone for good (rev-7 G1).
+            //
+            // The check is now the QUESTION IT MEANT: is this orchestration closed? General cannot
+            // be, and an unknown orchId still can — a session.json that has gone means the
+            // orchestration went with it.
+            if (key.OrchId != ChannelDiscovery.GENERAL_ORCH_ID && (heldSession == null || heldSession.ClosedUtc != null))
             {
                 _heldCrashLoopAlerts.Remove(key);
                 _log.Log_Info(key.OrchId, $"Crash-loop alert dropped — the orchestration is closed and its topic deleted with it: {key.AlertText}");
@@ -912,7 +930,12 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                await _telegramClient.Send_Message_Async(heldSession.TelegramTopicId, key.AlertText, cancellationToken);
+                // NULL-CONDITIONAL, and it is load-bearing rather than defensive: General has no
+                // session, and a null thread id is how this client addresses the General topic. The
+                // non-conditional form was safe only while the exit above dropped every sessionless
+                // orchestration — the bug that exit had. Fixing one without the other would have
+                // turned a silent discard into a NullReferenceException on the same path.
+                await _telegramClient.Send_Message_Async(heldSession?.TelegramTopicId, key.AlertText, cancellationToken);
 
                 // Dropped only after a CONFIRMED send — the rule 71a849a applied to three memos
                 // while this site, its own immediate predecessor, contradicted it.
