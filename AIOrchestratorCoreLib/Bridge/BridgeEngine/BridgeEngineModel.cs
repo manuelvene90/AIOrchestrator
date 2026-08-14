@@ -279,8 +279,20 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<string, string> _nudgedAboutEntry = [];
 
-    /// <summary>When the supervisor last posted a verdict into a spoke — the ledger's due-by signal.</summary>
-    readonly Dictionary<string, DateTime> _lastSupervisorVerdictUtc = [];
+    /// <summary>
+    /// When this orchestration last incurred a LEDGER DEBT — the due-by signal for PLAN.md.
+    ///
+    /// TWO EVENTS ARM IT, and it took the second one to make the rule hold for every session:
+    ///   - the supervisor posts a VERDICT into a spoke (work happened, the ledger must say so);
+    ///   - the OWNER sends a message (they asked for something, the ledger or the OWNER REQUESTS
+    ///     table must carry it).
+    ///
+    /// Only the first existed, and it cannot fire in a BASIC orchestration at all — a solo has no
+    /// spokes and posts no verdicts — so a solo was structurally exempt from ledger enforcement. It
+    /// then did exactly what an unenforced protocol step gets done: the owner asked for six things
+    /// over two hours and the bar read 3/3 throughout (2026-08-14).
+    /// </summary>
+    readonly Dictionary<string, DateTime> _ledgerDebtSinceUtc = [];
     readonly HashSet<string> _ledgerBehindReportedOrchIds = [];
     readonly Dictionary<string, string> _reportedLedgerShapeByOrchId = [];
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
@@ -2054,7 +2066,7 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            _lastSupervisorVerdictUtc.TryGetValue(session.OrchId, out var lastVerdictUtc);
+            _ledgerDebtSinceUtc.TryGetValue(session.OrchId, out var ledgerDebtSinceUtc);
 
             // The obligation is DURABLE, and the flag file is what carries it. This dictionary is
             // in-memory and BridgeState_Store persists only offsets and the last update id, so an
@@ -2065,10 +2077,10 @@ internal sealed class BridgeEngineModel(
             //
             // The flag's own write time is when the debt was incurred, so re-seeding from it costs
             // no new persistence and lets the ordinary comparison clear it once PLAN.md is newer.
-            if (lastVerdictUtc == default)
-                lastVerdictUtc = Read_LedgerDebtStamp_OrDefault(session.OrchId);
+            if (ledgerDebtSinceUtc == default)
+                ledgerDebtSinceUtc = Read_LedgerDebtStamp_OrDefault(session.OrchId);
 
-            var isBehind = LedgerHealth_Tracker.Is_LedgerBehind(_paths, session.OrchId, lastVerdictUtc == default ? null : lastVerdictUtc);
+            var isBehind = LedgerHealth_Tracker.Is_LedgerBehind(_paths, session.OrchId, ledgerDebtSinceUtc == default ? null : ledgerDebtSinceUtc);
 
             // The ORDER of the two halves is the correctness here, so the step owns it: the flag is
             // reconciled even in a meeting (lifting a block is not an interruption), while the alert
@@ -2459,7 +2471,7 @@ internal sealed class BridgeEngineModel(
                 if (!Planning.LedgerHealth_Tracker.Is_VerdictAt(entries, index))
                     continue;
 
-                _lastSupervisorVerdictUtc[append.Channel.OrchId] = DateTime.UtcNow;
+                _ledgerDebtSinceUtc[append.Channel.OrchId] = DateTime.UtcNow;
                 break;
             }
         }
@@ -7256,6 +7268,27 @@ internal sealed class BridgeEngineModel(
 
         _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
         Raise_OrchestrationActivity(target.OrchId);
+
+        // AN OWNER MESSAGE PUTS THE LEDGER IN DEBT, exactly as a verdict does, and this is the half
+        // that was missing (owner, 2026-08-14). They asked for six things over two hours and the bar
+        // stayed at 3/3 the whole time, because nothing in this system connects "the owner asked for
+        // something" to "the ledger has a line for it".
+        //
+        // IT IS THE ONLY ROUTE THAT WORKS FOR A SOLO. The verdict arming below fires on a supervisor
+        // entry in a SPOKE, and a basic orchestration has no spokes and no verdicts — so a solo could
+        // never be flagged for a stale ledger at all, whatever it did. The owner's reading was exact:
+        // *"you are just a session like any other. If you failed to upgrade the plan file any other
+        // future session also might fail."*
+        //
+        // THE OBLIGATION IS TO TOUCH PLAN.md, not to invent a task. A message that needs no new work
+        // still needs its row in OWNER REQUESTS — which the role commands already mandate "the moment
+        // the request arrives" — and that write clears the debt. So there is no case where this asks
+        // for something the protocol did not already ask for.
+        //
+        // GENERAL is excluded: it has no PLAN.md and never had one, so a debt there could never be
+        // paid and would block that session for ever.
+        if (target.OrchId != ChannelDiscovery.GENERAL_ORCH_ID)
+            _ledgerDebtSinceUtc[target.OrchId] = DateTime.UtcNow;
 
         if (_telegramClient == null || _telegramMuted)
             return;

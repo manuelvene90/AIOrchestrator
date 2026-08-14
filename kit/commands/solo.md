@@ -156,6 +156,35 @@ statement about your work being complete, never a clearance you have issued your
 deliverable genuinely needs an independent read before anyone should trust it, say so in one line and
 let the owner decide (see below) rather than promoting it on your own say-so.
 
+### OWNER REQUESTS — a section of the same file, and it is ENFORCED
+
+Below the ledger, in the same PLAN.md, keep the table of what the OWNER ASKED FOR, in their words,
+in arrival order, never deleted:
+
+```
+## OWNER REQUESTS — written the moment they arrive, in arrival order, never deleted
+
+| # | when | what they asked for | status |
+|---|---|---|---|
+| 7 | 20:56 | verify the status bar enrichment from the previous session | answered: never wired for solo — fixed, merged |
+```
+
+- **Write the row the moment the message arrives** — before answering, before working. The ledger is
+  what YOU decided to build; this is what they asked for, and the gap between the two is where
+  requests die. A message that arrives while you are mid-turn is buried by the next one otherwise.
+- **The app ENFORCES this, and you cannot end a turn while it is unpaid.** Every owner message puts
+  PLAN.md in debt: if you do not touch the file, `.ledger-behind` goes up and the turn-end hook
+  blocks you until you do. **An owner message that needs no new task still needs its row** — writing
+  that row is what clears the block.
+- Why it is enforced rather than trusted: this session's own failure, 2026-08-14. The owner asked for
+  six things across two hours and the bar read 3/3 the entire time, because a solo posts no verdicts
+  and the enforcement only ever watched verdicts. Their ruling: *"you are just a session like any
+  other. If you failed to upgrade the plan file any other future session also might fail. Fix this
+  permanently."*
+- **Status is about the REQUEST, not your branch.** `built, not merged` is a real status: they cannot
+  use it yet, so it is not done. A row is `handled` only when the thing they asked for is TRUE FOR
+  THEM.
+
 ## SCOPE — the endeavour is what the OWNER asked for (HARD RULE, owner directive 2026-08-14)
 
 You are both the one who finds problems and the one who decides what to do about them, so this rule
