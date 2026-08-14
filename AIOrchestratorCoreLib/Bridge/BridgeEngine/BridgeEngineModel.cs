@@ -1270,6 +1270,14 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
         {
+            // BRACKET THE READ. `imp-2` named the one writer neither dead hypothesis covers:
+            // Channel_Compactor rewrites the live file wholesale rather than appending, which is a
+            // far wider window for a reader. This stat is what lets the next occurrence say whether
+            // ANY writer touched the file while it was being read — one stamp at report time would
+            // have nothing to compare against. It costs one stat per channel per tick, on a path
+            // that already reads every channel's full text.
+            var beforeRead = ChannelFile_Snapshot.Take_OrUnknown(channel.FilePath);
+
             var malformed = ChannelShape_Validator.Find_MalformedHeaders(UsageTotals_Reader.Read_Text_Safe(channel.FilePath));
 
             if (malformed.Count == 0)
@@ -1306,8 +1314,10 @@ internal sealed class BridgeEngineModel(
             // Logged BEFORE the append, so the evidence survives an append that fails: without this
             // the only record of an occurrence was the report itself, and twice tonight that report
             // could not settle the question its own subject was sitting on.
+            var fileAcrossRead = ChannelFile_Snapshot.Describe_ChangeAcrossRead(beforeRead, ChannelFile_Snapshot.Take_OrUnknown(channel.FilePath));
+
             foreach (var entry in unreported)
-                _log.Log_Warning(channel.OrchId, $"Malformed header — {Path.GetFileName(channel.FilePath)} line {entry.LineNumber} — {ChannelShape_Validator.Diagnose(entry.Line)}");
+                _log.Log_Warning(channel.OrchId, $"Malformed header — {Path.GetFileName(channel.FilePath)} line {entry.LineNumber} — {ChannelShape_Validator.Diagnose(entry.Line)} {fileAcrossRead}");
 
             // CONSULT THE RETURN VALUE. This block used to rely on the append THROWING past it, and
             // said so — "the append above either wrote the report or threw past this line". Nine
