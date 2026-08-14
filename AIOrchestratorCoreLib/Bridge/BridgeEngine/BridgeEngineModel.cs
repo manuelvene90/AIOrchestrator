@@ -1318,56 +1318,50 @@ internal sealed class BridgeEngineModel(
 
             List<(int LineNumber, string Line)> unreported = [];
 
-            // Third instance of tonight's shape, found by sweeping rather than by a review: the memo
-            // was COMMITTED here, before the append that reports these entries. An append that
-            // throws left them permanently marked as reported — and this memo has no release at all,
-            // so those entries stay invisible for the life of the process, which is exactly what the
-            // report exists to prevent.
+            // MASTER'S SHAPE ON PURPOSE — this memo is NOT this branch's to fix. The defect is real
+            // (the memo is committed here, before the append that reports these entries, so a failed
+            // append marks them reported for ever and the memo has no release) and it was fixed here
+            // independently, in the same lines, by `fix/atomic-channel-appends`. Two implementations
+            // of one fix carried most of that pair's 23 conflict regions, the largest count in the
+            // repo, and the class — "a memo recording work as done, moved to after the append
+            // succeeded", seven sites — belongs to that branch by ruling (supervisor, 2026-08-14).
+            //
+            // So these lines are byte-identical to master, deliberately, so that fix applies cleanly.
+            // UNTIL IT MERGES THIS SITE IS UNPROTECTED: the append below throws rather than returning
+            // false, and a throw here takes the rest of the mirror tick with it.
             foreach (var entry in malformed)
             {
-                if (_reportedMalformedHeaders.Contains($"{channel.FilePath}|{entry.Line}"))
-                    continue;
+                var isNew = _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
 
-                if (!isFirstSight)
+                if (isNew && !isFirstSight)
                     unreported.Add(entry);
-                else
-                    _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
             }
 
             if (unreported.Count == 0)
                 continue;
 
             // THE BYTES, to the log only — nobody with a phone can act on a hex dump (decision 15).
-            // Logged BEFORE the append, so the evidence survives an append that fails: without this
-            // the only record of an occurrence was the report itself, and twice tonight that report
-            // could not settle the question its own subject was sitting on.
+            //
+            // LOGGED BEFORE THE APPEND, AND THAT ORDERING IS DELIBERATE — do not "tidy" it to sit
+            // after the append to match the memo below it. A MEMO must be recorded after a confirmed
+            // write, because it must never record work that did not happen. A DIAGNOSTIC must be
+            // written before, because it must not vanish in exactly the case it exists to explain:
+            // an append that fails is the occurrence, and logging afterwards loses the evidence for
+            // it. Two different things, two different correct orderings, and they do not conflict
+            // (supervisor's ruling, 2026-08-14).
+            //
+            // Without this, the only record of an occurrence was the report itself — and twice on
+            // 2026-08-13 that report could not settle the question its own subject was sitting on.
             var fileAcrossRead = ChannelFile_Snapshot.Describe_ChangeAcrossRead(beforeRead, ChannelFile_Snapshot.Take_OrUnknown(channel.FilePath));
 
             foreach (var entry in unreported)
                 _log.Log_Warning(channel.OrchId, $"Malformed header — {Path.GetFileName(channel.FilePath)} line {entry.LineNumber} — {ChannelShape_Validator.Diagnose(entry.Line)} {fileAcrossRead}");
 
-            // CONSULT THE RETURN VALUE. This block used to rely on the append THROWING past it, and
-            // said so — "the append above either wrote the report or threw past this line". Nine
-            // minutes later the safe wrapper made that false: it catches, logs and returns false, so
-            // the memo was recorded whether or not the report landed, and `_reportedMalformedHeaders`
-            // has no release. One failed append then suppressed the report for those entries for the
-            // life of the process — the session never told, never re-posting, while the owner was
-            // texted that it "has been told to re-post", a claim whose only carrier was the append
-            // that had just been lost.
-            //
-            // Both commits are right alone; the defect lived in their composition, because the second
-            // changed the throwing behaviour the first depended on (rev-5, 2026-08-13).
-            if (!Append_AppEntry_Safe(
-                    channel.FilePath,
-                    $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
-                    ChannelShape_Validator.Build_ReportBody(unreported),
-                    DateTime.Now))
-                continue;
-
-            // Recorded only after a CONFIRMED write, so a failed one is retried on the next tick
-            // rather than remembered as reported.
-            foreach (var entry in unreported)
-                _reportedMalformedHeaders.Add($"{channel.FilePath}|{entry.Line}");
+            ChannelAppender.Append_AppEntry(
+                channel.FilePath,
+                $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
+                ChannelShape_Validator.Build_ReportBody(unreported),
+                DateTime.Now);
 
             _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} malformed entry header(s) — those entries were never mirrored");
             Raise_OrchestrationActivity(channel.OrchId);
