@@ -603,13 +603,35 @@ public class NudgeDeciderTests
     /// <summary>
     /// The sentinel cannot be mistaken for an entry. A real identity is a whole entry and always opens
     /// `## [`, so no channel content can ever compare equal to it and suppress a nudge it earned.
+    ///
+    /// PARSED FROM REAL CHANNEL TEXT, NOT BUILT BY A FIXTURE (rev-5's R7). This case used to hand
+    /// `BuildTitled` a subject and assert that the result opened `## [` — but `BuildTitled` INTERPOLATES
+    /// that prefix itself, so the assertion read back the test's own format string and the parser never
+    /// ran. It would have stayed green if `RawText` had stopped carrying the header entirely, which is
+    /// the single change that would make the sentinel collidable.
+    ///
+    /// The claim is about what the PARSER produces, so the parser has to be the thing that produces it.
+    /// Same class as `[71]`'s aborted run and the harness that certified unrun code: the green was real,
+    /// what it was green ABOUT was not.
     /// </summary>
     [Fact]
     public void TheNoConversationSentinelCannotCollideWithARealEntry()
     {
-        var briefed = BuildTitled((ChannelAuthors.Supervisor, "brief", "implement the parser"));
+        var parsed = ChannelEntry_Parser.Parse_All(
+            "## [1] FROM supervisor — 2026-08-12 15:00 — brief\nimplement the parser\n\n"
+            + "## [2] FROM implementer — 2026-08-12 15:20 — filed\nlanded as abc1234\n");
 
-        Assert.StartsWith("## [", Nudge_Decider.Identify_NudgeSubject(briefed, NO_ARCHIVE));
+        Assert.Equal(2, parsed.Count);
+
+        // EVERY entry, not just the one the decider happens to pick: the safety property is that NO
+        // parser output can equal the sentinel, and one sample does not say that.
+        foreach (var entry in parsed)
+        {
+            Assert.StartsWith("## [", entry.RawText);
+            Assert.NotEqual(Nudge_Decider.NO_CONVERSATION_YET, entry.RawText);
+        }
+
+        Assert.StartsWith("## [", Nudge_Decider.Identify_NudgeSubject(parsed, NO_ARCHIVE));
         Assert.DoesNotContain("## [", Nudge_Decider.NO_CONVERSATION_YET);
     }
 
