@@ -12,6 +12,14 @@ namespace AIOrchestratorCoreLib.Kit;
 /// </summary>
 public static class KitAssets_Installer
 {
+    /// <summary>
+    /// The file dropped beside the installed commands naming the app that put them there. Sessions
+    /// read the INSTALLED copy while their author edits the branch source, and telling the two apart
+    /// has cost this project whole evenings — so the installed folder now carries its own provenance
+    /// instead of leaving everyone to infer it from mtimes.
+    /// </summary>
+    public const string PROVENANCE_FILE_NAME = ".installed-by.txt";
+
     /// <summary>Returns a human-readable list of what was installed/updated (empty = nothing to do).</summary>
     public static IReadOnlyList<string> Ensure_Installed(
         string kitCommandsFolder,
@@ -19,7 +27,8 @@ public static class KitAssets_Installer
         string claudeCommandsFolder,
         string statuslineTargetFile,
         string kitHooksFolder,
-        string claudeHooksFolder)
+        string claudeHooksFolder,
+        string? installerDescription = null)
     {
         List<string> installedFiles = [];
 
@@ -65,7 +74,30 @@ public static class KitAssets_Installer
                 installedFiles.Add(statuslineTargetFile);
         }
 
+        Write_Provenance_BestEffort(claudeCommandsFolder, installerDescription);
+
         return installedFiles;
+    }
+
+    /// <summary>
+    /// Written on EVERY run, not only when something was copied: the question it answers is "which
+    /// app owns what is here now", and an unchanged folder is exactly the case where that is hardest
+    /// to work out. Never counted as an installed file — it is provenance, not a kit asset, and a
+    /// startup log line listing it every time would be noise.
+    /// </summary>
+    static void Write_Provenance_BestEffort(string claudeCommandsFolder, string? installerDescription)
+    {
+        if (installerDescription == null || !Directory.Exists(claudeCommandsFolder))
+            return;
+
+        try
+        {
+            File.WriteAllText(Path.Combine(claudeCommandsFolder, PROVENANCE_FILE_NAME), $"{installerDescription}\n");
+        }
+        catch
+        {
+            // A missing note is cosmetic; installing the kit must never fail on it.
+        }
     }
 
     static bool Is_InstallableCommandAsset(string filePath)

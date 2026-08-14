@@ -31,11 +31,53 @@ public class KitAssetsInstallerTests : IDisposable
         Directory.Delete(_tempRoot, recursive: true);
     }
 
-    IReadOnlyList<string> Run_Installer()
+    IReadOnlyList<string> Run_Installer(string? installerDescription = null)
     {
         return KitAssets_Installer.Ensure_Installed(
             _kitCommandsFolder, _kitStatuslineFile, _commandsTargetFolder, _statuslineTargetFile,
-            Path.Combine(_tempRoot, "kit", "hooks"), Path.Combine(_tempRoot, "claude", "hooks"));
+            Path.Combine(_tempRoot, "kit", "hooks"), Path.Combine(_tempRoot, "claude", "hooks"),
+            installerDescription);
+    }
+
+    /// <summary>
+    /// SESSIONS READ THE INSTALLED COPY WHILE THEIR AUTHOR EDITS THE BRANCH SOURCE, and telling the
+    /// two apart has cost this project whole evenings — an edit is not delivery until an app startup
+    /// has copied it here. The installed folder now carries the identity of the app that filled it,
+    /// so the question stops being answered by comparing mtimes.
+    /// </summary>
+    [Fact]
+    public void Ensure_Installed_NamesTheAppThatInstalledTheCommands()
+    {
+        Run_Installer("build 22:43 · bin\\Debug — C:\\repos\\AIOrchestrator\\bin\\Debug\\");
+
+        var provenanceFile = Path.Combine(_commandsTargetFolder, KitAssets_Installer.PROVENANCE_FILE_NAME);
+
+        Assert.True(File.Exists(provenanceFile), "the installed commands do not say which app put them there");
+        Assert.Contains("build 22:43 · bin\\Debug", File.ReadAllText(provenanceFile));
+    }
+
+    /// <summary>
+    /// Rewritten even when NOTHING was copied: "which app owns what is here now" is hardest to answer
+    /// precisely in the run where the folder was already up to date, which is most runs.
+    /// </summary>
+    [Fact]
+    public void Ensure_Installed_SecondRunUnchanged_StillRefreshesTheProvenance()
+    {
+        Run_Installer("build 18:35 · bin\\Debug - Copia");
+
+        var installed = Run_Installer("build 22:43 · bin\\Debug");
+
+        Assert.Empty(installed);
+        Assert.Contains("build 22:43 · bin\\Debug", File.ReadAllText(Path.Combine(_commandsTargetFolder, KitAssets_Installer.PROVENANCE_FILE_NAME)));
+    }
+
+    /// <summary>The note is provenance, not a kit asset — counting it would log an install every run.</summary>
+    [Fact]
+    public void Ensure_Installed_TheProvenanceNote_IsNotReportedAsAnInstalledAsset()
+    {
+        var installed = Run_Installer("build 22:43 · bin\\Debug");
+
+        Assert.DoesNotContain(installed, file => file.EndsWith(KitAssets_Installer.PROVENANCE_FILE_NAME, StringComparison.Ordinal));
     }
 
     /// <summary>

@@ -115,9 +115,14 @@ public partial class App : Application
             var claudeHooksFolder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "hooks");
 
+            // The stamp goes in the log FIRST and into the installed folder second: which app is
+            // running, and which app owns the commands the sessions read. Both were guesswork.
+            var buildStamp = AIOrchestratorCoreLib.Build.BuildStamp_Reader.Describe_RunningApp();
+            log.Log_Info("", $"Running {buildStamp} — from {AppContext.BaseDirectory}");
+
             var installedFiles = KitAssets_Installer.Ensure_Installed(
                 kitCommandsFolder, kitStatuslineFile, claudeCommandsFolder, statuslineTargetFile,
-                kitHooksFolder, claudeHooksFolder);
+                kitHooksFolder, claudeHooksFolder, $"{buildStamp} — {AppContext.BaseDirectory}");
 
             foreach (var installedFile in installedFiles)
                 log.Log_Info("", $"Kit asset installed/updated: {installedFile}");
