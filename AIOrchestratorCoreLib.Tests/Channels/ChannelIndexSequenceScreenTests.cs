@@ -206,12 +206,15 @@ public class ChannelIndexSequenceScreenTests
     }
 
     /// <summary>
-    /// THE LIMIT, pinned so nobody mistakes it for coverage: a quoted header that is still the LAST
-    /// header in the file is invisible, because nothing has followed it to fall back. The window
-    /// closes the moment anybody appends.
+    /// THE LIMIT, AND IT IS ONE SHAPE ONLY — the name says which, because the old one
+    /// (<c>AQuotedHeaderAtTheEndOfTheFile…</c>) generalised this single fixture into a claim about
+    /// both shapes, and the class docstring repeated it (rev-8 F3).
+    ///
+    /// A quoted header with a HIGHER index, still last in the file, is invisible: nothing has followed
+    /// it to fall back below it. That window closes the moment anybody appends.
     /// </summary>
     [Fact]
-    public void AQuotedHeaderAtTheEndOfTheFileIsNotYetVisible()
+    public void AQuotedHIGHERHeaderAtTheEndOfTheFileIsNotYetVisible()
     {
         Assert.Empty(Screen(
             """
@@ -219,6 +222,28 @@ public class ChannelIndexSequenceScreenTests
 
             ## [200] FROM supervisor — 2026-08-13 20:41 — quoted, nothing follows it
             """));
+    }
+
+    /// <summary>
+    /// AND THE OTHER SHAPE HAS NO WINDOW AT ALL — the one that actually happened here. A quoted OLDER
+    /// header is a crossing against the line ABOVE it, so it fires with nothing following it.
+    ///
+    /// Not a guard for a code change; it is the missing half of the pair, and the pair is what makes
+    /// the docstring's limit a true statement instead of a general one. The shape wrongly declared
+    /// blind was the shape the class was written for, which is what made the wrong sentence worth a
+    /// finding rather than a nit.
+    /// </summary>
+    [Fact]
+    public void AQuotedOLDERHeaderAtTheEndOfTheFileIsCaughtImmediately()
+    {
+        var crossing = Assert.Single(Screen(
+            """
+            ## [107] FROM implementer — 2026-08-13 21:34 — real
+
+            ## [106] FROM supervisor — 2026-08-13 21:33 — quoted, nothing follows it
+            """));
+
+        Assert.Equal(106, crossing.Later.Index);
     }
 
     /// <summary>

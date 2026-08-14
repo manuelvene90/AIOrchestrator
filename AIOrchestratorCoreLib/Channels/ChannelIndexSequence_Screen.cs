@@ -37,8 +37,19 @@ public readonly record struct ChannelIndexCrossing(ChannelHeaderLine Earlier, Ch
 /// whether the quoted index was lower or higher than its surroundings. Both are printed with their
 /// line numbers; a screen that misstates which line it means costs more than it saves.
 ///
-/// It cannot see a quoted header that is still the LAST header in the file: nothing has followed it to
-/// fall back. That window closes as soon as anybody appends.
+/// THE BLIND WINDOW IS NARROWER THAN IT READS, AND THE REAL CASE IS NOT IN IT. A quoted header that
+/// is still the LAST header in the file is invisible only when its index is HIGHER than the one before
+/// it — `[94]` then a quoted `[200]`, with nothing yet to fall back below it. That window closes as
+/// soon as anybody appends.
+///
+/// The quoted-OLDER shape, which is what actually happened on this machine, has NO window: `[107]`
+/// then a quoted `[106]` is already a crossing against the line above it, whether or not anything
+/// follows.
+///
+/// The general sentence that used to stand here — "it cannot see a quoted header that is still the
+/// last header in the file" — was pinned by one fixture of the first shape and stated about both. That
+/// is the same error the SUSPECT label was withdrawn for, one level up, and a reader trusting it would
+/// believe the real case needs an append to surface (rev-8 F3, 2026-08-13).
 /// </summary>
 public static class ChannelIndexSequence_Screen
 {
