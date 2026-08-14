@@ -70,6 +70,21 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
   shared constants) stay yours. A sub-agent's report is not evidence — read the diff and run the
   suite yourself before you report. Full rules: read `~/.claude/commands/implementer.md`, section
   "Fan out" — read the file, never invoke the command.
+- **Announce a window before a multi-file write batch, and CLOSE it.** The app resolves your state
+  from these exactly as it does an implementer's — you are the other author allowed to announce one —
+  so an unclosed window leaves you rendering as still writing forever, and the owner sees a session
+  that never finished. Append an entry whose SUBJECT contains `WRITING WINDOW OPEN` (or
+  `MUTATION WINDOW OPEN` for a mutation run) naming the files in flight, and one containing
+  `WRITING WINDOW CLOSED` (or `MUTATION WINDOW CLOSED`) with the results.
+
+  **Spell it in full and match the kind you opened.** The first word is part of the marker, not
+  decoration, and the two kinds are tracked SEPARATELY — both can be open at once and each needs its
+  own close. **A mis-spelled close does nothing and reports nothing**; the window simply stays open.
+  Do not propose relaxing the matcher: "MUTATION WINDOW CLOSED" CONTAINS "WINDOW CLOSED", so
+  accepting the short form would let a mutation close silently close a writing window.
+
+  You have no supervisor auditing your files mid-write, so the window is not protecting you from a
+  reader here — it is what stops the app reporting you as busy when you are done.
 
 ## When a basic orchestration outgrows itself
 

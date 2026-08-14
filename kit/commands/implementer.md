@@ -111,6 +111,21 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   files; without one, your half-written state may be reported as defects.
   **Closing it matters more than opening it** — an unclosed window is read as still open forever, so
   it masks your filed report as "still writing" and keeps the app nudging you.
+- **SPELL THE CLOSE IN FULL, and match the kind you opened.** The four phrases are
+  `WRITING WINDOW OPEN` / `WRITING WINDOW CLOSED` and `MUTATION WINDOW OPEN` /
+  `MUTATION WINDOW CLOSED`. **The first word is part of the marker, not decoration**, and the two kinds
+  are tracked SEPARATELY: both can be open at once, closing a mutation window does not close a writing
+  window, and each needs its own close.
+
+  **A mis-spelled or mismatched close does not fail loudly — it does nothing at all**, and your window
+  stays open forever while the app reads you as still writing. On 2026-08-14 two of ten members got
+  this wrong in one day: one wrote a bare "WINDOW CLOSED" without the WRITING prefix and latched its
+  channel open, the other closed a mutation window while a writing window still stood. Neither was
+  careless; this paragraph did not exist.
+
+  **Do not propose relaxing the matcher to accept the bare form** — "MUTATION WINDOW CLOSED" CONTAINS
+  "WINDOW CLOSED", so a matcher that accepted the short phrase would let a mutation close silently
+  close a writing window. The matcher is right; the spelling is yours to get right.
 - **When your deliverable is accepted and you have no next task, DECLARE IT.** A one-line entry
   SUBJECTED `STANDING BY — <what you are waiting for>`. **Accepted is the word that matters:** while
   your report is still waiting on a verdict you are not idle, you are waiting on your supervisor, and

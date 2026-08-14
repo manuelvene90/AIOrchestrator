@@ -191,6 +191,16 @@ As soon as the goal is clear from the owner's first instruction, drop
   clears nothing. That gate exists because a brief of mine that merely discussed a marker opened a
   reviewer's window and pinned it for four hours. If a member is stuck with a window it never closed,
   the fix is to tell the member to append the close, not to append it for them.
+- **When you tell a member to close one, tell it the EXACT phrase, and the matching kind.** The four
+  are `WRITING WINDOW OPEN` / `WRITING WINDOW CLOSED` and `MUTATION WINDOW OPEN` /
+  `MUTATION WINDOW CLOSED`. The two kinds are tracked SEPARATELY — both can be open at once, and
+  closing one does not close the other. **A mis-spelled close does nothing and says nothing**: the
+  window stays open and the member keeps rendering as still writing, which you will read as a stalled
+  session. On 2026-08-14 two of ten members got this wrong in a day — one wrote a bare
+  "WINDOW CLOSED" without the WRITING prefix, one closed a mutation window while a writing window
+  stood open. **Never propose relaxing the matcher**: "MUTATION WINDOW CLOSED" CONTAINS
+  "WINDOW CLOSED", so accepting the short form would let a mutation close silently close a writing
+  window. The matcher is correct; the instruction you give is what has to be exact.
 - **EVERY owner message gets a reply from you, before your turn ends — no exceptions.** Even when
   there is nothing to decide and nothing is finished, the owner must never be left with "Sup:
   thinking…" as the last thing they see. One line is enough: `noted — imp-2 is on it, I'll report
