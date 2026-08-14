@@ -228,6 +228,22 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// WHEN A TOPIC NAME MAY BE ATTEMPTED AGAIN after an attempt whose outcome we could not learn.
+    ///
+    /// A SECOND DICTIONARY, DELIBERATELY, AND IT IS THE POINT OF THE FIX — the same move
+    /// <see cref="Status.Nudge_Decider"/> records for `_nudgedAboutEntry`, whose docstring notes that two
+    /// earlier attempts failed because "the nudge gate was borrowing a map that already carried two
+    /// meanings". `_appliedTopicNames` carried two: *this name is applied* and *do not retry this now*.
+    /// The entry guard read both from one value, so every failure had to be forced into one of them and a
+    /// transport failure — which tells us NOTHING — was recorded as if it had told us the name applied.
+    /// Choosing which of the two meanings to get wrong is not a predicate problem and no predicate fixes
+    /// it. This map has exactly one meaning and drives nothing else.
+    ///
+    /// Lost on restart, which costs one extra attempt per orchestration. Visible, cheap, self-correcting.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _topicNameRetryAfterUtc = [];
+
+    /// <summary>
     /// The status-line text last WRITTEN to each topic, so an unchanged line costs no API call.
     /// In memory on purpose, unlike the message id: after a restart the first tick edits once with
     /// whatever is current, which is correct, and the id — the thing that must not be lost — lives
@@ -864,7 +880,11 @@ internal sealed class BridgeEngineModel(
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
                 _log.Log_Warning(session.OrchId, alertText);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING session's stall alert in the same sweep, and the tick below it.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -1243,7 +1263,11 @@ internal sealed class BridgeEngineModel(
                 $"⚠️ {count} message{(count == 1 ? "" : "s")} in this orchestration never reached you — the session wrote a malformed channel header, so the app could not see {(count == 1 ? "it" : "them")}. It has been told to re-post.",
                 cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the owner is never told their entry is unreadable, and the tick dies with the notice.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -1419,7 +1443,11 @@ internal sealed class BridgeEngineModel(
                 $"⚠️ {memberId} was ORPHANED (alive but nothing listening — it ignored the nudge). Respawned it; its work on disk is untouched, but its in-session context is gone.",
                 cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: a member whose monitor is dead is not recovered, and the tick that would retry it goes too.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -1565,7 +1593,11 @@ internal sealed class BridgeEngineModel(
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
                 _log.Log_Warning(session.OrchId, alertText);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING session's budget alert in the same sweep.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -1666,7 +1698,11 @@ internal sealed class BridgeEngineModel(
 
             Save_LimitAlertState(state);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the REMAINING thresholds in the same loop — a timeout on the 90% alert can swallow the 100% one.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -1977,6 +2013,31 @@ internal sealed class BridgeEngineModel(
             {
                 return await client.Send_HtmlMessage_Async(threadId, MonospaceBlocks_Formatter.Build_Html(chunk), cancellationToken);
             }
+            // DELIBERATELY BARE — DO NOT "COMPLETE" THE SWEEP HERE. It was filtered once, in the
+            // sixteen-site pass, and that was a REGRESSION which rev-6 caught; this comment replaces
+            // the wrong one.
+            //
+            // The sweep's premise does not hold at this site. It assumed a bare rethrow kills the tick.
+            // Here it does not: the ONLY caller is Mirror_Append_Async, whose own OperationCanceled
+            // catch is ALREADY filtered, with a generic sibling that logs at ERROR and returns false so
+            // the tailer re-emits the entry. A timeout was therefore caught one frame up and turned
+            // into an orderly retry — the desired behaviour, already in place.
+            //
+            // Filtering here made a timeout fall into the catch below, which is written for "Telegram
+            // rejected malformed HTML" — an instant 400 — and which FALLS THROUGH TO A SECOND LIVE CALL
+            // (the plain-text send at the end of this method) against a host that has just proved it
+            // does not answer. Two ~90-second waits inside a loop that ticks every 2 seconds. It also
+            // misdiagnosed a network timeout as "HTML mockup send rejected", dropped the severity from
+            // ERROR to WARNING, and — if the HTML send reached Telegram and only the RESPONSE timed out
+            // — posted a DUPLICATE to the owner's topic.
+            //
+            // This is the rule stated ~100 lines below at Announce_SupervisorFree_Async and applied
+            // there and at Publish_DeliveryReceipt_Async: A FALLBACK IS FOR "THAT CALL FAILED", NOT FOR
+            // "THE ENDPOINT IS UNREACHABLE". Three identical shapes; two were reasoned about correctly
+            // and this one was swept.
+            //
+            // THE TEST BEFORE FILTERING ANY SITE IS NOT "is it bare" — it is "does an escape here reach
+            // an UNFILTERED frame, and does the generic catch below make another live call".
             catch (OperationCanceledException)
             {
                 throw;
@@ -2159,7 +2220,11 @@ internal sealed class BridgeEngineModel(
 
             await _telegramClient.Send_Photo_Async(threadId, photoPath, cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: a BEST-EFFORT photo — a path whose entire contract is that failing costs nothing.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -2235,6 +2300,37 @@ internal sealed class BridgeEngineModel(
             Remove_TopicCreationPin_FireAndForget(channel.OrchId, topicId);
             return topicId;
         }
+        // DELIBERATELY NOT FILTERED, AND THIS COMMENT IS THE REASON — DO NOT "COMPLETE" THE SWEEP HERE.
+        //
+        // FOURTEEN sibling sites on the tick path took `when (cancellationToken.IsCancellationRequested)`
+        // so an HttpClient timeout stops being read as a shutdown. THIS ONE MUST NOT, and the asymmetry
+        // is not an oversight: at every other site falling through to the generic catch costs a LOG LINE
+        // and a retry next tick. Here it costs a MISDELIVERY — the catch below returns null, and a null
+        // thread id mirrors the entry to the GENERAL topic instead of the orchestration's own.
+        //
+        // A lost tick is recoverable and invisible. A message delivered to the wrong topic is neither:
+        // the owner reads it in the wrong conversation and has no way to tell it was misrouted, and
+        // nothing anywhere records that it went to the wrong place. Aborting the tick is the cheaper
+        // failure, so a transient timeout is left to abort.
+        //
+        // If this ever needs to change, the fix is to make the null case STOP MIRRORING rather than
+        // redirect — not to add the filter here.
+        //
+        // THE COUNT ABOVE HAS BEEN WRONG TWICE AND IS RECONCILED HERE SO IT CANNOT DRIFT SILENTLY AGAIN.
+        // It first said "sixteen", which was the number of sites ADDRESSED — this one among them, and it
+        // did not take the filter. Corrected to fifteen, which was right for that commit and wrong one
+        // commit later, because reverting Send_MirrorChunk_Async and wrapping a new call site both moved
+        // it. The arithmetic, verifiable by grep at any time:
+        //
+        //     6  filtered at master 2110c56
+        //  + 14  sibling sites converted here (11 of the original 12, B1, B2 and Flush_OwnerDeliveries)
+        //  +  1  NEW try/catch wrapping the unprotected call in Announce_SupervisorFree_Async
+        //  = 21  filtered now, of 44 total
+        //
+        // Send_MirrorChunk_Async is the twelfth of the original twelve and was REVERTED as a regression,
+        // which is why it is 11 and not 12. A durable comment carrying a count owes the reader the sum
+        // that produces it; without one, the next person to move a site has no way to tell whether the
+        // number was already stale.
         catch (OperationCanceledException)
         {
             throw;
@@ -2873,7 +2969,11 @@ internal sealed class BridgeEngineModel(
 
             _log.Log_Info(request.OrchId, $"Asked the owner to confirm closing '{request.OrchId}' (asked by {request.Requester})");
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the owner is never asked, so the close request stays unresolved and the tick that would re-ask is gone.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -4072,12 +4172,25 @@ internal sealed class BridgeEngineModel(
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
 
+            // AND THE SECOND QUESTION, WHICH USED TO BE THE SAME ONE. An attempt whose outcome we could
+            // not learn holds this orchestration back for a WHILE — not for ever, which is what
+            // recording it as applied did, and not for two seconds, which is what recording nothing did.
+            var retryAfter = _topicNameRetryAfterUtc.TryGetValue(session.OrchId, out var stamp) ? stamp : (DateTime?)null;
+
+            if (!TopicNameSync_Gate.Is_AttemptDue(retryAfter, DateTime.UtcNow))
+                continue;
+
             try
             {
                 await _telegramClient.Edit_ForumTopic_Async(session.TelegramTopicId.Value, wantedName, cancellationToken);
                 _appliedTopicNames[session.OrchId] = wantedName;
+                _topicNameRetryAfterUtc.Remove(session.OrchId);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING session's topic name, on a best-effort path.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -4095,7 +4208,50 @@ internal sealed class BridgeEngineModel(
             {
                 // A REAL failure still must not spin: remember the attempt so it is retried on the
                 // next name change rather than on the next tick.
-                _appliedTopicNames[session.OrchId] = wantedName;
+                //
+                // BUT A TIMEOUT IS NOT A REAL FAILURE — IT IS "WE DO NOT KNOW", the same principle
+                // applied at Narrate_BusySupervisor_Async and not carried here when the filter above
+                // was added. The reasoning for this write is sound for the exceptions that used to
+                // arrive; the filter changed WHICH ones arrive, and that was not revisited.
+                //
+                // Writing the cache on a timeout records a name that may never have been applied as
+                // applied, and `_appliedTopicNames` has no Remove and no Clear anywhere in this file —
+                // the entry then survives for the life of the process. The owner toggles a mode, the
+                // edit times out, and the topic keeps showing the OLD glyph until the mode changes
+                // again or the app restarts, while the log says "sync failed" in the same breath as
+                // the code records success. Decision 11 makes that glyph the owner-visible truth of a
+                // passing state, so the stale name is not cosmetic.
+                //
+                // THE THREE BUCKETS, decided in TopicNameSync_Gate where the suite can reach them. An
+                // earlier version of this used `ex is not OperationCanceledException`, which is the
+                // two-bucket test rev-6 proved insufficient for the identical decision one method away —
+                // same class, two predicates, one commit. The predicate is now one predicate, and it
+                // lives somewhere it can be tested.
+                //
+                // BACKOFF REUSES MIRROR_RETRY_BACKOFF_SECONDS (30 s) rather than inventing a value: this
+                // file already has one retry window with that meaning, applied through
+                // Is_MirrorAttemptDue, and a second magic number would be worse than the one being
+                // explained. Thirty seconds takes a failing sync from ~30 attempts a minute to 2, and
+                // bounds an owner-visible glyph delay at 30 s. Do not "fix" it into a bespoke constant.
+                // THE REFUSAL BRANCH NOW ONLY EVER SEES A GENUINE REFUSAL, which is what makes writing
+                // the applied name here defensible at all. rev-10's F1 was that this branch uses the
+                // applied-name dictionary as a retry suppressor — "this name is applied" written for a
+                // name Telegram just refused, the same conflation the unknown branch was split to end.
+                // Its owner-visible half is closed by the classification: a 429 and every 5xx are
+                // OutcomeUnknown now, so they are stamped and retried rather than recorded as applied
+                // for the life of the process.
+                //
+                // THE RESIDUAL, STATED RATHER THAN CLAIMED AWAY: for a real refusal this write is still
+                // a dictionary saying "applied" about a name that is not. The BEHAVIOUR is right — an
+                // invalid name will not become valid, so it must not be retried until the wanted name
+                // changes, and the guard above does exactly that — but the map is not honest about what
+                // it holds. Closing that wants a third memo keyed on the refused name, which is not
+                // taken here because nothing observable depends on it.
+                if (TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown)
+                    _topicNameRetryAfterUtc[session.OrchId] = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, MIRROR_RETRY_BACKOFF_SECONDS);
+                else
+                    _appliedTopicNames[session.OrchId] = wantedName;
+
                 _log.Log_Warning(session.OrchId, $"Topic name sync failed: {ex.Message}");
             }
         }
@@ -4694,6 +4850,18 @@ internal sealed class BridgeEngineModel(
             _store.Set_TelegramTopicId(session.OrchId, newTopicId);
 
             _appliedTopicNames[session.OrchId] = topicName;
+
+            // AND THE RETRY STAMP GOES WITH THE TOPIC IT WAS ABOUT (rev-10's F2). The stamp means "an
+            // attempt on this orchestration told us nothing"; once the topic has been deleted and
+            // recreated, the thing it was about no longer exists, and leaving it would gate the NEW
+            // topic's first name sync for up to the remainder of 30 s.
+            //
+            // It bites exactly when the glyph carries information: the name applied at creation is the
+            // two-argument decoration, so an away or quiet glyph still has to be synced afterwards —
+            // and that sync is the one being held. Bounded and self-healing, which is why it is LOW,
+            // but it is a stale memo about a deleted object and those do not improve with age.
+            _topicNameRetryAfterUtc.Remove(session.OrchId);
+
             Take_KnownTopicMessageIds(messageThreadId);
             Take_ReceiptMessageId_OrNull(messageThreadId);
 
@@ -5365,6 +5533,18 @@ internal sealed class BridgeEngineModel(
         if (!_ownerDeliveryBuffer.Has_PendingDeliveries())
             return;
 
+        // KNOWN DEFECT, NOT FIXED HERE, AND IT BELONGS TO SOMEONE ELSE'S CLASS — do not fix it in
+        // passing. `Take_ReadyDeliveries` REMOVES every ready key from the buffer before this loop body
+        // runs, so the record of the work is destroyed before the work is known to have succeeded. Any
+        // escape from the loop therefore skips the remaining deliveries' `Append_OwnerEntry` below, and
+        // those owner messages are LOST rather than delayed — nothing re-delivers them.
+        //
+        // The catch filter further down closes the escape route this loop had; it does NOT close the
+        // drain. That is the "memo that records work as done, moved from before the append to after it
+        // succeeded" class, owned by imp-9 across seven sites — and one class fixed by two members in
+        // two branches is how a merge grows conflict regions. The same shape sits one line down inside
+        // the try, where `_pendingOwnerReplies[...]` is only registered on the success path, so a
+        // failed receipt leaves the owner's wait untracked and the receipt frozen on "thinking…".
         foreach (var delivery in _ownerDeliveryBuffer.Take_ReadyDeliveries(DateTime.UtcNow))
         {
             // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
@@ -5429,7 +5609,15 @@ internal sealed class BridgeEngineModel(
                     };
                 }
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            //
+            // Cost HERE was the worst of the sixteen, and it is why this site was taken first: this loop
+            // runs BEFORE the DND gate, so it is the one tick-path site a muted spell cannot spare — and
+            // an escape did not merely lose the tick, it LOST OWNER MESSAGES. See the note at the top of
+            // this loop for the half that is NOT fixed here.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -5964,7 +6152,11 @@ internal sealed class BridgeEngineModel(
         {
             await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the away notice, plus the rest of the away sweep and the tick.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -6004,7 +6196,11 @@ internal sealed class BridgeEngineModel(
                 await _telegramClient.Edit_MessageText_Async(
                     entry.MessageId, $"{entry.Text}{AwayMode_Policy.PARKED_SUFFIX}", cancellationToken);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING parked question in the same loop.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -6199,20 +6395,93 @@ internal sealed class BridgeEngineModel(
 
             pending.LastNarratedUtc = now;
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the owner's busy narration, and every later stage of the tick.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex)
         {
+            // A TIMEOUT IS NOT "THE MESSAGE IS GONE" — IT IS "WE DO NOT KNOW", and the reset below
+            // asserts the stronger fact from the weaker signal. This bug PRE-DATES the filter above
+            // and would have been made reachable by it: without this guard, filtering a wedged
+            // endpoint converts a timeout into a discarded message id, the next repeat SENDS instead
+            // of EDITS, and one narration becomes a pile of them — the waterfall CLAUDE.md item 14
+            // exists to prevent, arriving through the fix for something else.
+            //
+            // A timeout leaves the message very probably still there and still editable, so the ids
+            // are KEPT and the next repeat edits as normal. If it really is gone, the edit fails
+            // again with a non-timeout error and the reset runs then.
+            //
+            // NOT PINNED, AND THE CONSTANTS ABOVE ARE WHY — do not read the absent test as an
+            // oversight. This branch is only observable on the SECOND narration: the first must fail
+            // with a timeout, and the repeat must then be watched to see whether it EDITS (ids kept,
+            // correct) or SENDS (ids cleared, the waterfall). NARRATION_FIRST_DELAY_SECONDS = 45 plus
+            // NARRATION_REPEAT_SECONDS = 180 puts the earliest observation 225 SECONDS out, against a
+            // suite that runs in about 80 — and a slow suite stops being run, which trades one pinned
+            // `if` for an unmeasured everything.
+            //
+            // Making those two windows injectable unlocks this, Announce_SupervisorFree_Async's
+            // fallback skip below, rev-5's R2 on the nudge windows and imp-6's G3 — four blocked tests,
+            // one seam. Deferred until after the merge on purpose: this file is touched by fourteen
+            // branches and is the worst hotspot on the conflict map, so the seam is worth building and
+            // building it here first is not.
+            // TWO BUCKETS FOR A THREE-BUCKET WORLD was the first version of this line, and rev-6 was
+            // right to file it: `ex is not OperationCanceledException` established the invariant for
+            // exactly ONE weak signal. A Wi-Fi drop throws HttpRequestException, which said "gone",
+            // cleared both ids, and produced the very waterfall the guard exists to prevent — plus a
+            // third message, because a destroyed receipt id also pushes Announce_SupervisorFree down
+            // its null-receipt path.
+            //
+            // A TRANSPORT failure never tells us the message is gone; it tells us the round trip did
+            // not complete.
+            //
+            // CLASSIFIED THROUGH THE ONE PLACE THAT DECIDES IT, and this line is why. rev-9's F1 was
+            // "one class, two predicates, in one commit"; the first fix lifted the topic-name copy into
+            // TopicNameSync_Gate and left this one written out inline. They then AGREED, which is not
+            // the same as being one rule — decision 12's "all agreeing today and none joined to the
+            // others" is exactly two copies that match until one of them is edited. Worse here than the
+            // general case: the lifted copy is pinned by seven controls and this one is not asserted by
+            // anything, so a drift would be silent in precisely this direction.
+            //
+            // THE CLASSIFICATION IS SHARED; THE CONSEQUENCE IS NOT. This site decides whether to DISCARD
+            // state, the topic-name site decides whether to SUPPRESS RETRIES — opposite actions on the
+            // same question, and collapsing them to make the sharing tidier would trade one defect for
+            // another.
+            var couldNotReachTelegram =
+                TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown;
+
+            // THE LIMIT THAT USED TO BE STATED HERE IS CLOSED. A 429 and every 5xx were
+            // indistinguishable from a genuine "the message is gone" 400, because the client threw a
+            // plain Exception for any non-2xx and the status was formatted into a message string and
+            // lost — not unavailable, DISCARDED. TelegramApiException now carries it, so a retryable
+            // status reaches this predicate as OutcomeUnknown and the ids are KEPT.
+            //
+            // That was the case rev-6's F5 described: a 429 during a burst cleared both ids, the next
+            // repeat SENT instead of EDITING, and the owner got the decision-14 waterfall — plus a third
+            // message, because a destroyed receipt id also pushes Announce_SupervisorFree down its
+            // null-receipt path. It took three findings from three reviewers before the shared-client
+            // change was priced against the whole pattern rather than one symptom at a time.
+            //
+            // It is strictly better than what it replaces — master cleared unconditionally on all of
+            // these — and it is NOT the whole invariant. Do not read it as established.
+            var lostTheMessage = !couldNotReachTelegram;
+
             // A failed EDIT must not freeze the narration forever on a dead message id: drop it so
             // the next repeat sends a fresh line and starts editing that one instead. A receipt we
             // cannot edit is dead for the turn-ended announcement too, so it goes with it —
             // otherwise the same dead id would be re-adopted as the canvas on every later repeat.
-            if (isReceiptCanvas)
-                pending.ReceiptMessageId = null;
+            if (lostTheMessage)
+            {
+                if (isReceiptCanvas)
+                    pending.ReceiptMessageId = null;
 
-            pending.NarrationMessageId = null;
+                pending.NarrationMessageId = null;
+            }
+
             _log.Log_Warning(orchId, $"Busy-supervisor narration failed: {ex.Message}");
         }
     }
@@ -6242,7 +6511,31 @@ internal sealed class BridgeEngineModel(
         // silence is the same defect wearing a different hat.
         if (pending.ReceiptMessageId == null)
         {
-            await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
+            // WRAPPED AT THE CALL SITE, NOT IN THE SHARED METHOD. This call sat outside any try, and
+            // Send_DirectReply_BestEffort_Async's own OperationCanceled catch is bare — so a Telegram
+            // timeout escaped this method, escaped Resolve_PendingOwnerReplies_Async, and killed the
+            // rest of the tick, from a method whose name promises BEST EFFORT.
+            //
+            // The shared method's catch is deliberately left alone: it has callers this change has not
+            // read, and filtering it would decide for all of them at once. The narrow fix belongs where
+            // the unprotected call is.
+            //
+            // The route here is reached when the receipt id is null, which is what a failed narration
+            // edit produces — so the two sites compound, and the conditional reset in
+            // Narrate_BusySupervisor_Async narrows how often that happens without closing it.
+            try
+            {
+                await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(orchId, $"Turn-ended announcement send failed: {ex.Message}");
+            }
+
             return;
         }
 
@@ -6250,13 +6543,57 @@ internal sealed class BridgeEngineModel(
         {
             await _telegramClient.Edit_MessageText_Async(pending.ReceiptMessageId.Value, TURN_ENDED_TEXT, cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the owner is never told the turn ended, and the rest of the tick goes with it.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex)
         {
-            _log.Log_Warning(orchId, $"Turn-ended announcement edit failed, sending it instead: {ex.Message}");
+            // THE LINE MUST MATCH WHAT ACTUALLY HAPPENS NEXT. "sending it instead" was written when
+            // every failure fell through to the fallback; on the timeout path it does not, so the two
+            // outcomes get two lines. A log that narrates the branch not taken is worse than none —
+            // whoever reads it is reconstructing a failure they cannot reproduce.
+            if (ex is OperationCanceledException)
+                _log.Log_Error(orchId, $"Turn-ended announcement DROPPED for this turn — the endpoint timed out and the announcement does not retry: {ex.Message}", ex);
+            else
+                _log.Log_Warning(orchId, $"Turn-ended announcement edit failed, sending it instead: {ex.Message}");
+
+            // A FALLBACK IS FOR "THAT CALL FAILED", NOT FOR "THE ENDPOINT IS UNREACHABLE". After a
+            // timeout the fallback send is against an endpoint that has just proved it does not
+            // answer, so it is guaranteed to fail and costs a SECOND HttpClient timeout inside the
+            // same tick — two ~90-second waits in a loop that ticks every 2 seconds, which is worse
+            // than the abort the filter above removes.
+            //
+            // AND THE ANNOUNCEMENT IS LOST FOR THIS TURN. An earlier version of this comment claimed
+            // "the next tick finds the turn still ended and tries again" — that was FALSE and is
+            // corrected here rather than quietly deleted, because it justified the early return with
+            // an outcome the code does not produce. The caller sets `pending.TurnEndAnnounced = true`
+            // BEFORE calling this method, and that field has exactly ONE assignment in this file and no
+            // reset anywhere, so the guard can never re-enter. Master lost it too — its bare rethrow
+            // unwound with the latch already set — so this is not a regression, but the return makes
+            // the loss QUIETER and the log line below now says so plainly.
+            //
+            // THE REAL DEFECT IS LATCHING BEFORE THE CALL, and it is not fixed here: recording work as
+            // done before it has succeeded is the class imp-9 owns across seven sites, and two members
+            // fixing one class in two branches is how a merge grows conflict regions. Named, not taken.
+            //
+            // NOT PINNED, AND THE COST WAS MEASURED RATHER THAN GUESSED. Reaching here needs
+            // `pending.LastNarratedUtc != default`, so a test must first spend NARRATION_FIRST_DELAY_
+            // SECONDS = 45 and then flip the supervisor from mid-turn to free by rewriting usage files
+            // under a running engine. Worse, the harness cannot currently tell the two outcomes apart:
+            // FailableTelegram_Fake.Count_Attempts_Containing counts by TEXT FRAGMENT and the edit
+            // above and the fallback send below both carry TURN_ENDED_TEXT, so it needs a fake that
+            // records the METHOD — plus a positive control proving a NON-timeout failure still sends
+            // the fallback, because asserting only the absence is the nothing-is-ALLOW trap.
+            //
+            // ~60 s and a harness change to pin one `if`. The same seam named at Narrate_BusySupervisor_
+            // Async covers this too; see there for why it is deferred until after the merge.
+            if (ex is OperationCanceledException)
+                return;
 
             // Same reasoning as above: the signal matters more than which message carries it.
             await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
@@ -6358,7 +6695,11 @@ internal sealed class BridgeEngineModel(
                 else
                     await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, text, cancellationToken);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING orchestration's stale receipt — the owner keeps staring at one frozen on 'thinking…'.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
