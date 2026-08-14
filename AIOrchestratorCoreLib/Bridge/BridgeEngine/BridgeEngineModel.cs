@@ -3342,7 +3342,11 @@ internal sealed class BridgeEngineModel(
     {
         try
         {
-            var supervisorFragment = $"SUP · {session.OrchId}";
+            // THROUGH THE BUILDER, never spelled here. These two lines were the last copies of the
+            // window-title rule, and they drifted the same way every other copy did: a solo's window
+            // is titled "SOLO · <orch>" while this built "SOLO-1 · <orch>" from the member id, so a
+            // basic orchestration's only terminal was the one window a rename could never find.
+            var supervisorFragment = Spawning.SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId);
             TerminalWindow_Focuser.Try_Rename_ByTitleFragment(supervisorFragment, $"{supervisorFragment} · {name}");
 
             foreach (var member in session.Members)
@@ -3350,7 +3354,7 @@ internal sealed class BridgeEngineModel(
                 if (member.ClosedUtc != null)
                     continue;
 
-                var memberFragment = $"{member.MemberId.ToUpperInvariant()} · {session.OrchId}";
+                var memberFragment = Spawning.SessionWindowTitle_Builder.Build_ForMember(member.MemberId, session.OrchId);
                 TerminalWindow_Focuser.Try_Rename_ByTitleFragment(memberFragment, $"{memberFragment} · {name}");
             }
         }
