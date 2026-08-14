@@ -65,8 +65,17 @@ general-supervisor|.claude/supervision/general/channel.md|.claude/supervision/ge
 "
 
 # Pulls the fenced bash block that defines read_fp out of a role command.
+#
+# The CR strip is EXPLICIT and load-bearing. The role commands are stored CRLF on this machine
+# (core.autocrlf=true, no .gitattributes), and the rewrites below anchor on end-of-line — against a
+# CRLF line, `do$` does not match `do\r` and every rewrite would silently fail to apply. It currently
+# works only because Git-for-Windows awk opens in text mode and drops the CR for us, which is an
+# msys quirk this harness must not depend on: on a checkout that kept CRLF into a POSIX awk, the
+# extraction would still succeed and the driver would not, and the refusal below is the only reason
+# that would be noticed rather than reported as a pass.
 extract_block() {
   awk '
+    { sub(/\r$/, "") }
     /^```bash$/            { inblock = 1; buf = ""; next }
     inblock && /^```$/     { if (buf ~ /read_fp\(\)/) { printf "%s", buf; exit } ; inblock = 0; next }
     inblock                { buf = buf $0 "\n" }
@@ -158,8 +167,12 @@ PREAMBLE
       bash "$home/driven.sh" > "$out" 2>"$home/err.txt"
 
   local fires blind marker_reason
-  fires="$(grep -c "$phrase" "$out" 2>/dev/null || printf 0)"
-  blind="$(grep -c "WATCHER BLIND" "$out" 2>/dev/null || printf 0)"
+  # `|| true`, never `|| printf 0`: grep -c already prints 0 when it matches nothing, it just exits
+  # non-zero, so the fallback ran IN ADDITION and produced a two-line "0\n0". Harmless against an
+  # expectation of 2, but it would have failed a check that expected none, and it made the mutant
+  # run's output read like a broken harness rather than a caught defect.
+  fires="$(grep -c "$phrase" "$out" 2>/dev/null || true)"
+  blind="$(grep -c "WATCHER BLIND" "$out" 2>/dev/null || true)"
 
   printf '%s\n' "$role"
   check "$role: a real entry wakes it, a failed read never does (2 wakes, not 4)" "2" "$fires"
