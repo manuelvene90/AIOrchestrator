@@ -621,6 +621,15 @@ internal sealed class BridgeEngineModel(
 
     async Task Execute_MirrorTick_Async(CancellationToken cancellationToken)
     {
+        // ONE allowance for the whole tick's WAITING. Without it this method's worst case is
+        // "appends × the per-call budget", and four of the steps below append inside a
+        // foreach(session) -> foreach(member) nest — so the member count was the multiplier and ten
+        // members could spend ~15 s of waiting inside a 2 s loop, stalling the poll, the mirror, the
+        // tailer, compaction and the status push behind it. Uncontended writes charge ~0 ms and are
+        // unaffected; a spent allowance means blocked channels fail fast and retry next tick, which
+        // is a defined path (logged, and the owner's message goes back in its buffer).
+        using var tickAllowance = ChannelWrite_Lock.Open_TickAllowance(ChannelWrite_Lock.DEFAULT_TICK_ALLOWANCE);
+
         Process_PendingRequests();
 
         // After closes are processed, so a freshly-closed session is not immediately revived.

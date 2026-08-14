@@ -39,12 +39,75 @@ public static class ChannelWrite_Lock
     /// puts its message back.
     /// </para>
     /// <para>
-    /// Honest about what this does NOT fix: the budget is still PER CALL, so a tick making several
-    /// contended appends can still exceed a tick in total. Bounding a tick's whole lock spend is a
-    /// larger change than a constant, and this is the part of it that a constant can buy.
+    /// This bounds ONE call. A tick making several contended appends multiplies it, which is what
+    /// <see cref="Open_TickAllowance"/> exists to bound — see its docstring for the measurement.
     /// </para>
     /// </summary>
     public static readonly TimeSpan DEFAULT_BUDGET = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>
+    /// The whole of one mirror tick's WAITING, when the tick opens an allowance. Deliberately the
+    /// same 1500 ms as a single call's budget: the point is that a tick cannot spend more than one
+    /// contended append's worth of waiting no matter how many channels are contended.
+    /// </summary>
+    public static readonly TimeSpan DEFAULT_TICK_ALLOWANCE = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>
+    /// The allowance in force for the current async flow, or null when nobody opened one.
+    /// <para>
+    /// <c>AsyncLocal</c> rather than a static: it flows down into everything the tick awaits without
+    /// threading a parameter through the ~35 append call sites, and it does NOT leak sideways into
+    /// other flows — the inbound loop, a session's own write, or a second test running in parallel
+    /// each see their own. A static would have made the test suite's parallelism a source of
+    /// cross-talk, which is the failure this repo has spent the week removing rather than adding.
+    /// </para>
+    /// </summary>
+    static readonly AsyncLocal<TickAllowance?> CURRENT_TICK_ALLOWANCE = new();
+
+    /// <summary>
+    /// Opens a WAITING allowance shared by every serialised write in the current async flow, and
+    /// restores the previous one when disposed.
+    /// <para>
+    /// WHY THIS EXISTS, measured rather than argued. <c>DEFAULT_BUDGET</c> was cut under the 2 s
+    /// mirror tick so one contended append could not outlive one tick. That fixed the single call
+    /// and left the multiplication: <c>Execute_MirrorTick_Async</c> is one sequential await chain,
+    /// and four of its steps append inside a <c>foreach (session) -&gt; foreach (member)</c> nest.
+    /// The tick's worst case was therefore <c>appends × 1500 ms</c> with the member count as the
+    /// multiplier — ten members is ~15 s of waiting inside a 2 s loop, and the poll, the mirror,
+    /// the tailer, compaction and the status push all sit behind that same chain. Contention on
+    /// several channels stopped being a slow channel and became a stopped bridge.
+    /// </para>
+    /// <para>
+    /// WHAT IS CHARGED IS WAITING, NOT WRITING, and the distinction is deliberate: waiting is the
+    /// part that produces nothing, and a tick that has spent its allowance still performs every
+    /// UNCONTENDED write at full speed — those charge ~0 ms. Exhaustion degrades the tick to
+    /// "write what is free, skip what is blocked", never to "stop writing".
+    /// </para>
+    /// <para>
+    /// SKIPPING IS SAFE HERE ONLY BECAUSE FAILURE IS DEFINED. A refused write returns false, is
+    /// reported by <see cref="ChannelLock_Diagnostics"/>, and the owner-delivery path puts its
+    /// message back in the buffer. A fast false and a slow false say exactly the same thing to
+    /// every caller; the allowance only changes how long the tick pays to hear it.
+    /// </para>
+    /// </summary>
+    public static IDisposable Open_TickAllowance(TimeSpan total)
+    {
+        var previous = CURRENT_TICK_ALLOWANCE.Value;
+
+        CURRENT_TICK_ALLOWANCE.Value = new TickAllowance(total);
+
+        return new TickAllowance_Scope(() => CURRENT_TICK_ALLOWANCE.Value = previous);
+    }
+
+    /// <summary>
+    /// How much waiting the current flow's allowance has left, for a caller that wants to log or
+    /// assert on it. Null when no allowance is open — which is the normal state everywhere except
+    /// inside a mirror tick, and means the per-call budget applies unchanged.
+    /// </summary>
+    public static TimeSpan? Get_RemainingTickAllowance()
+    {
+        return CURRENT_TICK_ALLOWANCE.Value?.Remaining;
+    }
 
     /// <summary>
     /// Runs <paramref name="write"/> holding BOTH levels of the gate, and returns whether it ran.
@@ -68,27 +131,100 @@ public static class ChannelWrite_Lock
         var startedUtc = DateTime.UtcNow;
         var gate = Get_Gate(channelFilePath);
 
-        if (!gate.TryEnter(budget))
+        // The tick's allowance CAPS this call's budget, it never raises it: a caller asking for
+        // 200 ms still gets 200 ms. With no allowance open this is the caller's budget unchanged,
+        // which is why sessions, the inbound loop and every test are untouched by any of this.
+        var allowance = CURRENT_TICK_ALLOWANCE.Value;
+        var effectiveBudget = allowance == null ? budget : Min(budget, allowance.Remaining);
+
+        if (!gate.TryEnter(effectiveBudget))
         {
             waited = DateTime.UtcNow - startedUtc;
+
+            // All of it was waiting — the write never ran.
+            allowance?.Charge(waited);
+
             return false;
         }
 
+        var gateWait = DateTime.UtcNow - startedUtc;
+
         try
         {
-            var remaining = budget - (DateTime.UtcNow - startedUtc);
+            var remaining = effectiveBudget - gateWait;
 
             if (remaining < TimeSpan.Zero)
                 remaining = TimeSpan.Zero;
 
-            var acquired = ChannelFile_Lock.Try_Run_WithLock(channelFilePath, remaining, write, out _);
+            var acquired = ChannelFile_Lock.Try_Run_WithLock(channelFilePath, remaining, write, out var lockWait);
 
             waited = DateTime.UtcNow - startedUtc;
+
+            // WAITING ONLY. `lockWait` is stamped by Try_Run_WithLock BEFORE it runs the write, so
+            // this charges the two acquisitions and excludes the write itself. Charging `waited`
+            // would bill the tick for its own successful work and starve later appends of an
+            // allowance they were never the reason for.
+            allowance?.Charge(gateWait + lockWait);
+
             return acquired;
         }
         finally
         {
             gate.Exit();
+        }
+    }
+
+    static TimeSpan Min(TimeSpan left, TimeSpan right)
+    {
+        return left <= right ? left : right;
+    }
+
+    /// <summary>
+    /// One tick's remaining WAITING allowance. Mutable and shared by every write in the flow, so it
+    /// is locked: the mirror tick is sequential today, but an allowance that silently mis-counts
+    /// under a future parallel step is a bound that quietly stops bounding.
+    /// </summary>
+    sealed class TickAllowance
+    {
+        readonly Lock _gate = new();
+        TimeSpan _remaining;
+
+        public TickAllowance(TimeSpan total)
+        {
+            // A negative or zero total is a caller error, not a licence to wait forever: clamp to
+            // zero, which means "every contended write fails fast" rather than "no limit".
+            _remaining = total > TimeSpan.Zero ? total : TimeSpan.Zero;
+        }
+
+        public TimeSpan Remaining
+        {
+            get
+            {
+                lock (_gate)
+                    return _remaining;
+            }
+        }
+
+        public void Charge(TimeSpan spent)
+        {
+            lock (_gate)
+            {
+                _remaining -= spent;
+
+                // Never below zero: a single overspending call must not make the allowance look
+                // like a debt that later calls have to repay.
+                if (_remaining < TimeSpan.Zero)
+                    _remaining = TimeSpan.Zero;
+            }
+        }
+    }
+
+    /// <summary>Restores the previous allowance on dispose, so nesting cannot strand one.</summary>
+    sealed class TickAllowance_Scope(Action onDispose) : IDisposable
+    {
+        public void Dispose()
+        {
+            onDispose();
         }
     }
 
