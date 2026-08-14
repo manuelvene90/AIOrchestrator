@@ -813,8 +813,9 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
-            // Someone is actually working (transcript growing): a long thinking turn, not a stall.
-            if (Is_AnySessionMidTurn(session))
+            // Someone is actually working, or worked inside the window: a long thinking turn or a turn
+            // that has just ended, not a stall. Wider than "mid-turn" on purpose — see the method.
+            if (Has_AnySessionWorkedWithin(session, STALL_ALERT_MINUTES))
                 continue;
 
             if (!_stallAlertedOrchIds.Add(session.OrchId))
@@ -901,7 +902,24 @@ internal sealed class BridgeEngineModel(
     /// A session mid-turn is writing its transcript RIGHT NOW (the status line hands us the exact
     /// path). Falls back to the probe file's own mtime when a transcript path is unavailable.
     /// </summary>
-    bool Is_AnySessionMidTurn(IOrchestrationSession session)
+    /// <summary>
+    /// Did any session in this orchestration demonstrably WORK inside the window — not "say" anything,
+    /// but write a transcript?
+    ///
+    /// EVIDENCE OF LIFE OUTRANKS AN AGENT'S OWN STAMP, and that is the whole reason this is wider than
+    /// the mid-turn question it replaces (rev-8's F3). The quiet span is computed from `DateText`, which
+    /// item 12 declares untrusted input, and the trusted reader refuses only stamps in the FUTURE — a
+    /// stamp drifted into the PAST passes unchallenged. A supervisor that runs a forty-minute turn and
+    /// stamps its entry with the time it read at turn START looks forty minutes silent the moment the
+    /// turn ends, and the owner is texted about a session that had just spoken. The channel cannot
+    /// refute that stamp; the filesystem can, because the app writes these files rather than an agent.
+    ///
+    /// THIS NARROWS THE ALERT AND THE NARROWING IS DELIBERATE: an orchestration whose sessions worked
+    /// inside the window but have stopped SPEAKING is no longer alerted on. We hold evidence of life
+    /// inside the window, so claiming a stall would be asserting more than we know — and this is the
+    /// same judgement the mid-turn check already made, over a longer horizon.
+    /// </summary>
+    bool Has_AnySessionWorkedWithin(IOrchestrationSession session, int minutes)
     {
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
 
@@ -916,7 +934,9 @@ internal sealed class BridgeEngineModel(
 
         foreach (var usageFile in usageFiles)
         {
-            if (Is_SessionMidTurn(usageFile))
+            var lastActivityUtc = SessionActivity_Probe.Get_LastActivityUtc_OrNull(usageFile);
+
+            if (lastActivityUtc != null && (DateTime.UtcNow - lastActivityUtc.Value).TotalMinutes < minutes)
                 return true;
         }
 

@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
 
@@ -224,6 +225,69 @@ public class StallAlertClockProbeTests : IDisposable
         var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0, NEGATIVE_WINDOW_MILLISECONDS);
 
         Assert.False(alerted, "a five-minute-old orchestration was reported as stalled — the floor is its own age, in local time");
+    }
+
+    /// <summary>
+    /// EVIDENCE OF LIFE OUTRANKS AN AGENT'S OWN STAMP — rev-8's F3, and the only finding in this review
+    /// whose cost is paid by the owner rather than by a session.
+    ///
+    /// The clock reads `DateText`, which item 12 declares untrusted agent input, and
+    /// `Try_ReadTrustedStamp` refuses only stamps in the FUTURE. A stamp drifted into the PAST passes
+    /// unchallenged: a supervisor runs a forty-minute turn and stamps its entry with the time it read
+    /// at turn START — the exact error all five role commands were rewritten to prevent, recorded twice
+    /// in one day in this orchestration's own channels — the turn ends, and two minutes later the owner
+    /// is texted *"quiet for 40 min and no session is working"* about a supervisor that had just spoken.
+    ///
+    /// The channel cannot refute that stamp; the FILESYSTEM can. A session that wrote its transcript
+    /// five minutes ago was working five minutes ago, whatever its entries claim, and that evidence is
+    /// written by the app rather than by an agent.
+    ///
+    /// **The trade-off, stated because it is a real narrowing:** an orchestration whose sessions were
+    /// active inside the window but have stopped SPEAKING will no longer be alerted on. That is the
+    /// honest reading — we hold evidence of life inside the window — and it is the same judgement the
+    /// mid-turn guard beside it already makes, over a longer horizon.
+    /// </summary>
+    [Fact]
+    public async Task ASessionThatWorkedInsideTheWindowStopsTheAlertWhateverTheStampsSay()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        var silentSince = DateTime.Now.AddMinutes(-OLDER_THAN_THE_STALL_THRESHOLD_MINUTES);
+
+        Age_Session(session.OrchId, silentSince);
+
+        foreach (var member in session.Members)
+            File.SetLastWriteTime(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), silentSince);
+
+        // Every stamp says forty minutes — the supervisor's included, which is the drifted one.
+        Write_Channel(
+            _paths.Get_ImplementerChannelFile(session.OrchId, session.Members[0].MemberId),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n",
+            silentSince);
+
+        Write_Channel(
+            _paths.Get_OwnerChannelFile(session.OrchId),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
+            silentSince);
+
+        // …and the filesystem says the supervisor was working five minutes ago.
+        Record_SessionActivity(session.OrchId, DateTime.Now.AddMinutes(-5));
+
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0, NEGATIVE_WINDOW_MILLISECONDS);
+
+        Assert.False(alerted, "the owner was texted about a stall while a session had demonstrably worked five minutes earlier");
+    }
+
+    /// <summary>
+    /// Writes the usage file the activity probe reads. It carries no transcript path, so the probe
+    /// falls back to this file's own write stamp — which is the whole point of the fixture.
+    /// </summary>
+    void Record_SessionActivity(string orchId, DateTime activeAt)
+    {
+        var usageFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
+        File.WriteAllText(usageFile, "{}");
+        File.SetLastWriteTime(usageFile, activeAt);
     }
 
     void Start_StalledOrchestration_WithAFreshAppEntryInTheOwnerChannel()
