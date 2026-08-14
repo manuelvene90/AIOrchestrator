@@ -149,7 +149,7 @@ public class OwnerMessageSurvivesALockedChannelTests : IDisposable
 
         var ready = withRelease.Take_ReadyDeliveries(now);
 
-        Assert.Equal(OWNER_TEXT, Assert.Contains("channel.md", ready));
+        Assert.Equal(OWNER_TEXT, Assert.Contains("channel.md", ready).Text);
     }
 
     /// <summary>

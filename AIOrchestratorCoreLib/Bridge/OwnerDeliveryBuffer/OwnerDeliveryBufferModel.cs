@@ -2,9 +2,15 @@ namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 
 internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdCapSeconds) : IOwnerDeliveryBuffer
 {
+    /// <summary>
+    /// One buffered segment and the ORDINAL it arrived with. The ordinal is what makes ordering
+    /// survive a put-back: position cannot, because position is the thing under contention.
+    /// </summary>
+    readonly record struct Segment(long Ordinal, string Text);
+
     sealed class PendingDelivery
     {
-        public readonly List<string> Segments = [];
+        public readonly List<Segment> Segments = [];
         public DateTime LastArrivalUtc;
         public bool Held;
         public bool ReleaseRequested;
@@ -15,25 +21,35 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdC
     readonly Dictionary<string, PendingDelivery> _pending = [];
     readonly Lock _lock = new();
 
+    /// <summary>
+    /// Assigned to every segment on arrival and never reused. Monotonic under <c>_lock</c>, so two
+    /// segments buffered from different loops still receive a total order.
+    /// </summary>
+    long _nextOrdinal;
+
     public void Add_Segment(string targetKey, string segment, DateTime nowUtc)
     {
         lock (_lock)
         {
             var delivery = Get_OrCreate(targetKey);
 
-            delivery.Segments.Add(segment);
+            delivery.Segments.Add(new Segment(_nextOrdinal++, segment));
             delivery.LastArrivalUtc = nowUtc;
         }
     }
 
-    public void Prepend_Segment(string targetKey, string segment)
+    public void Restore_Segment(string targetKey, string segment, long ordinal)
     {
         lock (_lock)
         {
             // LastArrivalUtc deliberately untouched — see the interface. Refreshing it would make the
             // owner serve a second aggregation window for a failure they know nothing about, which is
             // the same reason the callers pair this with Release.
-            Get_OrCreate(targetKey).Segments.Insert(0, segment);
+            //
+            // Appended, NOT inserted at the front: the ORDINAL decides the order now, so where it
+            // lands in the list is irrelevant. Inserting at index 0 was the position-based attempt
+            // this replaces, and it inverted whenever two put-backs were in flight.
+            Get_OrCreate(targetKey).Segments.Add(new Segment(ordinal, segment));
         }
     }
 
@@ -80,9 +96,9 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdC
         }
     }
 
-    public IReadOnlyDictionary<string, string> Take_ReadyDeliveries(DateTime nowUtc)
+    public IReadOnlyDictionary<string, IReadyDelivery> Take_ReadyDeliveries(DateTime nowUtc)
     {
-        Dictionary<string, string> ready = [];
+        Dictionary<string, IReadyDelivery> ready = [];
 
         lock (_lock)
         {
@@ -110,7 +126,14 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdC
 
             foreach (var key in readyKeys)
             {
-                ready[key] = string.Join("\n\n", _pending[key].Segments);
+                // BY ORDINAL, not by list position: a restored segment is appended, so list order is
+                // arrival-of-the-put-back rather than arrival-of-the-message.
+                var ordered = _pending[key].Segments.OrderBy(segment => segment.Ordinal).ToList();
+
+                ready[key] = new ReadyDelivery(
+                    string.Join("\n\n", ordered.Select(segment => segment.Text)),
+                    ordered[0].Ordinal);
+
                 _pending.Remove(key);
             }
         }

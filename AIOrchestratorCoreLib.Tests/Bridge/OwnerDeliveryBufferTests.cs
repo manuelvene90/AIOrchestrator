@@ -26,7 +26,7 @@ public class OwnerDeliveryBufferTests
 
         var ready = buffer.Take_ReadyDeliveries(T0.AddSeconds(24));
 
-        Assert.Equal("increase the throughput\n\nI meant the CSV extraction", ready["chan-a"]);
+        Assert.Equal("increase the throughput\n\nI meant the CSV extraction", ready["chan-a"].Text);
         Assert.False(buffer.Has_PendingDeliveries());
     }
 
@@ -52,7 +52,7 @@ public class OwnerDeliveryBufferTests
         var ready = buffer.Take_ReadyDeliveries(T0.AddSeconds(16));
 
         Assert.Single(ready);
-        Assert.Equal("for the crm", ready["chan-a"]);
+        Assert.Equal("for the crm", ready["chan-a"].Text);
         Assert.True(buffer.Has_PendingDeliveries());
     }
 
@@ -77,18 +77,68 @@ public class OwnerDeliveryBufferTests
 
         var taken = buffer.Take_ReadyDeliveries(T0);
 
-        Assert.Equal("stop what you are doing", taken["chan-a"]);
+        Assert.Equal("stop what you are doing", taken["chan-a"].Text);
 
         // The owner speaks again while the first delivery is out being translated.
         buffer.Add_Segment("chan-a", "actually carry on", T0.AddSeconds(3));
 
-        // ...and the first delivery fails, so it goes back.
-        buffer.Prepend_Segment("chan-a", "stop what you are doing");
+        // ...and the first delivery fails, so it goes back WITH ITS ORDINAL.
+        buffer.Restore_Segment("chan-a", taken["chan-a"].Text, taken["chan-a"].FirstOrdinal);
         buffer.Release("chan-a");
 
         Assert.Equal(
             "stop what you are doing\n\nactually carry on",
-            buffer.Take_ReadyDeliveries(T0.AddSeconds(3))["chan-a"]);
+            buffer.Take_ReadyDeliveries(T0.AddSeconds(3))["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// THE MIRROR-IMAGE INTERLEAVING — two put-backs for one key, landing NEWER FIRST.
+    /// <para>
+    /// This is the case no position-based method can survive and the reason the ordinal exists.
+    /// Prepending inverts when the OLDER put-back lands first; appending inverts when the NEWER does.
+    /// Two flush entry points make both reachable — the mirror tick and the GO branch on the inbound
+    /// loop — so whichever position rule you pick, one of these two orders comes out wrong.
+    /// </para>
+    /// <para>
+    /// Ordinals make the landing order irrelevant, which is what "removes the contention rather than
+    /// guarding it" means in practice. Both orders are asserted below; without the ordinal ONE of
+    /// them reddens whichever way the buffer is written.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TwoPutBacksComeOutChronological_WHICHEVEROfThemLandsFirst()
+    {
+        foreach (var newerFirst in new[] { false, true })
+        {
+            var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
+
+            buffer.Add_Segment("chan-a", "first", T0);
+            buffer.Release("chan-a");
+            var older = buffer.Take_ReadyDeliveries(T0)["chan-a"];
+
+            buffer.Add_Segment("chan-a", "second", T0.AddSeconds(1));
+            buffer.Release("chan-a");
+            var newer = buffer.Take_ReadyDeliveries(T0.AddSeconds(1))["chan-a"];
+
+            // Both deliveries are now out and both are about to fail. The ONLY difference between
+            // the two runs is which failure returns first.
+            if (newerFirst)
+            {
+                buffer.Restore_Segment("chan-a", newer.Text, newer.FirstOrdinal);
+                buffer.Restore_Segment("chan-a", older.Text, older.FirstOrdinal);
+            }
+            else
+            {
+                buffer.Restore_Segment("chan-a", older.Text, older.FirstOrdinal);
+                buffer.Restore_Segment("chan-a", newer.Text, newer.FirstOrdinal);
+            }
+
+            buffer.Release("chan-a");
+
+            Assert.Equal(
+                "first\n\nsecond",
+                buffer.Take_ReadyDeliveries(T0.AddSeconds(2))["chan-a"].Text);
+        }
     }
 
     /// <summary>

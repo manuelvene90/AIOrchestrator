@@ -10,50 +10,44 @@ namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 /// target is HELD nothing is delivered and no per-message receipts are sent, so a long dictated
 /// thought lands on the session as one turn and on the owner's phone as one acknowledgement.
 /// </summary>
+/// <summary>
+/// One aggregated delivery taken from the buffer, with the ORDINAL of its earliest segment so a
+/// failed delivery can be restored to its place rather than merely to the buffer.
+/// </summary>
+public interface IReadyDelivery
+{
+    string Text { get; }
+
+    /// <summary>The lowest ordinal this delivery contained — pass it back to <c>Restore_Segment</c>.</summary>
+    long FirstOrdinal { get; }
+}
+
+/// <inheritdoc cref="IReadyDelivery"/>
+public sealed record ReadyDelivery(string Text, long FirstOrdinal) : IReadyDelivery;
+
 public interface IOwnerDeliveryBuffer
 {
     void Add_Segment(string targetKey, string segment, DateTime nowUtc);
 
     /// <summary>
-    /// Puts a segment back at the FRONT of its key, for a delivery that was taken and then failed.
+    /// Puts a failed delivery's text back with the ORDINAL it originally arrived with, so it returns
+    /// to its place in the conversation rather than merely to the buffer.
     /// <para>
-    /// WHY THE FRONT. <c>Take_ReadyDeliveries</c> removes the key and the delivery is then awaited for
-    /// SECONDS — a translator subprocess and Telegram calls — during which the inbound loop can buffer
-    /// a NEW segment B for the same key. Appending the failed original A would produce [B, A] and the
-    /// supervisor would read the owner's later message ABOVE their earlier one, joined into one entry:
-    /// "actually carry on" above "stop what you're doing", acted on last line first. Reordered
-    /// actively misleads where late merely delays.
+    /// WHY AN ORDINAL AND NOT A POSITION. <c>Take_ReadyDeliveries</c> removes the key and the delivery
+    /// is then awaited for SECONDS — a translator subprocess and Telegram calls — during which a NEW
+    /// segment can be buffered for the same key. Restoring by POSITION cannot be made correct, because
+    /// position is the thing under contention: prepending inverts when the older put-back lands first,
+    /// appending inverts when the newer does, and there is no exclusivity available to pick between
+    /// them. TWO flush entry points exist — the mirror tick and, deliberately,
+    /// <c>Apply_HoldControlWord_Async</c>'s GO branch on the INBOUND loop — so two put-backs for one
+    /// key are genuinely reachable.
     /// </para>
     /// <para>
-    /// TWO PUT-BACKS FOR ONE KEY WOULD LAND IN REVERSE ORDER AGAINST EACH OTHER, so it matters how
-    /// nearly that is excluded — and it is NOT excluded structurally. The two halves of the argument
-    /// are different in kind and this comment used to assert both as structural, which was false:
-    /// <list type="bullet">
-    /// <item>
-    /// HOLDS BY CONSTRUCTION — <c>Take_ReadyDeliveries</c> removes every returned key atomically under
-    /// the one lock, so no second caller can take a key while its delivery is out.
-    /// </item>
-    /// <item>
-    /// DOES NOT HOLD — "only the mirror loop flushes". There is a SECOND entry point:
-    /// <c>Apply_HoldControlWord_Async</c>'s GO branch flushes on the INBOUND loop, deliberately, so the
-    /// owner's GO is not left waiting up to 2 s for the next tick. It RELEASES first, which makes a
-    /// newly-arrived segment immediately takeable. So when the owner types GO while a delivery is in
-    /// flight, and both fail on the same correlated cause, two put-backs are reachable and the later
-    /// one wins the front.
-    /// </item>
-    /// </list>
-    /// </para>
-    /// <para>
-    /// THAT WINDOW IS KNOWN, ACCEPTED AND NARROW, not impossible. It needs a GO inside a failing
-    /// delivery; the single-put-back case is overwhelmingly the common one and this method is a
-    /// straight improvement to it. Appending is not the safer fallback — it is wrong in the mirror
-    /// case AND wrong in the common single case, which is the defect this replaced.
-    /// </para>
-    /// <para>
-    /// WHAT WOULD MAKE IT STRUCTURAL: serialising the two flush entry points. That is deliberately not
-    /// done — it puts a lock on the owner's delivery path and would make GO wait behind an in-flight
-    /// mirror flush holding a translator subprocess, defeating the feature to fix the ordering. It is
-    /// recorded as post-merge work rather than left for the next reader to re-derive.
+    /// An ordinal removes the contention instead of guarding it: assigned once on arrival, never
+    /// reused, and the aggregation reads in ordinal order. The result is chronological regardless of
+    /// which put-back lands first, how many are in flight, or which loop they came from — so this
+    /// needs no invariant about callers, which is the point. The previous version documented one, and
+    /// it was false.
     /// </para>
     /// <para>
     /// Unlike <c>Add_Segment</c> this does NOT refresh <c>LastArrivalUtc</c>: the owner already served
@@ -61,10 +55,10 @@ public interface IOwnerDeliveryBuffer
     /// about.
     /// </para>
     /// </summary>
-    void Prepend_Segment(string targetKey, string segment);
+    void Restore_Segment(string targetKey, string segment, long ordinal);
 
     /// <summary>Targets ready to deliver: key → aggregated text. Removes them from the buffer.</summary>
-    IReadOnlyDictionary<string, string> Take_ReadyDeliveries(DateTime nowUtc);
+    IReadOnlyDictionary<string, IReadyDelivery> Take_ReadyDeliveries(DateTime nowUtc);
 
     bool Has_PendingDeliveries();
 

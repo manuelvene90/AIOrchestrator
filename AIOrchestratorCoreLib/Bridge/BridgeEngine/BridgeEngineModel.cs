@@ -5247,7 +5247,7 @@ internal sealed class BridgeEngineModel(
                 // The ORIGINAL, never the possibly-half-translated working copy: a partially
                 // translated string becoming the owner's message is worse than a late one, and it
                 // would be near-impossible to diagnose from outside.
-                _ownerDeliveryBuffer.Prepend_Segment(delivery.Key, delivery.Value);
+                _ownerDeliveryBuffer.Restore_Segment(delivery.Key, delivery.Value.Text, delivery.Value.FirstOrdinal);
                 _ownerDeliveryBuffer.Release(delivery.Key);
 
                 _log.Log_Error(
@@ -5267,7 +5267,7 @@ internal sealed class BridgeEngineModel(
     /// One owner message, from the buffer to the supervisor's channel and back to the owner as a
     /// receipt. Throws on any failure that is not the append's own — the caller puts the message back.
     /// </summary>
-    async Task Deliver_OwnerMessage_Async(KeyValuePair<string, string> delivery, CancellationToken cancellationToken)
+    async Task Deliver_OwnerMessage_Async(KeyValuePair<string, IReadyDelivery> delivery, CancellationToken cancellationToken)
     {
         // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
         lock (_ownerStateLock)
@@ -5286,7 +5286,7 @@ internal sealed class BridgeEngineModel(
             }
         }
 
-        var deliveryText = delivery.Value;
+        var deliveryText = delivery.Value.Text;
 
         // Italian layer: the SESSION must only ever see English — translate the aggregated
         // owner text before it touches the channel. Already-English text passes unchanged.
@@ -5312,7 +5312,7 @@ internal sealed class BridgeEngineModel(
             // ran through the translator AGAIN. The owner's words were replaced by a paraphrase of
             // themselves and re-paraphrased on every subsequent lock. Translation belongs on the way
             // OUT; nothing may put an output of that pipeline back into the input side.
-            _ownerDeliveryBuffer.Prepend_Segment(delivery.Key, delivery.Value);
+            _ownerDeliveryBuffer.Restore_Segment(delivery.Key, delivery.Value.Text, delivery.Value.FirstOrdinal);
             _ownerDeliveryBuffer.Release(delivery.Key);
 
             _log.Log_Warning(target.OrchId,
