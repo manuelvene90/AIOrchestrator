@@ -26,6 +26,12 @@ public class ReviewerAuthorTests
     [InlineData("HOLD — the owner has not answered your last messages")]
     [InlineData("AWAY MODE ON — the owner is not reading")]
     [InlineData("2 entries are INVISIBLE — malformed header")]
+    // Leaked for as long as it existed: written to the owner channel and never listed, so the owner
+    // was texted that they are waiting for their own reply. This case pins the LIST, which is all it
+    // can do — the subject is an inline literal at the call site, so rewording it there would slip
+    // past this test exactly as the original wording slipped past every other one. That gap is the
+    // reason for the audience tag, not something this fix closes.
+    [InlineData("the owner is still waiting for your reply")]
     public void AgentCoaching_IsNotTextedToTheOwner(string subject)
     {
         var channel = DiscoveredChannel_Factory.Create_ForOwner("orch-1", "path/owner-channel.md");

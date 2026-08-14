@@ -96,6 +96,15 @@ public static class MirrorText_Formatter
     static readonly IReadOnlyList<string> AGENT_COACHING_SUBJECTS =
     [
         "unread reports waiting on you",
+
+        // Written at BridgeEngineModel's owner-reply nudge and NEVER listed here until 2026-08-14, so
+        // it was mirrored: the owner spent the day receiving "⚙ App: the owner is still waiting for
+        // your reply" — themselves told that they are waiting for their own reply. The body that
+        // explains it ("YOUR turn ended without answering the owner's message above") is agent-facing
+        // and never leaves the channel, which is what makes the subject read as nonsense rather than
+        // as a visible mistake.
+        "the owner is still waiting for your reply",
+
         "that message was too long for a phone",
         "HOLD — the owner has not answered",
         "AWAY MODE ON",
