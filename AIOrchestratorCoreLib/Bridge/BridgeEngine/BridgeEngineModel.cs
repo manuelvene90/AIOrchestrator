@@ -2412,6 +2412,7 @@ internal sealed class BridgeEngineModel(
 
         Process_StartRequests(pending);
         Process_AddImplementerRequests(pending);
+        Process_PromoteOrchestrationRequests(pending);
         Process_CloseImplementerRequests(pending);
         Process_CloseOrchestrationRequests(pending);
         Process_SetTelegramMutedRequests(pending);
@@ -2432,6 +2433,28 @@ internal sealed class BridgeEngineModel(
             {
                 if (request.Role == GeneralSupervision.SetModelRequest.SetModelRequest_Factory.SUPERVISOR_ROLE)
                 {
+                    // A BASIC ORCHESTRATION HAS NO SUPERVISOR TO RE-MODEL, and spawning one here does
+                    // not just add a session — it flips the shape PERMANENTLY. `Respawn_Supervisor`
+                    // stamps `SupervisorSpawnedUtc`, the factory merges it with a plain coalesce and
+                    // no wasSet escape hatch, and nothing anywhere clears it, including the close
+                    // paths. So "use fable for the CRM one" about a basic orchestration used to put a
+                    // supervisor beside the solo on one channel and make every later promotion
+                    // request answer "already has a supervisor" for ever.
+                    //
+                    // The concierge is explicitly authorised to drop this request for any orch id, so
+                    // the guard belongs here rather than in its instructions.
+                    if (Sessions.OrchestrationShape.Is_BasicOrchestration(_store.Get_Session(request.OrchId).SupervisorSpawnedUtc))
+                    {
+                        Append_OrchestrationAppEntry(
+                            request.OrchId,
+                            "model change REFUSED — this is a basic orchestration and has no supervisor",
+                            "A basic orchestration is one session with no supervisor, so there is no supervisor model to set. Spawning one here would permanently turn it into a crew and block any real promotion.\n\n"
+                            + "Use role 'implementer' to change the model of the session that IS here.");
+
+                        Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "no-supervisor");
+                        continue;
+                    }
+
                     _store.Set_SupervisorModelOverride(request.OrchId, request.Model);
                     SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_SupervisorPidFile(request.OrchId));
                     _launcher.Respawn_Supervisor(request.OrchId);
@@ -2665,6 +2688,117 @@ internal sealed class BridgeEngineModel(
     /// judgement that spends: retiring a finished member is the supervisor's own crew management, and
     /// asking them to approve each one made them the bottleneck on a decision they had delegated.
     /// </summary>
+    /// <summary>
+    /// A solo asking for its basic orchestration to become a full crew.
+    ///
+    /// TWO REFUSALS BEFORE THE OWNER IS EVER INVOLVED, and both go to the SOLO rather than to them.
+    /// A request that cannot be honoured is not a decision anybody should be asked to adjudicate: the
+    /// owner's tap answers "should this become a crew", never "is this request well-formed". Parking
+    /// a broken one spends a tap on "no" and teaches them to distrust the button.
+    ///
+    /// The handover requirement is the one that matters. The solo's session ENDS on promotion and its
+    /// in-context state dies with it; the channel is the only thing the supervisor inherits, so a
+    /// promotion granted without that entry silently discards whatever was never written down.
+    /// </summary>
+    void Process_PromoteOrchestrationRequests(IPendingRequests pending)
+    {
+        foreach (var request in pending.PromoteOrchestrationRequests)
+        {
+            try
+            {
+                var session = _store.Get_Session_OrNull(request.OrchId);
+
+                if (session == null || session.ClosedUtc != null)
+                {
+                    Append_GeneralAppEntry(
+                        $"promote-orchestration FAILED: '{request.OrchId}'",
+                        $"No open orchestration '{request.OrchId}' — nothing was promoted.");
+
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unpromotable");
+                    continue;
+                }
+
+                // THE SAME RULE THE EXECUTION USES, so the answer at park time and the answer at tap
+                // time cannot differ in kind — only in how stale they are. A half-promoted
+                // orchestration (stamped, solo still running) is INCOMPLETE rather than "already a
+                // crew", so the retry the failure message asks for is allowed through instead of
+                // being refused by the app's own guard.
+                var readiness = Sessions.OrchestrationShape.Decide_PromotionReadiness(
+                    session.SupervisorSpawnedUtc,
+                    session.Members.Any(member => member.ClosedUtc == null && Sessions.MemberKind_Ids.Resolve_Kind(member.MemberId) == Sessions.MemberKinds.Solo));
+
+                if (readiness == Sessions.PromotionReadiness.AlreadyACrew || readiness == Sessions.PromotionReadiness.NothingToPromote)
+                {
+                    Append_OrchestrationAppEntry(
+                        request.OrchId,
+                        readiness == Sessions.PromotionReadiness.AlreadyACrew
+                            ? "promotion REFUSED — this orchestration already has a supervisor"
+                            : "promotion REFUSED — there is no solo session here to promote",
+                        readiness == Sessions.PromotionReadiness.AlreadyACrew
+                            ? "A promotion turns a basic orchestration into a full crew, and this one is already a crew. Nothing was changed and the owner was not asked."
+                            : "A promotion replaces the solo session with a supervisor, and this orchestration has no live solo. Nothing was changed and the owner was not asked.");
+
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, readiness == Sessions.PromotionReadiness.AlreadyACrew ? "already-a-crew" : "nothing-to-promote");
+                    continue;
+                }
+
+                if (!HandoverEntry_Detector.Has_HandoverEntry(Read_OwnerChannelEntries(request.OrchId)))
+                {
+                    Append_OrchestrationAppEntry(
+                        request.OrchId,
+                        "promotion REFUSED — file your HANDOVER entry first, then ask again",
+                        "Your session ENDS when a promotion happens, and everything you know that is not in this channel dies with it. The supervisor that replaces you inherits this file and nothing else.\n\n"
+                        + $"So append an entry whose SUBJECT carries `{HandoverEntry_Detector.HANDOVER_MARKER}` — where the work really stands, what you tried that did not work, what is half-done and in which files, and the traps — and then drop the request again.\n\n"
+                        + "The owner has NOT been asked and nothing was changed.");
+
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "no-handover-entry");
+                    continue;
+                }
+
+                var parkedPath = CloseConfirmation_Parking.Park(_paths, request.SourceFilePath);
+
+                _log.Log_Info(request.OrchId, $"promote-orchestration held for the owner's confirmation ({parkedPath})");
+
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    "promotion HELD — the owner confirms this with a tap",
+                    $"Nothing has changed yet and you are still the session here. The owner has been asked.\n\n"
+                    + $"Reason relayed: {request.Reason}\n\n"
+                    + $"You will get an entry here either way. If they do not answer within {CloseConfirmation_Parking.EXPIRY_HOURS} hours it lapses and you are told — do NOT re-drop it in the meantime, and carry on working.");
+            }
+            catch (Exception ex)
+            {
+                // Fail closed and say so: the guard could not be honoured, so NOTHING was promoted.
+                _log.Log_Error(request.OrchId, "promote-orchestration could not be held for confirmation — NOT promoted", ex);
+
+                Append_OrchestrationAppEntry(
+                    request.OrchId,
+                    "promotion NOT held — nothing was changed",
+                    $"Your promotion request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and you are still the session here. Ask again if it is still wanted.");
+
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The orchestration's owner channel across its WHOLE history — the file the solo writes and the
+    /// supervisor inherits, plus the archive compaction has moved older entries into. Empty when it
+    /// cannot be read, which the caller treats as "no handover entry": a channel this app cannot read
+    /// is not evidence that the solo wrote one.
+    ///
+    /// A LIVE-FILE READ WAS A DIRECT HIT ON DECISION 13. `Channel_Compactor` moves all but the newest
+    /// 45 entries out once a channel passes 90, and `owner-channel.md` is on its list — so a solo that
+    /// filed its handover, was declined or lapsed once, and kept working would eventually be told to
+    /// "file your HANDOVER entry first", instructing it to do the thing it had already done. That is
+    /// the option-lab-2 shape the decision was written from, and the repo already ships the helper
+    /// that spans both files.
+    /// </summary>
+    IReadOnlyList<Channels.ChannelEntry.IChannelEntry> Read_OwnerChannelEntries(string orchId)
+    {
+        return ChannelHistory_Counter.Read_Entries(_paths.Get_OwnerChannelFile(orchId));
+    }
+
     void Process_CloseImplementerRequests(IPendingRequests pending)
     {
         foreach (var request in pending.CloseImplementerRequests)
@@ -2913,11 +3047,13 @@ internal sealed class BridgeEngineModel(
 
         if (orchId == null || _store.Get_Session_OrNull(orchId) == null)
         {
-            _log.Log_Warning(GLOBAL_ORCH_ID, $"A close request {what} and no orchestration could be named to tell: {parkedPath}");
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"A parked request {what} and no orchestration could be named to tell: {parkedPath}");
             return;
         }
 
-        Append_OrchestrationAppEntry(orchId, $"close request {what} — nothing was closed", advice);
+        // NEUTRAL: this is only reached for a request that could not be parsed, so its kind is
+        // unknown and naming a close would be inventing one.
+        Append_OrchestrationAppEntry(orchId, $"your request {what} — nothing was done", advice);
     }
 
     void Archive_ResolvedRequest_BestEffort(string requestFilePath, string outcome)
@@ -2953,47 +3089,43 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var parkedPath in CloseConfirmation_Parking.Find_Parked(_paths))
         {
-            if (Is_BeingResolved(parkedPath))
-                continue;
-
-            if (CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow))
+            if (Decide_ParkedAction(parkedPath) == ParkedConfirmationActions.Expire)
                 Expire_CloseConfirmation(parkedPath);
         }
+    }
+
+    /// <summary>
+    /// What this tick should do with a parked request — read from the ONE table both sweeps share.
+    ///
+    /// They used to carry a guard chain each, and that is how they came to disagree about which
+    /// requests were live: a dropped `continue` in this one let the ask sweep post fresh buttons every
+    /// two seconds for a request that had already lapsed. The order those guards must run in encodes
+    /// four production failures and now lives in `ParkedConfirmation_Planner`, where the suite can ask
+    /// about it — this method is left with the three facts and none of the reasoning.
+    /// </summary>
+    ParkedConfirmationActions Decide_ParkedAction(string parkedPath)
+    {
+        bool alreadyAsked;
+
+        lock (_closeConfirmationLock)
+            alreadyAsked = _closeConfirmations.Values.Any(confirmation => confirmation.ParkedPath == parkedPath);
+
+        return ParkedConfirmation_Planner.Decide(
+            Is_BeingResolved(parkedPath),
+            CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow),
+            alreadyAsked);
     }
 
     async Task Resolve_CloseConfirmations_Async(CancellationToken cancellationToken)
     {
         foreach (var parkedPath in CloseConfirmation_Parking.Find_Parked(_paths))
         {
-            // A request the tap handler is part-way through resolving is NOT unasked. Its
-            // registrations are already gone (dropped under the lock the moment the owner tapped)
-            // but its file is not archived until two awaited Telegram calls later, and "already
-            // asked" keys on registrations alone — so this tick used to post a SECOND prompt with
-            // fresh buttons for a decision the owner had just made. Those duplicate registrations
-            // then pointed at an archived path that only the file scan can clear, so nothing ever
-            // cleared them, and a tap on that immortal button closed an orchestration the owner had
-            // explicitly refused to close.
-            if (Is_BeingResolved(parkedPath))
-                continue;
-
-            // An expired request is never re-asked, even if lapsing it failed. Splitting expiry into
-            // its own pass dropped the `continue` that used to guarantee this: if the lapse cleared
-            // the registrations and then BOTH the archive and its fallback failed, the file stayed
-            // parked with nothing registered, and this loop posted a fresh prompt with live buttons
-            // to the owner's phone every two seconds. The old single loop produced repeated channel
-            // entries; this produced a waterfall (CLAUDE.md item 14).
-            if (CloseConfirmation_Parking.Is_Expired(parkedPath, DateTime.UtcNow))
-                continue;
-
-            bool alreadyAsked;
-
-            lock (_closeConfirmationLock)
-                alreadyAsked = _closeConfirmations.Values.Any(confirmation => confirmation.ParkedPath == parkedPath);
-
-            if (alreadyAsked)
-                continue;
-
-            await Ask_OwnerToConfirmClose_Async(parkedPath, cancellationToken);
+            // The three guards this loop used to carry — being resolved, expired, already asked —
+            // are one decision now, shared with the expiry sweep. Each of them was written after a
+            // live failure and their ORDER is what mattered; both the reasoning and the ordering are
+            // in `ParkedConfirmation_Planner`, and tested there.
+            if (Decide_ParkedAction(parkedPath) == ParkedConfirmationActions.Ask)
+                await Ask_OwnerToConfirmClose_Async(parkedPath, cancellationToken);
         }
     }
 
@@ -3027,7 +3159,7 @@ internal sealed class BridgeEngineModel(
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Parked close request is unreadable — archived unexecuted: {parkedPath}");
             Archive_ResolvedRequest_BestEffort(parkedPath, "unreadable");
-            Report_UnhonouredCloseRequest(parkedPath, "could not be read", "It was archived unexecuted and nothing was closed. Drop a fresh, valid request if the close is still wanted.");
+            Report_UnhonouredCloseRequest(parkedPath, "could not be read", "It was archived unexecuted and nothing was done. Drop a fresh, valid request if you still want it.");
             return;
         }
 
@@ -3042,12 +3174,32 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        // Same reasoning one level down: a member that is already retired cannot be retired again,
-        // and a prompt offering to would invite a tap that kills nothing while reading as if it had.
-        if (request.Kind == ParkedCloseKinds.Implementer
-            && session.Members.FirstOrDefault(member => member.MemberId == request.MemberId)?.ClosedUtc != null)
+        // Same reasoning one level down, PER KIND: a question whose answer can no longer change
+        // anything must not be asked. It covered the implementer close only — a two-armed guard
+        // written when there were two kinds — so a promotion whose solo had been closed meanwhile was
+        // still offered, and the only tap available led to "promotion FAILED after the owner
+        // confirmed it".
+        //
+        // A switch rather than another `if` chain: the arms are the enum, so a fourth kind arrives
+        // here as an unhandled case to answer rather than as silence that happens to read as "ask".
+        var mootBecause = request.Kind switch
         {
-            _log.Log_Info(request.OrchId, $"Parked close request is moot — '{request.MemberId}' is already closed");
+            ParkedCloseKinds.Implementer
+                when session.Members.FirstOrDefault(member => member.MemberId == request.MemberId)?.ClosedUtc != null
+                => $"'{request.MemberId}' is already closed",
+
+            ParkedCloseKinds.Promotion
+                when !OrchestrationShape.Can_StillPromote(OrchestrationShape.Decide_PromotionReadiness(
+                    session.SupervisorSpawnedUtc,
+                    OrchestrationShape.Has_LiveSolo(session.Members)))
+                => "there is nothing left to promote",
+
+            _ => null,
+        };
+
+        if (mootBecause != null)
+        {
+            _log.Log_Info(request.OrchId, $"Parked request is moot — {mootBecause}");
             Archive_ResolvedRequest_BestEffort(parkedPath, "moot");
             return;
         }
@@ -3066,6 +3218,12 @@ internal sealed class BridgeEngineModel(
         // nothing about one member being safe to retire, and the builder deliberately leaves it out
         // of that prompt — reading it here anyway would be work whose only possible use is to
         // mislead.
+        //
+        // DELIBERATELY TWO-ARMED OVER A THREE-VALUED ENUM — do not "fix" it. A promotion ENDS nothing,
+        // so it belongs on the same side as a member close, and it is already there. Said explicitly
+        // because a sweep of this file found six two-armed branches that were wrong and this is the
+        // one that is right: the next person enumerating them should be able to stop here in a second
+        // rather than reason it out again, or worse, "correct" it.
         var unresolved = request.Kind != ParkedCloseKinds.Orchestration
             ? null
             : Planning.PlanProgress_Formatter.Describe_UnresolvedAtClose_OrNull(
@@ -3081,10 +3239,16 @@ internal sealed class BridgeEngineModel(
 
         try
         {
+            // THE BUTTONS FOLLOW THE KIND, like the prompt above them. They were hard-coded "Close
+            // it" / "Keep it open" while the prompt already said "Turn 'X' into a full crew?" — so
+            // the owner would have confirmed a crew by tapping CLOSE, and the safe-looking tap would
+            // have declined a promotion nobody knew had been misread.
+            var (confirmLabel, declineLabel) = CloseConfirmationPrompt_Builder.Build_ButtonLabels(request.Kind);
+
             var messageId = await _telegramClient.Send_MessageWithButtons_Async(
                 session.TelegramTopicId,
                 text,
-                [(confirmData, "✅ Close it"), (declineData, "✋ Keep it open")],
+                [(confirmData, confirmLabel), (declineData, declineLabel)],
                 cancellationToken);
 
             Remember_TopicMessage(session.TelegramTopicId, messageId);
@@ -3163,9 +3327,13 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
+                // NEUTRAL ON PURPOSE, and this is the one branch where it cannot be otherwise: it
+                // runs because the parked file is gone or expired, so the kind is unknowable and
+                // "nothing closed" would be a guess — wrong on the tap the owner most wants to
+                // believe, where they tapped "✅ Make it a crew".
                 await client.Answer_CallbackQuery_Async(
                     tap.CallbackQueryId,
-                    stillParked ? "expired — nothing closed" : "already resolved — nothing closed",
+                    $"{(stillParked ? "expired" : "already resolved")} — {CloseConfirmationPrompt_Builder.Describe_NothingDone(null)}",
                     cancellationToken);
             }
             catch (OperationCanceledException)
@@ -3179,7 +3347,7 @@ internal sealed class BridgeEngineModel(
 
             _log.Log_Warning(
                 confirmation.OrchId,
-                $"A close confirmation was tapped after it {(stillParked ? "expired" : "was already resolved")} — NOTHING was closed ({confirmation.ParkedPath})");
+                $"A confirmation was tapped after it {(stillParked ? "expired" : "was already resolved")} — NOTHING was done ({confirmation.ParkedPath})");
 
             if (expired && stillParked)
                 Expire_CloseConfirmation(confirmation.ParkedPath);
@@ -3187,9 +3355,18 @@ internal sealed class BridgeEngineModel(
             return true;
         }
 
+        // READ ONCE, used by the toast and by the post-tap edit below. Both describe the same tap, so
+        // reading the file twice would let them disagree if it were archived in between — and the
+        // toast was a kind-blind literal: the owner tapped "✅ Make it a crew" and their phone
+        // flashed "closing…". That was the third owner-visible string on this one tap.
+        var tappedKind = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath)?.Kind;
+
         try
         {
-            await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, confirmation.Confirms ? "closing…" : "kept open", cancellationToken);
+            await client.Answer_CallbackQuery_Async(
+                tap.CallbackQueryId,
+                CloseConfirmationPrompt_Builder.Build_TapToast(tappedKind, confirmation.Confirms),
+                cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -3204,9 +3381,17 @@ internal sealed class BridgeEngineModel(
         // an edit sent afterwards would have nowhere to land.
         if (tap.MessageId != null)
         {
-            var decided = confirmation.Confirms
-                ? $"⚠️ Close '{confirmation.OrchId}'?\n\n✅ Closed — you confirmed."
-                : $"⚠️ Close '{confirmation.OrchId}'?\n\n✋ Kept open — you declined. Its sessions keep running.";
+            // WHAT THE TOPIC IS LEFT SAYING, and it followed the close wording unconditionally — so a
+            // promoted orchestration's topic read "Closed — you confirmed" for ever, about something
+            // that had just gained two sessions.
+            //
+            // The kind comes from the FILE, like every other decision on this path. An unreadable one
+            // yields neutral wording rather than the close wording: guessing "closed" is how a record
+            // comes to say the opposite of what happened.
+            var decided = CloseConfirmationPrompt_Builder.Build_DecidedText(
+                tappedKind,
+                confirmation.OrchId,
+                confirmation.Confirms);
 
             try
             {
@@ -3252,7 +3437,7 @@ internal sealed class BridgeEngineModel(
         {
             _log.Log_Warning(
                 confirmation.OrchId,
-                $"A confirmed close had no readable request — NOTHING was closed, left parked to be re-asked ({confirmation.ParkedPath})");
+                $"A confirmed request could not be read — NOTHING was done, left parked to be re-asked ({confirmation.ParkedPath})");
 
             // NOT archived. A sharing violation at tap time is transient, and archiving would throw
             // away a close the owner had already approved with no way back. Left parked, this heals
@@ -3262,19 +3447,35 @@ internal sealed class BridgeEngineModel(
             //
             // Told to the REQUESTER, in its own channel, because that is where this guard promised
             // an answer either way — the general channel cannot be read by the session waiting.
+            // NEUTRAL, because the file this branch exists for is the one that could not be read —
+            // so the kind is unknowable and "close" would be a guess in front of a solo that had
+            // asked to be promoted.
             Append_OrchestrationAppEntry(
                 confirmation.OrchId,
-                "close NOT executed — the request could not be read just now",
-                "The owner's tap arrived, but your request file could not be read at that moment, so nothing was closed. It has been left in place and they will be asked again shortly. Do not re-drop it.");
+                "NOT executed — your request could not be read just now",
+                "The owner's tap arrived, but your request file could not be read at that moment, so nothing was done. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
             return;
         }
+
+        // WHAT THE TAP ACTUALLY AUTHORISED, set by the arm that runs rather than derived from the
+        // kind afterwards. It was `Kind == Promotion ? "promoted" : "closed"` — which archived the
+        // UNKNOWN-KIND arm, the one that deliberately does nothing, under the label "closed". The
+        // comment three lines below said a wrong label leaves an audit trail saying the opposite of
+        // what happened, and the arm that produced one was added in the same commit as the comment.
+        var archiveLabel = "unexecuted";
 
         try
         {
             // The kind decides what the tap ends, and it comes from the FILE rather than from
             // anything remembered alongside the button. A prompt that said "member" must never be
             // able to execute an orchestration close because some other state disagreed.
+            //
+            // EVERY KIND IS NAMED, and the catch-all `else` that used to sit here is gone. It read as
+            // "orchestration is the default", which was true while there were two kinds and became a
+            // live hazard the moment a third existed: a PROMOTION falling into it would have closed
+            // the orchestration the owner had just agreed to EXPAND — the worst outcome this feature
+            // can produce, from the one tap they were most confident about.
             if (request.Kind == ParkedCloseKinds.Implementer)
             {
                 // A MEMBER CLOSE NO LONGER REACHES A TAP (owner directive 2026-08-13), so this is a
@@ -3294,13 +3495,29 @@ internal sealed class BridgeEngineModel(
                     $"close of '{request.MemberId}' NOT executed — that button predates the rule change",
                     "Member closes no longer wait for the owner, so this parked request was released rather than executed and nothing was closed. Drop it again if it still applies; it takes effect immediately.");
             }
-            else
+            else if (request.Kind == ParkedCloseKinds.Promotion)
             {
+                archiveLabel = "promoted";
+                Execute_ConfirmedPromotion(confirmation.OrchId, request.Reason);
+            }
+            else if (request.Kind == ParkedCloseKinds.Orchestration)
+            {
+                archiveLabel = "closed";
                 Execute_Close(
                     confirmation.OrchId,
                     request.Reason,
                     request.Requester,
                     "The owner confirmed it with a tap.");
+            }
+            else
+            {
+                // A kind this build cannot execute — from a newer build, or a file that parsed as
+                // something this one does not know how to act on. NOTHING happens, and it says so:
+                // silence here would archive an unexecuted request as though it had been done, which
+                // is the same lie as executing the wrong thing, one step quieter.
+                _log.Log_Warning(
+                    confirmation.OrchId,
+                    $"A confirmed request carried a kind this build cannot execute ('{request.Kind}') — NOTHING was done ({confirmation.ParkedPath})");
             }
         }
         catch (Exception)
@@ -3311,7 +3528,48 @@ internal sealed class BridgeEngineModel(
         }
         finally
         {
-            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "closed");
+            // "closed" on a promotion would leave an audit trail saying the opposite of what happened
+            // to an orchestration that is still running — and so would "closed" on a kind this build
+            // could not execute at all, which is what the ternary here used to produce.
+            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, archiveLabel);
+        }
+    }
+
+    /// <summary>
+    /// The owner agreed to spend a crew. The solo ends, a supervisor takes over its channel, imp-1
+    /// spawns empty — all of it in the launcher, which is where the ORDER of those three steps is
+    /// argued and where a failure at each one is survivable.
+    ///
+    /// It reports into the orchestration's own channel, which the new supervisor reads as its history:
+    /// the entry is the first thing it sees about why it exists, sitting directly under the handover
+    /// the solo was required to write.
+    /// </summary>
+    void Execute_ConfirmedPromotion(string orchId, string reason)
+    {
+        try
+        {
+            _launcher.Promote_ToFullCrew(orchId);
+
+            _log.Log_Info(orchId, $"Promoted to a full crew on the owner's confirmation — {reason}");
+
+            Append_OrchestrationAppEntry(
+                orchId,
+                "PROMOTED to a full crew — the owner confirmed",
+                $"The solo session has ended and a supervisor has taken over this channel, with imp-1 spawned and waiting for a brief.\n\n"
+                + $"Reason given: {reason}\n\n"
+                + "Everything above is the history you inherit — the handover entry is in it. The Telegram topic is unchanged, so the owner is reading this same thread.");
+        }
+        catch (Exception ex)
+        {
+            // The orchestration is NOT left half-promoted silently. Whatever the launcher managed
+            // before it threw, the channel says what was attempted, and the watchdog covers a
+            // supervisor whose spawn was stamped but failed.
+            _log.Log_Error(orchId, "Promotion to a full crew FAILED after the owner confirmed it", ex);
+
+            Append_OrchestrationAppEntry(
+                orchId,
+                "promotion FAILED after the owner confirmed it",
+                $"The owner approved the promotion and it could not be completed ({ex.Message}). Check which sessions are actually running before asking again.");
         }
     }
 
@@ -3319,16 +3577,21 @@ internal sealed class BridgeEngineModel(
     {
         var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
 
-        // "a close request" while the file is unreadable, and the exact subject when it is not. The
-        // requester is told which of its asks was refused; it may have more than one thing running.
-        var subject = request == null ? "what you asked to close" : CloseConfirmationPrompt_Builder.Describe_Subject(request);
+        // THE VERB COMES WITH THE PHRASE. This read "You asked to close {subject}" and the subject for
+        // a promotion is "the promotion to a full crew" — so a solo whose promotion the owner refused
+        // was told it had asked to CLOSE the promotion. The requester is told which of its asks was
+        // refused; it may have more than one thing running.
+        var askedFor = request == null
+            ? "what you asked for"
+            : CloseConfirmationPrompt_Builder.Describe_AskedFor(request);
 
-        _log.Log_Info(confirmation.OrchId, "The owner declined a close request");
+        _log.Log_Info(confirmation.OrchId, "The owner declined a parked request");
 
         Append_OrchestrationAppEntry(
             confirmation.OrchId,
-            "close DECLINED by the owner — keep working",
-            $"You asked to close {subject} ({request?.Reason ?? "no reason recorded"}) and the owner said no. Nothing was closed and every session is still running.\n\n"
+            $"{askedFor} — DECLINED by the owner, keep working",
+            $"You asked for {askedFor} ({request?.Reason ?? "no reason recorded"}) and the owner said no — "
+            + $"{CloseConfirmationPrompt_Builder.Describe_NothingDone(request?.Kind)}, and every session is still running.\n\n"
             + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
 
         Report_CloseOutcome_ToGeneral(confirmation.OrchId, "declined by the owner", request);
@@ -3350,12 +3613,13 @@ internal sealed class BridgeEngineModel(
         // A MEMBER close names the member, because "close of 'orch' declined" for a one-member ask
         // reads as the whole orchestration having been up for closure — the general supervisor
         // tracks orchestrations, and it would file the wrong fact.
-        var what = request == null || request.Kind == ParkedCloseKinds.Orchestration
-            ? $"'{orchId}'"
-            : $"'{request.MemberId}' in '{orchId}'";
-
+        //
+        // It used to ask `Kind == Orchestration` and put the MEMBER ID in the other arm: a two-armed
+        // test over three values, and a promotion carries no member id by construction — so a
+        // declined promotion was filed as the close of a member with no name, in the one channel the
+        // general supervisor reads to know what is running.
         Append_GeneralAppEntry(
-            $"close of {what} {outcome} — nothing was closed",
+            $"{CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(request, orchId)} — {outcome}, {CloseConfirmationPrompt_Builder.Describe_NothingDone(request?.Kind)}",
             $"Asked by: {request?.Requester ?? "unrecorded"}. Reason given: {request?.Reason ?? "none recorded"}. Its sessions are all still running.");
     }
 
@@ -3412,13 +3676,16 @@ internal sealed class BridgeEngineModel(
 
         if (request != null)
         {
-            _log.Log_Info(request.OrchId, $"A close request lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h");
+            _log.Log_Info(request.OrchId, $"A parked request lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h");
 
+            // Same fix as the declined notice: the phrase brings its own verb, so this can no longer
+            // render as "close of the promotion to a full crew LAPSED".
             Append_OrchestrationAppEntry(
                 request.OrchId,
-                $"close of {CloseConfirmationPrompt_Builder.Describe_Subject(request)} LAPSED — the owner never answered",
-                $"Your close request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and nothing was closed. "
-                + "It is not carried over: a close must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
+                $"{CloseConfirmationPrompt_Builder.Describe_AskedFor(request)} LAPSED — the owner never answered",
+                $"Your request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and "
+                + $"{CloseConfirmationPrompt_Builder.Describe_NothingDone(request.Kind)}. "
+                + "It is not carried over: a decision must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
 
             Report_CloseOutcome_ToGeneral(request.OrchId, $"lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h", request);
         }

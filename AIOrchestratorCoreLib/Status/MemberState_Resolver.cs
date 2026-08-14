@@ -481,7 +481,13 @@ public static class MemberState_Resolver
     /// quotation by definition. Bullets and bold are stripped because `**STANDING BY** — waiting` is
     /// a declaration written by someone using markdown.
     /// </summary>
-    static bool Contains_Marker(IChannelEntry entry, string marker)
+    /// <remarks>
+    /// PUBLIC since 2026-08-13, when the promotion protocol's `HANDOVER` marker became its second
+    /// consumer. It is exposed rather than copied deliberately: every rule in the comment above was
+    /// paid for by a live failure, and a second matcher written for a new marker would start out
+    /// missing all of them.
+    /// </remarks>
+    public static bool Contains_Marker(IChannelEntry entry, string marker)
     {
         if (Contains_MarkerToken(entry.Subject, marker))
             return true;

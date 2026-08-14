@@ -23,6 +23,12 @@ public static class ParkedCloseRequest_Reader
     /// </summary>
     public const string IMPLEMENTER_REQUESTER_DESCRIPTION = "a session in the orchestration (this request type records no name)";
 
+    /// <summary>
+    /// Same principle for a promotion: the schema records no requester, and only one session can ask
+    /// — the solo, about itself. Describing it beats inventing a name the file does not carry.
+    /// </summary>
+    public const string PROMOTION_REQUESTER_DESCRIPTION = "the solo session of this orchestration";
+
     public static IParkedCloseRequest? Read_OrNull(string parkedFilePath)
     {
         var orchestrationRequest = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(parkedFilePath);
@@ -45,6 +51,17 @@ public static class ParkedCloseRequest_Reader
                 implementerRequest.MemberId,
                 IMPLEMENTER_REQUESTER_DESCRIPTION,
                 implementerRequest.Reason,
+                parkedFilePath);
+        }
+
+        var promotionRequest = OrchestrationRequests_Reader.Read_PromoteOrchestrationRequest_OrNull(parkedFilePath);
+
+        if (promotionRequest != null)
+        {
+            return ParkedCloseRequest_Factory.Create_ForPromotion(
+                promotionRequest.OrchId,
+                PROMOTION_REQUESTER_DESCRIPTION,
+                promotionRequest.Reason,
                 parkedFilePath);
         }
 

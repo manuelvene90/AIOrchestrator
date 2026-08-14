@@ -89,6 +89,19 @@ internal sealed class OrchestrationLauncherModel(
 
     public IOrchestrationSession Add_Member(string orchId, MemberKinds kind)
     {
+        // THE SHAPE GATE, and it is here rather than in the button because a click can only ask.
+        // The desktop's "+ Implementer" reaches this method directly, so before this a click on a
+        // basic card spawned an implementer beside the solo with NO supervisor and no stamp — the
+        // orchestration still read as basic, the watchdog never made a supervisor, and the new
+        // session waited on a brief that could not come. That bypassed the request, the handover
+        // entry and the owner's tap in one click.
+        //
+        // It throws rather than returning quietly: every caller is either a UI handler that shows
+        // the message or a request processor that reports it, and a silent no-op here would spend a
+        // click and look like it worked.
+        if (!OrchestrationShape.Can_AddMember(_store.Get_Session(orchId).SupervisorSpawnedUtc, kind))
+            throw new Exception(OrchestrationShape.Describe_AddMemberRefusal(_store.Get_Session(orchId).SupervisorSpawnedUtc, kind));
+
         var session = _store.Add_Member(orchId, kind);
         var newMember = session.Members[session.Members.Count - 1];
 
@@ -97,6 +110,96 @@ internal sealed class OrchestrationLauncherModel(
         // Respawn stamped the new member's spawn state — return the fresh session, not the
         // pre-spawn snapshot.
         return _store.Get_Session(orchId);
+    }
+
+    /// <summary>
+    /// A basic orchestration becomes a full crew: the solo ends, a supervisor takes over its channel,
+    /// and imp-1 spawns empty beside it.
+    ///
+    /// NOTHING MOVES. The solo has been writing `owner-channel.md` — the file a supervisor owns — so
+    /// the supervisor opens it and finds the entire conversation, including the handover entry the
+    /// solo had to file before it could ask. No channel migration, no history copy, and the Telegram
+    /// topic stays bound to the same orchestration, so the owner keeps reading one thread.
+    ///
+    /// imp-1 SPAWNS EMPTY, deliberately. Making the solo into imp-1 would strand its reported work in
+    /// a spoke it no longer reads, and the supervisor can brief a fresh implementer from the history
+    /// it can see.
+    ///
+    /// THE ORDER IS THE DECISION HERE, and it is chosen for what survives a failure at each step:
+    ///
+    ///   1. SUPERVISOR FIRST. Its spawn stamps `SupervisorSpawnedUtc` BEFORE the attempt, so from
+    ///      that instant the orchestration reads as promoted and the watchdog will respawn the
+    ///      supervisor if the spawn itself failed. Nothing has been DESTROYED yet either: if this
+    ///      throws, the solo is still running.
+    ///
+    ///      **This used to claim "the orchestration is exactly what it was", and that was false** —
+    ///      the shape flag has already flipped by then and nothing rolls it back, because the stamp
+    ///      is deliberately written before the attempt. What is true is narrower: nothing is lost, and
+    ///      the state is RECOVERABLE. That half-promoted state now has a name — `Incomplete` — and a
+    ///      retry finishes it rather than being refused as "already a crew", which is what the old
+    ///      wording's optimism was hiding.
+    ///   2. THEN CLOSE THE SOLO. Doing this first would mean a failed supervisor spawn leaves an
+    ///      orchestration with NOTHING running and nothing to recover it — the watchdog skips closed
+    ///      members, and a basic orchestration has no supervisor slot to protect.
+    ///   3. imp-1 LAST, because it is the only step whose failure costs nothing: the supervisor can
+    ///      ask for an implementer through the request protocol like any other.
+    ///
+    /// The window between 1 and 2 has two sessions on one channel. It is seconds, both are
+    /// append-only, and the alternative is a window in which the orchestration has no session at all.
+    /// </summary>
+    public IOrchestrationSession Promote_ToFullCrew(string orchId)
+    {
+        var session = _store.Get_Session(orchId);
+
+        // ASKED AT THE MOMENT OF EFFECT, because the park-time check can be twelve hours old. Two
+        // requests can both pass it while neither has executed, and a `set-model` can change the shape
+        // underneath it — so the decision that matters is this one.
+        var readiness = OrchestrationShape.Decide_PromotionReadiness(
+            session.SupervisorSpawnedUtc,
+            OrchestrationShape.Has_LiveSolo(session.Members));
+
+        if (!OrchestrationShape.Can_StillPromote(readiness))
+        {
+            _log.Log_Warning(orchId, $"Promotion skipped — {readiness}");
+            return session;
+        }
+
+        // THE REPO IS CHECKED BEFORE THE STAMP, not after. `Respawn_Supervisor`'s first act is to
+        // stamp `SupervisorSpawnedUtc`, deliberately, so no tick sees "no pid file and no grace" and
+        // double-spawns — which means a spawn that throws leaves the orchestration reading as a crew
+        // with its solo still running. Start_Orchestration and Start_BasicOrchestration both validate
+        // this; promotion did not, so a moved or renamed repo folder flipped the shape and then failed.
+        if (!Directory.Exists(session.RepoPath))
+            throw new Exception($"Repo path '{session.RepoPath}' for '{orchId}' does not exist — nothing was promoted");
+
+        // INCOMPLETE means a supervisor spawn was already attempted for this orchestration, so this
+        // does NOT spawn a second one: `Respawn_Supervisor` does not terminate an incumbent, it nulls
+        // the stored pid and clears the pid file — and both `Kill_AllSessions` and
+        // `Kill_OrchestrationSessions` enumerate pid FILES, so the first supervisor would survive the
+        // orchestration's close AND the app's exit, still appending to owner-channel.md.
+        if (readiness == PromotionReadiness.Ready)
+            Respawn_Supervisor(orchId);
+        else
+            _log.Log_Info(orchId, "Finishing a promotion that stopped halfway — a supervisor spawn was already attempted, so it is not repeated");
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null || MemberKind_Ids.Resolve_Kind(member.MemberId) != MemberKinds.Solo)
+                continue;
+
+            _store.Close_Member(orchId, member.MemberId);
+            Termination.SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, member.MemberId));
+
+            _log.Log_Info(orchId, $"Solo session '{member.MemberId}' closed — promoted to a full crew");
+        }
+
+        // ONLY IF THERE IS NOT ONE ALREADY. Finishing a half-done promotion must not hand the
+        // supervisor an imp-2 beside the imp-1 it already has — an idempotent completion that adds a
+        // session every time it runs is not idempotent, it is just slower to notice.
+        var hasLiveImplementer = _store.Get_Session(orchId).Members.Any(member =>
+            member.ClosedUtc == null && MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Implementer);
+
+        return hasLiveImplementer ? _store.Get_Session(orchId) : Add_Implementer(orchId);
     }
 
     public void Respawn_Supervisor(string orchId)
@@ -149,6 +252,22 @@ internal sealed class OrchestrationLauncherModel(
     public void Respawn_Implementer(string orchId, string memberId)
     {
         var session = _store.Get_Session(orchId);
+
+        // A CLOSED MEMBER IS NOT RESPAWNED, re-read here rather than trusted from the caller's
+        // snapshot. The watchdog decides what is dead from a `Load_All` taken at the top of its tick
+        // and walks sessions doing file I/O and process lookups on the way down, while a promotion
+        // closes the solo from a different loop with no shared lock. A tick whose snapshot predates
+        // that close, reaching the solo after its process dies, asks for exactly this respawn.
+        //
+        // The store no longer re-opens the member on the pid write, so the roster stays honest either
+        // way — but without this the app would still open a terminal for a session it had retired,
+        // and the owner would find a solo alive beside the supervisor that replaced it.
+        if (session.Members.FirstOrDefault(member => member.MemberId == memberId)?.ClosedUtc != null)
+        {
+            _log.Log_Info(orchId, $"Respawn of '{memberId}' skipped — it was closed while the tick was in flight");
+            return;
+        }
+
         var pidFile = _paths.Get_ImplementerPidFile(orchId, memberId);
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
         var model = session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel;
@@ -238,7 +357,14 @@ internal sealed class OrchestrationLauncherModel(
         if (current == null || current.ClosedUtc != null)
             return;
 
-        // A member closed during the sync window must stay closed — writing its pid would reopen it.
+        // A member closed during the sync window is not written to at all. The REASON here used to be
+        // "writing its pid would reopen it", and that reason is now gone: `Set_MemberPid` carries
+        // `ClosedUtc` through, so the store can no longer resurrect anybody. What is left is smaller
+        // and still worth doing — a retired member's pid is a dead process, and recording it invites
+        // a later reader to kill or foreground whatever now holds that number.
+        //
+        // Said explicitly because a guard whose stated reason has moved elsewhere is how a maintainer
+        // comes to delete the wrong one, or to add a second copy of the one that actually holds.
         foreach (var member in current.Members)
         {
             if (member.MemberId == memberId && member.ClosedUtc == null)

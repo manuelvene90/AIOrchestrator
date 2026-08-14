@@ -16,6 +16,9 @@ public interface IOrchestrationLauncher
     IOrchestrationSession Start_BasicOrchestration(string repoName, string repoPath);
     IOrchestrationSession Add_Implementer(string orchId);
 
+    /// <summary>A basic orchestration becomes a full crew: the solo ends, a supervisor takes over its channel, imp-1 spawns empty.</summary>
+    IOrchestrationSession Promote_ToFullCrew(string orchId);
+
     /// <summary>Adds a member of the given kind — a reviewer spawns read-only, with no worktree.</summary>
     IOrchestrationSession Add_Member(string orchId, MemberKinds kind);
     void Respawn_Supervisor(string orchId);
