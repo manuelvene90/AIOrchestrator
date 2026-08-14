@@ -13,6 +13,27 @@ namespace AIOrchestratorCoreLib.Telegram;
 ///
 /// What remains unpinned is the one-line call from the engine to these methods. That is stated rather
 /// than hidden — a green suite here says these rules are right, not that they are wired up.
+///
+/// UNASSERTED, NOT UNTESTABLE, AND THE DIFFERENCE MATTERS. An earlier version of this said the wiring
+/// "cannot be observed by any test", which is wrong and was repeated into a commit message before it was
+/// checked. `BridgeEngine_Factory.Create` is PUBLIC and takes interfaces only, and five test files
+/// already drive the engine end to end — `OwnerAnswerSurvivesFailedSendTests`,
+/// `CloseImplementerGuardProbeTests` and the three nudge probes. What is unreachable is the engine's
+/// INTERNAL METHODS; its BEHAVIOUR is reachable, at the cost of a slow probe.
+///
+/// So the honest statement is that nothing asserts this wiring today and a probe could. "Untestable" is
+/// the word that stops anyone trying, which is why it is corrected here rather than left standing.
+///
+/// SHARED BY TWO CALL SITES WITH OPPOSITE CONSEQUENCES. `Classify_Failure` is also used by the
+/// busy-supervisor narration, which asks the same question — did the transport fail — and then does the
+/// opposite thing with the answer: it decides whether to DISCARD stored message ids, where this file's
+/// caller decides whether to SUPPRESS RETRIES. The classification is single on purpose and the actions
+/// are deliberately not.
+///
+/// The class name is therefore narrower than its contents: the classifier is about Telegram transport
+/// failures generally, not about topic names. Naming it for its first caller is a real wart and a rename
+/// is available to any reviewer who wants one; it was left because the ruling was to share the rule, not
+/// to move it.
 /// </summary>
 public static class TopicNameSync_Gate
 {

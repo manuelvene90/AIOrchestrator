@@ -6049,8 +6049,22 @@ internal sealed class BridgeEngineModel(
             // its null-receipt path.
             //
             // A TRANSPORT failure never tells us the message is gone; it tells us the round trip did
-            // not complete. Both of these are that.
-            var couldNotReachTelegram = ex is OperationCanceledException or HttpRequestException;
+            // not complete.
+            //
+            // CLASSIFIED THROUGH THE ONE PLACE THAT DECIDES IT, and this line is why. rev-9's F1 was
+            // "one class, two predicates, in one commit"; the first fix lifted the topic-name copy into
+            // TopicNameSync_Gate and left this one written out inline. They then AGREED, which is not
+            // the same as being one rule — decision 12's "all agreeing today and none joined to the
+            // others" is exactly two copies that match until one of them is edited. Worse here than the
+            // general case: the lifted copy is pinned by seven controls and this one is not asserted by
+            // anything, so a drift would be silent in precisely this direction.
+            //
+            // THE CLASSIFICATION IS SHARED; THE CONSEQUENCE IS NOT. This site decides whether to DISCARD
+            // state, the topic-name site decides whether to SUPPRESS RETRIES — opposite actions on the
+            // same question, and collapsing them to make the sharing tidier would trade one defect for
+            // another.
+            var couldNotReachTelegram =
+                TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown;
 
             // THE LIMIT, STATED, BECAUSE THE FIX IS INCOMPLETE AND SAYING SO IS THE POINT. The client
             // throws a PLAIN Exception for any non-2xx, so a 429 and every 5xx — which are also "we do
