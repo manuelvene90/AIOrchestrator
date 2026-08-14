@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
@@ -76,6 +76,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
         List<ICompletedChannelAppend> completedAppends = [];
         List<string> truncatedFiles = [];
         List<string> unreadableFiles = [];
+        List<string> heldTrailingEntryFiles = [];
 
         // Recorded BEFORE the work, and rebuilt from scratch every poll: a channel that drops out of
         // the active set (deferred topic, held owner channel, closed member) must stop counting as
@@ -89,7 +90,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
         {
             try
             {
-                var entries = Poll_OneChannel(channel, truncatedFiles);
+                var entries = Poll_OneChannel(channel, truncatedFiles, heldTrailingEntryFiles);
 
                 if (entries.Count > 0)
                     completedAppends.Add(CompletedChannelAppend_Factory.Create(channel, entries));
@@ -105,11 +106,11 @@ internal sealed class ChannelTailerModel : IChannelTailer
             }
         }
 
-        return TailerPollResult_Factory.Create(completedAppends, truncatedFiles, unreadableFiles);
+        return TailerPollResult_Factory.Create(completedAppends, truncatedFiles, unreadableFiles, heldTrailingEntryFiles);
     }
 
     /// <summary>Runs with <see cref="_statesLock"/> HELD.</summary>
-    IReadOnlyList<IChannelEntry> Poll_OneChannel(IDiscoveredChannel channel, List<string> truncatedFiles)
+    IReadOnlyList<IChannelEntry> Poll_OneChannel(IDiscoveredChannel channel, List<string> truncatedFiles, List<string> heldTrailingEntryFiles)
     {
         var fileLength = Get_FileLength_OrNull(channel.FilePath);
         if (fileLength == null)
@@ -150,7 +151,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
             state.QuietPolls++;
         }
 
-        return Extract_CompleteEntries(state);
+        return Extract_CompleteEntries(state, channel.FilePath, heldTrailingEntryFiles);
     }
 
     /// <summary>
@@ -320,7 +321,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
         return snapshot;
     }
 
-    static IReadOnlyList<IChannelEntry> Extract_CompleteEntries(FileTailState state)
+    static IReadOnlyList<IChannelEntry> Extract_CompleteEntries(FileTailState state, string channelFilePath, List<string> heldTrailingEntryFiles)
     {
         var pendingText = state.Pending.ToString();
 
@@ -339,7 +340,22 @@ internal sealed class ChannelTailerModel : IChannelTailer
             return [];
         }
 
-        var flushTrailingEntry = state.QuietPolls >= QUIET_POLLS_TO_FLUSH && Ends_WithLineBreak(pendingText);
+        var quiet = state.QuietPolls >= QUIET_POLLS_TO_FLUSH;
+        var flushTrailingEntry = quiet && Ends_WithLineBreak(pendingText);
+
+        // HELD, AND SAID SO. Quiet but unterminated means the trailing entry parses and cannot be
+        // released: the flush is the last entry's only exit, and it requires the line break. The
+        // channel sits invisible until somebody appends a header — the sender believing it was
+        // delivered — so the tailer reports the condition even though it will not act on it.
+        //
+        // It does not flush anyway, and the reason is what the remainder would cost. If this fired
+        // while a write was merely slow, the rest of the entry would arrive with no header of its
+        // own, be read as noise by the branch above, and be DROPPED. A truncated entry plus a
+        // silently discarded tail is strictly worse than the delay it would cure, and nothing in the
+        // content can tell the two cases apart — the newline cannot either, since a writer pausing
+        // after any completed line leaves the file ending in one mid-entry.
+        if (quiet && !flushTrailingEntry)
+            heldTrailingEntryFiles.Add(channelFilePath);
 
         int consumedUpToLine;
         if (flushTrailingEntry)

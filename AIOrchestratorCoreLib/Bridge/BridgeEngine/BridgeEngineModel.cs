@@ -193,6 +193,13 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
+    /// <summary>
+    /// Channels already logged as holding an unterminated trailing entry. Cleared as soon as the
+    /// tailer stops reporting one, so the next occurrence speaks again — content-addressed by the
+    /// file path, with no token to strand.
+    /// </summary>
+    readonly HashSet<string> _heldTrailingEntryFiles = [];
+
     readonly HashSet<string> _stallAlertedOrchIds = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
@@ -706,6 +713,19 @@ internal sealed class BridgeEngineModel(
         // silently stops hearing from, so the failure is surfaced here and the next poll retries it.
         foreach (var unreadableFile in pollResult.UnreadableFiles)
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Channel file could not be read this tick (the other channels are unaffected, this one retries): {unreadableFile}");
+
+        // A trailing entry the tailer can parse but may not release, because the file does not end
+        // with a line break. It is not lost — it emits as soon as anything appends a header — but
+        // until then it is invisible while its sender believes it was delivered, so the silence ends
+        // here even though the emission does not change. Once per spell: the condition persists for
+        // as long as the file stays unterminated, and a line every 2 s would bury the log it lives in.
+        foreach (var heldFile in pollResult.HeldTrailingEntryFiles)
+        {
+            if (_heldTrailingEntryFiles.Add(heldFile))
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"Channel's last entry is parsed but HELD — the file does not end with a line break, so nothing will mirror it until the next append: {heldFile}");
+        }
+
+        _heldTrailingEntryFiles.IntersectWith(pollResult.HeldTrailingEntryFiles);
 
         foreach (var append in pollResult.CompletedAppends)
         {
