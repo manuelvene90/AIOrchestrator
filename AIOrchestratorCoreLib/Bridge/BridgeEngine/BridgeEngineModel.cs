@@ -939,6 +939,7 @@ internal sealed class BridgeEngineModel(
         await Break_SilentDeadlock_Async(cancellationToken);
         await Check_AwayMode_Async(cancellationToken);
         await Push_PeriodicStatus_Async(cancellationToken);
+        await Push_GeneralDashboard_Async(cancellationToken);
 
         Compact_LongChannels();
         Persist_BridgeState();
@@ -2426,6 +2427,135 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Error(GLOBAL_ORCH_ID, "Usage limit check failed", ex);
+        }
+    }
+
+    long? _generalDashboardMessageId;
+    string? _generalDashboardText;
+    bool _generalDashboardIdLoaded;
+    DateTime? _generalDashboardFailedAtUtc;
+
+    /// <summary>
+    /// ONE MESSAGE IN GENERAL, EDITED IN PLACE: every open orchestration at a glance, so the owner
+    /// sees the whole machine without asking and without a notification per update. The per-topic
+    /// status line already works this way; this is the same idea one level up.
+    ///
+    /// It writes only when the TEXT CHANGED — the shared decider's rule — which is why the composer
+    /// puts no clock in it. Everything else here is execution: the decisions that can be pure
+    /// functions are, because this class is internal sealed with no InternalsVisibleTo and nothing
+    /// decided inside it can be reached by the suite.
+    /// </summary>
+    async Task Push_GeneralDashboard_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        // The same gate the other outbound sites use. DND holds and Silenced drops, and a dashboard
+        // that ignored the owner's own switch would be the loudest thing in the app.
+        if (Resolve_EffectiveMode(ChannelDiscovery.GENERAL_ORCH_ID) != TelegramDeliveryModes.Normal)
+            return;
+
+        // Backoff after a failure. Without it the retry is a 2-second hammer at an endpoint that is
+        // already failing — the shape that earns a bot a server-side throttle. The failure stamp is
+        // what holds it off, because the text has not changed and so cannot.
+        if (_generalDashboardFailedAtUtc != null
+            && (DateTime.UtcNow - _generalDashboardFailedAtUtc.Value).TotalSeconds < MIRROR_RETRY_BACKOFF_SECONDS)
+            return;
+
+        Load_GeneralDashboardMessageId_Once();
+
+        var text = Telegram.GeneralDashboard_Composer.Compose(Build_ProgressReportText(null));
+        var action = Telegram.TopicStatusLine_Decider.Decide(text, _generalDashboardText, _generalDashboardMessageId);
+
+        if (action == Telegram.TopicStatusActions.None)
+            return;
+
+        try
+        {
+            if (action == Telegram.TopicStatusActions.Edit && _generalDashboardMessageId != null)
+            {
+                await _telegramClient.Edit_MessageText_Async(_generalDashboardMessageId.Value, text, cancellationToken);
+            }
+            else
+            {
+                var messageId = await _telegramClient.Send_Message_Async(null, text, cancellationToken);
+
+                if (messageId == null)
+                    return;
+
+                _generalDashboardMessageId = messageId;
+                Save_GeneralDashboardMessageId(messageId.Value);
+            }
+
+            _generalDashboardText = text;
+            _generalDashboardFailedAtUtc = null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // "not modified" is Telegram agreeing with us: the desired state already holds, so it is a
+            // SUCCESS. Recording the text is what stops it being retried every tick for ever.
+            if (Telegram.TopicStatusLine_Decider.Is_MessageAlreadyCurrent(ex.Message))
+            {
+                _generalDashboardText = text;
+                return;
+            }
+
+            // The message is gone — the topic was cleared, or the owner deleted it. Forget the id so
+            // the next tick posts a fresh dashboard instead of editing into a hole for ever.
+            if (Telegram.TopicStatusLine_Decider.Is_MessageGone(ex.Message))
+            {
+                _generalDashboardMessageId = null;
+                _generalDashboardText = null;
+                Delete_GeneralDashboardState_BestEffort();
+                return;
+            }
+
+            _generalDashboardFailedAtUtc = DateTime.UtcNow;
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"General dashboard not updated ({ex.Message}) — retrying after the backoff");
+        }
+    }
+
+    /// <summary>
+    /// Read ONCE per process, not per tick: the file only ever changes because this class wrote it.
+    /// A miss here would be re-read 30 times a minute for the lifetime of the app.
+    /// </summary>
+    void Load_GeneralDashboardMessageId_Once()
+    {
+        if (_generalDashboardIdLoaded)
+            return;
+
+        _generalDashboardIdLoaded = true;
+        _generalDashboardMessageId = Telegram.GeneralDashboard_Store.Parse_MessageId_OrNull(
+            Read_FileText_Safe(_paths.GeneralDashboardStateFile));
+    }
+
+    void Save_GeneralDashboardMessageId(long messageId)
+    {
+        try
+        {
+            File.WriteAllText(_paths.GeneralDashboardStateFile, Telegram.GeneralDashboard_Store.To_Json(messageId));
+        }
+        catch (Exception ex)
+        {
+            // Costs one duplicate dashboard after the next restart, never this one's update.
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not remember the General dashboard message id: {ex.Message}");
+        }
+    }
+
+    void Delete_GeneralDashboardState_BestEffort()
+    {
+        try
+        {
+            if (File.Exists(_paths.GeneralDashboardStateFile))
+                File.Delete(_paths.GeneralDashboardStateFile);
+        }
+        catch
+        {
+            // The id is already forgotten in memory, which is what the next tick reads.
         }
     }
 
@@ -8605,7 +8735,12 @@ internal sealed class BridgeEngineModel(
             if (_telegramClient == null || Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
                 continue;
 
-            var text = "✓✓  ·  🔴 Sup: turn ended without a reply — nudged, an answer is coming";
+            // THE SPEAKER IS RESOLVED, NEVER SPELLED. This line was the last hard-coded "🔴 Sup" in
+            // the app and it survived the sweep that removed the others, so a basic orchestration —
+            // which has no supervisor at all — kept telling the owner about one. Every other
+            // owner-facing line here already asks Describe_Speaker; a literal beside them is a copy
+            // that cannot be kept in step.
+            var text = $"✓✓  ·  {Describe_Speaker(orchId)}: turn ended without a reply — nudged, an answer is coming";
 
             try
             {

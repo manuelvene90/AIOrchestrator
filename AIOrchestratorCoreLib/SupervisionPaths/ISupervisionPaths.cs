@@ -28,6 +28,13 @@ public interface ISupervisionPaths
     /// <summary>Per-window dedup state for the usage-limit Telegram alerts.</summary>
     string LimitAlertStateFile { get; }
 
+    /// <summary>
+    /// Which message in the General topic is the all-orchestrations dashboard. Persisted because the
+    /// remembered TEXT is in memory: a restart with no stored id posts a SECOND dashboard beside the
+    /// first, every time the app starts.
+    /// </summary>
+    string GeneralDashboardStateFile { get; }
+
     string Get_OrchestrationFolder(string orchId);
     string Get_SessionFile(string orchId);
 

@@ -12,6 +12,7 @@ internal sealed class SupervisionPathsModel(string root) : ISupervisionPaths
     public string GeneralPidFile { get; } = Path.Combine(root, "general", ".pid");
     public string RequestsFolder { get; } = Path.Combine(root, ".requests");
     public string LimitAlertStateFile { get; } = Path.Combine(root, ".limit-alerts.json");
+    public string GeneralDashboardStateFile { get; } = Path.Combine(root, ".general-dashboard.json");
 
     public string Get_OrchestrationFolder(string orchId)
     {
