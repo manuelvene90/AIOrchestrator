@@ -638,6 +638,12 @@ internal sealed class BridgeEngineModel(
         // pressed 🔕 — and DND means "pause OUTBOUND Telegram", not "stop the app from telling this
         // machine what the ledger says". The same placement is what keeps it working when Telegram is
         // not configured at all, and for orchestrations that have no topic.
+        //
+        // NOTHING IN THE SUITE PINS THIS LINE'S POSITION. What to write is decided in
+        // Planning.ProgressArtefact_Decider and is covered there; WHERE the decision is asked from is
+        // a property of the order of statements in this method, which no pure function can observe.
+        // Moving this call below the return seven lines down compiles, passes every test, and quietly
+        // reintroduces exactly the bug described above. If you are that edit: don't.
         Refresh_ProgressArtefacts();
 
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
@@ -3453,22 +3459,13 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// How long a progress artefact may sit unrewritten before it is refreshed anyway. It is a
-    /// HEARTBEAT, not a cache expiry, and it exists because the two halves of this feature are
-    /// coupled: writing only on change means the file's timestamp stops advancing, and a status line
-    /// that discards a stale file would then throw away a number that is simply UNCHANGED and
-    /// correct. Rewriting once a minute keeps the timestamp meaning "the app is alive", which is what
-    /// lets the renderer treat an old file as absent without ever losing a good reading.
-    /// </summary>
-    const int PROGRESS_HEARTBEAT_SECONDS = 60;
-
-    /// <summary>
     /// Publishes each live orchestration's ledger reading for the supervisor's terminal status line.
     /// Local files only — nothing here talks to Telegram, which is why it runs above the DND gate.
     ///
-    /// A ledger that does not parse REMOVES the artefact rather than leaving the last good one in
-    /// place: a number nobody can derive from the file on disk any more is worse than no number, and
-    /// the renderer already falls back cleanly to the line it drew before this feature existed.
+    /// WHAT TO DO lives in <see cref="Planning.ProgressArtefact_Decider"/>; this is left with doing
+    /// it. The engine is `internal sealed` with no `InternalsVisibleTo`, so a rule decided in here
+    /// cannot be reached by the suite at all — which is how three guards were once deleted at once
+    /// without reddening anything.
     /// </summary>
     void Refresh_ProgressArtefacts()
     {
@@ -3493,36 +3490,28 @@ internal sealed class BridgeEngineModel(
     {
         var artefactFile = _paths.Get_ProgressFile(orchId);
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
-
-        if (progress == null)
-        {
-            _progressArtefactByOrchId.Remove(orchId);
-
-            if (File.Exists(artefactFile))
-                File.Delete(artefactFile);
-
-            return;
-        }
-
-        var json = Planning.ProgressArtefact_Builder.Build_Json(progress);
+        var json = progress == null ? null : Planning.ProgressArtefact_Builder.Build_Json(progress);
 
         _progressArtefactByOrchId.TryGetValue(orchId, out var lastWritten);
 
-        if (json == lastWritten && !Is_ArtefactOlderThanHeartbeat(artefactFile))
+        var action = Planning.ProgressArtefact_Decider.Decide(
+            json,
+            lastWritten,
+            File.Exists(artefactFile) ? File.GetLastWriteTime(artefactFile) : null,
+            DateTime.Now);
+
+        if (action == Planning.ProgressArtefactActions.None)
             return;
 
-        Storage.Atomic_FileWriter.Write_AllText(artefactFile, json);
-        _progressArtefactByOrchId[orchId] = json;
-    }
+        if (action == Planning.ProgressArtefactActions.Delete)
+        {
+            _progressArtefactByOrchId.Remove(orchId);
+            File.Delete(artefactFile);
+            return;
+        }
 
-    static bool Is_ArtefactOlderThanHeartbeat(string artefactFile)
-    {
-        // A file that is not there at all is due a write, not skipped as "recent enough" — the cache
-        // says what this process last wrote, which is not the same question as what is on disk.
-        if (!File.Exists(artefactFile))
-            return true;
-
-        return (DateTime.Now - File.GetLastWriteTime(artefactFile)).TotalSeconds >= PROGRESS_HEARTBEAT_SECONDS;
+        Storage.Atomic_FileWriter.Write_AllText(artefactFile, json!);
+        _progressArtefactByOrchId[orchId] = json!;
     }
 
     static string Read_FileText_Safe(string filePath)
