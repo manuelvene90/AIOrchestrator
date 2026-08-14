@@ -203,7 +203,7 @@ public partial class OrchestrationDetailWindow : Window
         Collect_ChannelEntries(_paths.Get_OwnerChannelFile(session.OrchId), "owner", rows);
 
         foreach (var member in session.Members)
-            Collect_ChannelEntries(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), member.MemberId, rows);
+            Collect_ChannelEntries(AIOrchestratorCoreLib.Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId), member.MemberId, rows);
 
         ActivityItemsControl.ItemsSource = rows
             .OrderByDescending(item => item.When)
