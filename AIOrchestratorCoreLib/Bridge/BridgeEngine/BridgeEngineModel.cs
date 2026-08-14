@@ -516,7 +516,7 @@ internal sealed class BridgeEngineModel(
     {
         public long? ThreadId;
         public long? ReceiptMessageId;
-        public int SupervisorEntryCountAtDelivery;
+        public int OwnerAnswerCountAtDelivery;
         public DateTime DeliveredUtc;
         public bool Nudged;
 
@@ -6200,20 +6200,15 @@ internal sealed class BridgeEngineModel(
             ? $"working now{Describe_Activity_Suffix(supervisorUsage)}"
             : "idle — waiting";
 
-        // The header carries the ledger counts, so "who is doing what" and "how far along are we"
-        // arrive in one answer — the owner asked for both without having to send /progress too.
-        // Same builder /progress uses, so the two can never quote different figures.
-        List<string> lines =
-        [
-            Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId),
-            $"- supervisor: {supervisorLine}",
-        ];
+        // WHICH ROWS this carries is StatusRoster_Builder's — including the one that must NOT be
+        // here for a basic orchestration. See that class for why the decision moved out.
+        List<string> memberLines = [];
 
         foreach (var member in session.Members)
         {
             if (member.ClosedUtc != null)
             {
-                lines.Add($"- {member.MemberId}: closed");
+                memberLines.Add($"- {member.MemberId}: closed");
                 continue;
             }
 
@@ -6227,10 +6222,17 @@ internal sealed class BridgeEngineModel(
                 ? $" · last wrote {SessionDuration_Formatter.Describe(DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile))} ago"
                 : "";
 
-            lines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow)}{lastWrite}");
+            memberLines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow)}{lastWrite}");
         }
 
-        return string.Join('\n', lines);
+        // The header carries the ledger counts, so "who is doing what" and "how far along are we"
+        // arrive in one answer — the owner asked for both without having to send /progress too.
+        // Same builder /progress uses, so the two can never quote different figures.
+        return Status.StatusRoster_Builder.Build(
+            Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId),
+            Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc),
+            supervisorLine,
+            memberLines);
     }
 
     /// <summary>" — editing Foo.cs" when the transcript says so, empty when it cannot be read.</summary>
@@ -7223,9 +7225,10 @@ internal sealed class BridgeEngineModel(
         if (_configProvider.Get_Current().TelegramItalianLayer)
             deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
 
-        // Counted BEFORE the owner entry lands, so a later increase can only mean the
-        // supervisor answered THIS message.
-        var supervisorEntryCountBefore = Count_SupervisorEntries(delivery.Key);
+        // Counted BEFORE the owner entry lands, so a later increase can only mean the session
+        // answered THIS message. SESSION, not supervisor: a basic orchestration is answered by its
+        // solo, and counting supervisors alone made this number unable to rise there at all.
+        var ownerAnswerCountBefore = Count_OwnerAnswerEntries(delivery.Key);
 
         // Take_ReadyDeliveries REMOVED this from the buffer before we got here, so the only copy
         // of the owner's message is the local variable. A failed append that simply fell through
@@ -7278,7 +7281,7 @@ internal sealed class BridgeEngineModel(
                 {
                     ThreadId = target.ThreadId,
                     ReceiptMessageId = receiptMessageId,
-                    SupervisorEntryCountAtDelivery = supervisorEntryCountBefore,
+                    OwnerAnswerCountAtDelivery = ownerAnswerCountBefore,
                     DeliveredUtc = DateTime.UtcNow,
                     Nudged = false,
                 };
@@ -7331,25 +7334,53 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     string Build_HandoffLine(string orchId)
     {
+        var speaker = Describe_Speaker(orchId);
+
         if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
         {
             return Is_SessionMidTurn(Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE))
-                ? "🟡 Gen-Sup: busy — will read this the moment the current turn ends"
-                : "🟡 Gen-Sup: thinking…";
+                ? $"{speaker}: busy — will read this the moment the current turn ends"
+                : $"{speaker}: thinking…";
         }
 
         var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
         if (!Is_SessionMidTurn(supervisorUsageFile))
-            return "🔴 Sup: thinking…";
+            return $"{speaker}: thinking…";
 
         // Say WHAT it is doing, not just that it is busy — read straight off its transcript, which
         // is where the communicator used to read it, minus the session and the turn it cost.
         var activity = SupervisorActivity_Describer.Describe_OrNull(supervisorUsageFile);
 
         return activity == null
-            ? "🔴 Sup: busy mid-task — he'll pick this up when the current turn ends"
-            : $"🔴 Sup: busy — {activity} — he'll pick this up when the current turn ends";
+            ? $"{speaker}: busy mid-task — they'll pick this up when the current turn ends"
+            : $"{speaker}: busy — {activity} — they'll pick this up when the current turn ends";
+    }
+
+    /// <summary>
+    /// WHO the owner is being told about — "🔴 Sup" for a crew, "🟠 Solo" for a basic orchestration,
+    /// "🟡 Gen-Sup" for the General topic.
+    ///
+    /// A basic orchestration has NO supervisor, and every narration line about one used to say "Sup"
+    /// anyway (owner, 2026-08-14: *"the app didn't realize this is a 'solo' session … otherwise I get
+    /// confused"*). The basic/crew question is <see cref="Sessions.OrchestrationShape"/>'s, read from
+    /// the supervisor spawn stamp rather than from the roster — that class documents why a member-id
+    /// scan reads a PROMOTED orchestration as basic for ever.
+    ///
+    /// An orchestration this engine cannot find is described as a supervisor, deliberately: the
+    /// unknown case is the crew case everywhere else in this file, and inventing "Solo" for a session
+    /// whose shape we could not read would put a WRONG certainty in front of the owner.
+    /// </summary>
+    string Describe_Speaker(string orchId)
+    {
+        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
+            return Mirroring.SpeakerLabel_Formatter.GENERAL;
+
+        var session = _store.Get_Session_OrNull(orchId);
+
+        return Mirroring.SpeakerLabel_Formatter.Describe(
+            isGeneral: false,
+            isBasic: session != null && Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc));
     }
 
     /// <summary>
@@ -8135,8 +8166,8 @@ internal sealed class BridgeEngineModel(
         var waitedFor = SessionDuration_Formatter.Describe(now - pending.DeliveredUtc);
 
         var text = isFirst
-            ? Build_FirstNarration(activity)
-            : $"🔴 Sup: still at it{(activity == null ? "" : $" — {activity}")} · your message has been waiting {waitedFor}";
+            ? Build_FirstNarration(Describe_Speaker(orchId), activity)
+            : $"{Describe_Speaker(orchId)}: still at it{(activity == null ? "" : $" — {activity}")} · your message has been waiting {waitedFor}";
 
         // ONE canvas per delivery. The receipt is ALREADY the owner-facing message for this exchange
         // (✓ → ✓✓ → ✓✓ · handoff), and the handoff line has usually just written "Sup: busy" onto
@@ -8275,7 +8306,7 @@ internal sealed class BridgeEngineModel(
         if (Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
             return;
 
-        const string TURN_ENDED_TEXT = "✓✓  ·  🔴 Sup: turn ended — free now, he is reading this";
+        var turnEndedText = $"✓✓  ·  {Describe_Speaker(orchId)}: turn ended — free now, they are reading this";
 
         // No receipt to edit — one failed narration edit is enough to drop the id — so SEND it.
         // The owner's complaint that created this announcement was being left watching a "busy"
@@ -8297,7 +8328,7 @@ internal sealed class BridgeEngineModel(
             // Narrate_BusySupervisor_Async narrows how often that happens without closing it.
             try
             {
-                await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
+                await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, turnEndedText, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -8313,7 +8344,7 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await _telegramClient.Edit_MessageText_Async(pending.ReceiptMessageId.Value, TURN_ENDED_TEXT, cancellationToken);
+            await _telegramClient.Edit_MessageText_Async(pending.ReceiptMessageId.Value, turnEndedText, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -8358,7 +8389,7 @@ internal sealed class BridgeEngineModel(
             // SECONDS = 45 and then flip the supervisor from mid-turn to free by rewriting usage files
             // under a running engine. Worse, the harness cannot currently tell the two outcomes apart:
             // FailableTelegram_Fake.Count_Attempts_Containing counts by TEXT FRAGMENT and the edit
-            // above and the fallback send below both carry TURN_ENDED_TEXT, so it needs a fake that
+            // above and the fallback send below both carry turnEndedText, so it needs a fake that
             // records the METHOD — plus a positive control proving a NON-timeout failure still sends
             // the fallback, because asserting only the absence is the nothing-is-ALLOW trap.
             //
@@ -8368,15 +8399,15 @@ internal sealed class BridgeEngineModel(
                 return;
 
             // Same reasoning as above: the signal matters more than which message carries it.
-            await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
+            await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, turnEndedText, cancellationToken);
         }
     }
 
-    static string Build_FirstNarration(string? activity)
+    static string Build_FirstNarration(string speaker, string? activity)
     {
         var doing = activity == null ? "mid-task" : $"mid-task — {activity}";
 
-        return $"🔴 Sup: {doing}. Your message is delivered; he picks it up when this turn ends.";
+        return $"{speaker}: {doing}. Your message is delivered; they pick it up when this turn ends.";
     }
 
     async Task Resolve_PendingOwnerReplies_Async(CancellationToken cancellationToken)
@@ -8403,10 +8434,11 @@ internal sealed class BridgeEngineModel(
                 ? _paths.GeneralChannelFile
                 : _paths.Get_OwnerChannelFile(orchId);
 
-            var supervisorEntryCount = Count_SupervisorEntries(ownerChannel);
+            var ownerAnswerCount = Count_OwnerAnswerEntries(ownerChannel);
 
-            // Answered: the supervisor wrote to the owner. The mirrored entry IS the feedback.
-            if (supervisorEntryCount > pending.SupervisorEntryCountAtDelivery)
+            // Answered: the session that talks to the owner wrote back — the supervisor of a crew,
+            // or the solo of a basic orchestration. The mirrored entry IS the feedback.
+            if (ownerAnswerCount > pending.OwnerAnswerCountAtDelivery)
             {
                 lock (_ownerStateLock)
                 {
@@ -8496,9 +8528,15 @@ internal sealed class BridgeEngineModel(
     /// compaction moves older entries out of the live file. See
     /// <see cref="ChannelHistory_Counter"/> for the 2026-08-10 incident this caused.
     /// </summary>
-    static int Count_SupervisorEntries(string channelFile)
+    /// <summary>
+    /// Entries by whoever answers the owner here — supervisor OR solo. Named for the QUESTION rather
+    /// than for one of the two roles that answer it: as `Count_SupervisorEntries` it read as correct
+    /// while being permanently zero on every basic orchestration, which is what kept the "the owner
+    /// is still waiting" nudge firing for messages that had been answered.
+    /// </summary>
+    static int Count_OwnerAnswerEntries(string channelFile)
     {
-        return ChannelHistory_Counter.Count_Entries_ByAuthor(channelFile, ChannelAuthors.Supervisor);
+        return ChannelHistory_Counter.Count_OwnerFacingEntries(channelFile);
     }
 
     /// <summary>

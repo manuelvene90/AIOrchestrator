@@ -24,6 +24,30 @@ public static class ChannelHistory_Counter
     }
 
     /// <summary>
+    /// Entries by WHOEVER ANSWERS THE OWNER on this channel — the supervisor of a crew, or the solo
+    /// of a basic orchestration. One question, two roles, and the caller almost never wants only one
+    /// of them.
+    ///
+    /// IT USED TO COUNT SUPERVISORS ONLY, and in a BASIC orchestration that number can never rise: a
+    /// solo signs its entries `FROM solo`. So "has the owner been answered yet?" was permanently NO
+    /// on every basic orchestration — the pending reply was never cleared, the nudge fired every few
+    /// minutes for the life of the session, and the owner was told they were still waiting for
+    /// replies they had already received. Owner, 2026-08-14: *"why do I receive messages like this so
+    /// very often?"*, quoting the nudge.
+    ///
+    /// Summing the two is safe in both directions rather than merely convenient: a crew's owner
+    /// channel carries no `FROM solo` entries and a basic one carries no `FROM supervisor` entries,
+    /// because the roles do not coexist — and after a PROMOTION the solo's old entries are history the
+    /// supervisor inherits, which is exactly what a "has this conversation been answered" count should
+    /// see. Asking which mode we are in would add a second source of truth for no gain.
+    /// </summary>
+    public static int Count_OwnerFacingEntries(string channelFilePath)
+    {
+        return Count_Entries_ByAuthor(channelFilePath, ChannelAuthors.Supervisor)
+            + Count_Entries_ByAuthor(channelFilePath, ChannelAuthors.Solo);
+    }
+
+    /// <summary>
     /// The entries compaction has already moved out of the live file — OLDER than everything still
     /// live, by construction, because the compactor only ever moves from the front. Empty when nothing
     /// has been archived yet, which is the ordinary case.
