@@ -122,10 +122,19 @@ public class MemberStateAcrossArchiveTests : IDisposable
     }
 
     /// <summary>
-    /// A window whose OPEN is archived and whose CLOSE is still live is a COMPLETE pair, and must not
-    /// read as open. This is the other side of the case above and it is why the helper concatenates
-    /// archive-then-live rather than either alone: a scan that sees only one half of a pair draws the
-    /// wrong conclusion from a channel that did everything right.
+    /// A window whose OPEN is archived and whose CLOSE is still live must not read as open.
+    ///
+    /// ITS REASON CHANGED AND THE DOCSTRING IS BEING CORRECTED RATHER THAN LEFT. It used to say this
+    /// case is why the helper concatenates archive-then-live — that a scan seeing one half of a pair
+    /// draws the wrong conclusion. That was true while windows were read from the whole history. They
+    /// are not any more: the archived opener is never scanned, so this now passes because NO open is
+    /// found rather than because the pair resolves.
+    ///
+    /// It is kept as a regression guard on the outcome, which is the thing a consumer depends on. But
+    /// it no longer discriminates the concatenation order — `Read_AllEntries_PutsTheArchiveBeforeThe
+    /// LiveFile` pins that on its own — and a reader should not take it as evidence for one. A test
+    /// whose stated reason has quietly stopped matching why it passes is the defect this branch has
+    /// spent two days removing; leaving this docstring alone would have added one more.
     /// </summary>
     [Fact]
     public void AWindowClosedAfterCompactionIsNotStillOpen()
