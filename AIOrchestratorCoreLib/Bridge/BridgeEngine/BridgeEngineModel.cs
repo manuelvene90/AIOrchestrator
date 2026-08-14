@@ -2166,7 +2166,7 @@ internal sealed class BridgeEngineModel(
         }
         // DELIBERATELY NOT FILTERED, AND THIS COMMENT IS THE REASON — DO NOT "COMPLETE" THE SWEEP HERE.
         //
-        // Sixteen sibling sites on the tick path took `when (cancellationToken.IsCancellationRequested)`
+        // FOURTEEN sibling sites on the tick path took `when (cancellationToken.IsCancellationRequested)`
         // so an HttpClient timeout stops being read as a shutdown. THIS ONE MUST NOT, and the asymmetry
         // is not an oversight: at every other site falling through to the generic catch costs a LOG LINE
         // and a retry next tick. Here it costs a MISDELIVERY — the catch below returns null, and a null
@@ -2179,6 +2179,22 @@ internal sealed class BridgeEngineModel(
         //
         // If this ever needs to change, the fix is to make the null case STOP MIRRORING rather than
         // redirect — not to add the filter here.
+        //
+        // THE COUNT ABOVE HAS BEEN WRONG TWICE AND IS RECONCILED HERE SO IT CANNOT DRIFT SILENTLY AGAIN.
+        // It first said "sixteen", which was the number of sites ADDRESSED — this one among them, and it
+        // did not take the filter. Corrected to fifteen, which was right for that commit and wrong one
+        // commit later, because reverting Send_MirrorChunk_Async and wrapping a new call site both moved
+        // it. The arithmetic, verifiable by grep at any time:
+        //
+        //     6  filtered at master 2110c56
+        //  + 14  sibling sites converted here (11 of the original 12, B1, B2 and Flush_OwnerDeliveries)
+        //  +  1  NEW try/catch wrapping the unprotected call in Announce_SupervisorFree_Async
+        //  = 21  filtered now, of 44 total
+        //
+        // Send_MirrorChunk_Async is the twelfth of the original twelve and was REVERTED as a regression,
+        // which is why it is 11 and not 12. A durable comment carrying a count owes the reader the sum
+        // that produces it; without one, the next person to move a site has no way to tell whether the
+        // number was already stale.
         catch (OperationCanceledException)
         {
             throw;
@@ -3960,7 +3976,25 @@ internal sealed class BridgeEngineModel(
             {
                 // A REAL failure still must not spin: remember the attempt so it is retried on the
                 // next name change rather than on the next tick.
-                _appliedTopicNames[session.OrchId] = wantedName;
+                //
+                // BUT A TIMEOUT IS NOT A REAL FAILURE — IT IS "WE DO NOT KNOW", the same principle
+                // applied at Narrate_BusySupervisor_Async and not carried here when the filter above
+                // was added. The reasoning for this write is sound for the exceptions that used to
+                // arrive; the filter changed WHICH ones arrive, and that was not revisited.
+                //
+                // Writing the cache on a timeout records a name that may never have been applied as
+                // applied, and `_appliedTopicNames` has no Remove and no Clear anywhere in this file —
+                // the entry then survives for the life of the process. The owner toggles a mode, the
+                // edit times out, and the topic keeps showing the OLD glyph until the mode changes
+                // again or the app restarts, while the log says "sync failed" in the same breath as
+                // the code records success. Decision 11 makes that glyph the owner-visible truth of a
+                // passing state, so the stale name is not cosmetic.
+                //
+                // Skipping the write costs one retry on the next tick, which is the behaviour master
+                // had for every failure and is the cheap direction.
+                if (ex is not OperationCanceledException)
+                    _appliedTopicNames[session.OrchId] = wantedName;
+
                 _log.Log_Warning(session.OrchId, $"Topic name sync failed: {ex.Message}");
             }
         }
@@ -5971,7 +6005,27 @@ internal sealed class BridgeEngineModel(
             // one seam. Deferred until after the merge on purpose: this file is touched by fourteen
             // branches and is the worst hotspot on the conflict map, so the seam is worth building and
             // building it here first is not.
-            var lostTheMessage = ex is not OperationCanceledException;
+            // TWO BUCKETS FOR A THREE-BUCKET WORLD was the first version of this line, and rev-6 was
+            // right to file it: `ex is not OperationCanceledException` established the invariant for
+            // exactly ONE weak signal. A Wi-Fi drop throws HttpRequestException, which said "gone",
+            // cleared both ids, and produced the very waterfall the guard exists to prevent — plus a
+            // third message, because a destroyed receipt id also pushes Announce_SupervisorFree down
+            // its null-receipt path.
+            //
+            // A TRANSPORT failure never tells us the message is gone; it tells us the round trip did
+            // not complete. Both of these are that.
+            var couldNotReachTelegram = ex is OperationCanceledException or HttpRequestException;
+
+            // THE LIMIT, STATED, BECAUSE THE FIX IS INCOMPLETE AND SAYING SO IS THE POINT. The client
+            // throws a PLAIN Exception for any non-2xx, so a 429 and every 5xx — which are also "we do
+            // not know" — are indistinguishable here from a genuine "message is gone" 400. Telling
+            // them apart needs the STATUS CODE, which the client currently discards into the message
+            // text, and parsing English out of a message string to make a control-flow decision is a
+            // worse defect than the one it would fix. So this bucket is transport-level only.
+            //
+            // It is strictly better than what it replaces — master cleared unconditionally on all of
+            // these — and it is NOT the whole invariant. Do not read it as established.
+            var lostTheMessage = !couldNotReachTelegram;
 
             // A failed EDIT must not freeze the narration forever on a dead message id: drop it so
             // the next repeat sends a fresh line and starts editing that one instead. A receipt we
@@ -6056,14 +6110,33 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Warning(orchId, $"Turn-ended announcement edit failed, sending it instead: {ex.Message}");
+            // THE LINE MUST MATCH WHAT ACTUALLY HAPPENS NEXT. "sending it instead" was written when
+            // every failure fell through to the fallback; on the timeout path it does not, so the two
+            // outcomes get two lines. A log that narrates the branch not taken is worse than none —
+            // whoever reads it is reconstructing a failure they cannot reproduce.
+            if (ex is OperationCanceledException)
+                _log.Log_Error(orchId, $"Turn-ended announcement DROPPED for this turn — the endpoint timed out and the announcement does not retry: {ex.Message}", ex);
+            else
+                _log.Log_Warning(orchId, $"Turn-ended announcement edit failed, sending it instead: {ex.Message}");
 
             // A FALLBACK IS FOR "THAT CALL FAILED", NOT FOR "THE ENDPOINT IS UNREACHABLE". After a
             // timeout the fallback send is against an endpoint that has just proved it does not
             // answer, so it is guaranteed to fail and costs a SECOND HttpClient timeout inside the
             // same tick — two ~90-second waits in a loop that ticks every 2 seconds, which is worse
-            // than the abort the filter above removes. The announcement is not lost: the next tick
-            // finds the turn still ended and tries again against an endpoint that may have recovered.
+            // than the abort the filter above removes.
+            //
+            // AND THE ANNOUNCEMENT IS LOST FOR THIS TURN. An earlier version of this comment claimed
+            // "the next tick finds the turn still ended and tries again" — that was FALSE and is
+            // corrected here rather than quietly deleted, because it justified the early return with
+            // an outcome the code does not produce. The caller sets `pending.TurnEndAnnounced = true`
+            // BEFORE calling this method, and that field has exactly ONE assignment in this file and no
+            // reset anywhere, so the guard can never re-enter. Master lost it too — its bare rethrow
+            // unwound with the latch already set — so this is not a regression, but the return makes
+            // the loss QUIETER and the log line below now says so plainly.
+            //
+            // THE REAL DEFECT IS LATCHING BEFORE THE CALL, and it is not fixed here: recording work as
+            // done before it has succeeded is the class imp-9 owns across seven sites, and two members
+            // fixing one class in two branches is how a merge grows conflict regions. Named, not taken.
             //
             // NOT PINNED, AND THE COST WAS MEASURED RATHER THAN GUESSED. Reaching here needs
             // `pending.LastNarratedUtc != default`, so a test must first spend NARRATION_FIRST_DELAY_
