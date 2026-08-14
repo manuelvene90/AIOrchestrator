@@ -830,7 +830,11 @@ internal sealed class BridgeEngineModel(
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
                 _log.Log_Warning(session.OrchId, alertText);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING session's stall alert in the same sweep, and the tick below it.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -1139,7 +1143,11 @@ internal sealed class BridgeEngineModel(
                 $"⚠️ {count} message{(count == 1 ? "" : "s")} in this orchestration never reached you — the session wrote a malformed channel header, so the app could not see {(count == 1 ? "it" : "them")}. It has been told to re-post.",
                 cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the owner is never told their entry is unreadable, and the tick dies with the notice.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -1299,7 +1307,11 @@ internal sealed class BridgeEngineModel(
                 $"⚠️ {memberId} was ORPHANED (alive but nothing listening — it ignored the nudge). Respawned it; its work on disk is untouched, but its in-session context is gone.",
                 cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: a member whose monitor is dead is not recovered, and the tick that would retry it goes too.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -1445,7 +1457,11 @@ internal sealed class BridgeEngineModel(
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
                 _log.Log_Warning(session.OrchId, alertText);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING session's budget alert in the same sweep.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -1546,7 +1562,11 @@ internal sealed class BridgeEngineModel(
 
             Save_LimitAlertState(state);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the REMAINING thresholds in the same loop — a timeout on the 90% alert can swallow the 100% one.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -1857,7 +1877,11 @@ internal sealed class BridgeEngineModel(
             {
                 return await client.Send_HtmlMessage_Async(threadId, MonospaceBlocks_Formatter.Build_Html(chunk), cancellationToken);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: the rest of a chunked entry, so the owner reads a message that stops mid-sentence and nothing is logged as failed.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -2039,7 +2063,11 @@ internal sealed class BridgeEngineModel(
 
             await _telegramClient.Send_Photo_Async(threadId, photoPath, cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: a BEST-EFFORT photo — a path whose entire contract is that failing costs nothing.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -2753,7 +2781,11 @@ internal sealed class BridgeEngineModel(
 
             _log.Log_Info(request.OrchId, $"Asked the owner to confirm closing '{request.OrchId}' (asked by {request.Requester})");
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the owner is never asked, so the close request stays unresolved and the tick that would re-ask is gone.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -3870,7 +3902,11 @@ internal sealed class BridgeEngineModel(
                 await _telegramClient.Edit_ForumTopic_Async(session.TelegramTopicId.Value, wantedName, cancellationToken);
                 _appliedTopicNames[session.OrchId] = wantedName;
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING session's topic name, on a best-effort path.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -5602,7 +5638,11 @@ internal sealed class BridgeEngineModel(
         {
             await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the away notice, plus the rest of the away sweep and the tick.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -5642,7 +5682,11 @@ internal sealed class BridgeEngineModel(
                 await _telegramClient.Edit_MessageText_Async(
                     entry.MessageId, $"{entry.Text}{AwayMode_Policy.PARKED_SUFFIX}", cancellationToken);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING parked question in the same loop.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -5996,7 +6040,11 @@ internal sealed class BridgeEngineModel(
                 else
                     await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, text, cancellationToken);
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            // Cost HERE: every REMAINING orchestration's stale receipt — the owner keeps staring at one frozen on 'thinking…'.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
