@@ -856,6 +856,12 @@ survived — the ones this exists to catch are the ones that never got that far:
 - **Write the row the moment the request arrives** — before briefing anyone, before answering, before
   anything. This is the owner's own requirement and the entire point: a message that arrives while
   you are mid-turn is buried by the next one otherwise.
+- **The app ENFORCES it, and you cannot end a turn while it is unpaid.** Every owner message puts
+  PLAN.md in debt exactly as a verdict does: if the file is not touched, `.ledger-behind` goes up and
+  the turn-end hook blocks you. **A message that needs no new task still needs its row** — writing it
+  is what clears the block. Added 2026-08-14, after a session took six requests over two hours with
+  the bar frozen at 3/3: *"you are just a session like any other… fix this permanently for any future
+  orchestration or solo session."*
 - **Their words, not your restatement.** You will re-read this to check nothing slipped, and a
   paraphrase is exactly where the slip hides — you will recognise your own summary and move on.
 - **Status is about the REQUEST, not the branch.** `built, in review, not live` is a real status: the
