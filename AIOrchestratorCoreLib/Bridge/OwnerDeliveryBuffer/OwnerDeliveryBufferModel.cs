@@ -1,4 +1,4 @@
-namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
+﻿namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 
 internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdCapSeconds) : IOwnerDeliveryBuffer
 {
@@ -23,6 +23,17 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds, int holdC
 
             delivery.Segments.Add(segment);
             delivery.LastArrivalUtc = nowUtc;
+        }
+    }
+
+    public void Prepend_Segment(string targetKey, string segment)
+    {
+        lock (_lock)
+        {
+            // LastArrivalUtc deliberately untouched — see the interface. Refreshing it would make the
+            // owner serve a second aggregation window for a failure they know nothing about, which is
+            // the same reason the callers pair this with Release.
+            Get_OrCreate(targetKey).Segments.Insert(0, segment);
         }
     }
 

@@ -5247,7 +5247,7 @@ internal sealed class BridgeEngineModel(
                 // The ORIGINAL, never the possibly-half-translated working copy: a partially
                 // translated string becoming the owner's message is worse than a late one, and it
                 // would be near-impossible to diagnose from outside.
-                _ownerDeliveryBuffer.Add_Segment(delivery.Key, delivery.Value, DateTime.UtcNow);
+                _ownerDeliveryBuffer.Prepend_Segment(delivery.Key, delivery.Value);
                 _ownerDeliveryBuffer.Release(delivery.Key);
 
                 _log.Log_Error(
@@ -5312,7 +5312,7 @@ internal sealed class BridgeEngineModel(
             // ran through the translator AGAIN. The owner's words were replaced by a paraphrase of
             // themselves and re-paraphrased on every subsequent lock. Translation belongs on the way
             // OUT; nothing may put an output of that pipeline back into the input side.
-            _ownerDeliveryBuffer.Add_Segment(delivery.Key, delivery.Value, DateTime.UtcNow);
+            _ownerDeliveryBuffer.Prepend_Segment(delivery.Key, delivery.Value);
             _ownerDeliveryBuffer.Release(delivery.Key);
 
             _log.Log_Warning(target.OrchId,
