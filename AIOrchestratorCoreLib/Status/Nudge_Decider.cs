@@ -176,6 +176,34 @@ public static class Nudge_Decider
     /// the newest app entry moves the instant the nudge lands — the nudge IS an app entry — so the next
     /// round reads a different key and nudges again, rebuilding the exact defect. Measured, not argued:
     /// <c>AnAppOnlyChannelKeepsOneSubjectAsFurtherAppEntriesArrive</c> is the case that reddens.
+    ///
+    /// THE ENGINE WIRING OF `5f3dc1f` HAS NO TEST, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT
+    /// (rev-5's R2, ruled 2026-08-14 — do not re-raise it without reading this).
+    ///
+    /// R2 asked for the guards to be restored as a mutation and a fixture written against it. **That
+    /// mutation is INERT.** This function never returns null — every path ends in a conversation
+    /// identity, a non-wake entry's text, or <see cref="NO_CONVERSATION_YET"/> — so restoring
+    /// `&amp;&amp; conversationIdentity != null` to the gate or to the record adds a condition that is
+    /// always true. "Putting either guard back reddens nothing" is what an inert mutation does at ANY
+    /// level of coverage, so it measures nothing about this code. Before believing a control's result,
+    /// establish that the mutation changed something.
+    ///
+    /// The mutation that WOULD reinstate the loop is reverting the whole engine hunk — the call back to
+    /// the nullable <see cref="Identify_LastConversationEntry_OrNull"/> TOGETHER with both guards.
+    /// Against that, old and new differ **only on the SECOND nudge**: the first fires identically in
+    /// both, and only what gets RECORDED differs. So the fixture R2 proposed — an app-only channel plus
+    /// an assertion on the app-entry count — passes under old and new alike; it would pin a state with
+    /// two routes to it, which is rev-5's own R7 finding arriving from the other side.
+    ///
+    /// Reaching the second nudge needs `_nudgedMemberUtc` cleared, which happens in the escalation path
+    /// after `ORPHAN_CONFIRM_MINUTES`. Both windows are `const int` (`IMPLEMENTER_NUDGE_MINUTES = 8`,
+    /// `ORPHAN_CONFIRM_MINUTES = 6`) with no seam, so a test would have to wait six real minutes against
+    /// a suite that runs in about eighty seconds — and a slow suite stops being run.
+    ///
+    /// **So the gap is real and is recorded here rather than papered over with a green test that proves
+    /// nothing.** Closing it properly wants the two windows made injectable, the way the Telegram client
+    /// was; that is a seam, not a marker-gate fix, and it belongs on its own branch off master where it
+    /// would also unblock the other engine rules recorded as "unpinnable, needs a seam".
     /// </summary>
     public static string Identify_NudgeSubject(IReadOnlyList<IChannelEntry> entries, string channelFilePath)
     {
