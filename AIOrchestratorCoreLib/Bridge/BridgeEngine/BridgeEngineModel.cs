@@ -228,6 +228,22 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// WHEN A TOPIC NAME MAY BE ATTEMPTED AGAIN after an attempt whose outcome we could not learn.
+    ///
+    /// A SECOND DICTIONARY, DELIBERATELY, AND IT IS THE POINT OF THE FIX — the same move
+    /// <see cref="Status.Nudge_Decider"/> records for `_nudgedAboutEntry`, whose docstring notes that two
+    /// earlier attempts failed because "the nudge gate was borrowing a map that already carried two
+    /// meanings". `_appliedTopicNames` carried two: *this name is applied* and *do not retry this now*.
+    /// The entry guard read both from one value, so every failure had to be forced into one of them and a
+    /// transport failure — which tells us NOTHING — was recorded as if it had told us the name applied.
+    /// Choosing which of the two meanings to get wrong is not a predicate problem and no predicate fixes
+    /// it. This map has exactly one meaning and drives nothing else.
+    ///
+    /// Lost on restart, which costs one extra attempt per orchestration. Visible, cheap, self-correcting.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _topicNameRetryAfterUtc = [];
+
+    /// <summary>
     /// The status-line text last WRITTEN to each topic, so an unchanged line costs no API call.
     /// In memory on purpose, unlike the message id: after a restart the first tick edits once with
     /// whatever is current, which is correct, and the id — the thing that must not be lost — lives
@@ -3949,10 +3965,19 @@ internal sealed class BridgeEngineModel(
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
 
+            // AND THE SECOND QUESTION, WHICH USED TO BE THE SAME ONE. An attempt whose outcome we could
+            // not learn holds this orchestration back for a WHILE — not for ever, which is what
+            // recording it as applied did, and not for two seconds, which is what recording nothing did.
+            var retryAfter = _topicNameRetryAfterUtc.TryGetValue(session.OrchId, out var stamp) ? stamp : (DateTime?)null;
+
+            if (!TopicNameSync_Gate.Is_AttemptDue(retryAfter, DateTime.UtcNow))
+                continue;
+
             try
             {
                 await _telegramClient.Edit_ForumTopic_Async(session.TelegramTopicId.Value, wantedName, cancellationToken);
                 _appliedTopicNames[session.OrchId] = wantedName;
+                _topicNameRetryAfterUtc.Remove(session.OrchId);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
             // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -3990,9 +4015,20 @@ internal sealed class BridgeEngineModel(
                 // the code records success. Decision 11 makes that glyph the owner-visible truth of a
                 // passing state, so the stale name is not cosmetic.
                 //
-                // Skipping the write costs one retry on the next tick, which is the behaviour master
-                // had for every failure and is the cheap direction.
-                if (ex is not OperationCanceledException)
+                // THE THREE BUCKETS, decided in TopicNameSync_Gate where the suite can reach them. An
+                // earlier version of this used `ex is not OperationCanceledException`, which is the
+                // two-bucket test rev-6 proved insufficient for the identical decision one method away —
+                // same class, two predicates, one commit. The predicate is now one predicate, and it
+                // lives somewhere it can be tested.
+                //
+                // BACKOFF REUSES MIRROR_RETRY_BACKOFF_SECONDS (30 s) rather than inventing a value: this
+                // file already has one retry window with that meaning, applied through
+                // Is_MirrorAttemptDue, and a second magic number would be worse than the one being
+                // explained. Thirty seconds takes a failing sync from ~30 attempts a minute to 2, and
+                // bounds an owner-visible glyph delay at 30 s. Do not "fix" it into a bespoke constant.
+                if (TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown)
+                    _topicNameRetryAfterUtc[session.OrchId] = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, MIRROR_RETRY_BACKOFF_SECONDS);
+                else
                     _appliedTopicNames[session.OrchId] = wantedName;
 
                 _log.Log_Warning(session.OrchId, $"Topic name sync failed: {ex.Message}");
