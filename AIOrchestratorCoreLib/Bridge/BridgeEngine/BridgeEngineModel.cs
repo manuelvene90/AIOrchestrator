@@ -888,7 +888,13 @@ internal sealed class BridgeEngineModel(
             if (key.OrchId != ChannelDiscovery.GENERAL_ORCH_ID && (heldSession == null || heldSession.ClosedUtc != null))
             {
                 _heldCrashLoopAlerts.Remove(key);
-                _log.Log_Info(key.OrchId, $"Crash-loop alert dropped — the orchestration is closed and its topic deleted with it: {key.AlertText}");
+                // States what was COMPUTED — the orchestration is closed — and not the deletion,
+                // which this line never checked. Close_Orchestration deletes the topic only if there
+                // was one and only if the call succeeds (fire-and-forget, swallow-and-log), so a
+                // close with no topic, or a delete refused for want of rights, both satisfied this
+                // condition while the old message asserted a deletion that had not happened
+                // (rev-7 G4, 2026-08-14).
+                _log.Log_Info(key.OrchId, $"Crash-loop alert dropped — the orchestration is closed, so nothing is watching its topic: {key.AlertText}");
                 continue;
             }
 
@@ -941,8 +947,21 @@ internal sealed class BridgeEngineModel(
                 // while this site, its own immediate predecessor, contradicted it.
                 _heldCrashLoopAlerts.Remove(key);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                // FILTERED, and the filter is the fix. An HttpClient TIMEOUT throws
+                // TaskCanceledException, which IS an OperationCanceledException — so the unfiltered
+                // form rethrew a timeout as if the app were shutting down: it escaped this loop and
+                // the whole mirror tick with it, taking the stall alerts, the budget alerts, the idle
+                // nudges, the status refresh and the channel poll along for that tick.
+                //
+                // Worse for this method specifically: the attempt was already counted one line above,
+                // so the give-up budget was being spent by the one failure path that logged nothing.
+                // Ten timeouts retired an alert in silence, and the GIVEN UP line was the first
+                // evidence anything had happened.
+                //
+                // Matches the loop-level handlers at the top of this file, every one of which filters
+                // on the token; this site was the outlier (rev-7 G2, 2026-08-14).
                 throw;
             }
             catch (Exception ex)
