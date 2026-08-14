@@ -502,6 +502,35 @@ check "rev-9 ROW E control: the bracketed spelling" ALLOW "$(verdict "$(run_hook
 check "rev-9 ROW B: the C# line as a grep pattern" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "for (var index = entries.Count - 1; index >= 0; index--)" src/')" reviewer)")"
 check "rev-9 ROW B: perl -i is denied as an EDIT" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -0777 -i -pe 's/old/for (var index = entries.Count - 1; index >= 0; index--)/' Foo.cs")" reviewer)")"
 
+# rev-6 characterised the installed guard as TWO predicates rather than a list of unlucky words, and
+# filed the rule so a fix could be tested against it instead of against anecdotes. These cases test
+# the RULE. Neither needed a code change here — both were already closed by lexer commits earlier on
+# this branch — so no mutation was manufactured for them; their evidence is the differential, measured
+# 2026-08-14: every ALLOW case below is refused by the copy installed on this machine and passes here.
+#
+# PREDICATE 1: a bare two-letter delete command followed by a SPACE, with the character in FRONT of it
+# never examined. The trailing space is the trigger, which is why `confirmed` passes and `confirm `
+# does not. The three word cases above are the same class; these are rev-6's own words, and `odd` is
+# the copy-command variant nothing else in this file covers.
+check "rev-6 P1: platform, form, harm in prose" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'the platform is odd and the form is harmless' >> $REV_CHANNEL")" reviewer)")"
+check "rev-6 P1: term and confirm in prose" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "printf '%s' 'I confirm the term is correct' >> $REV_CHANNEL")" reviewer)")"
+
+# PREDICATE 2, AND IT IS THE ONE NOBODY HAD: a matcher reading the greater-than character as a write
+# ANYWHERE in the command, with its own message. rev-6 hit it on an awk range filter whose only
+# offence was a numeric at-least comparison — it could not type the operator in its own report either.
+#
+# WHY THIS ONE IS WORSE THAN ITS SEVERITY: a numeric comparison is how you check a measured total
+# against an expected one, which is the discipline the fleet was asked to adopt the same morning. The
+# guard bit hardest on the habit being installed, in the role most likely to need it. ROW B covers the
+# operator inside a quoted grep PATTERN; here it is a bare operator in a program argument, which is a
+# different position and was untested.
+check "rev-6 P2: awk numeric at-least filter" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "awk '\$3 >= 100 { print \$1 }' results.txt")" reviewer)")"
+check "rev-6 P2: awk numeric range filter" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "awk 'NR >= 5 && NR <= 10' results.txt")" reviewer)")"
+
+# THE CONTROL, and it is the same command so the pair pins the position rather than the word `awk`:
+# an operator inside the program is text, an operator outside it is a redirect and must stay denied.
+check "rev-6 P2 control: awk with a REAL redirect" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "awk '{ print }' results.txt > out.txt")" reviewer)")"
+
 # rev-9 F1: THE IN-PLACE FLAG IS A LETTER IN A CLUSTER, AND THE RULE KNEW ONE SPELLING.
 #
 # The predicate asked whether an argument STARTED WITH `-i`. That is true of `-i` and `-i.bak` and of
