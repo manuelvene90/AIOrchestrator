@@ -2143,6 +2143,21 @@ internal sealed class BridgeEngineModel(
             Remove_TopicCreationPin_FireAndForget(channel.OrchId, topicId);
             return topicId;
         }
+        // DELIBERATELY NOT FILTERED, AND THIS COMMENT IS THE REASON — DO NOT "COMPLETE" THE SWEEP HERE.
+        //
+        // Sixteen sibling sites on the tick path took `when (cancellationToken.IsCancellationRequested)`
+        // so an HttpClient timeout stops being read as a shutdown. THIS ONE MUST NOT, and the asymmetry
+        // is not an oversight: at every other site falling through to the generic catch costs a LOG LINE
+        // and a retry next tick. Here it costs a MISDELIVERY — the catch below returns null, and a null
+        // thread id mirrors the entry to the GENERAL topic instead of the orchestration's own.
+        //
+        // A lost tick is recoverable and invisible. A message delivered to the wrong topic is neither:
+        // the owner reads it in the wrong conversation and has no way to tell it was misrouted, and
+        // nothing anywhere records that it went to the wrong place. Aborting the tick is the cheaper
+        // failure, so a transient timeout is left to abort.
+        //
+        // If this ever needs to change, the fix is to make the null case STOP MIRRORING rather than
+        // redirect — not to add the filter here.
         catch (OperationCanceledException)
         {
             throw;
@@ -5065,6 +5080,18 @@ internal sealed class BridgeEngineModel(
         if (!_ownerDeliveryBuffer.Has_PendingDeliveries())
             return;
 
+        // KNOWN DEFECT, NOT FIXED HERE, AND IT BELONGS TO SOMEONE ELSE'S CLASS — do not fix it in
+        // passing. `Take_ReadyDeliveries` REMOVES every ready key from the buffer before this loop body
+        // runs, so the record of the work is destroyed before the work is known to have succeeded. Any
+        // escape from the loop therefore skips the remaining deliveries' `Append_OwnerEntry` below, and
+        // those owner messages are LOST rather than delayed — nothing re-delivers them.
+        //
+        // The catch filter further down closes the escape route this loop had; it does NOT close the
+        // drain. That is the "memo that records work as done, moved from before the append to after it
+        // succeeded" class, owned by imp-9 across seven sites — and one class fixed by two members in
+        // two branches is how a merge grows conflict regions. The same shape sits one line down inside
+        // the try, where `_pendingOwnerReplies[...]` is only registered on the success path, so a
+        // failed receipt leaves the owner's wait untracked and the receipt frozen on "thinking…".
         foreach (var delivery in _ownerDeliveryBuffer.Take_ReadyDeliveries(DateTime.UtcNow))
         {
             // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
@@ -5129,7 +5156,15 @@ internal sealed class BridgeEngineModel(
                     };
                 }
             }
-            catch (OperationCanceledException)
+            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            //
+            // Cost HERE was the worst of the sixteen, and it is why this site was taken first: this loop
+            // runs BEFORE the DND gate, so it is the one tick-path site a muted spell cannot spare — and
+            // an escape did not merely lose the tick, it LOST OWNER MESSAGES. See the note at the top of
+            // this loop for the half that is NOT fixed here.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -5881,20 +5916,40 @@ internal sealed class BridgeEngineModel(
 
             pending.LastNarratedUtc = now;
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the owner's busy narration, and every later stage of the tick.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex)
         {
+            // A TIMEOUT IS NOT "THE MESSAGE IS GONE" — IT IS "WE DO NOT KNOW", and the reset below
+            // asserts the stronger fact from the weaker signal. This bug PRE-DATES the filter above
+            // and would have been made reachable by it: without this guard, filtering a wedged
+            // endpoint converts a timeout into a discarded message id, the next repeat SENDS instead
+            // of EDITS, and one narration becomes a pile of them — the waterfall CLAUDE.md item 14
+            // exists to prevent, arriving through the fix for something else.
+            //
+            // A timeout leaves the message very probably still there and still editable, so the ids
+            // are KEPT and the next repeat edits as normal. If it really is gone, the edit fails
+            // again with a non-timeout error and the reset runs then.
+            var lostTheMessage = ex is not OperationCanceledException;
+
             // A failed EDIT must not freeze the narration forever on a dead message id: drop it so
             // the next repeat sends a fresh line and starts editing that one instead. A receipt we
             // cannot edit is dead for the turn-ended announcement too, so it goes with it —
             // otherwise the same dead id would be re-adopted as the canvas on every later repeat.
-            if (isReceiptCanvas)
-                pending.ReceiptMessageId = null;
+            if (lostTheMessage)
+            {
+                if (isReceiptCanvas)
+                    pending.ReceiptMessageId = null;
 
-            pending.NarrationMessageId = null;
+                pending.NarrationMessageId = null;
+            }
+
             _log.Log_Warning(orchId, $"Busy-supervisor narration failed: {ex.Message}");
         }
     }
@@ -5932,13 +5987,26 @@ internal sealed class BridgeEngineModel(
         {
             await _telegramClient.Edit_MessageText_Async(pending.ReceiptMessageId.Value, TURN_ENDED_TEXT, cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        // Cost HERE: the owner is never told the turn ended, and the rest of the tick goes with it.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex)
         {
             _log.Log_Warning(orchId, $"Turn-ended announcement edit failed, sending it instead: {ex.Message}");
+
+            // A FALLBACK IS FOR "THAT CALL FAILED", NOT FOR "THE ENDPOINT IS UNREACHABLE". After a
+            // timeout the fallback send is against an endpoint that has just proved it does not
+            // answer, so it is guaranteed to fail and costs a SECOND HttpClient timeout inside the
+            // same tick — two ~90-second waits in a loop that ticks every 2 seconds, which is worse
+            // than the abort the filter above removes. The announcement is not lost: the next tick
+            // finds the turn still ended and tries again against an endpoint that may have recovered.
+            if (ex is OperationCanceledException)
+                return;
 
             // Same reasoning as above: the signal matters more than which message carries it.
             await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, TURN_ENDED_TEXT, cancellationToken);
