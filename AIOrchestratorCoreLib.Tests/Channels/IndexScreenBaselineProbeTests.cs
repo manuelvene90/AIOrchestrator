@@ -79,7 +79,16 @@ public class IndexScreenBaselineProbeTests : IDisposable
 
         await Tick_Once_Async();
 
-        Assert.Contains("index runs backwards", Wait_For_LogLine(orchId, "index runs backwards"));
+        // NOT `Contains(fragment, Wait_For_LogLine(fragment))`, which asserts a string is present in
+        // a line that was found by searching for it. The real assertion is the helper's throw; this
+        // one adds something the search did not already guarantee — that the line names THE quotation
+        // this test planted (rev-6 F4).
+        //
+        // It names the LINE and not the index pair on purpose: the engine appends its own idle-nudge
+        // entry to this channel during the ticks, so the number the quotation collides with is the
+        // app's, not the fixture's. Asserting the pair pinned that accident; asserting the planted
+        // line pins the thing the test is actually about.
+        Assert.Contains("quoted inside the entry above", Wait_For_LogLine(orchId, "index runs backwards"));
     }
 
     /// <summary>
@@ -98,7 +107,10 @@ public class IndexScreenBaselineProbeTests : IDisposable
 
         await Tick_Once_Async();
 
-        Assert.Contains("malformed entry header", Wait_For_LogLine(orchId, "malformed entry header"));
+        // Same non-tautology: the search proves the line exists, this proves it names the channel the
+        // owner has to go and look at AND how many entries went invisible — the two parts of that
+        // message that are computed rather than constant.
+        Assert.Contains($"{Path.GetFileName(channelFile)}: 1 malformed", Wait_For_LogLine(orchId, "malformed entry header"));
     }
 
     /// <summary>
@@ -120,7 +132,69 @@ public class IndexScreenBaselineProbeTests : IDisposable
         await Tick_Once_Async();
         await Tick_Once_Async();
 
+        Assert_ATickActuallyRan();
         Assert.DoesNotContain(Read_LogLines(session.OrchId), line => line.Contains("index runs backwards"));
+    }
+
+    /// <summary>
+    /// THE SAME INVARIANT FOR THE TWIN, and it is the site with the larger blast radius: the malformed
+    /// sweep APPENDS A CHANNEL ENTRY and alerts the owner, where the index sweep only writes a log
+    /// line. Without this, a mutation hardcoding `isFirstSight = false` at the malformed site passed
+    /// the whole suite (rev-6 F3) — and what it would produce is every historical malformed header
+    /// re-announced on the first sweep after every app start, with an owner alert each time. That is
+    /// the owner-retraining waterfall the sweep's own comment gives as its reason for existing.
+    ///
+    /// The author's stated reason for keeping the index invariant — "a fix that registered nothing
+    /// would satisfy both guards" — applies verbatim here, and the twin had none.
+    /// </summary>
+    [Fact]
+    public async Task AMalformedHeaderALREADYInTheFileIsAbsorbedAsHistory()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, session.Members[0].MemberId);
+
+        File.WriteAllText(
+            channelFile,
+            "## [1] FROM supervisor — 2026-08-13 09:00 — brief\nbody\n\n## [2b] FROM supervisor — 2026-08-13 09:05 — already here when the app started\nbody\n");
+
+        await Tick_Once_Async();
+        await Tick_Once_Async();
+
+        Assert_ATickActuallyRan();
+        Assert.DoesNotContain(Read_LogLines(session.OrchId), line => line.Contains("malformed entry header"));
+
+        // And nothing was appended to the channel either — that is the half the owner would see.
+        Assert.DoesNotContain("INVISIBLE", File.ReadAllText(channelFile));
+    }
+
+    /// <summary>
+    /// A POSITIVE MARKER FOR THE INVARIANTS, because "no warning was logged" has two routes to green
+    /// and the second one is "no tick ever ran" (rev-6 F4, decision 20). `Persist_BridgeState` is the
+    /// LAST statement of the tick body and both sweeps run before it, so the state file existing is
+    /// proof the pass reached its end rather than dying on an early await.
+    ///
+    /// The guards do not need this — their helper throws when the line never arrives — but that made
+    /// the guards the only thing establishing the invariants' precondition, which is a coupling worth
+    /// removing rather than documenting.
+    /// </summary>
+    void Assert_ATickActuallyRan()
+    {
+        Assert.True(
+            Wait_Until(() => File.Exists(_paths.BridgeStateFile)),
+            "no tick ever completed, so 'nothing was reported' proves nothing about the sweep");
+    }
+
+    static bool Wait_Until(Func<bool> condition)
+    {
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            if (condition())
+                return true;
+
+            Thread.Sleep(50);
+        }
+
+        return false;
     }
 
     (string OrchId, string ChannelFile) Start_WithACleanChannel()

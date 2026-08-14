@@ -90,12 +90,29 @@ public class ChannelIndexSequenceScreenTests
         Assert.Contains("line 1", text);
         Assert.Contains("line 3", text);
 
+        // REINSTATED. The commit that added the ordered assertions below DELETED these two while
+        // fixing a finding about missing assertions, and said "it is not extra scope, it is the same
+        // lines" — true of the lines, silent about what left with them. At that point no test
+        // anywhere referenced either string, so the class's founding design rule — a SCREEN that
+        // accuses nobody — was pinned by nothing: the clause could be deleted outright, or the
+        // SUSPECT label its own docstring calls the original defect reinstated, with the suite green
+        // (rev-6 F1, 2026-08-14).
+        Assert.Contains("SCREEN, not a verdict", text);
+        Assert.DoesNotContain("SUSPECT", text);
+
         // ORDERED, not merely present (rev-8 F6). "Contains line 1" and "contains line 3" both survive
         // swapping Earlier and Later throughout the format string, and the printed indices survive
         // deleting their clause outright — so the two assertions above pass while every printed
         // pairing is wrong. The class's own line says a screen that misstates which line it means
         // costs more than it saves; this is that sentence pinned.
         Assert.Contains("[107] then [106]", text);
+
+        // PRESENCE BEFORE ORDER, because IndexOf returns -1 when absent and -1 precedes every found
+        // position — so the ordering assertion alone passes when the "line n:" shape is missing
+        // entirely rather than merely misordered. Decision 20 in miniature: never assert on a state
+        // with two routes to it (rev-6 F5).
+        Assert.Contains("line 1:", text);
+        Assert.Contains("line 3:", text);
         Assert.True(text.IndexOf("line 1:") < text.IndexOf("line 3:"), $"the pair is printed in the wrong order: {text}");
     }
 
