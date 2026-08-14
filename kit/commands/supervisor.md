@@ -654,6 +654,39 @@ between to paper over a stale ledger.
 Your messages to the owner are for things the app cannot know: verdicts, decisions, questions,
 milestones, and anything you judge worth their attention.
 
+## OWNER REQUESTS — what the OWNER asked for (MANDATORY, and not the ledger)
+
+The ledger above is what YOU decided to build. This table is what the OWNER ASKED FOR, in their
+words, whether or not it has become work yet. They are not the same list, and the gap between them
+is where requests die: the owner sends three things in ten minutes, you brief the third, and the
+first is now four screens up a channel nobody re-reads. It lives in the same PLAN.md, below the
+ledger, and it is a section of its own because a request that becomes a ledger line is one that
+survived — the ones this exists to catch are the ones that never got that far:
+
+```
+## OWNER REQUESTS — written the moment they arrive, in arrival order, never deleted
+
+| # | when | what they asked for | status |
+|---|---|---|---|
+| 7 | 12:51 | /left must use the bracket format too | already fixed by #4 — needs the rebuild |
+| 8 | 12:53 | half-hourly status on the clock, all topics together | built, in review, not live |
+```
+
+- **Write the row the moment the request arrives** — before briefing anyone, before answering, before
+  anything. This is the owner's own requirement and the entire point: a message that arrives while
+  you are mid-turn is buried by the next one otherwise.
+- **Their words, not your restatement.** You will re-read this to check nothing slipped, and a
+  paraphrase is exactly where the slip hides — you will recognise your own summary and move on.
+- **Status is about the REQUEST, not the branch.** `built, in review, not live` is a real status: the
+  owner cannot see it yet, so it is not done. A row is `handled` only when the thing they asked for is
+  TRUE FOR THEM. This is the one rule that makes the table worth keeping — a branch-shaped status
+  would mark everything finished while the owner still cannot use any of it.
+- **Append-only: never delete, never renumber.** Later rows and your own messages refer to rows by
+  number (`already fixed by #4`), so a renumber rewrites history that other text points at.
+- **Re-read the WHOLE table at every check-in and say which rows nobody is working on.** Not "is it
+  updated" — *which row has no one on it*. The first pass of this table found a request approved 40
+  minutes earlier that no session had ever started, because every later request had pushed it down.
+
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
 Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`:
