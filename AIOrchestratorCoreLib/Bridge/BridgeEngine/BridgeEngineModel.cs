@@ -640,16 +640,21 @@ internal sealed class BridgeEngineModel(
 
         Process_PendingRequests();
 
-        // Before anything that might announce, so a queued announcement keeps its place ahead of one
-        // this tick produces. Inside the allowance opened above, so the retries draw on the tick's
-        // waiting rather than adding a second budget on top of it.
-        Drain_PendingAnnouncements();
-
         // After closes are processed, so a freshly-closed session is not immediately revived.
         _watchdog.Check_AndRestart_DeadSessions();
 
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
+
+        // AFTER the owner's delivery, and that ORDER IS THE POINT. Both draw on the one allowance
+        // above, so whichever runs first can spend it — and several wedged channels retrying
+        // announcements would leave nothing for the owner's own message, which is the highest-value
+        // write in the system and the one a person is waiting on. Announcement retries are already
+        // late by definition and lose nothing by waiting another tick.
+        //
+        // This costs announcement ordering NOTHING: nothing between here and the tick's start
+        // announces, so a queued announcement still lands ahead of any this tick produces.
+        Drain_PendingAnnouncements();
 
         // Lapsing a stale close sends the owner nothing and closes nothing, so it runs even while
         // muted. Behind the gate, DND froze the only thing that disarms a live confirmation button.
