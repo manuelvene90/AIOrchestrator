@@ -1,4 +1,4 @@
-﻿using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
+using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
@@ -1319,7 +1319,7 @@ internal sealed class BridgeEngineModel(
             if (member.ClosedUtc != null)
                 continue;
 
-            channelFiles.Add(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId));
+            channelFiles.Add(Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId));
         }
 
         foreach (var channelFile in channelFiles)
@@ -1416,7 +1416,7 @@ internal sealed class BridgeEngineModel(
                 if (member.ClosedUtc != null)
                     continue;
 
-                var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+                var channelFile = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
 
                 if (!File.Exists(channelFile))
                     continue;
@@ -1855,7 +1855,7 @@ internal sealed class BridgeEngineModel(
             if (member.ClosedUtc != null)
                 continue;
 
-            var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+            var channelFile = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
 
             if (!File.Exists(channelFile))
                 continue;
@@ -2011,7 +2011,7 @@ internal sealed class BridgeEngineModel(
             // not then be told the orphan was handled. Escalated rather than logged: an unexplained
             // respawn is a member that will sit there having lost its context and not know it.
             if (!ChannelAppender.Append_AppEntry(
-                    _paths.Get_ImplementerChannelFile(session.OrchId, memberId), AppEntryAudiences.Agent,
+                    Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, memberId), AppEntryAudiences.Agent,
                     // The constant, not the text: Nudge_Decider has to recognise this entry as the app's
                     // own wake rather than something to nudge the member about, and two copies of a string
                     // are two copies that can drift.
@@ -5888,7 +5888,7 @@ internal sealed class BridgeEngineModel(
                     continue;
 
                 if (ChannelAppender.Append_AppEntry(
-                        _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
+                        Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId), AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
                     wokenSessions++;
                 else
                     notWoken.Add($"{session.OrchId}/{member.MemberId}");
@@ -6329,7 +6329,7 @@ internal sealed class BridgeEngineModel(
                 if (member.ClosedUtc != null)
                     continue;
 
-                var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+                var channelFile = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
 
                 if (!File.Exists(channelFile))
                     continue;
@@ -6398,7 +6398,7 @@ internal sealed class BridgeEngineModel(
             // channel's story — the status line picks the last real subject, the builder resolves the
             // member's state — and a compacted channel answers neither from its live half alone.
             var entries = ChannelHistory_Counter.Read_AllEntries(
-                _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId));
+                Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId));
 
             members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false));
         }
@@ -6429,7 +6429,7 @@ internal sealed class BridgeEngineModel(
             }
 
             var memberFolder = _paths.Get_ImplementerFolder(session.OrchId, member.MemberId);
-            var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+            var channelFile = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
             var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var declared = MemberState_Resolver.Resolve(entries);
             var workingNow = SessionActivity_Probe.Is_MidTurn(Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
@@ -6632,7 +6632,7 @@ internal sealed class BridgeEngineModel(
             return $"which implementer? e.g. /imp 1 (open: {string.Join(", ", session.Members.Where(m => m.ClosedUtc == null).Select(m => m.MemberId))})";
 
         var memberId = $"imp-{digits[0]}";
-        var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, memberId);
+        var channelFile = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, memberId);
         var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
 
         if (entries.Count == 0)
@@ -8287,7 +8287,7 @@ internal sealed class BridgeEngineModel(
             if (member.ClosedUtc != null)
                 continue;
 
-            var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
+            var channelFile = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
             var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
 

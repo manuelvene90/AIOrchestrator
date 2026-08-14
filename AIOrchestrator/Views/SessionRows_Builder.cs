@@ -104,7 +104,7 @@ public static class SessionRows_Builder
         AIOrchestratorCoreLib.Sessions.OrchestrationMember.IOrchestrationMember member)
     {
         var memberId = member.MemberId;
-        var channelFile = paths.Get_ImplementerChannelFile(session.OrchId, memberId);
+        var channelFile = AIOrchestratorCoreLib.Channels.MemberChannel_Locator.Get_ChannelFile(paths, session.OrchId, memberId);
 
         // WHOLE HISTORY: the card's state chip is the same question the Telegram surfaces ask, and the
         // two must not disagree about a member because one of them stopped reading at the compaction.
