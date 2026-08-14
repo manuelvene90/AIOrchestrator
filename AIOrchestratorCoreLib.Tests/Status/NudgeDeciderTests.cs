@@ -601,6 +601,57 @@ public class NudgeDeciderTests
     }
 
     /// <summary>
+    /// A FAILED ARCHIVE READ CANNOT SUPPRESS A NUDGE — rev-5's R8, filed UNPROVEN, and this is why it
+    /// stays unproven.
+    ///
+    /// R8's concern: `5f3dc1f` made the subject always answerable, so a failed archive read is now
+    /// RECORDED as "nothing to be nudged about", where the old null skipped the record entirely and was
+    /// self-correcting by never remembering anything.
+    ///
+    /// The record is real. The harm is not, because the gate is an EQUALITY comparison against a subject
+    /// that MOVES, not a "have I nudged this member" flag. `UsageTotals_Reader.Read_Text_Safe` returns
+    /// empty on any failure, so a failed archive read is indistinguishable from an absent one — which is
+    /// exactly what this case builds. The value it yields can never equal the value a healthy read
+    /// yields for the same channel, so the next tick that CAN read the archive computes something
+    /// different, the gate does not match, and the nudge fires.
+    ///
+    /// So a transient failure costs ONE EXTRA nudge, never a missing one — the visible direction rather
+    /// than the silent one. And the guarantee underneath it is the sentinel's non-collision property,
+    /// pinned by the case below: a value that can never equal a real entry can never suppress one.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableArchiveYieldsADifferentSubjectThanAReadableOne()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-r8-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            File.WriteAllText(channelFile, "## [394] FROM app — 2026-08-12 03:00 — you stopped mid-task\nnothing was going to wake you\n");
+
+            var live = ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile));
+
+            // The archive is absent, which is byte-for-byte what a FAILED read produces.
+            var whileUnreadable = Nudge_Decider.Identify_NudgeSubject(live, channelFile);
+
+            File.WriteAllText(
+                Channel_Compactor.Build_ArchiveFilePath(channelFile),
+                "## [1] FROM supervisor — 2026-08-11 22:00 — the brief\ndo the work\n");
+
+            var onceReadable = Nudge_Decider.Identify_NudgeSubject(live, channelFile);
+
+            Assert.NotEqual(whileUnreadable, onceReadable);
+            Assert.Contains("the brief", onceReadable);
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>
     /// The sentinel cannot be mistaken for an entry. A real identity is a whole entry and always opens
     /// `## [`, so no channel content can ever compare equal to it and suppress a nudge it earned.
     ///
