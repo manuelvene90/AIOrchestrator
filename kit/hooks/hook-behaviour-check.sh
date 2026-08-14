@@ -502,6 +502,29 @@ check "rev-9 ROW E control: the bracketed spelling" ALLOW "$(verdict "$(run_hook
 check "rev-9 ROW B: the C# line as a grep pattern" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "for (var index = entries.Count - 1; index >= 0; index--)" src/')" reviewer)")"
 check "rev-9 ROW B: perl -i is denied as an EDIT" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -0777 -i -pe 's/old/for (var index = entries.Count - 1; index >= 0; index--)/' Foo.cs")" reviewer)")"
 
+# rev-10 F2: THE ONE WRITE THIS ROLE PERMITS, IN THE SPELLING A WINDOWS SESSION ACTUALLY TYPES.
+#
+# Inside double quotes the tokeniser ate every backslash, so `"C:\Users\…"` reduced to `C:Users…` —
+# a path with no separators left, matching no own-folder segment. The reviewer was DENIED appending
+# to its own channel in exactly the spelling `kit/commands/reviewer.md:24` documents, while the
+# POSIX spelling two lines away was fine.
+#
+# WHY IT SURVIVED 203 CASES: every reviewer-channel case in this file used $REV_CHANNEL, which is
+# POSIX-only. The Windows fixture that did exist was asserted against the awaiting-answer hook,
+# whose payloads never reach this lexer. A whole spelling was untested, not tested and passing.
+#
+# THE TWO DENY ROWS ARE NOT DECORATION. Unquoted, the shell really does eat those backslashes, so
+# that denial is correct and must survive the fix; and a quoted Windows path OUTSIDE the member
+# folder must stay denied or the fix is just "allow anything with a backslash in it". A matcher
+# that blanket-allowed Windows paths would satisfy both ALLOW rows and neither of these.
+WIN_REV_CHANNEL=$(printf '%s' "$REV_CHANNEL" | tr '/' '\\')
+WIN_ELSEWHERE=$(printf '%s' "$TEMP_HOME/src/Foo.cs" | tr '/' '\\')
+
+check "own channel, DOUBLE-quoted Windows path" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> \"$WIN_REV_CHANNEL\"")" reviewer)")"
+check "own channel, SINGLE-quoted Windows path" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> '$WIN_REV_CHANNEL'")" reviewer)")"
+check "own channel, UNQUOTED Windows path" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> $WIN_REV_CHANNEL")" reviewer)")"
+check "a quoted Windows path ELSEWHERE" DENY "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cat >> \"$WIN_ELSEWHERE\"")" reviewer)")"
+
 # ── INDIRECT EXECUTION ───────────────────────────────────────────────────────────────────────────
 #
 # All four of these were DENIED by the crude substring matcher BY ACCIDENT — the token appeared

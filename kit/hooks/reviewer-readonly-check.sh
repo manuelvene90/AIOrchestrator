@@ -368,9 +368,21 @@ def tokenize(s):
             while j < n and s[j] != '"':
                 if s[j] == "\\" and j + 1 < n:
                     # Inside double quotes a continuation is still deleted, as the shell does.
-                    if s[j + 1] != "\n":
-                        buf.append(s[j + 1])
-                    j += 2; continue
+                    if s[j + 1] == "\n":
+                        j += 2; continue
+
+                    # POSIX: inside double quotes the backslash escapes ONLY these five. Before
+                    # anything else it is an ORDINARY CHARACTER and the shell keeps it. Eating it
+                    # unconditionally — which this branch did — turned `"C:\Users\…"` into
+                    # `C:Users…`, and a path whose separators are gone matches no own-folder
+                    # segment: the one write this role permits was DENIED in exactly the Windows
+                    # spelling `kit/commands/reviewer.md:24` documents. The unquoted spelling is a
+                    # different case and is still denied above at the `\` branch, correctly — there
+                    # the shell really does eat them.
+                    if s[j + 1] in '$`"\\':
+                        buf.append(s[j + 1]); j += 2; continue
+
+                    buf.append("\\"); j += 1; continue
                 buf.append(s[j]); j += 1
             if j >= n:
                 raise Undecidable("an unbalanced double quote")
