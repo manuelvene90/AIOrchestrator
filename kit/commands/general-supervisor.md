@@ -116,11 +116,43 @@ sub-agents, no extra shell work**. Be reachable fast; learn things when a reques
 ## Channel protocol
 
 - Entries: `## [n] FROM supervisor — YYYY-MM-DD HH:mm — subject`, append-only, never edit the past.
-- **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
-  immediately before appending and add one (the app appends while you work, so a remembered number
-  collides — real duplicates happened on 2026-08-10), and take the time from the system clock
-  (`date +'%Y-%m-%d %H:%M'`). The app measures time-on-task from that field and now BLANKS it when
-  the stamp is in the future, so guessing costs you the display.
+- **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
+
+  ```bash
+  bash ~/.claude/commands/channel-append.sh \
+    --channel "$HOME/.claude/supervision/general/channel.md" \
+    --author  supervisor \
+    --subject "starting orchestration: CRM (Projects\Prova Amazon)" \
+    --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
+  ```
+
+  It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the app takes the same one
+  from .NET, so you and it interlock), **allocates `n` and stamps the time itself INSIDE that lock**,
+  and prints the index it used. **You compute NEITHER.** "Re-read the last header and add one" cannot
+  be made safe by trying harder — the window it leaves open IS the write: two writers both read
+  `[71]` and both wrote `[72]`. Hand-stamping failed the same way, ten hours ahead of the entry it
+  sat on; the app measures time-on-task from that field and BLANKS a future stamp.
+- **Exit code 3 means NOTHING WAS WRITTEN** — "could not acquire the lock within the budget". Never
+  read it as success: the entry is not in the file, so the owner never got the reply and never saw
+  the outcome you relayed. Retry the call (raise `--budget-seconds` if the channel is busy).
+  **Never fall back to a bare `>>` redirect** — an unlocked append under contention is the exact
+  collision this prevents. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
+- **Exit code 127 is the OPPOSITE of 3 and must never be conflated with it.** `3` means the protocol
+  EXISTS and another writer holds the lock — appending anyway IS the collision. `127`, or the helper
+  simply not being on disk, means it is ABSENT on this machine (a freshly bootstrapped machine is
+  exactly this case): nobody else is taking locks either, so a direct append to your own `channel.md`
+  is no worse than how every channel was written before the helper existed, and writing nothing would
+  leave the owner without a concierge at all. Degraded mode: build the FULL entry — header and body —
+  in a temp file and append it with ONE
+  `cat tmp >> "$HOME/.claude/supervision/general/channel.md"` (splitting header from body is how
+  another author's header lands inside an entry), and **say in the body that it was written without
+  the lock because the helper is not installed.** Visible degradation, never silent — and it licenses
+  nothing beyond your own channel; the read-only rule below still holds.
+- **The honest limit: this serialises the writers that USE it, and nothing else.** A session
+  appending with a bare redirect is stopped by nothing here — a protocol to follow, not a boundary
+  that binds.
+- **Other orchestrations' channels stay READ-ONLY** — the helper does not change that; you never
+  append to one.
 - **ENGLISH, always** — even when the owner texts you in Italian, you answer in English. Applies
   to every message, summary, and channel entry.
 - **Stay mostly SILENT, and MINIMAL VERBOSITY always** (owner mandate, applies everywhere this

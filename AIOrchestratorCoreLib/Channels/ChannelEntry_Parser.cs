@@ -59,7 +59,11 @@ public static partial class ChannelEntry_Parser
         if (entries.Count == 0)
             return 1;
 
-        return entries[entries.Count - 1].Index + 1;
+        // The HIGHEST index used, not the last one written. Entries are appended by several
+        // writers and a file that has already suffered a collision is not sorted — numbering from
+        // the tail then hands out an index that exists further up, turning one duplicate into a
+        // run of them.
+        return entries.Max(entry => entry.Index) + 1;
     }
 
     public static bool Is_HeaderLine(string line)

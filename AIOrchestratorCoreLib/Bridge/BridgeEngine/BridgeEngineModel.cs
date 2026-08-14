@@ -1,4 +1,5 @@
 ﻿using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
+using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Configuration;
@@ -249,6 +250,13 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS, OWNER_HOLD_CAP_SECONDS);
+
+    /// <summary>
+    /// Announcements whose channel was locked. These are the one class of write a return check
+    /// cannot save — they fire on the EDGE, with the transition already recorded in the mode state,
+    /// so there is no memo to withhold. See <see cref="IPendingAnnouncements"/>.
+    /// </summary>
+    readonly IPendingAnnouncements _pendingAnnouncements = PendingAnnouncements_Factory.Create();
     readonly Dictionary<string, (string OrchId, long? ThreadId)> _deliveryTargets = [];
     readonly Lock _deliveryLock = new();
 
@@ -551,6 +559,13 @@ internal sealed class BridgeEngineModel(
 
     public async Task Run_Async(CancellationToken cancellationToken)
     {
+        // The channel lock now mediates every write in the system and had no voice at all: a wedged
+        // channel was silent, a broken lock was silent, and the bool that says "this write did not
+        // happen" is discarded by almost every call site. Its failures go to the log from here on —
+        // decision 21's rule (the line goes to orchestrator.log.jsonl, which the app tails) applied
+        // to the thing every append now passes through.
+        ChannelLock_Diagnostics.Set_Sink(message => _log.Log_Warning(GLOBAL_ORCH_ID, message));
+
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
         List<Task> loops = [Run_Supervised_Async("mirror", Run_MirrorLoop_Async, cancellationToken)];
@@ -562,7 +577,22 @@ internal sealed class BridgeEngineModel(
             ? "Bridge started (file-only mode — Telegram not configured)"
             : "Bridge started (Telegram mirror + inbound routing active)");
 
-        await Task.WhenAll(loops);
+        try
+        {
+            await Task.WhenAll(loops);
+        }
+        finally
+        {
+            // ONE LAST DRAIN. Announce no longer writes, so anything queued when the loops stop would
+            // otherwise die with the process — the one real cost of making the drain the single
+            // writer. This does not eliminate that cost: an announcement made while this final drain
+            // is itself blocked is still lost. It narrows it to the exposure the process already has
+            // for any write in flight when it dies, rather than adding a new one.
+            //
+            // In a finally so it runs on the cancellation path too, which is the ordinary way this
+            // method ends.
+            Drain_PendingAnnouncements();
+        }
     }
 
     /// <summary>
@@ -698,6 +728,15 @@ internal sealed class BridgeEngineModel(
 
     async Task Execute_MirrorTick_Async(CancellationToken cancellationToken)
     {
+        // ONE allowance for the whole tick's WAITING. Without it this method's worst case is
+        // "appends × the per-call budget", and four of the steps below append inside a
+        // foreach(session) -> foreach(member) nest — so the member count was the multiplier and ten
+        // members could spend ~15 s of waiting inside a 2 s loop, stalling the poll, the mirror, the
+        // tailer, compaction and the status push behind it. Uncontended writes charge ~0 ms and are
+        // unaffected; a spent allowance means blocked channels fail fast and retry next tick, which
+        // is a defined path (logged, and the owner's message goes back in its buffer).
+        using var tickAllowance = ChannelWrite_Lock.Open_TickAllowance(ChannelWrite_Lock.DEFAULT_TICK_ALLOWANCE);
+
         Process_PendingRequests();
 
         // After closes are processed, so a freshly-closed session is not immediately revived.
@@ -705,6 +744,16 @@ internal sealed class BridgeEngineModel(
 
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
+
+        // AFTER the owner's delivery, and that ORDER IS THE POINT. Both draw on the one allowance
+        // above, so whichever runs first can spend it — and several wedged channels retrying
+        // announcements would leave nothing for the owner's own message, which is the highest-value
+        // write in the system and the one a person is waiting on. Announcement retries are already
+        // late by definition and lose nothing by waiting another tick.
+        //
+        // This costs announcement ordering NOTHING: nothing between here and the tick's start
+        // announces, so a queued announcement still lands ahead of any this tick produces.
+        Drain_PendingAnnouncements();
 
         // Lapsing a stale close sends the owner nothing and closes nothing, so it runs even while
         // muted. Behind the gate, DND froze the only thing that disarms a live confirmation button.
@@ -1219,7 +1268,15 @@ internal sealed class BridgeEngineModel(
                         && alreadyNudgedAbout == conversationIdentity)
                         continue;
 
-                    await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, dormantMidWork, cancellationToken);
+                    var nudged = await Nudge_Implementer_Async(session, member.MemberId, channelFile, entries[^1], quietFor, dormantMidWork, cancellationToken);
+
+                    // BOTH memos are conditional on the nudge existing. The first starts the orphan
+                    // clock — miss this and a member that never received a nudge is killed and
+                    // respawned for not answering it, losing its context. The second suppresses
+                    // re-nudging about this same entry forever.
+                    if (!nudged)
+                        continue;
+
                     _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
                     _nudgedAboutEntry[memberKey] = conversationIdentity;
 
@@ -1315,18 +1372,30 @@ internal sealed class BridgeEngineModel(
                 // file. Baseline_IfUnseen above has put exactly those entries in this memo at the
                 // instant sight was taken, so anything still new here arrived afterwards — which is
                 // the definition of the thing worth reporting.
-                if (_reportedMalformedHeaders.Add(ChannelShape_Validator.Build_MemoKey(channel.FilePath, entry.Line)))
+                //
+                // CONTAINS, NOT ADD, and that is the half this branch contributes: the memo is
+                // written only once the report has LANDED, below. Adding here would mark a header
+                // reported by the act of noticing it, so a locked channel would silence it for ever —
+                // and the memo is the only record that it was not reported.
+                if (!_reportedMalformedHeaders.Contains(ChannelShape_Validator.Build_MemoKey(channel.FilePath, entry.Line)))
                     unreported.Add(entry);
             }
 
             if (unreported.Count == 0)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
-                channel.FilePath,
-                $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
-                ChannelShape_Validator.Build_ReportBody(unreported),
-                DateTime.Now);
+            if (!ChannelAppender.Append_AppEntry(
+                    channel.FilePath,
+                    $"{unreported.Count} entr{(unreported.Count == 1 ? "y is" : "ies are")} INVISIBLE — malformed header",
+                    ChannelShape_Validator.Build_ReportBody(unreported),
+                    DateTime.Now))
+            {
+                _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} invisible entr(ies) could not be reported (channel locked) — NOT marked as reported, the next tick retries");
+                continue;
+            }
+
+            foreach (var entry in unreported)
+                _reportedMalformedHeaders.Add(ChannelShape_Validator.Build_MemoKey(channel.FilePath, entry.Line));
 
             _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {unreported.Count} malformed entry header(s) — those entries were never mirrored");
             Raise_OrchestrationActivity(channel.OrchId);
@@ -1550,19 +1619,27 @@ internal sealed class BridgeEngineModel(
         if (_nudgedMemberUtc.ContainsKey(session.OrchId))
             return;
 
-        _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
+        // Memo AFTER the nudge lands: it is once per quiet spell, and the spell only clears when
+        // every member stops waiting. Recording it for a nudge that was never written would leave
+        // the supervisor un-nudged for the entire remaining stall.
+        if (!ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(session.OrchId),
+                $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
+                $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
+                DateTime.Now))
+        {
+            _log.Log_Warning(session.OrchId, "Supervisor idle-nudge could not be appended (channel locked) — not recorded as nudged; the next tick retries");
+            return;
+        }
 
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
-            $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
-            $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
-            DateTime.Now);
+        _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
 
         _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
     }
 
-    async Task Nudge_Implementer_Async(
+    /// <summary>Returns whether the nudge was actually written — see the guard at the append.</summary>
+    async Task<bool> Nudge_Implementer_Async(
         IOrchestrationSession session,
         string memberId,
         string channelFile,
@@ -1595,7 +1672,16 @@ internal sealed class BridgeEngineModel(
                 lastEntry.Author.ToString().ToLowerInvariant(),
                 Nudge_Wording.Describe_QuietFor(quietFor));
 
-        ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
+        // Returns whether the nudge was actually delivered, and the caller MUST honour it. The memo
+        // it writes on return starts the ORPHAN CLOCK: a member that does not wake within
+        // ORPHAN_CONFIRM_MINUTES is killed and respawned, losing its context. So a nudge that was
+        // never written would have the app destroy a healthy session for failing to answer a message
+        // it was never sent — a locked channel escalating into the most destructive act the app has.
+        if (!ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now))
+        {
+            _log.Log_Warning(session.OrchId, $"{memberId} needed a nudge but the channel was locked — NOT nudged, and deliberately not counted as nudged; the next tick retries");
+            return false;
+        }
 
         var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
         _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {Nudge_Wording.Describe_QuietFor(quietFor)} — nudged");
@@ -1609,6 +1695,7 @@ internal sealed class BridgeEngineModel(
         // It stays in the log, where diagnosing this belongs. If a nudge does NOT work, the
         // orphan-recovery path speaks up — and that one IS a real problem, because context is lost.
         await Task.CompletedTask;
+        return true;
     }
 
     /// <summary>
@@ -1626,14 +1713,27 @@ internal sealed class BridgeEngineModel(
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(session.OrchId, memberId));
             _launcher.Respawn_Implementer(session.OrchId, memberId);
 
-            ChannelAppender.Append_AppEntry(
-                _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
-                // The constant, not the text: Nudge_Decider has to recognise this entry as the app's
-                // own wake rather than something to nudge the member about, and two copies of a string
-                // are two copies that can drift.
-                Nudge_Wording.RESPAWN_SUBJECT,
-                "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
-                DateTime.Now);
+            // The kill and the respawn above have already happened and cannot be undone, so this
+            // entry is the ONLY thing that tells the respawned session why it restarted and where to
+            // resume. If it did not land, the session wakes with no explanation — and the owner must
+            // not then be told the orphan was handled. Escalated rather than logged: an unexplained
+            // respawn is a member that will sit there having lost its context and not know it.
+            if (!ChannelAppender.Append_AppEntry(
+                    _paths.Get_ImplementerChannelFile(session.OrchId, memberId),
+                    // The constant, not the text: Nudge_Decider has to recognise this entry as the app's
+                    // own wake rather than something to nudge the member about, and two copies of a string
+                    // are two copies that can drift.
+                    Nudge_Wording.RESPAWN_SUBJECT,
+                    "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
+                    DateTime.Now))
+            {
+                _log.Log_Error(
+                    session.OrchId,
+                    $"{memberId} was respawned but the explanation could not be appended (channel locked) — it is awake with no idea why it restarted",
+                    null);
+
+                return;
+            }
 
             Raise_OrchestrationActivity(session.OrchId);
         }
@@ -1703,13 +1803,23 @@ internal sealed class BridgeEngineModel(
             {
                 _ledgerBehindReportedOrchIds.Remove(session.OrchId);
             }
-            else if (_ledgerBehindReportedOrchIds.Add(session.OrchId))
+            else if (!_ledgerBehindReportedOrchIds.Contains(session.OrchId))
             {
-                ChannelAppender.Append_AppEntry(
-                    _paths.Get_OwnerChannelFile(session.OrchId),
-                    "PLAN.md is behind your verdicts",
-                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
-                    DateTime.Now);
+                // The set is the "already told them" record and it is added only once the telling
+                // succeeded. Adding it as the branch condition meant a locked channel silenced the
+                // warning permanently while the flag file kept blocking the supervisor's turn end —
+                // a deadlock with nothing anywhere explaining it.
+                if (!ChannelAppender.Append_AppEntry(
+                        _paths.Get_OwnerChannelFile(session.OrchId),
+                        "PLAN.md is behind your verdicts",
+                        "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
+                        DateTime.Now))
+                {
+                    _log.Log_Warning(session.OrchId, "Ledger-behind warning could not be appended (channel locked) — not recorded as reported; the next tick retries");
+                    continue;
+                }
+
+                _ledgerBehindReportedOrchIds.Add(session.OrchId);
 
                 _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
                 Raise_OrchestrationActivity(session.OrchId);
@@ -1757,16 +1867,28 @@ internal sealed class BridgeEngineModel(
         if (_reportedLedgerShapeByOrchId.TryGetValue(session.OrchId, out var reported) && reported == fingerprint)
             return;
 
-        _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
-
+        // No complaints: record the clean fingerprint and stop. Nothing is written, so there is
+        // nothing that can fail to be written.
         if (complaints.Count == 0)
+        {
+            _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
             return;
+        }
 
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(session.OrchId),
-            "PLAN.md has lines that cannot show progress",
-            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
-            DateTime.Now);
+        // Fingerprint AFTER the warning lands: it suppresses re-reporting until the offending set
+        // changes, so recording it for a warning that was never written hides the problem until the
+        // supervisor happens to edit those same lines.
+        if (!ChannelAppender.Append_AppEntry(
+                _paths.Get_OwnerChannelFile(session.OrchId),
+                "PLAN.md has lines that cannot show progress",
+                $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
+                DateTime.Now))
+        {
+            _log.Log_Warning(session.OrchId, "PLAN.md shape warning could not be appended (channel locked) — fingerprint not recorded; the next tick retries");
+            return;
+        }
+
+        _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
 
         _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
         Raise_OrchestrationActivity(session.OrchId);
@@ -3882,24 +4004,52 @@ internal sealed class BridgeEngineModel(
         });
     }
 
-    void Append_GeneralAppEntry(string subject, string body)
+    /// <summary>
+    /// Returns whether the entry landed.
+    /// <para>
+    /// These two wrappers carry the widest blast radius in the file: most of their callers append
+    /// AFTER something irreversible — an orchestration closed, a session killed and respawned, a
+    /// request file deleted or parked — and the entry is the only thing that tells the agent the
+    /// irreversible thing happened. A dropped one leaves an agent whose world changed underneath it
+    /// with no record of why.
+    /// </para>
+    /// <para>
+    /// The result is surfaced rather than swallowed here, and logged against the orchestration so
+    /// the failure is attributable even where a caller ignores it. Callers that record state on the
+    /// strength of the entry must check it; the ones that do not are listed in the sweep's report.
+    /// </para>
+    /// </summary>
+    bool Append_GeneralAppEntry(string subject, string body)
     {
-        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, subject, body, DateTime.Now);
+        if (!ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, subject, body, DateTime.Now))
+        {
+            _log.Log_Warning(ChannelDiscovery.GENERAL_ORCH_ID, $"General channel entry '{subject}' was NOT written — the channel was locked for the whole budget");
+            return false;
+        }
+
         Raise_OrchestrationActivity(ChannelDiscovery.GENERAL_ORCH_ID);
+        return true;
     }
 
-    void Append_OrchestrationAppEntry(string orchId, string subject, string body)
+    /// <summary>Returns whether the entry landed. See <see cref="Append_GeneralAppEntry"/>.</summary>
+    bool Append_OrchestrationAppEntry(string orchId, string subject, string body)
     {
         var ownerChannel = _paths.Get_OwnerChannelFile(orchId);
 
         if (!File.Exists(ownerChannel))
         {
             _log.Log_Warning(orchId, $"No owner-channel.md for '{orchId}' — app entry '{subject}' logged only");
-            return;
+            return false;
         }
 
-        ChannelAppender.Append_AppEntry(ownerChannel, subject, body, DateTime.Now);
+        if (!ChannelAppender.Append_AppEntry(ownerChannel, subject, body, DateTime.Now))
+        {
+            _log.Log_Warning(orchId, $"Owner-channel entry '{subject}' was NOT written — the channel was locked for the whole budget");
+            return false;
+        }
+
         Raise_OrchestrationActivity(orchId);
+        return true;
     }
 
     /// <summary>
@@ -4947,6 +5097,7 @@ internal sealed class BridgeEngineModel(
 
         var wokenSessions = 0;
         var wokenOrchestrations = 0;
+        List<string> notWoken = [];
 
         foreach (var session in _store.Load_All())
         {
@@ -4955,28 +5106,43 @@ internal sealed class BridgeEngineModel(
 
             wokenOrchestrations++;
 
-            ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), SUBJECT, body, DateTime.Now);
-            wokenSessions++;
+            // Every counter increments only on a written entry. The total is reported to the owner
+            // below as "go ahead sent to N sessions", and /resume is the one command with no retry —
+            // it exists for the usage-limit reset, where nothing else will speak to a session again.
+            // Counting an append that did not happen tells the owner a session was woken and leaves
+            // it asleep, which is the exact failure /resume is the remedy for.
+            if (ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), SUBJECT, body, DateTime.Now))
+                wokenSessions++;
+            else
+                notWoken.Add($"{session.OrchId}/supervisor");
 
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc != null)
                     continue;
 
-                ChannelAppender.Append_AppEntry(
-                    _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), SUBJECT, body, DateTime.Now);
-
-                wokenSessions++;
+                if (ChannelAppender.Append_AppEntry(
+                        _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), SUBJECT, body, DateTime.Now))
+                    wokenSessions++;
+                else
+                    notWoken.Add($"{session.OrchId}/{member.MemberId}");
             }
 
             Raise_OrchestrationActivity(session.OrchId);
         }
 
         // The general supervisor too — it has the same problem and its own channel.
-        ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, SUBJECT, body, DateTime.Now);
-        wokenSessions++;
+        if (ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, SUBJECT, body, DateTime.Now))
+            wokenSessions++;
+        else
+            notWoken.Add("general");
 
         _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — woke {wokenSessions} session(s) across {wokenOrchestrations} orchestration(s)");
+
+        // Named, not counted: "3 of 5" leaves the owner to work out which two are still asleep, and
+        // /resume is exactly when they cannot afford to guess.
+        if (notWoken.Count > 0)
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"/resume could NOT wake (channel locked): {string.Join(", ", notWoken)}");
 
         await Send_DirectReply_BestEffort_Async(
             client,
@@ -5312,11 +5478,21 @@ internal sealed class BridgeEngineModel(
                 // panel shows it live — which is the whole reason the app writes this and not the hook.
                 _log.Log_Warning(session.OrchId, description);
 
-                ChannelAppender.Append_AppEntry(
+                var reported = ChannelAppender.Append_AppEntry(
                     _paths.Get_OwnerChannelFile(session.OrchId),
                     Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
                     $"{description} This is almost always the machine rather than the code — hooks shell out, and a machine that cannot fork cannot run them. Nothing is wrong with your work; the restraint you think you are under is simply not applied right now.",
                     DateTime.Now);
+
+                // The marker goes ONLY if the report went. The catch below states this contract and
+                // used to enforce it for free, because a failed append THREW; once the appender
+                // started returning false instead, nothing threw, the delete ran anyway, and a
+                // report that was never written destroyed the record that would have retried it.
+                if (!reported)
+                {
+                    _log.Log_Warning(session.OrchId, "Guard-not-in-force report could not be appended (channel locked) — the marker survives and the next tick retries");
+                    continue;
+                }
 
                 File.Delete(markerFile);
             }
@@ -5362,19 +5538,39 @@ internal sealed class BridgeEngineModel(
             if (signature == (lastSignature ?? ""))
                 continue;
 
-            _flaggedIdleMembersByOrchId[session.OrchId] = signature;
-
+            // Nothing idle: record the empty signature and move on — no write, nothing to fail.
             if (idle.Count == 0)
+            {
+                _flaggedIdleMembersByOrchId[session.OrchId] = signature;
                 continue;
+            }
 
-            ChannelAppender.Append_AppEntry(
+            // Signature AFTER the flag lands. It re-fires only when the idle SET changes, so
+            // recording it for a flag that was never written means this exact set is never flagged
+            // again.
+            if (!Flag_IdleMembers_Entry(session, signature))
+            {
+                _log.Log_Warning(session.OrchId, "Idle-member flag could not be appended (channel locked) — signature not recorded; the next tick retries");
+                continue;
+            }
+
+            _flaggedIdleMembersByOrchId[session.OrchId] = signature;
+            continue;
+        }
+    }
+
+    /// <summary>Extracted so the caller can record its signature only when the entry landed.</summary>
+    bool Flag_IdleMembers_Entry(IOrchestrationSession session, string signature)
+    {
+        if (!ChannelAppender.Append_AppEntry(
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 Status.Retirement_Advisor.FLAG_SUBJECT,
                 $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
-                DateTime.Now);
+                DateTime.Now))
+            return false;
 
-            _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
-        }
+        _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
+        return true;
     }
 
 
@@ -6215,84 +6411,143 @@ internal sealed class BridgeEngineModel(
         // failed receipt leaves the owner's wait untracked and the receipt frozen on "thinking…".
         foreach (var delivery in _ownerDeliveryBuffer.Take_ReadyDeliveries(DateTime.UtcNow))
         {
-            // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
-            lock (_ownerStateLock)
-            {
-                _holdReceipts.Remove(delivery.Key);
-            }
-
-            (string OrchId, long? ThreadId) target;
-
-            lock (_deliveryLock)
-            {
-                if (!_deliveryTargets.TryGetValue(delivery.Key, out target))
-                {
-                    _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner delivery for '{delivery.Key}' has no recorded target — dropped");
-                    continue;
-                }
-            }
-
-            var deliveryText = delivery.Value;
-
-            // Italian layer: the SESSION must only ever see English — translate the aggregated
-            // owner text before it touches the channel. Already-English text passes unchanged.
-            if (_configProvider.Get_Current().TelegramItalianLayer)
-                deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
-
-            // Counted BEFORE the owner entry lands, so a later increase can only mean the
-            // supervisor answered THIS message.
-            var supervisorEntryCountBefore = Count_SupervisorEntries(delivery.Key);
-
-            ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now);
-            _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
-            Raise_OrchestrationActivity(target.OrchId);
-
-            if (_telegramClient == null || _telegramMuted)
-                continue;
-
+            // TAKE_READYDELIVERIES HAS ALREADY EMPTIED THE BUFFER FOR EVERY KEY IN THIS BATCH, so from
+            // here the local variables are the only copy of the owner's words. The append's own
+            // failure is handled below with a put-back; this wrapper covers the OTHER ways out, which
+            // were not — a translator that throws destroys the text outright, and any escape from the
+            // loop destroys every delivery still to come in the batch as well.
             try
             {
-                // The batch's ✓ becomes "✓✓" — plus a TRUTHFUL handoff line (can the recipient
-                // answer now, or is it mid-turn with the communicator covering the wait?). One
-                // message that evolves, never a pile of ✓ / ✓✓ / thinking lines.
-                var handoffLine = Build_HandoffLine(target.OrchId);
-
-                var receiptText = Should_SendHandoffLine(target.OrchId, handoffLine)
-                    ? $"✓✓  ·  {handoffLine}"
-                    : "✓✓";
-
-                var receiptMessageId = await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
-
-                // Tracked until the supervisor actually answers — the owner must never be left
-                // staring at a receipt frozen on "thinking…".
-                lock (_ownerStateLock)
-                {
-                    _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
-                    {
-                        ThreadId = target.ThreadId,
-                        ReceiptMessageId = receiptMessageId,
-                        SupervisorEntryCountAtDelivery = supervisorEntryCountBefore,
-                        DeliveredUtc = DateTime.UtcNow,
-                        Nudged = false,
-                    };
-                }
+                await Deliver_OwnerMessage_Async(delivery, cancellationToken);
             }
-            // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
-            // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
-            // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+            catch (Exception exception)
+            {
+                // The ORIGINAL, never the possibly-half-translated working copy: a partially
+                // translated string becoming the owner's message is worse than a late one, and it
+                // would be near-impossible to diagnose from outside.
+                _ownerDeliveryBuffer.Restore_Segment(delivery.Key, delivery.Value.Text, delivery.Value.FirstOrdinal);
+                _ownerDeliveryBuffer.Release(delivery.Key);
+
+                _log.Log_Error(
+                    GLOBAL_ORCH_ID,
+                    $"Owner message for '{Path.GetFileName(delivery.Key)}' failed mid-delivery — it is back in the buffer and the next tick retries it",
+                    exception);
+
+                // CONTINUE, deliberately, including on cancellation. Rethrowing here is what let one
+                // failure take the rest of the batch down with it: every remaining delivery had
+                // already been removed from the buffer and would never be re-delivered. Each key is
+                // independent, and the put-back above means a cancelled run loses nothing either.
+            }
+        }
+    }
+
+    /// <summary>
+    /// One owner message, from the buffer to the supervisor's channel and back to the owner as a
+    /// receipt. Throws on any failure that is not the append's own — the caller puts the message back.
+    /// </summary>
+    async Task Deliver_OwnerMessage_Async(KeyValuePair<string, IReadyDelivery> delivery, CancellationToken cancellationToken)
+    {
+        // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
+        lock (_ownerStateLock)
+        {
+            _holdReceipts.Remove(delivery.Key);
+        }
+
+        (string OrchId, long? ThreadId) target;
+
+        lock (_deliveryLock)
+        {
+            if (!_deliveryTargets.TryGetValue(delivery.Key, out target))
+            {
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner delivery for '{delivery.Key}' has no recorded target — dropped");
+                return;
+            }
+        }
+
+        var deliveryText = delivery.Value.Text;
+
+        // Italian layer: the SESSION must only ever see English — translate the aggregated
+        // owner text before it touches the channel. Already-English text passes unchanged.
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
+
+        // Counted BEFORE the owner entry lands, so a later increase can only mean the
+        // supervisor answered THIS message.
+        var supervisorEntryCountBefore = Count_SupervisorEntries(delivery.Key);
+
+        // Take_ReadyDeliveries REMOVED this from the buffer before we got here, so the only copy
+        // of the owner's message is the local variable. A failed append that simply fell through
+        // would destroy it — which is worse than the collision the lock exists to prevent, and is
+        // why "fail the write" cannot mean "drop the write" on this path.
+        if (!ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now))
+        {
+            // Put it back and mark it ready: the owner has already waited out one aggregation
+            // window and must not serve a second one for a lock they know nothing about.
             //
-            // Cost HERE was the worst of the sixteen, and it is why this site was taken first: this loop
-            // runs BEFORE the DND gate, so it is the one tick-path site a muted spell cannot spare — and
-            // an escape did not merely lose the tick, it LOST OWNER MESSAGES. See the note at the top of
-            // this loop for the half that is NOT fixed here.
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            // delivery.Value, THE ORIGINAL — not deliveryText. This put back the TRANSLATED string
+            // until rev-9 caught it: with the Italian layer on, the buffer stopped holding the
+            // owner's message and started holding a machine translation of it, which the retry then
+            // ran through the translator AGAIN. The owner's words were replaced by a paraphrase of
+            // themselves and re-paraphrased on every subsequent lock. Translation belongs on the way
+            // OUT; nothing may put an output of that pipeline back into the input side.
+            _ownerDeliveryBuffer.Restore_Segment(delivery.Key, delivery.Value.Text, delivery.Value.FirstOrdinal);
+            _ownerDeliveryBuffer.Release(delivery.Key);
+
+            _log.Log_Warning(target.OrchId,
+                $"Owner message NOT delivered — '{Path.GetFileName(delivery.Key)}' stayed locked by another writer for the whole budget; it is back in the buffer and the next tick retries it");
+
+            return;
+        }
+
+        _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
+        Raise_OrchestrationActivity(target.OrchId);
+
+        if (_telegramClient == null || _telegramMuted)
+            return;
+
+        try
+        {
+            // The batch's ✓ becomes "✓✓" — plus a TRUTHFUL handoff line (can the recipient
+            // answer now, or is it mid-turn with the communicator covering the wait?). One
+            // message that evolves, never a pile of ✓ / ✓✓ / thinking lines.
+            var handoffLine = Build_HandoffLine(target.OrchId);
+
+            var receiptText = Should_SendHandoffLine(target.OrchId, handoffLine)
+                ? $"✓✓  ·  {handoffLine}"
+                : "✓✓";
+
+            var receiptMessageId = await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
+
+            // Tracked until the supervisor actually answers — the owner must never be left
+            // staring at a receipt frozen on "thinking…".
+            lock (_ownerStateLock)
             {
-                throw;
+                _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
+                {
+                    ThreadId = target.ThreadId,
+                    ReceiptMessageId = receiptMessageId,
+                    SupervisorEntryCountAtDelivery = supervisorEntryCountBefore,
+                    DeliveredUtc = DateTime.UtcNow,
+                    Nudged = false,
+                };
             }
-            catch (Exception ex)
-            {
-                _log.Log_Warning(target.OrchId, $"Delivery receipt send failed: {ex.Message}");
-            }
+        }
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
+        //
+        // It composes with this branch's put-back rather than colliding with it: the append has already
+        // SUCCEEDED by the time control reaches here, so an escape from this block would have the
+        // caller restore a message that was in fact delivered. The filter keeps a timeout local, and
+        // leaves only real cancellation — where the in-memory buffer dies with the process anyway — as
+        // the route out.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(target.OrchId, $"Delivery receipt send failed: {ex.Message}");
         }
     }
 
@@ -6626,13 +6881,91 @@ internal sealed class BridgeEngineModel(
             _lastVerbosityNudgeUtc[orchId] = DateTime.UtcNow;
         }
 
-        ChannelAppender.Append_AppEntry(
+        // Return deliberately discarded, and this one is safe for a reason the memo sites are not:
+        // the state recorded above is a COOLDOWN, not a record that the work is done. It expires by
+        // itself after NUDGE_COOLDOWN_MINUTES, so a lost nudge costs at most one un-nudged message
+        // rather than suppressing the nudge forever. Recording it after the append instead would
+        // reopen the double-nudge race the lock above exists to close — a worse trade for a smaller
+        // problem. The lock's own diagnostics report the failure either way.
+        var nudged = ChannelAppender.Append_AppEntry(
             _paths.Get_OwnerChannelFile(orchId),
             "that message was too long for a phone",
             Brevity_Policy.Build_NudgeBody(mirroredText),
             DateTime.Now);
 
-        _log.Log_Info(orchId, $"Supervisor message exceeded the brevity cap ({Brevity_Policy.Count_Lines(mirroredText)} lines) — nudged");
+        // The return is consulted for the SENTENCE ONLY, and that does not disturb the deliberate
+        // discard above: nothing is queued, nothing is retried, and the cooldown still records before
+        // the append. It used to say "nudged" unconditionally, so a locked channel produced a
+        // confident wrong statement sitting beside the lock's own diagnostic contradicting it.
+        _log.Log_Info(
+            orchId,
+            nudged
+                ? $"Supervisor message exceeded the brevity cap ({Brevity_Policy.Count_Lines(mirroredText)} lines) — nudged"
+                : $"Supervisor message exceeded the brevity cap ({Brevity_Policy.Count_Lines(mirroredText)} lines) — NOT nudged, the channel was locked; the cooldown still applies, so the next overlong message in {Brevity_Policy.NUDGE_COOLDOWN_MINUTES} minutes is the next chance");
+    }
+
+    /// <summary>
+    /// QUEUES an announcement. It never writes — <see cref="Drain_PendingAnnouncements"/> is the only
+    /// thing that writes one, and that is the entire ordering guarantee.
+    /// <para>
+    /// These are the one class of channel write a return-value check cannot save: they fire on the
+    /// EDGE, and by the time the append runs the transition is already recorded in the mode state,
+    /// so there is no memo to withhold — withholding one would mean refusing to change the mode.
+    /// A lost entry means the supervisor is never told the owner went away and keeps asking them
+    /// questions, which is what away mode exists to stop.
+    /// </para>
+    /// <para>
+    /// THIS USED TO APPEND DIRECTLY AND GUARD THE ORDER WITH A <c>Has_Queued_For</c> CHECK, and that
+    /// guard could not work: an announcement whose append is still WAITING on the channel lock is in
+    /// neither state — not written, not queued — so a concurrent announcement saw an empty queue and
+    /// overtook it. The two producers really do sit on different loops (away mode is ENTERED on the
+    /// mirror tick and EXITED on the inbound loop) and the thing that ends away mode is the owner
+    /// texting, which IS the inbound loop's traffic. The supervisor's last word would be "went away"
+    /// while the owner was present, so it would stop asking a present owner questions — the inversion
+    /// away mode exists to manage. (rev-10, F1 on d0054fb.)
+    /// </para>
+    /// <para>
+    /// ONE WRITER REMOVES THE RACE RATHER THAN GUARDING IT. A single writer draining a per-channel
+    /// FIFO cannot interleave with itself, and there is no state an announcement can be in that the
+    /// next writer cannot see. The cost is that every announcement waits up to one tick (≤2 s, against
+    /// a supervisor watcher polling at 5 s) and that anything still queued at exit is lost — which is
+    /// why <see cref="Run_Async"/> drains once more on the way out.
+    /// </para>
+    /// </summary>
+    void Announce(string orchId, string channelFile, string subject, string body)
+    {
+        var dropped = _pendingAnnouncements.Queue(orchId, channelFile, subject, body, DateTime.UtcNow);
+
+        if (dropped != null)
+            _log.Log_Error(orchId,
+                $"Announcement queue for {Path.GetFileName(channelFile)} is full ({IPendingAnnouncements.PER_CHANNEL_CAP}) — DROPPED the oldest, '{dropped.Subject}' queued at {dropped.QueuedUtc:HH:mm:ss}Z. That channel has been unwritable long enough to lose announcements.",
+                null);
+    }
+
+    /// <summary>
+    /// Retries queued announcements. Runs inside the mirror tick, so its waiting is drawn from the
+    /// tick's own allowance rather than added on top of it.
+    /// </summary>
+    void Drain_PendingAnnouncements()
+    {
+        if (_pendingAnnouncements.Count == 0)
+            return;
+
+        var delivered = _pendingAnnouncements.Drain(pending =>
+            ChannelAppender.Append_AppEntry(pending.ChannelFile, pending.Subject, pending.Body, DateTime.Now));
+
+        if (delivered > 0)
+            _log.Log_Info(GLOBAL_ORCH_ID, $"Delivered {delivered} queued announcement(s)");
+
+        // THE FAILURE IS REPORTED HERE, not at Announce. Queuing is now the ordinary path — every
+        // announcement is queued — so a line there would say nothing and fire constantly. What is
+        // worth saying is that something is STILL waiting after a drain, which means a channel is
+        // genuinely locked against us rather than merely behind by a tick.
+        var stillWaiting = _pendingAnnouncements.Count;
+
+        if (stillWaiting > 0)
+            _log.Log_Warning(GLOBAL_ORCH_ID,
+                $"{stillWaiting} announcement(s) could not be written — the channel stayed locked; it is queued and the next tick retries it");
     }
 
     /// <summary>
@@ -6645,9 +6978,21 @@ internal sealed class BridgeEngineModel(
         if (newMode == previousMode)
             return;
 
+        // THE MODE-TRANSITION ANNOUNCEMENTS DISCARD THE RETURN, AND A BOOL CHECK CANNOT FIX THEM.
+        // These fire on the EDGE: the guard above returns early once newMode == previousMode, so by
+        // the time the append runs the transition is already recorded in the mode state itself. There
+        // is no memo here to withhold — withholding one would mean not changing the mode, which is
+        // not ours to refuse. A lost entry means the supervisor is never told the owner went away and
+        // keeps asking them questions, which is precisely what away mode exists to stop.
+        //
+        // Closing it properly needs a pending-announcement queue that survives to the next tick, which
+        // is a mechanism rather than a return check, so it is NOT done here and is reported as an open
+        // gap rather than left to look finished. The same applies to the quiet, away-on and away-off
+        // announcements below. The lock's diagnostics name the channel and the wait on every failure,
+        // so none of these is silent — only unretried.
         if (newMode == TelegramDeliveryModes.Deferred)
         {
-            ChannelAppender.Append_AppEntry(
+            Announce(orchId,
                 _paths.Get_OwnerChannelFile(orchId),
                 "the owner switched this topic to Do-Not-Disturb — treat it as AWAY",
                 "They set DND deliberately, so this is not a guess: they are away and nothing you write reaches them "
@@ -6655,8 +7000,7 @@ internal sealed class BridgeEngineModel(
                 + "Behave exactly as in AWAY MODE: ask NOTHING, park what you need from them, decide and delegate "
                 + "everything you safely can, and leave the owner-approval and merge gates standing. The app queues a "
                 + "short status for them and keeps only the newest, so they return to the CURRENT state instead of a "
-                + "backlog. You get an entry here when they switch back.",
-                DateTime.Now);
+                + "backlog. You get an entry here when they switch back.");
 
             Raise_OrchestrationActivity(orchId);
             return;
@@ -6664,12 +7008,11 @@ internal sealed class BridgeEngineModel(
 
         if (previousMode == TelegramDeliveryModes.Deferred && newMode == TelegramDeliveryModes.Normal)
         {
-            ChannelAppender.Append_AppEntry(
+            Announce(orchId,
                 _paths.Get_OwnerChannelFile(orchId),
                 "Do-Not-Disturb is off — the owner is back",
                 "Normal mode. Re-ask ONLY what still matters, rewritten against the CURRENT state, and drop what "
-                + "events have overtaken. One line on what you decided while they were away.",
-                DateTime.Now);
+                + "events have overtaken. One line on what you decided while they were away.");
 
             Raise_OrchestrationActivity(orchId);
         }
@@ -6696,15 +7039,14 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(orchId, $"QUIET — {AwayMode_Policy.QUIET_THRESHOLD} unanswered messages; supervisor told to hold further questions");
 
-        ChannelAppender.Append_AppEntry(
+        Announce(orchId,
             _paths.Get_OwnerChannelFile(orchId),
             "HOLD — the owner has not answered your last messages",
             $"{AwayMode_Policy.QUIET_THRESHOLD} of your messages are unanswered. They may simply be mid-task, so nothing is being "
             + "assumed yet — but STOP sending them anything more for now: no questions, no options, no updates.\n\n"
             + "Park what you would have asked (keep the list; you will re-ask from it) and carry on with what you can "
             + $"decide and delegate yourself. If they stay silent for {AwayMode_Policy.AWAY_AFTER_MINUTES} minutes you will get an "
-            + "AWAY MODE ON entry; if they reply, everything returns to normal on its own.",
-            DateTime.Now);
+            + "AWAY MODE ON entry; if they reply, everything returns to normal on its own.");
 
         Raise_OrchestrationActivity(orchId);
 
@@ -6748,19 +7090,18 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE ON (app-wide) — owner unresponsive; every supervisor told to proceed without questions");
 
-        ChannelAppender.Append_AppEntry(
+        Announce(GLOBAL_ORCH_ID,
             _paths.GeneralChannelFile,
             "AWAY MODE ON — the owner is not reading",
             "Every orchestration has been told directly; you do not need to relay it. Ask them nothing until the "
-            + "AWAY MODE OFF entry arrives.",
-            DateTime.Now);
+            + "AWAY MODE OFF entry arrives.");
 
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
+            Announce(session.OrchId,
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 "AWAY MODE ON — the owner is not reading",
                 "They have not answered. Assume they are unavailable, NOT ignoring you.\n\n"
@@ -6770,8 +7111,7 @@ internal sealed class BridgeEngineModel(
                 + "needs their decision waits rather than proceeding without it.\n\n"
                 + "The app posts a short update to them every 30 min — you do not need to. When they return you get an "
                 + "AWAY MODE OFF entry; then re-ask ONLY what is still relevant, updated to the current state, and drop "
-                + "what events have overtaken.",
-                DateTime.Now);
+                + "what events have overtaken.");
 
             Raise_OrchestrationActivity(session.OrchId);
 
@@ -6784,26 +7124,24 @@ internal sealed class BridgeEngineModel(
     {
         _log.Log_Info(GLOBAL_ORCH_ID, "AWAY MODE OFF (app-wide) — owner is back");
 
-        ChannelAppender.Append_AppEntry(
+        Announce(GLOBAL_ORCH_ID,
             _paths.GeneralChannelFile,
             "AWAY MODE OFF — the owner is back",
-            "Every orchestration has been told directly.",
-            DateTime.Now);
+            "Every orchestration has been told directly.");
 
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
                 continue;
 
-            ChannelAppender.Append_AppEntry(
+            Announce(session.OrchId,
                 _paths.Get_OwnerChannelFile(session.OrchId),
                 "AWAY MODE OFF — the owner is back",
                 "Normal mode: they are reading and can answer within a short time.\n\n"
                 + "Go through the questions you parked. Re-ask ONLY the ones that still matter, rewritten against the "
                 + "CURRENT state (facts may have moved while they were away), and say in one line what you decided "
                 + "yourself in the meantime. Drop the rest without ceremony — a re-asked obsolete question is exactly "
-                + "the mess this mode exists to prevent.",
-                DateTime.Now);
+                + "the mess this mode exists to prevent.");
 
             Raise_OrchestrationActivity(session.OrchId);
 
@@ -6889,6 +7227,11 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Post_StatusEntry(string orchId, string text)
     {
+        // Return deliberately discarded: this is the periodic status, and a dropped one is SUPERSEDED
+        // rather than lost — the next carries the current state, and the Deferred path already
+        // collapses queued statuses to the newest for the same reason. Retrying it would deliver a
+        // stale snapshot the following tick is about to replace. Nothing records it as done, so
+        // nothing is left claiming work that did not happen.
         ChannelAppender.Append_AppEntry(
             _paths.Get_OwnerChannelFile(orchId),
             MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
@@ -7340,13 +7683,21 @@ internal sealed class BridgeEngineModel(
             if (pending.Nudged || (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds < OWNER_REPLY_GRACE_SECONDS)
                 continue;
 
-            pending.Nudged = true;
+            // Neither the memo NOR the owner-facing receipt may run ahead of the nudge. `Nudged` is
+            // one-per-pending-reply forever, and the receipt below tells the owner "nudged, an
+            // answer is coming" — so a failed append here would burn the only nudge this reply ever
+            // gets AND assert to the owner that a message was sent that does not exist.
+            if (!ChannelAppender.Append_AppEntry(
+                    ownerChannel,
+                    "the owner is still waiting for your reply",
+                    "Your turn ended without answering the owner's message above. Reply now, even one line (what you are doing / what you are waiting on). The owner is looking at an unanswered receipt.",
+                    DateTime.Now))
+            {
+                _log.Log_Warning(orchId, "Owner reply nudge could not be appended (channel locked) — NOT marked as nudged and the owner's receipt is left alone; the next tick retries");
+                continue;
+            }
 
-            ChannelAppender.Append_AppEntry(
-                ownerChannel,
-                "the owner is still waiting for your reply",
-                "Your turn ended without answering the owner's message above. Reply now, even one line (what you are doing / what you are waiting on). The owner is looking at an unanswered receipt.",
-                DateTime.Now);
+            pending.Nudged = true;
 
             _log.Log_Warning(orchId, "Owner message went unanswered past the grace window — supervisor nudged");
             Raise_OrchestrationActivity(orchId);
