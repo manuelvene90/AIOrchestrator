@@ -134,6 +134,67 @@ GIT_BRANCH_READONLY_FLAGS = {"-a", "--all", "-l", "--list", "-r", "--remotes", "
 
 PKG = {"npm": {"install", "ci"}, "yarn": {"add"}, "pip": {"install"}, "dotnet": {"add", "new"}}
 
+# THE IN-PLACE FLAG IS A LETTER IN A CLUSTER, NOT A WORD. The rule here used to ask whether any
+# argument STARTED WITH `-i`, which is true of `-i` and `-i.bak` and of nothing else anyone types:
+# `perl -pi -e`, `perl -ni -e` and `sed -ni` all rewrite the named file and all walked straight past
+# it, and so did `sed --in-place`, which was never mentioned in the finding. Bundled is the ordinary
+# form; `-i` alone is the spelling the guard could already see.
+#
+# THE SCAN HAS TO STOP SOMEWHERE, and that is the whole difficulty. In a cluster, the letters after a
+# value-taking flag are that flag's ARGUMENT, not more flags — so `perl -Ilib` and `perl -Mi::Foo`
+# contain an `i` that is part of a directory and a module name. Reading those as in-place would deny
+# ordinary read-only work, which is the failure this branch exists to end.
+#
+# The sets are PER-COMMAND because the same letter is a different flag in each: `-f` names a script
+# file in sed and takes nothing in perl, so `perl -fi -e …` is an edit and a shared set would read its
+# `i` as a filename. `-l` sets line length in sed and is an optional octal in perl.
+#
+# TWO CLASSES, and the second one is not decoration — the first draft of this function had only the
+# first and let `perl -lpi -e` through, which is an ordinary one-liner and rewrites the file. A flag
+# whose value is OPTIONAL DIGITS only swallows what actually follows it: in `-lpi` nothing digit-like
+# follows `l`, so `p` and `i` are still flags, while in `-0777` the digits are the value.
+#
+# Case matters. `-I` is an include directory in perl and `-i` is the edit; they are different flags.
+IN_PLACE_LONG = ("--in-place",)
+VALUE_CLUSTER_FLAGS = {"sed": "efl", "perl": "eEFImMDx"}
+DIGIT_VALUE_CLUSTER_FLAGS = {"sed": "", "perl": "0lC"}
+
+
+def is_in_place_edit(command, args):
+    """Does any argument carry the in-place flag, in ANY spelling this command accepts?"""
+    value_flags = VALUE_CLUSTER_FLAGS.get(command, "")
+    digit_flags = DIGIT_VALUE_CLUSTER_FLAGS.get(command, "")
+
+    for a in args:
+        if a in IN_PLACE_LONG or any(a.startswith(long + "=") for long in IN_PLACE_LONG):
+            return True
+
+        # `--foo` is a long option and never a cluster; a bare `-` and a non-flag word are neither.
+        if not a.startswith("-") or a.startswith("--") or a == "-":
+            continue
+
+        cluster = a[1:]
+        index = 0
+        while index < len(cluster):
+            ch = cluster[index]
+
+            if ch == "i":
+                return True
+
+            # The rest of the cluster belongs to this flag, so nothing after it is a flag at all.
+            if ch in value_flags:
+                break
+
+            if ch in digit_flags:
+                index += 1
+                while index < len(cluster) and cluster[index].isdigit():
+                    index += 1
+                continue
+
+            index += 1
+
+    return False
+
 PREFIXES = {"sudo", "command", "env", "nohup", "time", "builtin", "exec"}
 
 # Flags that swallow the NEXT word, per prefix. The list is BOUNDED and that is a decision, not an
@@ -500,7 +561,7 @@ def classify_words(words, depth, assignments):
     if command in FILE_VERBS:
         return "files"
 
-    if command in ("sed", "perl") and any(a == "-i" or a.startswith("-i") for a in args):
+    if command in ("sed", "perl") and is_in_place_edit(command, args):
         return "editor"
 
     if command == "git":

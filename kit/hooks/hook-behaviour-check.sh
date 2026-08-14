@@ -502,6 +502,38 @@ check "rev-9 ROW E control: the bracketed spelling" ALLOW "$(verdict "$(run_hook
 check "rev-9 ROW B: the C# line as a grep pattern" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "for (var index = entries.Count - 1; index >= 0; index--)" src/')" reviewer)")"
 check "rev-9 ROW B: perl -i is denied as an EDIT" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -0777 -i -pe 's/old/for (var index = entries.Count - 1; index >= 0; index--)/' Foo.cs")" reviewer)")"
 
+# rev-9 F1: THE IN-PLACE FLAG IS A LETTER IN A CLUSTER, AND THE RULE KNEW ONE SPELLING.
+#
+# The predicate asked whether an argument STARTED WITH `-i`. That is true of `-i` and `-i.bak` and of
+# nothing else anyone types. rev-9 watched the first three of these rewrite the file they name and be
+# allowed; the next three are the same defect in `sed`, which the finding never mentioned.
+#
+# The DENY cases assert the REASON, not just the verdict. `editor` is the answer that means the guard
+# understood WHY — a denial arriving as `redirect` or `files` would be the right verdict reached by
+# accident, and this file has already caught that once on rev-9's ROW B.
+check "rev-9 F1: perl -pi bundled" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -pi -e 's/a/b/' Foo.cs")" reviewer)")"
+check "rev-9 F1: perl -0777 -pi" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -0777 -pi -e 's/a/b/' Foo.cs")" reviewer)")"
+check "rev-9 F1: perl -ni bundled" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -ni -e 's/a/b/' Foo.cs")" reviewer)")"
+check "F1: sed bundles it too" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sed -ni 's/a/b/p' Foo.cs")" reviewer)")"
+check "F1: sed --in-place, the long form" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sed --in-place 's/a/b/' Foo.cs")" reviewer)")"
+check "F1: sed --in-place with a suffix" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sed --in-place=.bak 's/a/b/' Foo.cs")" reviewer)")"
+
+# `-l` IS AN OPTIONAL OCTAL, SO IT ONLY SWALLOWS DIGITS. The first draft of the fix stopped the scan
+# at every value-taking letter and let this through — an ordinary perl one-liner that rewrites the
+# file. It is here because the fix got it wrong first, which is the only reason a case is worth its
+# line: nothing digit-like follows `l`, so `p` and `i` are still flags.
+check "F1: perl -lpi, optional-digit flag" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -lpi -e 's/a/b/' Foo.cs")" reviewer)")"
+
+# THE CONTROLS. Every one of these contains the letter `i` in a flag cluster or an argument and none
+# of them edits anything. Without them the fix could be "deny sed and perl outright", which would pass
+# all seven cases above and take the reviewer's own reading tools away — the exact trade this branch
+# exists to refuse. `-I` is an include directory and `-M` a module name; case matters, and so does
+# knowing where a flag's argument begins.
+check "F1 control: perl -pe writes nothing" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -pe 's/a/b/' Foo.cs")" reviewer)")"
+check "F1 control: sed -n prints only" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sed -n 's/a/b/p' Foo.cs")" reviewer)")"
+check "F1 control: perl -Ilib is a directory" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -Ilib -e 'print 1'")" reviewer)")"
+check "F1 control: perl -Mi::Foo is a module" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -Mi::Foo -e 'print 1'")" reviewer)")"
+
 # rev-10 F2: THE ONE WRITE THIS ROLE PERMITS, IN THE SPELLING A WINDOWS SESSION ACTUALLY TYPES.
 #
 # Inside double quotes the tokeniser ate every backslash, so `"C:\Users\…"` reduced to `C:Users…` —
