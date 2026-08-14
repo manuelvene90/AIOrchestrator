@@ -898,14 +898,62 @@ Monitor(
 sup="$HOME/.claude/supervision/$ARGUMENTS"
 shopt -s nullglob
 
-# Sets FP, or returns non-zero with FP_ERR naming the command that failed. md5sum takes the files
-# DIRECTLY — never `cat … | md5sum` — so that a failed read is visible; see below.
+# Sets FP, or returns non-zero with FP_ERR naming the command that failed. Each command is run per
+# file and its status checked — never `cat … | md5sum` — so that a failed read is visible; see below.
+#
+# ONE LINE PER CHANNEL, "<path>|<size> <hash>", and the SIZE is not decoration: the self-write record
+# below is expressed in sizes, so a fingerprint of hashes alone could not tell your own append from
+# anybody else's.
 read_fp() {
   FP=""; FP_ERR=""
-  local files out
+  local files file size hash out=""
   files=( "$sup"/imp-*/channel.md "$sup"/rev-*/channel.md "$sup/owner-channel.md" )
-  if ! out="$(md5sum "${files[@]}" 2>/dev/null)" || [ -z "$out" ]; then FP_ERR="md5sum"; return 1; fi
+  for file in "${files[@]}"; do
+    if ! size="$(wc -c < "$file" 2>/dev/null)" || [ -z "$size" ]; then FP_ERR="wc -c on $file"; return 1; fi
+    if ! hash="$(md5sum "$file" 2>/dev/null)"  || [ -z "$hash" ]; then FP_ERR="md5sum on $file"; return 1; fi
+    # Trimmed with parameter expansion, never a pipe into tr: a pipe would hand the `if !` above the
+    # exit status of tr, and a failed read would start reporting itself as a successful one.
+    size="${size// /}"
+    out="$out$file|$size ${hash%% *}"$'\n'
+  done
   FP="$out"
+}
+
+# Did anything OTHER THAN YOUR OWN APPENDS change? You write to every channel here, so on the busiest
+# watcher in the system most changes were your own — this monitor's own note records it firing
+# "upwards of a hundred times in a day" with the large majority finding nothing new, and each of
+# those is a full context reload.
+#
+# Per channel, because one spoke's traffic must never be excused by another's. A channel counts as
+# yours only when channel-append.sh's record for it says BOTH that the fingerprint is the one your
+# write left AND that your unbroken run of writes started at or before the size you last saw. The
+# second half is what stops an implementer's report being swallowed: if they append and then you
+# append, the file carries exactly your fingerprint, and a hash-only check would sleep through them.
+#
+# ANY doubt fires: a channel you have never seen, a missing record, a record that does not match.
+# Returns 0 (fire) as soon as one changed channel is not provably yours.
+foreign_change() {
+  local line file now before record start after
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    file="${line%%|*}"; now="${line#*|}"
+
+    before="$(printf '%s' "$prev" | grep -F -m1 "$file|")" || before=""
+    before="${before#*|}"
+
+    [ "$now" = "$before" ] && continue
+    [ -n "$before" ] || return 0
+
+    record="$file.self-write.supervisor"
+    [ -f "$record" ] || return 0
+    start="$(grep -m1 '^start=' "$record" 2>/dev/null | cut -d= -f2- | tr -d ' ')"
+    after="$(grep -m1 '^after=' "$record" 2>/dev/null | cut -d= -f2-)"
+    [ -n "$start" ] && [ -n "$after" ] || return 0
+    [ "$after" = "$now" ] || return 0
+    [ "$start" -le "${before%% *}" ] 2>/dev/null || return 0
+  done <<< "$FP"
+
+  return 1
 }
 
 # The watcher drops a FACT; the APP writes the record. Never write the log file from here.
@@ -931,7 +979,7 @@ while true; do
   fi
   if read_fp; then
     fails=0
-    if [ -n "$prev" ] && [ "$FP" != "$prev" ]; then
+    if [ -n "$prev" ] && [ "$FP" != "$prev" ] && foreign_change; then
       echo "CHANNELS CHANGED on $ARGUMENTS — read every channel from your last entry down, act on it, append your entries."
     fi
     prev="$FP"
@@ -951,6 +999,17 @@ read that could not run fired anyway. **One failed read produced exactly two pha
 going into the failure and one coming out. Measured on 2026-08-14: this monitor fired on changed
 channels upwards of a hundred times in a day and the large majority found nothing new, while an
 implementer's channel that had not been touched for 27 minutes woke it four times.
+
+**YOUR OWN APPEND IS NOT TRAFFIC, and on this watcher that is most of it.** You write to every
+channel you watch, so the majority of the changes you woke for were your own briefs — and a wake is
+a full context reload. `channel-append.sh` records, from inside the lock, the size a channel had when
+your unbroken run of writes to it started and the fingerprint your write left; `foreign_change` fires
+unless EVERY changed channel is provably yours. **Per channel, never per tick:** if imp-1 reports
+while you are briefing imp-2, judging the tick as a whole would call the whole change yours and lose
+the report. Any doubt fires — a channel you have never seen, a missing record, a record that does not
+match. The cost of the per-file fingerprint is two commands per channel instead of one `md5sum` for
+all of them; that is the price of being able to tell whose write it was, and a failed read is still
+handled exactly as below.
 
 **Your shape was the worse of the two, and this is why `cat` is gone.** `cat … | md5sum` hashes
 whatever reached the pipe, so a `cat` that fails entirely hashes EMPTY INPUT and yields
