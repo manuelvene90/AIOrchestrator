@@ -60,6 +60,10 @@ public partial class MainWindow : Window
 
         ActivityLogListBox.ItemsSource = _logRows;
         RootPathText.Text = paths.Root;
+
+        // Read once, at construction: the running binary cannot change under a running process, and
+        // a stamp that refreshed would invite the reading "it says 22:43, so 22:43 is what I built".
+        BuildStampText.Text = AIOrchestratorCoreLib.Build.BuildStamp_Reader.Describe_RunningApp();
         TelegramStatusText.Text = configProvider.Get_Current().Is_TelegramConfigured()
             ? "Telegram: mirror + remote input active"
             : "Telegram: not configured (file-only mode) — set it up in ⚙ Settings, then restart";

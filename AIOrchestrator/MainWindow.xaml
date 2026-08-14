@@ -190,6 +190,9 @@
                           Foreground="{StaticResource TextSecondary}" Margin="14,0,0,0" VerticalAlignment="Center"
                           ToolTip="Translation layer: everything the bot sends you is translated to Italian on the way out. The sessions themselves keep working in English. (= /italian)"
                           Checked="ItalianLayerCheckBox_Changed" Unchecked="ItalianLayerCheckBox_Changed"/>
+                <TextBlock x:Name="BuildStampText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}"
+                           Margin="18,0,0,0" VerticalAlignment="Center"
+                           ToolTip="Which binary is actually running, and when it was built. The folder name is the half that exposes a stale copy."/>
                 <TextBlock x:Name="RootPathText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>
