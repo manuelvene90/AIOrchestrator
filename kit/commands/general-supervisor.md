@@ -277,7 +277,26 @@ read_fp() {
   local size hash
   if ! size="$(wc -c < "$gc" 2>/dev/null)" || [ -z "$size" ]; then FP_ERR="wc -c"; return 1; fi
   if ! hash="$(md5sum "$gc" 2>/dev/null)"  || [ -z "$hash" ]; then FP_ERR="md5sum"; return 1; fi
+  # Trimmed with parameter expansion, never a pipe into tr: a pipe would hand the `if !` above the
+  # exit status of tr, and a failed read would start reporting itself as a successful one.
+  size="${size// /}"
   FP="$size ${hash%% *}"
+}
+
+# Was this change nothing but OUR OWN append? channel-append.sh records, inside the lock, the size
+# the channel had when our current unbroken run of writes started and the fingerprint it left
+# behind. BOTH must match: the fingerprint alone would swallow an owner message that landed just
+# before our own entry, because the file would still carry exactly the fingerprint our write left.
+# Anything foreign in between moves `start` past the last size we saw, and we fire.
+self_write_suppresses() {
+  local record start after
+  record="$gc.self-write.supervisor"
+  [ -f "$record" ] || return 1
+  start="$(grep -m1 '^start=' "$record" 2>/dev/null | cut -d= -f2- | tr -d ' ')"
+  after="$(grep -m1 '^after=' "$record" 2>/dev/null | cut -d= -f2-)"
+  [ -n "$start" ] && [ -n "$after" ] || return 1
+  [ "$after" = "$FP" ] || return 1
+  [ "$start" -le "${prev%% *}" ] 2>/dev/null
 }
 
 # The watcher drops a FACT; the APP writes the record. Never write the log file from here.
@@ -296,7 +315,7 @@ while true; do
   sleep 5
   if read_fp; then
     fails=0
-    if [ -n "$prev" ] && [ "$FP" != "$prev" ]; then
+    if [ -n "$prev" ] && [ "$FP" != "$prev" ] && ! self_write_suppresses; then
       echo "GENERAL CHANNEL CHANGED — read from your last entry down, act, reply."
     fi
     prev="$FP"
@@ -317,6 +336,16 @@ failed. `read_fp` now keeps `prev` untouched when it cannot read, so an append t
 failed spell still fires on the next successful read; and after twelve consecutive failures it says
 plainly that it is blind rather than going quiet on you. The owner's traffic is what is at stake
 here, so the silent half matters more than the noisy one.
+
+**YOUR OWN APPEND IS NOT TRAFFIC.** A fingerprint cannot tell whose write changed the file, so every
+entry you wrote used to wake you — and a wake is a full context reload, spent to learn that you had
+written something you already knew you had written. `channel-append.sh` now records, from inside the
+lock, the size the channel had when your current unbroken run of writes started and the fingerprint
+it left; the watcher fires unless BOTH say the change was yours alone. The two-fact rule is the
+load-bearing part: if the owner writes and you append a minute later, the file still carries exactly
+the fingerprint your write left, and suppressing on the fingerprint alone would sleep through them.
+**Never weaken this to the fingerprint on its own** — the saving is small and what it costs is the
+owner's message.
 
 **Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
 2026-08-07 twenty-nine background watchers were killed across four sessions of one orchestration,

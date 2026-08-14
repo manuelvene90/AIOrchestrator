@@ -169,6 +169,51 @@ break_if_stale() {
   fi
 }
 
+# A SESSION WOKEN BY ITS OWN APPEND RELOADS ITS WHOLE CONTEXT TO LEARN NOTHING, and that was about
+# half of every wake on the owner's machine: the watchers fingerprint the channel file, and a
+# fingerprint cannot tell whose write changed it. So the writer says so, from inside the lock, where
+# the answer is not a guess.
+#
+# TWO FACTS, because the fingerprint alone would swallow an owner's message. If they wrote at 23:14
+# and we appended our own entry at 23:15, the file's fingerprint is still exactly the one our write
+# left behind — and a watcher suppressing on that alone would sleep through them. So the record also
+# carries the size the channel had when our unbroken run of writes STARTED. A watcher suppresses only
+# when the fingerprint matches AND that start is at or before the last size it saw for itself:
+# anything foreign in between moves the start past it, and it fires.
+#
+# The run is EXTENDED rather than restarted while our writes stay consecutive (the previous record's
+# size is still the file's size when we take it again), so a session appending twice in one turn is
+# not woken by its own second entry. The moment anything else appends, the next write starts a new
+# run after it.
+#
+# Per AUTHOR, never one file per channel: a supervisor and an implementer both watch the implementer's
+# channel, and a shared record would let the supervisor's append suppress the IMPLEMENTER's wake —
+# turning a token saving into a missed brief.
+record_self_write() {
+  local safe_author previous_after previous_after_size start_size after_size after_hash
+
+  safe_author="$(printf '%s' "$AUTHOR" | tr -c 'A-Za-z0-9_-' '_')"
+  SELF_WRITE_FILE="${CHANNEL}.self-write.${safe_author}"
+
+  after_size="$(wc -c < "$CHANNEL" 2>/dev/null | tr -d ' ')" || return 0
+  after_hash="$(md5sum "$CHANNEL" 2>/dev/null)" || return 0
+  [ -n "$after_size" ] && [ -n "$after_hash" ] || return 0
+
+  previous_after="$(grep -m1 '^after=' "$SELF_WRITE_FILE" 2>/dev/null | cut -d= -f2-)"
+  previous_after_size="${previous_after%% *}"
+
+  if [ -n "$previous_after_size" ] && [ "$previous_after_size" = "$BEFORE_SIZE" ]; then
+    start_size="$(grep -m1 '^start=' "$SELF_WRITE_FILE" 2>/dev/null | cut -d= -f2-)"
+  fi
+
+  [ -n "${start_size:-}" ] || start_size="$BEFORE_SIZE"
+
+  # Best effort throughout: a missing record costs one needless wake, which is the behaviour this
+  # replaces. Never a reason to fail an append that already landed.
+  printf 'start=%s\nafter=%s %s\n' "$start_size" "$after_size" "${after_hash%% *}" \
+    > "$SELF_WRITE_FILE" 2>/dev/null || true
+}
+
 acquire_lock() {
   local waited_ms=0 budget_ms delay_ms="$RETRY_INITIAL_MS"
   budget_ms=$(awk "BEGIN{printf \"%d\", $BUDGET_SECONDS * 1000}")
@@ -238,6 +283,10 @@ NEXT_INDEX=$((LAST_INDEX + 1))
 # blanks the app's time-on-task display, and one was observed 10 hours ahead of the entry it sat on.
 STAMP="$(date +'%Y-%m-%d %H:%M')"
 
+# The size BEFORE our append, read inside the lock. Half of the self-write record below; see it for
+# why the fingerprint alone is not enough.
+BEFORE_SIZE="$(wc -c < "$CHANNEL" 2>/dev/null | tr -d ' ')"
+
 STAGED_ENTRY="$(mktemp)" || { echo "channel-append.sh: cannot create a temp file" >&2; exit 4; }
 
 # The leading newline is the whole requirement, and it is not cosmetic: the parser matches its header
@@ -260,6 +309,8 @@ if ! cat "$STAGED_ENTRY" >> "$CHANNEL"; then
 fi
 
 rm -f "$STAGED_ENTRY"
+
+record_self_write
 # ---- end critical section ---------------------------------------------------------------------
 
 release_lock

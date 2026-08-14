@@ -287,7 +287,29 @@ read_fp() {
   local size hash
   if ! size="$(wc -c < "$ch" 2>/dev/null)" || [ -z "$size" ]; then FP_ERR="wc -c"; return 1; fi
   if ! hash="$(md5sum "$ch" 2>/dev/null)"  || [ -z "$hash" ]; then FP_ERR="md5sum"; return 1; fi
+  # Trimmed with parameter expansion, never a pipe into tr: a pipe would hand the `if !` above the
+  # exit status of tr, and a failed read would start reporting itself as a successful one.
+  size="${size// /}"
   FP="$size ${hash%% *}"
+}
+
+# Was this change nothing but OUR OWN append? channel-append.sh records, inside the lock, the size
+# the channel had when our current unbroken run of writes started and the fingerprint it left
+# behind. BOTH must match: the fingerprint alone would swallow a brief that landed just before our
+# own entry, because the file would still carry exactly the fingerprint our write left. Anything
+# foreign in between moves `start` past the last size we saw, and we fire.
+#
+# The record is per AUTHOR — the supervisor writes to this same channel, and its append must still
+# wake you.
+self_write_suppresses() {
+  local record start after
+  record="$ch.self-write.reviewer"
+  [ -f "$record" ] || return 1
+  start="$(grep -m1 '^start=' "$record" 2>/dev/null | cut -d= -f2- | tr -d ' ')"
+  after="$(grep -m1 '^after=' "$record" 2>/dev/null | cut -d= -f2-)"
+  [ -n "$start" ] && [ -n "$after" ] || return 1
+  [ "$after" = "$FP" ] || return 1
+  [ "$start" -le "${prev%% *}" ] 2>/dev/null
 }
 
 # The watcher drops a FACT; the APP writes the record. Never write the log file from here.
@@ -306,7 +328,7 @@ while true; do
   sleep 5
   if read_fp; then
     fails=0
-    if [ -n "$prev" ] && [ "$FP" != "$prev" ]; then
+    if [ -n "$prev" ] && [ "$FP" != "$prev" ] && ! self_write_suppresses; then
       echo "YOUR CHANNEL CHANGED — read from your last entry down, act on it, append your report."
     fi
     prev="$FP"
@@ -327,6 +349,15 @@ failed read produced exactly two phantom wakes** — one going into the failure,
 nothing anywhere recorded that a read had failed. Measured on 2026-08-14: a channel untouched for 27
 minutes woke its member four times. It is worst on a machine that is out of memory, which is exactly
 when forks fail and when real traffic matters most.
+
+**YOUR OWN APPEND IS NOT TRAFFIC.** A fingerprint cannot tell whose write changed the file, so every
+report you wrote used to wake you — and a wake is a full context reload, spent to learn that you had
+written something you already knew you had written. `channel-append.sh` now records, from inside the
+lock, the size the channel had when your current unbroken run of writes started and the fingerprint
+it left; the watcher fires unless BOTH say the change was yours alone. The two-fact rule is the
+load-bearing part: if the supervisor writes and you append a minute later, the file still carries
+exactly the fingerprint your write left, and suppressing on the fingerprint alone would sleep through
+them. **Never weaken this to the fingerprint on its own.**
 
 So `read_fp` checks each command and **keeps `prev` untouched when it cannot read**. Nothing is lost
 by waiting: if an append lands during a failed spell, the next successful read still differs from the
