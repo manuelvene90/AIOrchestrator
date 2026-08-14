@@ -295,6 +295,15 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, DateTime> _ledgerDebtSinceUtc = [];
     readonly HashSet<string> _ledgerBehindReportedOrchIds = [];
     readonly Dictionary<string, string> _reportedLedgerShapeByOrchId = [];
+
+    /// <summary>
+    /// Since when NOTHING in this orchestration has been mid-turn — the clock behind the stale
+    /// `- [>]` check. Removed the moment anything speaks, so it measures QUIET rather than age.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _quietSinceUtc = [];
+
+    /// <summary>Which stale-in-progress SET was last reported, so a fix to one line still leaves the rest heard.</summary>
+    readonly Dictionary<string, string> _reportedStaleInProgress = [];
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS, OWNER_HOLD_CAP_SECONDS);
@@ -2122,6 +2131,7 @@ internal sealed class BridgeEngineModel(
             }
 
             Report_LedgerShape(session);
+            Report_StaleInProgress(session, presence);
         }
     }
 
@@ -2197,6 +2207,72 @@ internal sealed class BridgeEngineModel(
 
         _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
         _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
+    }
+
+    /// <summary>
+    /// A `- [>]` line while NOTHING has been mid-turn for ten minutes is a false claim, and this is
+    /// the guarantee the owner asked for after a session broke the rule it had just written down
+    /// (2026-08-14): *"it absolutely must be guaranteed that it won't be messed up in the future by
+    /// other sessions either."*
+    ///
+    /// It ARMS THE LEDGER DEBT rather than only complaining, because a complaint is what the written
+    /// rule already was. The turn-end hook then blocks until PLAN.md is touched, and every honest
+    /// answer — `[x]` finished, `[!]` waiting on something named, `[-]` dropped, or genuinely still
+    /// `[>]` and back at work — is one edit that clears it.
+    ///
+    /// <see cref="StaleInProgress_Detector"/> holds the reasoning, including why this does not look
+    /// for the word "merge" anywhere.
+    /// </summary>
+    void Report_StaleInProgress(IOrchestrationSession session, Telegram.OwnerPresenceModes presence)
+    {
+        // The quiet clock is per orchestration and starts the first tick that finds it quiet WITH an
+        // unworked claim on the board. Restarting it whenever a session speaks is what makes this a
+        // measure of quiet rather than of elapsed time.
+        var working = Is_AnySessionWorking(session);
+
+        if (working)
+        {
+            _quietSinceUtc.Remove(session.OrchId);
+            _reportedStaleInProgress.Remove(session.OrchId);
+            return;
+        }
+
+        if (!_quietSinceUtc.TryGetValue(session.OrchId, out var quietSince))
+        {
+            _quietSinceUtc[session.OrchId] = DateTime.UtcNow;
+            return;
+        }
+
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(
+            UsageTotals_Reader.Read_Text_Safe(_paths.Get_PlanFile(session.OrchId)));
+
+        var unworked = Planning.StaleInProgress_Detector.Find_UnworkedInProgressLines(
+            progress, anySessionWorking: false, quietFor: DateTime.UtcNow - quietSince);
+
+        if (unworked.Count == 0)
+            return;
+
+        // CONTENT-ADDRESSED, like the shape complaint: it re-fires when the offending SET changes,
+        // so a session that fixes one line and leaves another still hears about the one it left.
+        var signature = string.Join("\n", unworked);
+
+        if (_reportedStaleInProgress.TryGetValue(session.OrchId, out var reported) && reported == signature)
+            return;
+
+        if (!Append_SupervisorAttention_UnlessMeeting(
+                session.OrchId,
+                "PLAN.md claims work that nobody is doing",
+                Planning.StaleInProgress_Detector.Describe(unworked),
+                presence))
+            return;
+
+        _reportedStaleInProgress[session.OrchId] = signature;
+
+        // The debt AFTER the telling lands, so a session is never blocked by a demand it was never
+        // sent — the deadlock this file has already paid for once.
+        _ledgerDebtSinceUtc[session.OrchId] = DateTime.UtcNow;
+
+        _log.Log_Warning(session.OrchId, $"PLAN.md claims {unworked.Count} line(s) in progress while nothing is running — flagged for the turn-end hook");
     }
 
     /// <summary>Runaway guard: a per-orchestration token ceiling the owner sets in config.json.</summary>
