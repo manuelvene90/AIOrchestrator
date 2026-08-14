@@ -26,8 +26,40 @@ public interface IChannelTailer
     /// </summary>
     void Confirm_Append(string channelFilePath);
 
-    /// <summary>Whether this file still owes a delivery — the bridge must not rewrite it meanwhile.</summary>
-    bool Has_UnconfirmedEntries(string channelFilePath);
+    /// <summary>
+    /// Whether this file owes a delivery AS FAR AS THIS TAILER CAN ESTABLISH, from the three places
+    /// one can be owed from: entries emitted but not yet acknowledged, bytes read but not yet
+    /// emitted (only these survive a poll's rewind), and bytes on disk PAST THE CURSOR that no poll
+    /// has read yet. The bridge must not rewrite such a file meanwhile.
+    /// <para>
+    /// It is a POINT-IN-TIME answer and not a lock, which is the honest limit of it: an entry
+    /// appended after this returns — while the caller is still deciding, or while the compactor is
+    /// reading the file — is outside what it was asked. Closing that needs the write held off for
+    /// the whole decision, which nothing here does.
+    /// </para>
+    /// <para>
+    /// The third is the one that is easy to forget: the mirror tick appends entries after its own
+    /// poll, so a channel can owe a delivery that exists nowhere in this object's memory. It
+    /// therefore stats the file rather than trusting its buffers.
+    /// </para>
+    /// <para>
+    /// When it CANNOT tell — the file cannot be stat'ed, or has vanished under the cursor — it
+    /// returns true and sets <paramref name="unevaluableReason"/> to the predicate that failed. The
+    /// caller must log that line and hold off rather than let a rewrite proceed on an unasked
+    /// question. A null reason means the answer was actually computed.
+    /// </para>
+    /// </summary>
+    bool Has_UndeliveredEntries(string channelFilePath, out string? unevaluableReason);
+
+    /// <summary>
+    /// Whether this file was among the channels handed to the LAST <see cref="Poll"/>. A file the
+    /// poll skipped has a frozen cursor — a deferred topic, an owner channel held mid-composition —
+    /// and everything it produced is owed to the owner as a catch-up burst, so compaction asks this
+    /// before rewriting anything. It reports whether the file was POLLED, which is not the same as
+    /// whether its cursor is current — a polled file can still have grown since, which is
+    /// <see cref="Has_UndeliveredEntries"/>'s third clause and not this one's business.
+    /// </summary>
+    bool Was_PolledInLastPoll(string channelFilePath);
 
     /// <summary>
     /// Current offsets snapshot, persisted by the bridge so restarts do not re-mirror. Unconfirmed
@@ -37,8 +69,14 @@ public interface IChannelTailer
 
     /// <summary>
     /// Re-anchors a file's offset after the bridge itself rewrote it (channel compaction). Without
-    /// this the shrink would look like the append-only protocol breaking and the whole remaining
-    /// file would be re-mirrored to Telegram.
+    /// it the next poll sees a file shorter than its cursor and reads that as the append-only
+    /// protocol breaking: it reports a truncation anomaly, resets the cursor and discards what was
+    /// pending. It does NOT re-mirror the file — the truncation branch emits nothing — and this
+    /// sentence said it did until rev-4 checked it against the branch on 2026-08-13.
+    /// <para>
+    /// It also DISCARDS the pending and unconfirmed bytes, deliberately: they were read out of the
+    /// pre-rewrite file and describe offsets that mean something else now.
+    /// </para>
     /// </summary>
     void Set_Offset(string channelFilePath, long offset);
 }

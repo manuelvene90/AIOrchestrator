@@ -9,8 +9,21 @@ public enum TopicStatusActions
     /// <summary>No message exists in this topic yet.</summary>
     Post,
 
-    /// <summary>A message exists: change it in place, so it never notifies and never scrolls away.</summary>
+    /// <summary>A message exists and is still where the owner is looking: change it in place, silently.</summary>
     Edit,
+
+    /// <summary>
+    /// The message exists but later traffic has buried it and the topic has gone quiet: DELETE it and
+    /// post it again at the bottom. Telegram cannot MOVE a message, so this is the only way to put it
+    /// back where the owner is looking.
+    ///
+    /// Appended rather than slotted next to None: the values are compared, never persisted, but a
+    /// renumbering is a silent change to every stored or logged reading of them and buys nothing.
+    ///
+    /// It is the one status-line action that NOTIFIES, which is why it waits for two quiet minutes,
+    /// obeys the delivery gate the POST obeys, and is never chosen while the line is already last.
+    /// </summary>
+    Repost,
 }
 
 /// <summary>
@@ -43,11 +56,40 @@ public static class TopicStatusLine_Decider
     /// editable, so clearing the id would post a second line while the frozen one stayed up — two
     /// status lines in one topic, which is the defect this feature exists to prevent, through another
     /// door. That case falls to the backoff instead.
+    ///
+    /// "message to delete not found" is Telegram's wording for the same state on the REPOST path,
+    /// which deletes before it sends. Without it, an owner who deleted the status line by hand left a
+    /// topic reposting into a delete that can never succeed, once per backoff period forever — the
+    /// edit path that clears the id is never reached there, because the text of a quiet orchestration
+    /// never changes.
     /// </summary>
     public static bool Is_MessageGone(string errorMessage)
     {
         return errorMessage.Contains("message to edit not found", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("message to delete not found", StringComparison.OrdinalIgnoreCase)
             || errorMessage.Contains("MESSAGE_ID_INVALID", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The delete was REFUSED, not failed — the message is still there and always will be, so
+    /// retrying can only loop. Two triggers, and the second is the one that matters: Telegram will
+    /// not delete a message past its 48-HOUR window, which needs no missing permission at all and is
+    /// exactly the fate of a buried status line on a quiet orchestration; and the bot may lack
+    /// `can_delete_messages`, which persists until an admin changes it.
+    ///
+    /// DELIBERATELY NOT PART OF <see cref="Is_MessageGone"/>. The message EXISTS: clearing the id
+    /// would post a second line beside an undeletable one, which is the two-status-lines defect
+    /// through a third door — the identical unsoundness that keeps "message can't be edited" out of
+    /// that predicate. A refusal instead LATCHES the topic: it stops trying to move its line and
+    /// keeps editing in place, which is the behaviour that existed before the repost was added.
+    /// </summary>
+    public static bool Is_DeleteRefused(string errorMessage)
+    {
+        return errorMessage.Contains("message can't be deleted", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("message can not be deleted", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("message cannot be deleted", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("not enough rights", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("CHAT_ADMIN_REQUIRED", StringComparison.OrdinalIgnoreCase);
     }
 
     public static TopicStatusActions Decide(string statusText, string? lastWrittenText, long? existingMessageId)

@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Status;
 using Xunit;
 
@@ -79,5 +80,47 @@ public class NudgeWordingTests
         Assert.Contains("12 min", Nudge_Wording.Body_ForOpenWindow(42, "12 min"));
         Assert.Contains("[7]", Nudge_Wording.Body_ForUnansweredTraffic(7, "supervisor", "9 min"));
         Assert.Contains("9 min", Nudge_Wording.Body_ForUnansweredTraffic(7, "supervisor", "9 min"));
+    }
+
+    /// <summary>
+    /// AN UNKNOWN DURATION MUST NOT ARRIVE AS A NUMBER. `Measure_QuietFor` returns null when nothing in
+    /// a channel can be dated, and this text goes into the member's OWN entry and into the log — the
+    /// two surfaces this file exists because of. A sentinel duration would have decided correctly and
+    /// then told a member it had been quiet for 10,675,199 days.
+    ///
+    /// Asserted as the ABSENCE of digits rather than as the presence of a phrase: the wording may be
+    /// improved, and what must never come back is a figure standing in for an answer nobody has.
+    /// </summary>
+    [Fact]
+    public void AnUndateableChannelIsDescribedWithoutInventingANumber()
+    {
+        var text = Nudge_Wording.Describe_QuietFor(null);
+
+        Assert.NotEmpty(text);
+        Assert.False(text.Any(char.IsDigit), $"an unknown duration was rendered with digits in it: '{text}'");
+    }
+
+    /// <summary>
+    /// AND THE KNOWN CASE IS THE SHARED FORMATTER, NOT A SECOND COPY OF IT — item 12, which was paid
+    /// for once already when the UI grew its own duration formatter and rendered a future stamp as
+    /// "under a minute" for a member that had been working for hours.
+    ///
+    /// This compares against <see cref="SessionDuration_Formatter.Describe"/> at each boundary the
+    /// formatter switches units on, so a re-implementation that happens to agree on one value cannot
+    /// pass. It reddens the moment anybody formats here instead of delegating.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 30)]
+    [InlineData(0, 90)]
+    [InlineData(0, 3600)]
+    [InlineData(5, 0)]
+    [InlineData(200, 0)]
+    public void AKnownDurationIsRenderedByTheONEFormatter(int hours, int seconds)
+    {
+        var duration = TimeSpan.FromHours(hours) + TimeSpan.FromSeconds(seconds);
+
+        Assert.Equal(
+            SessionDuration_Formatter.Describe(duration),
+            Nudge_Wording.Describe_QuietFor(duration));
     }
 }

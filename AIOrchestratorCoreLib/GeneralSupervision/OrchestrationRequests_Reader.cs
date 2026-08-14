@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.CloseImplementerRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.CloseOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.MalformedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
+using AIOrchestratorCoreLib.GeneralSupervision.PromoteOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
@@ -22,7 +23,8 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 /// Supported actions (retries REUSE the same action string — never invent variants):
 ///   {"action":"start-orchestration","repo":"...","mode":"full|basic"}
 ///                                       (general supervisor; id auto-allocated. mode is optional
-///                                        and defaults to full — basic is one solo session)
+///                                        and defaults to BASIC — one solo session. A full crew is
+///                                        the expensive shape and must be asked for by name.)
 ///   {"action":"add-implementer","orchId":"..."}                       (orchestration supervisor)
 ///   {"action":"add-reviewer","orchId":"..."}                          (orchestration supervisor; read-only member)
 ///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor; also closes rev-n)
@@ -31,6 +33,10 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 ///                                        HELD until the owner confirms with a tap, whoever asked,
 ///                                        so 'requester' is what they are shown, not a gate. The
 ///                                        owner's own closes do not come through here at all.)
+///   {"action":"promote-orchestration","orchId":"...","reason":"..."}
+///                                       (a SOLO session, asking for its basic orchestration to
+///                                        become a full crew — HELD until the owner taps, and
+///                                        refused unless the solo has filed a HANDOVER entry)
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
 ///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
 ///   {"action":"set-model","orchId":"...","role":"supervisor|implementer","model":"..."}  (per-orchestration override)
@@ -41,6 +47,7 @@ public static class OrchestrationRequests_Reader
     public const string ADD_IMPLEMENTER_ACTION = "add-implementer";
     public const string ADD_REVIEWER_ACTION = "add-reviewer";
     public const string CLOSE_IMPLEMENTER_ACTION = "close-implementer";
+    public const string PROMOTE_ORCHESTRATION_ACTION = "promote-orchestration";
     public const string CLOSE_ORCHESTRATION_ACTION = "close-orchestration";
     public const string SET_TELEGRAM_MUTED_ACTION = "set-telegram-muted";
     public const string SET_ORCHESTRATION_NAME_ACTION = "set-orchestration-name";
@@ -52,10 +59,13 @@ public static class OrchestrationRequests_Reader
     /// </summary>
     public const string MISSING_REASON_MESSAGE = "missing 'reason' — every autonomous action must state WHY in one short line (it is relayed to the owner)";
 
-    /// <summary>A full crew: supervisor plus imp-1. The default when no mode is given.</summary>
+    /// <summary>
+    /// A full crew: supervisor plus imp-1. **Must be asked for by name** since 2026-08-13 — it is the
+    /// expensive shape, and the one the owner wants justified rather than defaulted into.
+    /// </summary>
     public const string FULL_MODE = "full";
 
-    /// <summary>One solo session, no supervisor — the shape the owner asks the concierge for.</summary>
+    /// <summary>One solo session, no supervisor. THE DEFAULT: what a start request buys unless it says otherwise.</summary>
     public const string BASIC_MODE = "basic";
 
     public const string MISSING_REQUESTER_MESSAGE = "missing 'requester' — closing an orchestration is irreversible, so the audit trail and the owner's confirmation must both be able to name WHO asked (e.g. \"supervisor of crm-2\")";
@@ -68,6 +78,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
         List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
         List<IMalformedRequest> malformedRequests = [];
 
@@ -76,7 +87,7 @@ public static class OrchestrationRequests_Reader
             foreach (var file in Directory.EnumerateFiles(paths.RequestsFolder, "*.json"))
             {
                 var rejectionReason = Try_ParseInto_OrReason(
-                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests);
+                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests);
 
                 if (rejectionReason != null)
                     malformedRequests.Add(MalformedRequest_Factory.Create(file, rejectionReason, Peek_OrchId_OrNull(file)));
@@ -84,7 +95,7 @@ public static class OrchestrationRequests_Reader
         }
 
         return PendingRequests_Factory.Create(
-            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, setModelRequests, malformedRequests);
+            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, malformedRequests);
     }
 
     /// <summary>
@@ -101,6 +112,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
         List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
@@ -111,6 +123,7 @@ public static class OrchestrationRequests_Reader
             closeOrchestrationRequests,
             setTelegramMutedRequests,
             setOrchestrationNameRequests,
+            promoteOrchestrationRequests,
             setModelRequests);
 
         if (rejection != null)
@@ -133,6 +146,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
         List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
@@ -143,12 +157,46 @@ public static class OrchestrationRequests_Reader
             closeOrchestrationRequests,
             setTelegramMutedRequests,
             setOrchestrationNameRequests,
+            promoteOrchestrationRequests,
             setModelRequests);
 
         if (rejection != null)
             return null;
 
         return closeImplementerRequests.Count == 1 ? closeImplementerRequests[0] : null;
+    }
+
+    /// <summary>
+    /// Re-reads ONE parked promote-orchestration request, through the SAME strict parse as everything
+    /// else — including the mandatory reason. A parked file can never be honoured on terms the scanner
+    /// would have refused, and the reason is what the owner is shown when they are asked to spend.
+    /// </summary>
+    public static IPromoteOrchestrationRequest? Read_PromoteOrchestrationRequest_OrNull(string filePath)
+    {
+        List<IStartOrchestrationRequest> startRequests = [];
+        List<IAddImplementerRequest> addImplementerRequests = [];
+        List<ICloseImplementerRequest> closeImplementerRequests = [];
+        List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
+        List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
+        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
+        List<ISetModelRequest> setModelRequests = [];
+
+        var rejection = Try_ParseInto_OrReason(
+            filePath,
+            startRequests,
+            addImplementerRequests,
+            closeImplementerRequests,
+            closeOrchestrationRequests,
+            setTelegramMutedRequests,
+            setOrchestrationNameRequests,
+            promoteOrchestrationRequests,
+            setModelRequests);
+
+        if (rejection != null)
+            return null;
+
+        return promoteOrchestrationRequests.Count == 1 ? promoteOrchestrationRequests[0] : null;
     }
 
     /// <summary>
@@ -176,6 +224,7 @@ public static class OrchestrationRequests_Reader
         List<ICloseOrchestrationRequest> closeOrchestrationRequests,
         List<ISetTelegramMutedRequest> setTelegramMutedRequests,
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests,
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests,
         List<ISetModelRequest> setModelRequests)
     {
         JsonObject root;
@@ -206,16 +255,23 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(repoQuery))
                         return "missing 'repo'";
 
-                    // Absent means FULL, so every request written before this field existed keeps
-                    // working. A value we do not recognise is REJECTED rather than defaulted: a
-                    // typo must never quietly hand the owner the expensive shape when they asked
-                    // for the cheap one.
+                    // ABSENT MEANS BASIC since the owner's directive of 2026-08-13, "as a cost-saving
+                    // measure". A crew is the expensive shape and now has to be asked for by name.
+                    //
+                    // The old default was FULL and its argument was migration — every request written
+                    // before this field existed kept working. That argument now points the other way:
+                    // a stale request buys ONE session instead of a crew, so the failure mode is
+                    // underspending, which the owner sees and corrects. The reverse was overspending
+                    // they only met on the bill.
+                    //
+                    // A value we do not recognise is still REJECTED rather than defaulted: a typo must
+                    // never decide the shape silently, and that is now true in both directions.
                     var mode = root["mode"]?.GetValue<string>()?.Trim().ToLowerInvariant();
 
                     if (mode != null && mode != FULL_MODE && mode != BASIC_MODE)
                         return $"mode must be '{FULL_MODE}' or '{BASIC_MODE}', got '{mode}'";
 
-                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, mode == BASIC_MODE, filePath));
+                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, mode != FULL_MODE, filePath));
                     return null;
                 }
                 case ADD_IMPLEMENTER_ACTION:
@@ -231,6 +287,24 @@ public static class OrchestrationRequests_Reader
                     var kind = action == ADD_REVIEWER_ACTION ? MemberKinds.Reviewer : MemberKinds.Implementer;
 
                     addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, kind, reason.Trim(), filePath));
+                    return null;
+                }
+                case PROMOTE_ORCHESTRATION_ACTION:
+                {
+                    if (string.IsNullOrWhiteSpace(orchId))
+                        return "missing 'orchId'";
+
+                    var reason = root["reason"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(reason))
+                        return MISSING_REASON_MESSAGE;
+
+                    // NOTHING ABOUT THE ORCHESTRATION IS CHECKED HERE, and that is deliberate. This
+                    // reader knows JSON; whether the orchestration is basic, and whether its solo has
+                    // filed the handover entry, are facts about the world that the executor reads and
+                    // refuses on WITH ITS OWN REASON. A parser that answers "unanalysable" to a
+                    // perfectly analysable line — because something it cannot see is not true yet —
+                    // wears the safe posture without having it.
+                    promoteOrchestrationRequests.Add(PromoteOrchestrationRequest_Factory.Create(orchId, reason.Trim(), filePath));
                     return null;
                 }
                 case CLOSE_IMPLEMENTER_ACTION:

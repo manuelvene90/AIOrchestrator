@@ -20,6 +20,9 @@
     <!-- The kit ships WITH the app so startup can self-install the role commands and the status
          line script (~/.claude) — running install.ps1 is no longer a prerequisite for them. -->
     <Content Include="..\kit\commands\*.md" Link="kit\commands\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The append helper ships INTO the commands folder, because that is where the role commands
+         tell every session to run it from. Ship it anywhere else and the instruction is a dead path. -->
+    <Content Include="..\kit\channel-append.sh" Link="kit\commands\channel-append.sh" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

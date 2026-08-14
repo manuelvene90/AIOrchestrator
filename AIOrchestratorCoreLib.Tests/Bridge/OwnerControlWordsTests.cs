@@ -67,7 +67,7 @@ public class OwnerDeliveryBufferHoldTests
         buffer.Add_Segment(KEY, "one", T0);
 
         Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(3)));
-        Assert.Equal("one", Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(4))).Value);
+        Assert.Equal("one", Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(4))).Value.Text);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class OwnerDeliveryBufferHoldTests
         buffer.Release(KEY);
 
         var delivered = Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(31)));
-        Assert.Equal("first thought\n\nthe rest of it", delivered.Value);
+        Assert.Equal("first thought\n\nthe rest of it", delivered.Value.Text);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class OwnerDeliveryBufferHoldTests
 
         // Immediately — no window wait; the owner already said they are done.
         var delivered = Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(3)));
-        Assert.Equal("first\n\nsecond", delivered.Value);
+        Assert.Equal("first\n\nsecond", delivered.Value.Text);
         Assert.False(buffer.Is_Holding(KEY));
     }
 
@@ -150,7 +150,7 @@ public class OwnerDeliveryBufferHoldTests
         buffer.Add_Segment(KEY, "stranded", T0.AddSeconds(5));
 
         Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(60)));
-        Assert.Equal("stranded", Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(66))).Value);
+        Assert.Equal("stranded", Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(66))).Value.Text);
     }
 
     /// <summary>The cap is on SILENCE: someone still typing has not forgotten anything.</summary>
@@ -187,7 +187,7 @@ public class OwnerDeliveryBufferHoldTests
 
         var ready = buffer.Take_ReadyDeliveries(T0.AddSeconds(6));
 
-        Assert.Equal("free", Assert.Single(ready).Value);
+        Assert.Equal("free", Assert.Single(ready).Value.Text);
         Assert.True(buffer.Is_Holding(KEY));
     }
 

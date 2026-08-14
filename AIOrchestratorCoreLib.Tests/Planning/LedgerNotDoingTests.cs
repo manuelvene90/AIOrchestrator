@@ -96,12 +96,14 @@ public class LedgerNotDoingTests
     }
 
     /// <summary>
-    /// THE OWNER'S COMPLAINT, in numbers from their own ledger: 53 running, 4 blocked, 36 open.
-    /// Naming all 53 is the wall they said they would not read; naming the 4 is the thing they can
-    /// act on. Detail is a function of COUNT, not of category.
+    /// The owner's own ledger, in numbers: 53 running, 2 blocked, 36 open — 91 lines, 91 printed.
+    ///
+    /// This docstring used to end "detail is a function of COUNT, not of category", which was the
+    /// rule that collapsed the 53 to a number and named the 2. See the comment in the body for what
+    /// replaced it and what survived of it.
     /// </summary>
     [Fact]
-    public void ALargeKindBecomesACountAndASmallOneKeepsItsNames()
+    public void ALedgerOfNinetyOneLinesPrintsNinetyOneLines()
     {
         List<string> lines = [];
 
@@ -114,73 +116,60 @@ public class LedgerNotDoingTests
         for (var index = 0; index < 36; index++)
             lines.Add($"- [ ] open {index}");
 
-        var remaining = PlanProgress_Formatter.Describe_Remaining(Parse([.. lines])!);
+        var ledger = PlanProgress_Formatter.Describe_Ledger(Parse([.. lines])!);
 
-        // The big kind is a number and names nothing.
-        Assert.Contains("in progress   53", remaining);
-        Assert.DoesNotContain("running 0", remaining);
+        // REVERSED BY THE OWNER, 2026-08-13. This case used to assert the opposite of every line
+        // below: the 53 collapsed to "in progress   53", the open ones showed three names and
+        // "+33 more", and the whole thing was three lines. That was the answer to "too detailed",
+        // and the owner has since ruled that hiding rows hides the ledger author's failure to group
+        // them: "I want to see all the rows, it must not be truncated."
+        //
+        // The complaint the old shape answered is still real and still theirs — a 91-line ledger IS
+        // unreadable on a phone. It is now answered by writing a 7-8 line ledger, upstream of here,
+        // which is the supervisor's job. This function's job is to not lie about what the ledger says.
+        Assert.Equal(91, ledger.Split('\n').Length);
 
-        // The small kind keeps every name, because each one is what they can act on.
-        Assert.Contains("125% scaling", remaining);
-        Assert.Contains("the second blocker", remaining);
-
-        // The open ones are a handful and then a count. The FOURTH must be absent: "+33 more" alone
-        // survives the cap being removed, because the hidden count is computed either way — it was
-        // asserted that way first and the mutation stayed green.
-        Assert.Contains("open 0", remaining);
-        Assert.Contains("open 2", remaining);
-        Assert.DoesNotContain("open 3", remaining);
-        Assert.Contains("+33 more", remaining);
-
-        // AND IT FITS A PHONE — the actual defect. Three kinds, three lines.
-        Assert.Equal(3, remaining.Split('\n').Length);
+        Assert.Contains("[>] running 0", ledger);
+        Assert.Contains("[>] running 52", ledger);
+        Assert.Contains("[!] migrate the state file — blocked on: your call about the 125% scaling", ledger);
+        Assert.Contains("[ ] open 35", ledger);
+        Assert.DoesNotContain("more", ledger);
     }
 
     /// <summary>
-    /// A DONE line is never printed — and this is STRUCTURAL rather than guarded, which is worth
-    /// stating plainly because it makes the test unfalsifiable by design.
+    /// A DONE line IS printed, since the owner's directive of 2026-08-13: "the done rows must not be
+    /// hidden."
     ///
-    /// PlanLedger_Parser never collects the TEXT of a done line: it counts them and discards the
-    /// words. So the formatter cannot print one however it is written, and no mutation of the
-    /// formatter can make this fail. That is the strongest form of the rule — impossible rather than
-    /// checked — but a reader deserves to know the test is a statement of the shape and not a guard,
-    /// or they will trust it to catch something it never could.
+    /// This test used to assert the exact opposite, and its docstring explained that the rule was
+    /// STRUCTURAL — the parser discarded the words of a done line, so the formatter could not have
+    /// printed one however it was written. That stopped being true when /tasks needed the full ledger
+    /// and `DoneTasks` was collected; the guarantee had already quietly become a choice by the time
+    /// the owner reversed it. Worth recording, because a rule described as impossible is one nobody
+    /// re-checks.
     /// </summary>
     [Fact]
-    public void NoDoneLineIsEverPrinted()
+    public void EveryStateIsPrinted_DoneIncluded()
     {
-        var remaining = PlanProgress_Formatter.Describe_Remaining(Parse(
-            "- [x] the finished thing nobody asked about",
+        var ledger = PlanProgress_Formatter.Describe_Ledger(Parse(
+            "- [x] the finished thing",
             "- [>] the running one",
-            "- [ ] the open one")!);
+            "- [ ] the open one",
+            "- [-] the dropped one")!);
 
-        Assert.DoesNotContain("the finished thing", remaining);
-        Assert.Contains("the running one", remaining);
+        Assert.Equal(
+            "[x] the finished thing\n[>] the running one\n[ ] the open one\n[-] the dropped one",
+            ledger);
     }
 
     /// <summary>
-    /// A kind exactly at the cap still keeps its names — the boundary is asserted rather than
-    /// assumed, because "more than a handful" is the whole rule.
+    /// A ledger whose every line is done or dropped now PRINTS those lines instead of saying there is
+    /// nothing left — they are what there is to see, and the count line above already says 100%.
+    /// The "nothing left" wording only ever fitted a renderer that showed unfinished work alone.
     /// </summary>
     [Fact]
-    public void TheDetailCapIsInclusive()
+    public void AFinishedLedgerStillShowsItsRows()
     {
-        List<string> atCap = [];
-
-        for (var index = 0; index < PlanProgress_Formatter.DETAIL_CAP; index++)
-            atCap.Add($"- [>] running {index}");
-
-        Assert.Contains("running 0", PlanProgress_Formatter.Describe_Remaining(Parse([.. atCap])!));
-
-        atCap.Add("- [>] one too many");
-
-        Assert.DoesNotContain("running 0", PlanProgress_Formatter.Describe_Remaining(Parse([.. atCap])!));
-    }
-
-    [Fact]
-    public void NothingLeft_SaysSo()
-    {
-        Assert.Equal("nothing left — every line is done or dropped", PlanProgress_Formatter.Describe_Remaining(Parse("- [x] a", "- [-] b")!));
+        Assert.Equal("[x] a\n[-] b", PlanProgress_Formatter.Describe_Ledger(Parse("- [x] a", "- [-] b")!));
     }
 
     /// <summary>The close names what it is ending mid-flight — it does not veto it.</summary>

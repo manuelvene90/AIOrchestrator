@@ -39,9 +39,17 @@ public interface IPlanProgress
     IReadOnlyList<string> OpenTasks { get; }
 
     /// <summary>
-    /// Delivered, in ledger order. Collected only because /tasks renders the full ledger — the
-    /// short /progress must never print one, and until this existed that was guaranteed by the
-    /// parser discarding the words rather than by anything choosing not to show them.
+    /// Delivered, in ledger order. Collected only because /tasks renders the full ledger.
     /// </summary>
     IReadOnlyList<string> DoneTasks { get; }
+
+    /// <summary>
+    /// EVERY task line, in the order the file wrote them, each carrying its own marker — the ledger
+    /// as the supervisor typed it rather than as five buckets.
+    ///
+    /// The buckets above answer "how many, of which kind"; this answers "what does the ledger say",
+    /// which is a different question and the one /progress asks since 2026-08-13. Grouping by kind on
+    /// the way out reorders somebody's document, and the owner asked to see their rows.
+    /// </summary>
+    IReadOnlyList<PlanLedgerLine> Lines { get; }
 }

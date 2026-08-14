@@ -59,12 +59,50 @@ public static partial class ChannelEntry_Parser
         if (entries.Count == 0)
             return 1;
 
-        return entries[entries.Count - 1].Index + 1;
+        // The HIGHEST index used, not the last one written. Entries are appended by several
+        // writers and a file that has already suffered a collision is not sorted — numbering from
+        // the tail then hands out an index that exists further up, turning one duplicate into a
+        // run of them.
+        return entries.Max(entry => entry.Index) + 1;
     }
 
     public static bool Is_HeaderLine(string line)
     {
         return Header_Regex().IsMatch(line.TrimEnd('\r'));
+    }
+
+    /// <summary>
+    /// Every header line with WHERE it is and what index it claims — for callers that need to reason
+    /// about the header lines themselves rather than about the entries they open.
+    ///
+    /// It exists so that <see cref="ChannelIndexSequence_Screen"/> does not carry a second copy of
+    /// <c>Header_Regex</c>. A duplicated header pattern is the drift that has cost this codebase a
+    /// legend, two ledger parsers and a marker list in one evening — and it would be a particularly
+    /// poor place to start, since the screen's whole job is to notice header lines that should not be
+    /// there.
+    ///
+    /// Line numbers are 1-based, matching <see cref="ChannelShape_Validator.Find_MalformedHeaders"/>,
+    /// so the two report the same coordinates for the same file.
+    /// </summary>
+    public static IReadOnlyList<(int LineNumber, int Index, string Line)> Read_HeaderLines(string channelText)
+    {
+        List<(int LineNumber, int Index, string Line)> headers = [];
+
+        if (string.IsNullOrEmpty(channelText))
+            return headers;
+
+        var lines = channelText.Split('\n');
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].TrimEnd('\r');
+            var match = Header_Regex().Match(line);
+
+            if (match.Success)
+                headers.Add((i + 1, int.Parse(match.Groups[1].Value), line.Trim()));
+        }
+
+        return headers;
     }
 
     static IChannelEntry Build_Entry(Match header, IReadOnlyList<string> entryLines)

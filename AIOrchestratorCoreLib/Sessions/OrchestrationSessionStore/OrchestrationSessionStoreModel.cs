@@ -183,7 +183,19 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
             {
                 if (member.MemberId == memberId)
                 {
-                    members.Add(OrchestrationMember_Factory.Create(memberId, pid, DateTime.UtcNow));
+                    // CLOSED STAYS CLOSED. This called the three-argument overload, which forwards
+                    // `closedUtc: null` — so writing a pid silently RE-OPENED a retired member, and
+                    // `Respawn_Implementer`'s first act is exactly this write. A watchdog tick holding
+                    // a snapshot from before a close could therefore resurrect the member it was
+                    // racing, permanently, with nothing to heal it.
+                    //
+                    // The codebase already knew this hazard and guarded the LATER write —
+                    // `Store_MemberTruePid_IfStillOpen`, "a member closed during the sync window must
+                    // stay closed". The guard was simply never applied to the earlier one. Fixed here
+                    // rather than at that call site so it holds for every caller of this store method,
+                    // present and future: setting a pid is not a statement about whether a member is
+                    // open.
+                    members.Add(OrchestrationMember_Factory.Create(memberId, pid, DateTime.UtcNow, member.ClosedUtc));
                     found = true;
                 }
                 else

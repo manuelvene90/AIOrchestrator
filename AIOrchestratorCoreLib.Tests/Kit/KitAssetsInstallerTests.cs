@@ -38,6 +38,25 @@ public class KitAssetsInstallerTests : IDisposable
             Path.Combine(_tempRoot, "kit", "hooks"), Path.Combine(_tempRoot, "claude", "hooks"));
     }
 
+    /// <summary>
+    /// The append helper lives beside the role commands that tell sessions to run it. If the
+    /// installer does not carry it across, every one of those instructions points at a path that
+    /// does not exist and the sessions fall back to the unlocked appends the helper replaced —
+    /// a protocol that ships as documentation only.
+    /// </summary>
+    [Fact]
+    public void Ensure_Installed_CarriesTheAppendHelperAcrossToo_NotOnlyTheMarkdown()
+    {
+        File.WriteAllText(Path.Combine(_kitCommandsFolder, "channel-append.sh"), "#!/bin/bash\necho helper v1\n");
+
+        Run_Installer();
+
+        var installedHelper = Path.Combine(_commandsTargetFolder, "channel-append.sh");
+
+        Assert.True(File.Exists(installedHelper), "the append helper was not installed beside the role commands that call it");
+        Assert.Equal("#!/bin/bash\necho helper v1\n", File.ReadAllText(installedHelper));
+    }
+
     [Fact]
     public void Ensure_Installed_FreshMachine_CopiesEverything()
     {

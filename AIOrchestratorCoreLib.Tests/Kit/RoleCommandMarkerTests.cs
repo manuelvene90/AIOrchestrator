@@ -30,6 +30,29 @@ public class RoleCommandMarkerTests
     static readonly string[] NOT_MARKERS = ["PARALLEL UNITS", "UNPROVEN", "HOLD", "FROM", "AWAY MODE ON"];
 
     /// <summary>
+    /// EVERY protocol marker, which since 2026-08-13 is more than the state resolver's own.
+    ///
+    /// `ALL_MARKERS` means "phrases `MemberState_Resolver` resolves to a member STATE", and that was
+    /// the whole vocabulary while the resolver was the only thing reading markers. It is not any
+    /// more: `HANDOVER` is read by `HandoverEntry_Detector`, through the same matcher, to decide
+    /// whether a solo may ask for a crew — a real marker, acted on by real code, that changes no
+    /// member state.
+    ///
+    /// So the docs guard walks the UNION while the shape guard below keeps walking the resolver's own
+    /// list, because "this phrase declares a state" is only true of the state ones. Adding `HANDOVER`
+    /// to `ALL_MARKERS` instead would have made the shape guard demand that a handover entry change
+    /// a member's state, which it neither does nor should.
+    ///
+    /// The guard CAUGHT this drift the moment solo.md taught the new marker — it did its job, and
+    /// what needed extending was its model of what a marker is for.
+    /// </summary>
+    static readonly IReadOnlyList<string> PROTOCOL_MARKERS =
+    [
+        .. MemberState_Resolver.ALL_MARKERS,
+        AIOrchestratorCoreLib.GeneralSupervision.HandoverEntry_Detector.HANDOVER_MARKER,
+    ];
+
+    /// <summary>
     /// A phrase the docs teach must be one the matcher acts on. Catches a typo, a rename that
     /// updated one side, and a marker invented in prose that no code has ever read.
     /// </summary>
@@ -50,7 +73,7 @@ public class RoleCommandMarkerTests
                     continue;
 
                 Assert.True(
-                    MemberState_Resolver.ALL_MARKERS.Contains(phrase),
+                    PROTOCOL_MARKERS.Contains(phrase),
                     $"{Path.GetFileName(file)} teaches `{phrase}`, which the matcher does not act on");
             }
         }
@@ -65,7 +88,11 @@ public class RoleCommandMarkerTests
     {
         var taught = string.Concat(Find_RoleCommandFiles().Select(File.ReadAllText));
 
-        foreach (var marker in MemberState_Resolver.ALL_MARKERS)
+        // THE UNION, so a marker acted on by something other than the state resolver cannot exist in
+        // code that nobody is ever told to write. That is the failure this direction was built for —
+        // STANDING BY sat unread in the matcher for exactly that long — and it applies to a promotion
+        // marker no less than to a state one.
+        foreach (var marker in PROTOCOL_MARKERS)
             Assert.True(taught.Contains(marker), $"no role command teaches `{marker}`");
     }
 

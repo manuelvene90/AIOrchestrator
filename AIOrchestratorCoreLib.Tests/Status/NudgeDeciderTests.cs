@@ -251,6 +251,109 @@ public class NudgeDeciderTests
     }
 
     /// <summary>
+    /// CLAUDE.md ITEM 13 AGAIN, THIRTY LINES FROM THE FUNCTION THAT GETS IT RIGHT. The nudge marker —
+    /// the thing that makes a member nudged ONCE per unanswered thing — read only the live file. Once
+    /// compaction moves the last conversation entry into the archive it returned null, and null means
+    /// "no memory": the caller skips the gate AND records nothing, so the member is nudged again, and
+    /// that nudge becomes the next round's unanswered thing. Every 8 minutes, forever, needing nobody.
+    ///
+    /// It is not hypothetical. `ai-orchestrator-3/imp-1` ends at entry [395] whose body reads "Entry
+    /// [394] FROM app has been waiting 8 min with no reply from you" — the app nudging a member about
+    /// its own previous nudge. Two `da-vinci-fintech-suite-5` channels show the same shape.
+    ///
+    /// Real files, because the defect is entirely about which file is read.
+    /// </summary>
+    [Fact]
+    public void TheThingAMemberWasNudgedAboutSurvivesCompactionToTheArchive()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-marker-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            // What a compacted channel looks like mid-loop: every conversation entry archived, and
+            // only the app's own nudges left in the live file.
+            File.WriteAllText(channelFile, "## [394] FROM app — 2026-08-12 03:00 — you stopped mid-task\nnothing was going to wake you\n");
+            File.WriteAllText(
+                Channel_Compactor.Build_ArchiveFilePath(channelFile),
+                "## [1] FROM supervisor — 2026-08-11 22:00 — the brief\ndo the work\n");
+
+            var live = ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile));
+
+            var identity = Nudge_Decider.Identify_LastConversationEntry_OrNull(live, channelFile);
+
+            Assert.NotNull(identity);
+            Assert.Contains("the brief", identity);
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>
+    /// THE LIVE FILE STILL WINS, asserted apart. The archive holds the OLDER entries, so a reader that
+    /// simply preferred the archive would pin every member to an ancient entry and never let a genuinely
+    /// new brief earn its own nudge — the mute-switch failure, reached from the other side.
+    /// </summary>
+    [Fact]
+    public void AConversationEntryInTheLiveFileBeatsTheArchive()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-marker-live-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            File.WriteAllText(channelFile, "## [40] FROM supervisor — 2026-08-12 09:00 — the NEW brief\nthe next thing\n");
+            File.WriteAllText(
+                Channel_Compactor.Build_ArchiveFilePath(channelFile),
+                "## [1] FROM supervisor — 2026-08-11 22:00 — the OLD brief\ndo the work\n");
+
+            var live = ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile));
+
+            var identity = Nudge_Decider.Identify_LastConversationEntry_OrNull(live, channelFile);
+
+            Assert.NotNull(identity);
+            Assert.Contains("the NEW brief", identity);
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>
+    /// And a channel with no conversation ANYWHERE is still null — the genuine case the old docstring
+    /// described, now the only one that produces it. Without this, a fix that returned some placeholder
+    /// would satisfy both cases above and suppress the first nudge a real brief earns.
+    /// </summary>
+    [Fact]
+    public void AChannelHoldingOnlyAppEntriesEverywhereStillHasNoIdentity()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-marker-none-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            File.WriteAllText(channelFile, "## [3] FROM app — 2026-08-12 03:00 — you stopped mid-task\nnothing here\n");
+
+            var live = ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile));
+
+            Assert.Null(Nudge_Decider.Identify_LastConversationEntry_OrNull(live, channelFile));
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>
     /// The SUBJECT is deliberately not the body. An earlier version passed one string as both, so a
     /// marker matcher reading Subject instead of RawText — or Body instead of either — would have
     /// been invisible here: every field said the same thing, so every implementation agreed. That
@@ -350,8 +453,8 @@ public class NudgeDeciderTests
             (ChannelAuthors.App, "you stopped mid-task", "nothing was going to wake you"));
 
         Assert.Equal(
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(beforeTheNudge),
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(afterTheNudge));
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(beforeTheNudge, NO_ARCHIVE),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(afterTheNudge, NO_ARCHIVE));
     }
 
     /// <summary>
@@ -372,8 +475,8 @@ public class NudgeDeciderTests
             (ChannelAuthors.Implementer, "WRITING WINDOW OPEN — Model.cs", "still going"));
 
         Assert.NotEqual(
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(before),
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(after));
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(before, NO_ARCHIVE),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(after, NO_ARCHIVE));
     }
 
     /// <summary>
@@ -394,9 +497,319 @@ public class NudgeDeciderTests
         var second = Stamped((ChannelAuthors.Implementer, "a completely different thing", "2026-08-12 19:30"));
 
         Assert.NotEqual(
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(first),
-            Nudge_Decider.Identify_LastConversationEntry_OrNull(second));
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(first, NO_ARCHIVE),
+            Nudge_Decider.Identify_LastConversationEntry_OrNull(second, NO_ARCHIVE));
     }
+
+    /// <summary>
+    /// THE OTHER HALF OF THE SELF-FEED, at its source. The app's own nudge moved the channel file, so
+    /// the nudge restarted the very clock that schedules the next nudge.
+    ///
+    /// The marker gate above now stops the repetition on its own, so what this pins is the smaller
+    /// defect the marker does not reach: the FIRST nudge for each new unanswered thing was scheduled
+    /// from the file stamp, so any app write landing after that entry delayed a legitimate nudge by
+    /// up to the full 8 minutes.
+    ///
+    /// THE FILE STAMP IS SET TO NOW ON PURPOSE, and it is what makes this case unable to pass for
+    /// another reason. The fallback path returns "quiet for ~0" from that stamp, so a result near 30
+    /// minutes can only have come from reading the last CONVERSATION entry. Without that, a test
+    /// asserting "quiet" would pass under a mutation that broke the fallback instead.
+    /// </summary>
+    [Fact]
+    public void AnAppEntryDoesNotResetTheQuietClock()
+    {
+        var now = new DateTime(2026, 8, 12, 19, 0, 0);
+        var file = Write_TempChannel();
+
+        var entries = Stamped(
+            (ChannelAuthors.Implementer, "STANDING BY", "2026-08-12 18:30"),
+            (ChannelAuthors.App, "you stopped mid-task", "2026-08-12 18:58"));
+
+        Assert.Equal(30, Nudge_Decider.Measure_QuietFor(entries, now)!.Value.TotalMinutes, 1);
+    }
+
+    /// <summary>
+    /// And a MEMBER's entry does reset it — asserted apart, because the two directions are what the
+    /// clock is for. A change that ignored every entry would satisfy the case above and leave a
+    /// working member permanently "quiet for hours", nudged on the first tick after it spoke.
+    /// </summary>
+    [Fact]
+    public void AMemberEntryResetsTheQuietClock()
+    {
+        var now = new DateTime(2026, 8, 12, 19, 0, 0);
+        var file = Write_TempChannel();
+
+        var entries = Stamped(
+            (ChannelAuthors.Supervisor, "brief", "2026-08-12 18:00"),
+            (ChannelAuthors.Implementer, "done, commit 8b58b2e", "2026-08-12 18:58"));
+
+        Assert.Equal(2, Nudge_Decider.Measure_QuietFor(entries, now)!.Value.TotalMinutes, 1);
+    }
+
+    /// <summary>
+    /// An unreadable stamp falls back to the file, which is the OLD behaviour — noisy rather than
+    /// silent. A quiet clock that cannot be computed must never make a member look busy: that would
+    /// suppress the nudge for a session that really had stopped, which is the expensive direction.
+    ///
+    /// The file is stamped in the past here (the inverse of the case above) so the number can only
+    /// have come from the fallback.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableStampFallsBackToTheFileRatherThanLookingBusy()
+    {
+        var now = DateTime.Now;
+        var file = Write_TempChannel();
+        File.SetLastWriteTime(file, now.AddMinutes(-45));
+
+        var entries = Stamped((ChannelAuthors.Implementer, "STANDING BY", "not a date at all"));
+
+        Assert.Null(Nudge_Decider.Measure_QuietFor(entries, now));
+    }
+
+    /// <summary>
+    /// A FUTURE stamp is refused by the trusted reader and falls back too. An agent that stamps
+    /// tomorrow would otherwise be measured as negatively quiet and never nudged again — the silent
+    /// direction, and the same class of bug as the future-dated entry that once held the status
+    /// line's `last` row until real time caught up.
+    /// </summary>
+    [Fact]
+    public void AFutureStampCannotSilenceTheNudgeForever()
+    {
+        var now = DateTime.Now;
+        var file = Write_TempChannel();
+        File.SetLastWriteTime(file, now.AddMinutes(-45));
+
+        var entries = Stamped((ChannelAuthors.Implementer, "STANDING BY", now.AddHours(6).ToString("yyyy-MM-dd HH:mm")));
+
+        Assert.Null(Nudge_Decider.Measure_QuietFor(entries, now));
+    }
+
+    /// <summary>
+    /// AN APP ENTRY DOES NOT DATE A CHANNEL — rev-8's F1, and this case is the R9 assertion inverted.
+    ///
+    /// It used to require 20 minutes here, measured from the app's own `/resume` entry. R9 was right
+    /// that the FILE is the wrong source — compaction moves the file's stamp with nobody having
+    /// spoken — and the remedy took the wrong half: on a channel holding only app entries, the app's
+    /// own write became the clock. Measuring the CONVERSATION is immune to compaction and to the app
+    /// both, which is what R9 should have asked for.
+    ///
+    /// So an app-only channel is not "quiet for zero"; it is a channel nobody can date, and every
+    /// caller reads null as past the threshold. The stall alert that could never fire for an
+    /// orchestration whose session died silently is this assertion's real subject.
+    /// </summary>
+    [Fact]
+    public void AnAppOnlyChannelCannotBeDatedAtAll()
+    {
+        var now = new DateTime(2026, 8, 12, 19, 0, 0);
+        var file = Write_TempChannel();
+
+        File.SetLastWriteTime(file, now);
+
+        var entries = Stamped((ChannelAuthors.App, "GO AHEAD — resume", "2026-08-12 18:40"));
+
+        Assert.Null(Nudge_Decider.Measure_QuietFor(entries, now));
+    }
+
+    static string Write_TempChannel()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"aiorch-quietclock-{Guid.NewGuid():N}.md");
+        File.WriteAllText(path, "seed");
+        return path;
+    }
+
+    /// THE PROPERTY THAT KILLS THE SECOND LOOP, and the one a "key on the last entry" fix fails.
+    ///
+    /// A channel with no conversation entry still has an unanswered thing — an app entry a respawned
+    /// member is supposed to act on — so it gets ONE nudge, not none. For that to be one and not
+    /// forever, the thing remembered must not move when the nudge lands. The nudge IS an app entry, so
+    /// any key taken from the newest entry changes the instant it is written, the next round reads a
+    /// different key, and it nudges again — the exact loop, rebuilt by the obvious fix.
+    /// </summary>
+    [Fact]
+    public void AnAppOnlyChannelKeepsOneSubjectAsFurtherAppEntriesArrive()
+    {
+        var beforeTheNudge = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"));
+
+        // THE REAL SUBJECT, from the writer itself. This fixture used to invent one ("you stopped
+        // mid-task"), which no code path produces — and the case still passed, because both sides
+        // returned the constant sentinel and nothing about the subject was ever read. It asserts
+        // something now, and only if the text matches what the app actually writes.
+        var afterTheNudge = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"));
+
+        Assert.Equal(
+            Nudge_Decider.Identify_NudgeSubject(beforeTheNudge, NO_ARCHIVE),
+            Nudge_Decider.Identify_NudgeSubject(afterTheNudge, NO_ARCHIVE));
+    }
+
+    /// <summary>
+    /// R1, and the half the sentinel got wrong: a SECOND `/resume` is a second unanswered thing.
+    ///
+    /// The sentinel is a constant, so once it was recorded the gate matched for ever and an app-only
+    /// channel got exactly one nudge PER PROCESS — including for the `/resume` the sentinel's own
+    /// docstring names as the reason such channels must be nudged at all. The owner's unstick command
+    /// could not unstick anything, which is the same `/resume` path as the bound finding, one layer
+    /// down.
+    ///
+    /// The subject now moves because REALITY moved. No clear, no release site, still one write site.
+    /// </summary>
+    [Fact]
+    public void ASecondResumeIsANewUnansweredThingAndEarnsItsOwnNudge()
+    {
+        var afterOneNudge = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"));
+
+        var thenAnotherResume = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"),
+            (ChannelAuthors.App, "GO AHEAD — resume", "the owner sent /resume again"));
+
+        Assert.NotEqual(
+            Nudge_Decider.Identify_NudgeSubject(afterOneNudge, NO_ARCHIVE),
+            Nudge_Decider.Identify_NudgeSubject(thenAnotherResume, NO_ARCHIVE));
+    }
+
+    /// <summary>
+    /// THE OTHER DIRECTION, and it is what stops this becoming the loop again. The respawn notice is
+    /// the app waking the member, exactly like the nudge — so it must NOT count as a new thing to be
+    /// nudged about. Escalation drops the nudged-at stamp on both its exits, so a subject that moved
+    /// here would re-arm the whole nudge-then-respawn cycle with nobody having said anything.
+    /// </summary>
+    [Fact]
+    public void TheRespawnNoticeIsTheAppsOwnWakeAndDoesNotEarnANewNudge()
+    {
+        var afterTheNudge = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"));
+
+        var thenRespawned = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.App, Nudge_Wording.Subject_For(false), "nothing was going to wake you"),
+            (ChannelAuthors.App, Nudge_Wording.RESPAWN_SUBJECT, "spawned a fresh session"));
+
+        Assert.Equal(
+            Nudge_Decider.Identify_NudgeSubject(afterTheNudge, NO_ARCHIVE),
+            Nudge_Decider.Identify_NudgeSubject(thenRespawned, NO_ARCHIVE));
+    }
+
+    /// <summary>
+    /// And it is not a mute switch either: the moment a real conversation entry exists, that is a
+    /// different unanswered thing and earns its own nudge. Asserted apart, because a subject that was
+    /// always the sentinel would satisfy the case above and silence the member permanently.
+    /// </summary>
+    [Fact]
+    public void AConversationEntryArrivingIsADifferentSubjectFromNoConversationAtAll()
+    {
+        var appOnly = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"));
+
+        var thenBriefed = BuildTitled(
+            (ChannelAuthors.App, "GO AHEAD — resume", "pick up where you left off"),
+            (ChannelAuthors.Supervisor, "brief", "implement the parser"));
+
+        Assert.NotEqual(
+            Nudge_Decider.Identify_NudgeSubject(appOnly, NO_ARCHIVE),
+            Nudge_Decider.Identify_NudgeSubject(thenBriefed, NO_ARCHIVE));
+    }
+
+    /// <summary>
+    /// A FAILED ARCHIVE READ CANNOT SUPPRESS A NUDGE — rev-5's R8, filed UNPROVEN, and this is why it
+    /// stays unproven.
+    ///
+    /// R8's concern: `5f3dc1f` made the subject always answerable, so a failed archive read is now
+    /// RECORDED as "nothing to be nudged about", where the old null skipped the record entirely and was
+    /// self-correcting by never remembering anything.
+    ///
+    /// The record is real. The harm is not, because the gate is an EQUALITY comparison against a subject
+    /// that MOVES, not a "have I nudged this member" flag. `UsageTotals_Reader.Read_Text_Safe` returns
+    /// empty on any failure, so a failed archive read is indistinguishable from an absent one — which is
+    /// exactly what this case builds. The value it yields can never equal the value a healthy read
+    /// yields for the same channel, so the next tick that CAN read the archive computes something
+    /// different, the gate does not match, and the nudge fires.
+    ///
+    /// So a transient failure costs ONE EXTRA nudge, never a missing one — the visible direction rather
+    /// than the silent one. And the guarantee underneath it is the sentinel's non-collision property,
+    /// pinned by the case below: a value that can never equal a real entry can never suppress one.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableArchiveYieldsADifferentSubjectThanAReadableOne()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"nudge-r8-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var channelFile = Path.Combine(folder, "channel.md");
+
+            File.WriteAllText(channelFile, "## [394] FROM app — 2026-08-12 03:00 — you stopped mid-task\nnothing was going to wake you\n");
+
+            var live = ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFile));
+
+            // The archive is absent, which is byte-for-byte what a FAILED read produces.
+            var whileUnreadable = Nudge_Decider.Identify_NudgeSubject(live, channelFile);
+
+            File.WriteAllText(
+                Channel_Compactor.Build_ArchiveFilePath(channelFile),
+                "## [1] FROM supervisor — 2026-08-11 22:00 — the brief\ndo the work\n");
+
+            var onceReadable = Nudge_Decider.Identify_NudgeSubject(live, channelFile);
+
+            Assert.NotEqual(whileUnreadable, onceReadable);
+            Assert.Contains("the brief", onceReadable);
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>
+    /// The sentinel cannot be mistaken for an entry. A real identity is a whole entry and always opens
+    /// `## [`, so no channel content can ever compare equal to it and suppress a nudge it earned.
+    ///
+    /// PARSED FROM REAL CHANNEL TEXT, NOT BUILT BY A FIXTURE (rev-5's R7). This case used to hand
+    /// `BuildTitled` a subject and assert that the result opened `## [` — but `BuildTitled` INTERPOLATES
+    /// that prefix itself, so the assertion read back the test's own format string and the parser never
+    /// ran. It would have stayed green if `RawText` had stopped carrying the header entirely, which is
+    /// the single change that would make the sentinel collidable.
+    ///
+    /// The claim is about what the PARSER produces, so the parser has to be the thing that produces it.
+    /// Same class as `[71]`'s aborted run and the harness that certified unrun code: the green was real,
+    /// what it was green ABOUT was not.
+    /// </summary>
+    [Fact]
+    public void TheNoConversationSentinelCannotCollideWithARealEntry()
+    {
+        var parsed = ChannelEntry_Parser.Parse_All(
+            "## [1] FROM supervisor — 2026-08-12 15:00 — brief\nimplement the parser\n\n"
+            + "## [2] FROM implementer — 2026-08-12 15:20 — filed\nlanded as abc1234\n");
+
+        Assert.Equal(2, parsed.Count);
+
+        // EVERY entry, not just the one the decider happens to pick: the safety property is that NO
+        // parser output can equal the sentinel, and one sample does not say that.
+        foreach (var entry in parsed)
+        {
+            Assert.StartsWith("## [", entry.RawText);
+            Assert.NotEqual(Nudge_Decider.NO_CONVERSATION_YET, entry.RawText);
+        }
+
+        Assert.StartsWith("## [", Nudge_Decider.Identify_NudgeSubject(parsed, NO_ARCHIVE));
+        Assert.DoesNotContain("## [", Nudge_Decider.NO_CONVERSATION_YET);
+    }
+
+    /// <summary>
+    /// A channel path with no file behind it, so the cases above read the LIVE LIST ALONE.
+    ///
+    /// Deliberate rather than convenient: each of them pins something about the entries themselves —
+    /// that an app entry does not change the identity, that a new member entry does, that the identity
+    /// is the raw text — and an archive sitting behind them would give every assertion a second route
+    /// to its result. The archive has its own cases, above, with real files.
+    /// </summary>
+    static readonly string NO_ARCHIVE = Path.Combine(Path.GetTempPath(), $"nudge-no-archive-{Guid.NewGuid():N}", "channel.md");
 
     static IReadOnlyList<IChannelEntry> Stamped(params (ChannelAuthors Author, string Subject, string DateText)[] entries)
     {
@@ -405,7 +818,9 @@ public class NudgeDeciderTests
         foreach (var (author, subject, dateText) in entries)
         {
             // INDEX 7 for every entry, deliberately: duplicate indices are real and this fixture must
-            // not be able to tell the entries apart by one.
+            // not be able to tell the entries apart by one. KEPT OVER THE BRANCH'S RUNNING INDEX —
+            // the quiet-clock cases read only the author and the stamp, so a distinguishing index
+            // buys them nothing and would quietly weaken the identity cases that share this helper.
             built.Add(ChannelEntry_Factory.Create(
                 7, author, dateText, subject, "body",
                 $"## [7] FROM {author} — {dateText} — {subject}\nbody"));

@@ -39,14 +39,44 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
 
 - Entries start: `## [n] FROM implementer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
   Never edit past entries.
-- **`n` and the date both come from a FRESH READ, never from memory.** Re-read the last header
-  immediately before appending and add one (the supervisor and the app append while you work, so a
-  remembered number collides — real duplicates happened on 2026-08-10), and take the time from the
-  system clock (`date +'%Y-%m-%d %H:%M'`). The app measures your time-on-task from that field and
-  now BLANKS it when the stamp is in the future, so guessing costs you the display.
+- **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
+
+  ```bash
+  bash ~/.claude/commands/channel-append.sh \
+    --channel "$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md" \
+    --author  implementer \
+    --subject "TASK 1 committed abc1234 — 214 tests green" \
+    --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
+  ```
+
+  It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the app takes the same one
+  from .NET), **allocates `n` and stamps the time itself INSIDE that lock**, and writes the entry in
+  a single append. It prints the index it used.
+- **You compute NEITHER `n` NOR the timestamp — hand-numbering and hand-stamping are what broke.**
+  "Re-read the last header and add one" cannot be made safe by trying harder: the window it leaves
+  open IS the write. Two writers both read `[71]` and both wrote `[72]`, and on the same day a
+  hand-written stamp landed ten hours ahead of the entry it sat on — the app measures your
+  time-on-task from that field and BLANKS it when the stamp is in the future.
+- **Exit code 3 means NOTHING WAS WRITTEN.** It is "could not acquire the lock within the budget" —
+  never a success, and your entry is not in the file. Retry the call (raise `--budget-seconds` if the
+  channel is busy). **Never fall back to a bare `>>` redirect**: an unlocked append under contention
+  is the exact collision this prevents — the one that filed a reviewer's nine findings under the
+  supervisor's header. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
+- **Exit code 127 is the OPPOSITE case — never treat it like `3`.** `3` means the protocol EXISTS and
+  another writer holds the lock, so bypassing it IS the collision. `127` (or the helper simply not
+  being there) means the protocol is ABSENT on this machine — a fresh bootstrap, or a session older
+  than the app's build output. Nobody else is locking either, so a direct append is no worse than how
+  every channel was written before the helper existed, and writing nothing would leave you unable to
+  report at all. Degraded mode, then: build the FULL entry — header and body — in a temp file and
+  append it with ONE `cat tmp >> <channel>` (emitting header and body as separate writes is what puts
+  another author's header inside an entry), and **state in the body that it was written without the
+  lock because the helper is not installed.** Degraded in the open, never silently.
+- **The honest limit: this serialises the writers that USE it, and nothing else.** A session that
+  appends with a bare redirect is stopped by nothing here, so this is a protocol to follow, not a
+  boundary that binds.
 - **APPEND ONLY — never `Write` a channel file.** Writing overwrites it and DESTROYS entries
   (this really happened: a supervisor's `Write` wiped an implementer's just-posted entry and cost
-  35 minutes). Append with `>>` (or an Edit that adds text at the end), never a whole-file write.
+  35 minutes). Every entry goes through the helper; never a whole-file write.
 - **ENGLISH, always** — channel entries, commits, code comments, docs. Even if supervisor or owner
   traffic arrives in Italian, you write in English.
 - **Report after EVERY milestone, task, and step** — not only at the end: what landed, commit
