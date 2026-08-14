@@ -102,8 +102,13 @@ elseif ($role -eq 'solo') {
     #
     # Same call, not a copy of the logic: one renderer, so the terminal cannot disagree with the
     # owner's phone.
+    # ORANGE, NOT BLUE. Blue is the MEMBER colour, and a solo is not a member of anything: it is the
+    # session the owner is talking to, and it reads as an implementer at a glance. Owner, 2026-08-14:
+    # *"the solo status bar has SOLO written in blue like an impl instead of in orange"*. 256-colour
+    # 208 is the orange that matches the 🟠 this session already speaks with in the Telegram mirror,
+    # so the two surfaces name the same voice the same way.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'SOLO' }
-    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $orchId $esc[0m $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -in @('implementer','reviewer')) {
     # NOT the members: an implementer's terminal showing the orchestration's overall percentage would
