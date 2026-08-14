@@ -87,11 +87,24 @@ public class ChannelBaselinePassTests : IDisposable
     }
 
     /// <summary>
-    /// The keys are the sweeps' own, not a second composition — a baseline keyed differently from the
-    /// memo that reads it never matches, and every offence would be reported for ever.
+    /// THE PASS ASKS THE SHARED BUILDERS, AND THE FORMAT IS PINNED TO A LITERAL.
+    ///
+    /// <para>
+    /// RENAMED, because the old name — `TheKeysAreTheSweepsOwnCompositions` — promised something this
+    /// test cannot see. It compares the pass's keys with the same helpers the pass calls, so it pinned
+    /// "the pass agrees with the helper", nearly a tautology; a SWEEP re-inlining its key would leave
+    /// it green, which is the failure the name advertised (rev-9 F1). A guard-sounding name over a
+    /// tautology is worse than no test.
+    /// </para>
+    /// <para>
+    /// The literal assertions are what the rename leaves worth having: an edit to a helper's format
+    /// now shows up as a difference instead of moving the expectation silently with it. The property
+    /// the old name claimed — one composer tree-wide — is pinned by
+    /// <see cref="MemoKeyCompositionScanTests"/> instead, where it can actually be seen.
+    /// </para>
     /// </summary>
     [Fact]
-    public void TheKeysAreTheSweepsOwnCompositions()
+    public void ThePassAsksTheSharedBuilders_AndTheirFormatIsPinned()
     {
         var baseline = Assert.Single(Build(seenByShapeSweep: false, seenByIndexSweep: false));
 
@@ -105,6 +118,12 @@ public class ChannelBaselinePassTests : IDisposable
         Assert.Equal(
             ChannelIndexSequence_Screen.Build_MemoKey(_channelFile, crossing),
             Assert.Single(baseline.CrossingKeys));
+
+        // THE FORMATS THEMSELVES, as literals. Everything above tracks a helper edit; these do not.
+        Assert.Equal($"{_channelFile}|{MALFORMED_HEADER}", ChannelShape_Validator.Build_MemoKey(_channelFile, MALFORMED_HEADER));
+        Assert.Equal(
+            $"{_channelFile}|{ChannelIndexSequence_Screen.Build_DedupeKey(crossing)}",
+            ChannelIndexSequence_Screen.Build_MemoKey(_channelFile, crossing));
     }
 
     /// <summary>A channel with nothing wrong in it still baselines — with two empty key lists.</summary>
