@@ -4226,8 +4226,11 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
-            var entries = ChannelEntry_Parser.Parse_All(
-                UsageTotals_Reader.Read_Text_Safe(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId)));
+            // WHOLE HISTORY, not the live file: both consumers of this list ask a question about the
+            // channel's story — the status line picks the last real subject, the builder resolves the
+            // member's state — and a compacted channel answers neither from its live half alone.
+            var entries = ChannelHistory_Counter.Read_AllEntries(
+                _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId));
 
             members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false));
         }
@@ -4264,7 +4267,7 @@ internal sealed class BridgeEngineModel(
 
             var memberFolder = _paths.Get_ImplementerFolder(session.OrchId, member.MemberId);
             var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var declared = MemberState_Resolver.Resolve(entries);
             var workingNow = SessionActivity_Probe.Is_MidTurn(Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
 
@@ -5647,7 +5650,7 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId);
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
             memberLines.Add($"{member.MemberId}: {Describe_AwayMemberState(entries, usageFile)}");
