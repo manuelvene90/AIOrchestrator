@@ -55,7 +55,7 @@ public class ChannelBaselinePassTests : IDisposable
     [Fact]
     public void AnUnseenChannel_IsBaselined_WithBothMemosKeyed()
     {
-        var baseline = Assert.Single(Build(seenByShapeSweep: false, seenByIndexSweep: false));
+        var baseline = Assert.Single(Build(alreadyFirstSighted: false));
 
         Assert.Equal(_channelFile, baseline.ChannelFilePath);
         Assert.Contains(baseline.MalformedKeys, key => key.Contains(MALFORMED_HEADER));
@@ -63,27 +63,21 @@ public class ChannelBaselinePassTests : IDisposable
     }
 
     /// <summary>
-    /// GUARD — rev-10 F1. The SHAPE sweep got there first, so the pass must not touch this channel:
-    /// that sweep already absorbed the history at ITS first sight, and everything appearing afterwards
-    /// is genuinely new. A pass that baselined it now would file those new offences as history and no
+    /// GUARD — rev-10 F1. A channel whose contents have already been read is never baselined again:
+    /// whoever took that first sight absorbed the history at that instant, and everything appearing
+    /// afterwards is genuinely new. A second baseline would file those new offences as history and no
     /// route would ever report them.
+    ///
+    /// <para>
+    /// This was two cases, one per sweep, while first sight was registered three times. It is one case
+    /// now because there is one set: a single registration is what forces a single absorption, and the
+    /// window between two consumers — one having seen a channel, another not — no longer exists.
+    /// </para>
     /// </summary>
     [Fact]
-    public void AChannelTheSHAPESweepHasAlreadySeen_IsNotBaselined()
+    public void AChannelAlreadyFirstSighted_IsNotBaselinedAgain()
     {
-        Assert.Empty(Build(seenByShapeSweep: true, seenByIndexSweep: false));
-    }
-
-    /// <summary>
-    /// GUARD — the same for the index side, and the reason the gate is EITHER rather than BOTH: the two
-    /// sweeps walk discovery separately, so a file created between them sits in one set only. Skipping
-    /// on either is still correct, because the sweep that has not seen it keeps its own first-sight
-    /// branch above its no-offence skip.
-    /// </summary>
-    [Fact]
-    public void AChannelTheINDEXSweepHasAlreadySeen_IsNotBaselined()
-    {
-        Assert.Empty(Build(seenByShapeSweep: false, seenByIndexSweep: true));
+        Assert.Empty(Build(alreadyFirstSighted: true));
     }
 
     /// <summary>
@@ -106,7 +100,7 @@ public class ChannelBaselinePassTests : IDisposable
     [Fact]
     public void ThePassAsksTheSharedBuilders_AndTheirFormatIsPinned()
     {
-        var baseline = Assert.Single(Build(seenByShapeSweep: false, seenByIndexSweep: false));
+        var baseline = Assert.Single(Build(alreadyFirstSighted: false));
 
         Assert.Equal(
             ChannelShape_Validator.Build_MemoKey(_channelFile, MALFORMED_HEADER),
@@ -132,20 +126,18 @@ public class ChannelBaselinePassTests : IDisposable
     {
         File.WriteAllText(_channelFile, "## [1] FROM supervisor — 2026-08-13 09:00 — brief\nbody\n");
 
-        var baseline = Assert.Single(Build(seenByShapeSweep: false, seenByIndexSweep: false));
+        var baseline = Assert.Single(Build(alreadyFirstSighted: false));
 
         Assert.Empty(baseline.MalformedKeys);
         Assert.Empty(baseline.CrossingKeys);
     }
 
-    IReadOnlyList<ChannelBaseline> Build(bool seenByShapeSweep, bool seenByIndexSweep)
+    IReadOnlyList<ChannelBaseline> Build(bool alreadyFirstSighted)
     {
-        HashSet<string> shapeBaselined = seenByShapeSweep ? [_channelFile] : [];
-        HashSet<string> indexBaselined = seenByIndexSweep ? [_channelFile] : [];
+        HashSet<string> firstSighted = alreadyFirstSighted ? [_channelFile] : [];
 
         return ChannelBaseline_Pass.Build_ForUnseenChannels(
             [DiscoveredChannel_Factory.Create_ForImplementer("orch-1", "imp-1", _channelFile)],
-            shapeBaselined,
-            indexBaselined);
+            firstSighted);
     }
 }

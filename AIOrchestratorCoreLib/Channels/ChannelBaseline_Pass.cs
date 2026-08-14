@@ -20,19 +20,18 @@ public readonly record struct ChannelBaseline(
 /// first sight when the channel appears instead.
 /// </para>
 /// <para>
-/// IT SKIPS A CHANNEL EITHER SWEEP HAS ALREADY SEEN, and that gate is the whole correctness of it.
-/// The first version gated on a set of its own, which nothing else wrote — so a channel a SWEEP saw
-/// first was still unseen to this pass, which reached it a tick later and filed everything that had
-/// arrived in between as history. The entry is on disk, its writer believes it visible, and neither
-/// the sweep (key already recorded) nor the pass (memo never releases) will ever report it. That is
-/// the same class the pass was written to close, returning through the ORDERING rather than the gate
-/// (rev-10 F1, 2026-08-14).
+/// ONE SET, ONE MEANING: `firstSighted` holds every channel whose CONTENTS have been read, by anyone.
+/// It used to be three registrations — this pass and each sweep keeping its own — and every pair of
+/// them left a window: a channel one had seen and another had not, where an offence arriving in
+/// between was absorbed as history by whichever got there second, and could never be reported (the
+/// entry is on disk, its writer believes it visible, and the memos never release).
 /// </para>
 /// <para>
-/// EITHER, NOT BOTH: the two sweeps walk `ChannelDiscovery.Find_ChannelFiles` separately, so a file
-/// created between them sits in one set only. Skipping on either is still right, because the sweep
-/// that has not seen it keeps its own first-sight branch — which sits ABOVE its no-offence skip
-/// precisely so it fires on sight of the file rather than on its first offence.
+/// A SINGLE REGISTRATION FORCES A SINGLE ABSORPTION, and that is why one set is correct rather than
+/// merely tidier. Whoever takes first sight must record BOTH memos at that instant; if it recorded
+/// only its own, the other consumer would either re-announce history or swallow a new offence. So
+/// this returns both key sets together and the caller applies them together (rev-10 F1, and the
+/// residual rev-9 named on top of it).
 /// </para>
 /// <para>
 /// IT COMPOSES NO KEYS OF ITS OWN. Both come from the builders the sweeps use. A baseline keyed even
@@ -41,7 +40,7 @@ public readonly record struct ChannelBaseline(
 /// </para>
 /// <para>
 /// THE DECISION AND THE KEYS ARE HERE; APPLYING THEM IS THE ENGINE'S. That split is what makes the
-/// case above expressible at all: a test hands this a channel already in `shapeBaselined` and asserts
+/// case above expressible at all: a test hands this a channel already in `firstSighted` and asserts
 /// nothing comes back, which is a state no test can reach through the tick — it needs a file to
 /// appear between two points inside one tick.
 /// </para>
@@ -50,14 +49,13 @@ public static class ChannelBaseline_Pass
 {
     public static IReadOnlyList<ChannelBaseline> Build_ForUnseenChannels(
         IReadOnlyList<IDiscoveredChannel> channels,
-        IReadOnlySet<string> shapeBaselined,
-        IReadOnlySet<string> indexBaselined)
+        IReadOnlySet<string> firstSighted)
     {
         List<ChannelBaseline> baselines = [];
 
         foreach (var channel in channels)
         {
-            if (shapeBaselined.Contains(channel.FilePath) || indexBaselined.Contains(channel.FilePath))
+            if (firstSighted.Contains(channel.FilePath))
                 continue;
 
             var liveText = UsageTotals_Reader.Read_Text_Safe(channel.FilePath);
