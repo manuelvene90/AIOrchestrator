@@ -16,6 +16,7 @@ internal sealed class OrchestrationSessionModel(
     string? implementerModelOverride,
     IReadOnlyList<IOrchestrationMember> members,
     Telegram.TelegramDeliveryModes telegramMode,
+    Telegram.OwnerPresenceModes ownerPresence,
     DateTime? closedUtc,
     long? statusLineMessageId) : IOrchestrationSession
 {
@@ -34,5 +35,7 @@ internal sealed class OrchestrationSessionModel(
     public string? ImplementerModelOverride { get; } = implementerModelOverride;
     public IReadOnlyList<IOrchestrationMember> Members { get; } = members;
     public Telegram.TelegramDeliveryModes TelegramMode { get; } = telegramMode;
+
+    public Telegram.OwnerPresenceModes OwnerPresence { get; } = ownerPresence;
     public DateTime? ClosedUtc { get; } = closedUtc;
 }

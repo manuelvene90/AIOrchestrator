@@ -44,8 +44,8 @@ public class PromotionPromptWordingTests
         [
             confirm,
             decline,
-            CloseConfirmationPrompt_Builder.Build_DecidedText(ParkedCloseKinds.Promotion, "crm-4", confirmed: true),
-            CloseConfirmationPrompt_Builder.Build_DecidedText(ParkedCloseKinds.Promotion, "crm-4", confirmed: false),
+            CloseConfirmationPrompt_Builder.Describe_Decision("crm-4", request, CloseTapOutcomes.Closed),
+            CloseConfirmationPrompt_Builder.Describe_Decision("crm-4", request, CloseTapOutcomes.Declined),
             CloseConfirmationPrompt_Builder.Describe_AskedFor(request),
             CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(request, "crm-4"),
             CloseConfirmationPrompt_Builder.Build_TapToast(ParkedCloseKinds.Promotion, confirms: true),
@@ -104,8 +104,10 @@ public class PromotionPromptWordingTests
     [Fact]
     public void ThePromotionDecidedTextNamesWhatHappened()
     {
-        var confirmedText = CloseConfirmationPrompt_Builder.Build_DecidedText(ParkedCloseKinds.Promotion, "crm-4", confirmed: true);
-        var declinedText = CloseConfirmationPrompt_Builder.Build_DecidedText(ParkedCloseKinds.Promotion, "crm-4", confirmed: false);
+        var promotion = ParkedCloseRequest_Factory.Create_ForPromotion("crm-4", "the solo", "three subsystems now", "p.json");
+
+        var confirmedText = CloseConfirmationPrompt_Builder.Describe_Decision("crm-4", promotion, CloseTapOutcomes.Closed);
+        var declinedText = CloseConfirmationPrompt_Builder.Describe_Decision("crm-4", promotion, CloseTapOutcomes.Declined);
 
         // Both keep the QUESTION above the answer, so the topic reads as a decision and not as a
         // verdict on something the reader has to remember.
@@ -158,7 +160,7 @@ public class PromotionPromptWordingTests
     /// paths exist because the parked file is gone, expired or corrupt — so "nothing was closed" there
     /// is a guess, and it is wrong on the tap the owner is most confident about.
     ///
-    /// This is the same rule `Build_DecidedText`'s fallback follows, asserted for the family rather
+    /// This is the same rule `Describe_Decision`'s own null-request fallback follows, asserted for the family rather
     /// than for the one method that already had it.
     /// </summary>
     [Fact]
@@ -194,8 +196,8 @@ public class PromotionPromptWordingTests
         Assert.Equal("✅ Close it", confirm);
         Assert.Equal("✋ Keep it open", decline);
 
-        Assert.Contains("Closed — you confirmed", CloseConfirmationPrompt_Builder.Build_DecidedText(kind, "crm-4", confirmed: true));
-        Assert.Contains("Kept open", CloseConfirmationPrompt_Builder.Build_DecidedText(kind, "crm-4", confirmed: false));
+        Assert.Contains("Closed — you confirmed", CloseConfirmationPrompt_Builder.Describe_Decision("crm-4", Request_Of(kind), CloseTapOutcomes.Closed));
+        Assert.Contains("Kept open", CloseConfirmationPrompt_Builder.Describe_Decision("crm-4", Request_Of(kind), CloseTapOutcomes.Declined));
 
         // The four surfaces swept above, on the close side: making the promotion right must not make
         // the close vague. This is what stops the whole sweep passing by going neutral everywhere.
@@ -221,9 +223,9 @@ public class PromotionPromptWordingTests
     [Fact]
     public void AnUnknownKindSaysNothingItCannotKnow()
     {
-        foreach (var confirmed in new[] { true, false })
+        foreach (var outcome in new[] { CloseTapOutcomes.Closed, CloseTapOutcomes.Declined })
         {
-            var text = CloseConfirmationPrompt_Builder.Build_DecidedText(null, "crm-4", confirmed);
+            var text = CloseConfirmationPrompt_Builder.Describe_Decision("crm-4", null, outcome);
 
             Assert.DoesNotContain("clos", text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("crew", text, StringComparison.OrdinalIgnoreCase);

@@ -129,6 +129,33 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
   prompted into. It matters more here than for an implementer: the person who wrote while you were
   busy is the owner, and they are watching for the answer.
 
+## The task ledger — PLAN.md (yours here, not a supervisor's)
+
+`~/.claude/supervision/$ARGUMENTS/PLAN.md` exists from the moment this orchestration was created —
+the app seeds it, reads it for the card's progress bar, and answers the owner's `/progress` and
+`/left` straight from it. In a basic orchestration there is no supervisor, so **it is yours**. Its
+seed text says "maintained by the SUPERVISOR"; read that as "maintained by whoever talks to the
+owner", which here is you.
+
+One task per line: `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked` ·
+`- [-] not doing`. One line = one deliverable that can be FINISHED — "fix the staleness bug" is a
+line, "audited the tailer, 9 findings" is a diary entry that can never be marked done and so sits in
+the denominator forever. Update it at every real boundary; a stale ledger is worse than none,
+because the owner is being shown it without you in between.
+
+**DONE MEANS READY TO MERGE, and here is what that means READY TO MERGE WITHOUT A REVIEWER**
+(owner directive, 2026-08-13): `- [x]` is built, tested, diff read, evidence stated — finished to the
+point where the only thing left is the owner merging it. *"The merge doesn't count, it's not work,
+it's just a merge."* Do not hold a finished deliverable at `[>]` waiting to land: that makes the bar
+read as nothing while the work is done.
+
+**But you are the one case with nobody independent, so be exact about what `[x]` claims.** It says
+YOU are finished and have shown your evidence. It does NOT say the work was reviewed — the owner is
+your reviewer here, and you never call your own work reviewed or approved. Marking `[x]` is a
+statement about your work being complete, never a clearance you have issued yourself. If a
+deliverable genuinely needs an independent read before anyone should trust it, say so in one line and
+let the owner decide (see below) rather than promoting it on your own say-so.
+
 ## When a basic orchestration outgrows itself — asking for a crew
 
 Work that merely needs to go WIDE you can absorb yourself, by fanning out (above). **Width is not a

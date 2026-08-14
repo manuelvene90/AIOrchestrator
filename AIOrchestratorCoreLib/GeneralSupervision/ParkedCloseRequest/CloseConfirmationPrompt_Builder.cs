@@ -23,6 +23,94 @@ public static class CloseConfirmationPrompt_Builder
     }
 
     /// <summary>
+    /// What the prompt is REPLACED with once the tap has been acted on — the last thing the owner is
+    /// told about a close, and for a while the only thing that was untrue.
+    ///
+    /// It used to be written before the close was attempted, so "✅ Closed — you confirmed" appeared
+    /// whether or not anything closed. Two paths made it a lie: an unreadable request (nothing is
+    /// touched) and a throw partway through (marked closed, sessions alive). The first heals — the
+    /// request stays parked and the owner is asked again — so the sentence has to tell them the tap
+    /// did not take, or the fresh prompt arrives contradicting a success still on their screen.
+    ///
+    /// THE SECOND DOES NOT HEAL, and it is why this maps outcomes rather than a boolean. Nothing will
+    /// re-offer that request, so whatever this says is final. It must claim NEITHER success nor
+    /// failure and point at the one place that can answer, because "we do not know" rendered as either
+    /// is how the owner ends up believing live sessions are dead.
+    ///
+    /// IT IS ALSO THE ONLY IMPLEMENTATION OF THIS SENTENCE. A second one — `Build_DecidedText`, which
+    /// took a boolean and was written by the same-day promotion work — sat beside it for one merge.
+    /// Two builders of one owner-facing sentence is the case decision 12 names outright: they drift,
+    /// and the one the tests exercise stops being the one the engine calls. The promotion wording came
+    /// into this switch and that method went; PromotionPromptWordingTests now asserts against what the
+    /// engine actually sends.
+    /// </summary>
+    /// <param name="request">
+    /// What the tap was about, or null when it could not be read — the ONE case where the wording
+    /// cannot name a member or a kind, because nobody can say whether there was one.
+    /// </param>
+    public static string Describe_Decision(string orchId, IParkedCloseRequest? request, CloseTapOutcomes outcome)
+    {
+        var isMember = request?.Kind == ParkedCloseKinds.Implementer;
+        var isPromotion = request?.Kind == ParkedCloseKinds.Promotion;
+
+        // THE HEADER MUST NAME WHAT THE PROMPT NAMED. Every sentence used to open "Close '{orchId}'?"
+        // whatever had been tapped, so retiring one member reported itself under the orchestration's
+        // name — the exact failure this class's own header calls the worst version of this feature —
+        // and a promotion, which closes nothing at all, was announced as a close.
+        //
+        // An UNREADABLE request gets the neutral header rather than the close one. Guessing "close"
+        // is how a record comes to say the opposite of what happened.
+        var header =
+            isPromotion ? $"⚙️ Turn '{orchId}' into a full crew?"
+            : isMember ? $"⚠️ Close member '{request!.MemberId}' in '{orchId}'?"
+            : request == null ? $"'{orchId}'"
+            : $"⚠️ Close '{orchId}'?";
+
+        // WHAT MIGHT STILL BE RUNNING is the member, or the whole orchestration. Saying "sessions" for
+        // a one-member close tells the owner something far worse than what happened.
+        var survivors = isMember ? $"'{request!.MemberId}' may still be running" : "its sessions may still be running";
+
+        var line = outcome switch
+        {
+            CloseTapOutcomes.Declined =>
+                isPromotion ? "✋ Left as one session — you declined. It keeps working exactly as it was."
+                : isMember ? "✋ Kept open — you declined. That session keeps running."
+                : request == null ? "✋ You declined. Nothing was changed."
+                : "✋ Kept open — you declined. Its sessions keep running.",
+
+            CloseTapOutcomes.Closed =>
+                isPromotion ? "✅ Promoted — you confirmed. The supervisor is taking over this conversation."
+                : request == null ? "✅ You confirmed."
+                : "✅ Closed — you confirmed.",
+
+            // NO PROMISE THAT MAY NOT BE KEPT. This said "you will be asked again shortly", which is
+            // true only while the file stays readable — a persistently unreadable one is archived and
+            // reported to the REQUESTER, and the owner is never asked and never told. The condition is
+            // now stated rather than dropped.
+            //
+            // AND IT NAMES NO VERB. It read "NOT closed", which was safe while every parked request
+            // was a close and became a guess the day one was a PROMOTION: this outcome exists only
+            // when the file could not be read, so the kind is exactly the thing nobody can know, and
+            // a solo that asked to be promoted was told its close had not happened.
+            CloseTapOutcomes.NotAttempted =>
+                "⚠️ NOT done — the request could not be read, so nothing was changed. You will be asked again if it can be read on the next sweep.",
+
+            // THE OUTCOME THIS WHOLE CHANGE EXISTS FOR, and it has to be ACTIONABLE as well as honest.
+            // It said "check the app" and sent the owner to a card that reads closed and dimmed, with
+            // the close button disabled and "Show session" hidden — the one control that would reach a
+            // session still running. It now says what is unusual about this outcome instead: the close
+            // is recorded, nothing will ask again, and the error is where errors actually land.
+            CloseTapOutcomes.Uncertain => isPromotion
+                ? "⚠️ The promotion did not complete. It is recorded as done, the crew may not be running, and you will NOT be asked again. The error is in the General topic."
+                : $"⚠️ Close did not complete. It is recorded as closed, {survivors}, and you will NOT be asked again. The error is in the General topic.",
+
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), $"unhandled close outcome '{outcome}'"),
+        };
+
+        return $"{header}\n\n{line}";
+    }
+
+    /// <summary>
     /// THE TWO WORDS THE OWNER ACTUALLY TAPS. They were hard-coded "✅ Close it" / "✋ Keep it open"
     /// while the prompt above them was already kind-aware, so a promotion asked "Turn 'X' into a full
     /// crew?" over a button reading CLOSE IT.
@@ -44,33 +132,6 @@ public static class CloseConfirmationPrompt_Builder
             ParkedCloseKinds.Orchestration => ("✅ Close it", "✋ Keep it open"),
             ParkedCloseKinds.Implementer => ("✅ Close it", "✋ Keep it open"),
             _ => throw new ArgumentOutOfRangeException(nameof(kind), $"unhandled close kind '{kind}'"),
-        };
-    }
-
-    /// <summary>
-    /// What the prompt is rewritten to say once they have tapped, so the topic carries the decision
-    /// rather than the question. It was unconditionally "Close 'X'? … Closed — you confirmed", which
-    /// left a promoted orchestration's topic permanently reading that it had been closed.
-    ///
-    /// An UNREADABLE request falls back to neutral wording rather than to the close wording. Guessing
-    /// "closed" is how the record comes to say the opposite of what happened, and this method exists
-    /// because that already happened once at the archive label.
-    /// </summary>
-    public static string Build_DecidedText(ParkedCloseKinds? kind, string orchId, bool confirmed)
-    {
-        return kind switch
-        {
-            ParkedCloseKinds.Promotion => confirmed
-                ? $"⚙️ Turn '{orchId}' into a full crew?\n\n✅ Promoted — you confirmed. The supervisor is taking over this conversation."
-                : $"⚙️ Turn '{orchId}' into a full crew?\n\n✋ Left as one session — you declined. It keeps working exactly as it was.",
-
-            ParkedCloseKinds.Orchestration or ParkedCloseKinds.Implementer => confirmed
-                ? $"⚠️ Close '{orchId}'?\n\n✅ Closed — you confirmed."
-                : $"⚠️ Close '{orchId}'?\n\n✋ Kept open — you declined. Its sessions keep running.",
-
-            _ => confirmed
-                ? $"'{orchId}' — ✅ you confirmed."
-                : $"'{orchId}' — ✋ you declined. Nothing was changed.",
         };
     }
 
@@ -147,7 +208,7 @@ public static class CloseConfirmationPrompt_Builder
     /// this code cannot make: those branches exist precisely because the request file is gone,
     /// expired or corrupt, so the kind is unknowable and reaching for it would be a guess.
     ///
-    /// The neutral form is the honest one there, and it is the rule `Build_DecidedText`'s fallback
+    /// The neutral form is the honest one there, and it is the rule `Describe_Decision`'s null-request fallback
     /// already follows. Where the kind IS known, the specific form says what did not happen.
     /// </summary>
     public static string Describe_NothingDone(ParkedCloseKinds? kind)

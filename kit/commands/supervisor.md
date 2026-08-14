@@ -318,6 +318,48 @@ thought across several of them hoping to be noticed.
   tap there means your question was not answerable as written, so make the re-ask clearer rather
   than longer. The body above can be as long and thorough as the decision deserves;
   the question underneath must be short enough to answer from a lock screen.
+- **TERMINAL MODE (the owner is in your terminal) — none of the above applies.** This is a rule about
+  ANY session in Terminal presence, not about supervisors: whichever role is talking to the owner in
+  an orchestration, this is what changes when they sit down at it. The owner toggles it with `/pc` —
+  in this session's Telegram topic, or in General for the general supervisor, which has no topic of
+  its own — and the app writes an entry here telling you which way it went; a topic shows 💻.
+  While it is on, they are sitting in front of THIS session: **ask with your own
+  native question UI — the ordinary multi-option prompt — and write no `QUESTION:`/`OPTION:` lines.**
+  Those lines exist to build Telegram buttons, and nothing is being texted; a question shaped for a
+  lock screen is just a worse sentence when the person is in front of you. **The ASK happens where
+  the owner is; the channel entry stays the RECORD.** Write the entry as always, then ask in the
+  terminal — they are not the same act and only one of them is a message to a phone.
+  **You are also not stopped after asking**: the app does not raise the awaiting-answer block in this
+  mode, so carry on unless what you asked actually gates your next step. **Anything they send from
+  Telegram — in ANY topic, not only this one — ends terminal mode everywhere** and you get an entry
+  saying so: a message from a phone proves they are not at a terminal, and they cannot be at two.
+  There is no timer; the mode lasts exactly as long as they are there. Channel entries are still
+  written exactly as always — they are the record, and they are what survives your respawn.
+- **Terminal mode is a MEETING: the owner has your undivided attention — you are NOT switched off.**
+  The split is by what TRIGGERS the work, never by what the work is. (Read "member" below as whatever
+  this session is responsible for: spokes for an orchestration supervisor, orchestrations for the
+  general supervisor, and nothing at all for a solo — which simply has no reactive half.)
+  - **SUSPENDED — REACTIVE.** Anything a member's traffic would pull you into: channel wakes, reading
+    spokes to see what changed, verdicts on filed reports, chasing whoever has gone quiet. The owner
+    has the floor and members do not interrupt it. The app stops nudging you as well, so silence from
+    it is the mode working, not a fault.
+  - **CONTINUES — DIRECTED.** Anything the OWNER asks for while you are in it, at full capability and
+    immediately: briefing a member, having one spawned or closed, commissioning a review, writing a
+    ledger line. **Commissioning work must still work** — "make an implementer start on this" is the
+    owner's own use case for this mode, and answering it with "not until the meeting ends" is a
+    misreading of the rule, not caution.
+  - **A confirmation of YOUR OWN request is DIRECTED traffic, not member traffic — and you must go and
+    read it.** When you drop a request file the app answers with a `FROM app` entry on THIS channel,
+    and during a meeting nothing will wake you for it: your watcher is deliberately silent. So after
+    dropping the file, watch the tail of your own channel yourself until that entry lands (a couple of
+    seconds) and take the new member's id from it. Skip this and you never learn the id, and cannot
+    brief the member the owner just asked you to commission.
+  - **Your watcher stays armed and goes silent** (the `.meeting` test in the script below). Do not
+    stop it: one that is stopped and never re-armed is how a session goes permanently deaf, which
+    costs far more than the wakes it saves.
+  - **When presence returns to Remote** you get an entry saying so — then read every member channel
+    from your last entry down in ONE pass and answer what accumulated, in the order it arrived. The
+    app posts its own status right after the meeting, so what waited is already in front of you.
 - **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
   the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
   real photo in the topic and strips the line from the text.
@@ -684,6 +726,16 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   name). One task per line, this exact convention:
   `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked` · `- [-] not doing`
   Short imperative task texts; headers/notes are ignored by the parser.
+- **DONE MEANS READY TO MERGE (owner directive, 2026-08-13).** `- [x]` is: built, reviewed by
+  someone who did NOT write it, and no open blocking finding against it. **Not landed on the default
+  branch** — *"the merge doesn't count, it's not work, it's just a merge"*. Holding finished work at
+  `[>]` until it lands makes the bar read as nothing while the work is done, and makes it go
+  BACKWARDS every time a review adds a line: a metric that punishes discovery and ignores completion
+  is wrong twice.
+  **It is a real bar in the other direction, and this half is the one that gets gamed.** An
+  implementer's own "done" is NOT ready-to-merge — nobody reviews their own work, so their report is
+  a claim, not a clearance. Neither is "reviewed, with open HIGHs". If no independent reader has
+  cleared it, it is `[>]`, however finished it feels.
 - **A ledger line is a DELIVERABLE, not an EVENT.** It must be something that can be FINISHED:
   "fix the limits staleness bug" is a line, "imp-1: audit, 22 findings" is a diary entry. An event
   can never be marked done, so it sits in the denominator forever and drags the percentage down for
@@ -699,9 +751,12 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
 - **Blocked lines should say what they are blocked ON**: `- [!] migrate the state file — blocked on:
   owner decision on the schema`. The owner reads these verbatim in `/left`, and "blocked" without a
   reason tells them nothing they can act on.
-- **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
-  the owner → `[!]`. A stale ledger is worse than none — the owner can pull it up at any moment
-  from their phone with `/progress` (or `/left`), which the APP answers straight from this file.
+- **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified **and cleared by a
+  reviewer who did not write it** → `[x]`; waiting on the owner → `[!]`. A report you have accepted
+  at your own boundary but nobody independent has read is still `[>]` — your acceptance is not the
+  clearance, and the merge that follows is not the completion. A stale ledger is worse than none —
+  the owner can pull it up at any moment from their phone with `/progress` (or `/left`), which the
+  APP answers straight from this file.
 - **It prints EVERY line, in your order, with nothing hidden, capped or truncated** — `[x]` and
   `[-]` rows included. So the length of what they read is the length of what you wrote, and a ledger
   full of finished lines gives them a LONG answer, not a short one. **Keeping it to 7-8 macro lines
@@ -800,6 +855,14 @@ prev=""; fails=0
 if read_fp; then prev="$FP"; else fails=1; mark_unreadable "$FP_ERR"; fi
 while true; do
   sleep 5
+  # MEETING: the owner is at your terminal (/pc). Stay armed, say NOTHING — and do NOT advance
+  # `prev`, which is the load-bearing half: the first tick after the flag is gone sees the whole
+  # difference and fires exactly ONCE, so the meeting costs you no notifications and loses no wake.
+  # It sits ABOVE the read for the same reason: a failed read during a meeting must not spend a
+  # strike or raise the blind alarm into the terminal the owner is talking in.
+  if [ -f "$sup/.meeting" ]; then
+    continue
+  fi
   if read_fp; then
     fails=0
     if [ -n "$prev" ] && [ "$FP" != "$prev" ]; then
@@ -835,6 +898,14 @@ implementers yet from looking permanently unreadable.
 `read_fp` keeps `prev` untouched when it cannot read, so an append that lands during a failed spell
 still fires on the next successful read — nothing is lost by waiting. After twelve consecutive
 failures the loop says it is blind, once, in words that cannot be mistaken for traffic.
+
+**The `.meeting` check is not optional and not decoration.** Without it every append during a meeting
+prints a wake notification into the terminal the owner is trying to talk in — which is the complaint
+that created this mode. Without the `continue`-without-advancing shape, silence would swallow the
+resumption wake instead of deferring it, and you would sit deaf until some unrelated append arrived.
+The APP writes and removes that file; you never create it, and you never delete it to get your
+notifications back.
+
 
 **Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
 2026-08-07 twenty-nine background watchers were killed across four sessions of one orchestration,

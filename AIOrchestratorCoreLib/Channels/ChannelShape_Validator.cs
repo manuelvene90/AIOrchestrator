@@ -79,6 +79,37 @@ public static partial class ChannelShape_Validator
     private static partial Regex Attempted_Header_Regex();
 
     /// <summary>
+    /// How many bytes of the offending line are dumped. The header prefix is what decides the
+    /// verdict, so the first ~96 bytes carry the evidence; a whole subject line would put kilobytes
+    /// of hex into the log for nothing.
+    /// </summary>
+    const int DIAGNOSTIC_BYTE_CAP = 96;
+
+    /// <summary>
+    /// What the app SAW, for the log — the bytes, the length, and which of the two regexes matched.
+    ///
+    /// <para>
+    /// WHY BYTES AND NOT TEXT. Twice on 2026-08-13 a well-formed header was flagged, and the report
+    /// quoted a line that read as complete and canonical — em-dashes, plain index, single spaces. The
+    /// leading hypothesis was a read landing mid-append, which would have to produce a TRUNCATED
+    /// capture; both captures were complete, so it was refuted twice and the cause is still unknown.
+    /// </para>
+    /// <para>
+    /// The investigation stalled because the only evidence was TEXT, and text is exactly what cannot
+    /// separate these cases: a complete line and a line that merely renders complete look identical.
+    /// The instrument could not see what it was measuring. This is that gap closed — the next
+    /// occurrence carries its own proof instead of another argument.
+    /// </para>
+    /// </summary>
+    public static string Diagnose(string line)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(line);
+        var shown = Math.Min(bytes.Length, DIAGNOSTIC_BYTE_CAP);
+
+        return $"len={bytes.Length}B attempted={Looks_LikeAttemptedHeader(line)} parses={ChannelEntry_Parser.Is_HeaderLine(line)} hex[0..{shown}]={Convert.ToHexString(bytes, 0, shown)}";
+    }
+
+    /// <summary>
     /// The key a caller remembers a reported header by, scoped to its channel so two channels carrying
     /// the same line are two facts.
     ///

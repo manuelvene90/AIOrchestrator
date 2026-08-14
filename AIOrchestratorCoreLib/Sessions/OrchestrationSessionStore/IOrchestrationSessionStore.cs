@@ -33,6 +33,9 @@ public interface IOrchestrationSessionStore
 
     /// <summary>Per-topic delivery mode (Normal / Deferred = queued / Silenced = dropped).</summary>
     void Set_TelegramMode(string orchId, Telegram.TelegramDeliveryModes mode);
+
+    /// <summary>Where the owner is for this orchestration — see IOrchestrationSession.OwnerPresence.</summary>
+    void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence);
     void Set_MemberPid(string orchId, string memberId, int? pid);
     void Set_DisplayName(string orchId, string displayName);
     void Set_SupervisorModelOverride(string orchId, string? model);

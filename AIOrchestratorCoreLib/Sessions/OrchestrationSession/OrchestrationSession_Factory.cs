@@ -32,7 +32,8 @@ public static class OrchestrationSession_Factory
         IReadOnlyList<IOrchestrationMember> members,
         TelegramDeliveryModes telegramMode,
         DateTime? closedUtc,
-        long? statusLineMessageId = null)
+        long? statusLineMessageId = null,
+        OwnerPresenceModes ownerPresence = OwnerPresenceModes.Remote)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -40,7 +41,7 @@ public static class OrchestrationSession_Factory
         return new OrchestrationSessionModel(
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
-            telegramMode, closedUtc, statusLineMessageId);
+            telegramMode, ownerPresence, closedUtc, statusLineMessageId);
     }
 
     /// <summary>
@@ -111,6 +112,12 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, telegramMode: mode);
     }
 
+    /// <summary>Where the owner IS — orthogonal to the delivery mode, which stays as they set it.</summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithOwnerPresence(IOrchestrationSession existing, OwnerPresenceModes presence)
+    {
+        return CreateFrom_Existing(existing, ownerPresence: presence);
+    }
+
     public static IOrchestrationSession CreateFrom_Existing_Closed(IOrchestrationSession existing, DateTime closedUtc)
     {
         return CreateFrom_Existing(existing, closedUtc: closedUtc);
@@ -136,6 +143,7 @@ public static class OrchestrationSession_Factory
         bool implementerModelWasSet = false,
         IReadOnlyList<IOrchestrationMember>? members = null,
         TelegramDeliveryModes? telegramMode = null,
+        OwnerPresenceModes? ownerPresence = null,
         DateTime? closedUtc = null,
         long? statusLineMessageId = null,
         bool statusLineMessageIdWasSet = false)
@@ -155,6 +163,7 @@ public static class OrchestrationSession_Factory
             members ?? existing.Members,
             telegramMode ?? existing.TelegramMode,
             closedUtc ?? existing.ClosedUtc,
-            statusLineMessageIdWasSet ? statusLineMessageId : existing.StatusLineMessageId);
+            statusLineMessageIdWasSet ? statusLineMessageId : existing.StatusLineMessageId,
+            ownerPresence ?? existing.OwnerPresence);
     }
 }

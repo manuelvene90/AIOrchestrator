@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Channels;
+﻿using AIOrchestratorCoreLib.Channels;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Channels;
@@ -173,5 +173,32 @@ public class ChannelShapeValidatorTests
     {
         Assert.Empty(ChannelShape_Validator.Find_MalformedHeaders(""));
         Assert.Empty(ChannelShape_Validator.Find_MalformedHeaders("# Channel\n\nSeed preamble, no entries yet.\n"));
+    }
+    /// <summary>
+    /// The diagnosis must carry BYTES, not text. Two well-formed headers were flagged on 2026-08-13
+    /// and the reports quoted lines that read as canonical, so the investigation could not tell a
+    /// complete line from one that merely rendered complete. This is the evidence that separates them.
+    /// </summary>
+    [Fact]
+    public void Diagnose_ReportsTheBytes_TheLength_AndBOTHVerdicts()
+    {
+        var diagnosis = ChannelShape_Validator.Diagnose("## [2b] FROM supervisor — d — s");
+
+        Assert.Contains("attempted=True", diagnosis);
+        Assert.Contains("parses=False", diagnosis);
+
+        // "## [" is 23 23 20 5B — the prefix that decides the verdict.
+        Assert.Contains("2323205B", diagnosis);
+        Assert.Contains("len=", diagnosis);
+    }
+
+    /// <summary>A canonical header diagnoses as parsing — otherwise the flags would say nothing.</summary>
+    [Fact]
+    public void Diagnose_OfAWellFormedHeader_SaysItParses()
+    {
+        var diagnosis = ChannelShape_Validator.Diagnose("## [57] FROM supervisor — 2026-08-13 21:36 — subject");
+
+        Assert.Contains("attempted=True", diagnosis);
+        Assert.Contains("parses=True", diagnosis);
     }
 }

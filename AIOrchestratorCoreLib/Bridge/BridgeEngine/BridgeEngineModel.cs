@@ -202,7 +202,39 @@ internal sealed class BridgeEngineModel(
         public long? PromptMessageId { get; init; }
     }
 
-    /// <summary>One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only).</summary>
+    /// <summary>
+    /// Crash-loop alerts taken from the watchdog that could not be delivered yet, and when each was
+    /// last attempted. The watchdog's queue is DRAINED by the take, so without this they were simply
+    /// gone — see <see cref="Send_CrashLoopAlerts_Async"/>.
+    /// <para>
+    /// KEYED ON THE ALERT, NOT THE ORCHESTRATION. It was keyed on the orchestration for one release,
+    /// which collapsed siblings: one watchdog pass checks the supervisor AND every member, each
+    /// registering its own respawn, and what tells them apart — "supervisor of X" versus "imp-2 of
+    /// X" — lives in the TEXT that "newest wins" overwrote. A machine-wide cause (a binary off PATH,
+    /// a machine that cannot fork) crash-loops every session in lockstep and reaches the threshold on
+    /// the same pass, so that is the common case rather than the exotic one, and it is unrecoverable:
+    /// the watchdog emits at <c>count != CRASH_LOOP_THRESHOLD</c> — exactly once — and the counter
+    /// resets only when that slot comes alive (rev-6 F1, 2026-08-13).
+    /// </para>
+    /// </summary>
+    readonly Dictionary<(string OrchId, string AlertText), CrashLoopAlertHold> _heldCrashLoopAlerts = [];
+
+    /// <summary>
+    /// A held crash-loop alert's delivery state: when it was last attempted, and how many attempts it
+    /// has cost. ATTEMPTS, not elapsed time, because a meeting or a DND spell holds the alert without
+    /// trying — counting wall-clock would let a long meeting spend the budget and drop an alert that
+    /// was never once offered to Telegram.
+    /// </summary>
+    readonly record struct CrashLoopAlertHold(DateTime LastAttemptUtc, int Attempts);
+
+    /// <summary>
+    /// How many failed sends a crash-loop alert costs before it is given up. It must TERMINATE: the
+    /// hold added for rev-6 F3 turned "one failed send" into a retry with no ceiling, and an alert
+    /// that can never be delivered — a closed topic, a revoked token — would otherwise log every
+    /// backoff for the life of the app (rev-5, 2026-08-13).
+    /// </summary>
+    const int CRASH_LOOP_ALERT_MAX_ATTEMPTS = 10;
+
     /// <summary>
     /// Channels already logged as holding an unterminated trailing entry. Cleared as soon as the
     /// tailer stops reporting one, so the next occurrence speaks again — content-addressed by the
@@ -210,6 +242,10 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly HashSet<string> _heldTrailingEntryFiles = [];
 
+    /// <summary>
+    /// One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only). Both are
+    /// written ONLY after a confirmed send, so an alert nobody received never marks itself delivered.
+    /// </summary>
     readonly HashSet<string> _stallAlertedOrchIds = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
@@ -417,8 +453,12 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     const int QUESTION_HOLD_CAP_MINUTES = 10;
 
-    /// <summary>Presence of this file in an orchestration folder stops its supervisor dead.</summary>
-    public const string AWAITING_ANSWER_FLAG_FILE = ".awaiting-answer";
+    /// <summary>
+    /// Presence of this file in an orchestration folder stops its supervisor dead. The name is
+    /// FORWARDED from the marker rather than restated: two copies of a filename that a bash hook
+    /// also hard-codes is one drift away from a block nothing can clear.
+    /// </summary>
+    public const string AWAITING_ANSWER_FLAG_FILE = Status.AwaitingAnswerFlag_Marker.FILE_NAME;
 
     /// <summary>Members waiting on a verdict, one id per line — read by the awaiting-answer hook.</summary>
     public const string AWAITING_VERDICT_FILE = ".awaiting-verdict";
@@ -763,6 +803,10 @@ internal sealed class BridgeEngineModel(
         // After closes are processed, so a freshly-closed session is not immediately revived.
         _watchdog.Check_AndRestart_DeadSessions();
 
+        // Before anything that could write to a channel: the flag is what keeps a supervisor's
+        // watcher silent, and a tick that appends before reconciling it would litter the meeting.
+        Sync_MeetingFlags();
+
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
@@ -968,26 +1012,175 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>A session respawning repeatedly without coming alive is INVISIBLE from the phone — escalate it.</summary>
+    /// <summary>
+    /// A session respawning repeatedly without coming alive is INVISIBLE from the phone — escalate it.
+    /// <para>
+    /// The queue is DRAINED by <c>Take_PendingCrashLoopAlerts</c>, so a silenced topic used to lose
+    /// its alerts outright: taken, skipped, never re-queued. The tick's own comment promises the
+    /// opposite — "crash-loop alerts stay queued in the watchdog until unmute" — which is true of
+    /// app-wide DND (it returns above this) and was false of a meeting, which runs on through it
+    /// (rev-7 P6, 2026-08-13). They are held here instead, newest per orchestration, and delivered
+    /// when the topic can hear again.
+    /// </para>
+    /// </summary>
     async Task Send_CrashLoopAlerts_Async(CancellationToken cancellationToken)
     {
+        // TryAdd, not assignment: an identical repeat is the same alert, while a SIBLING session's
+        // alert differs in its text and must survive alongside it. Bounded because the watchdog
+        // emits each one exactly once, at the threshold.
         foreach (var alert in _watchdog.Take_PendingCrashLoopAlerts())
+            _heldCrashLoopAlerts.TryAdd((alert.OrchId, alert.AlertText), new CrashLoopAlertHold(default, 0));
+
+        if (_telegramClient == null)
         {
-            if (_telegramClient == null || Is_TopicSilenced(alert.OrchId))
+            // Nothing will ever deliver these, so holding them is a leak rather than a promise —
+            // but it is still a DROP, and this was the one exit of four that took it silently, in a
+            // method whose whole point is that a lost alert says so (rev-7). Logged per alert, and
+            // only when there is something to lose: on a machine with no bot configured this path
+            // runs every tick, and an unconditional line would bury the log it lives in.
+            foreach (var (orchId, alertText) in _heldCrashLoopAlerts.Keys)
+                _log.Log_Warning(orchId, $"Crash-loop alert dropped undelivered — Telegram is not configured, so nothing can ever deliver it: {alertText}");
+
+            _heldCrashLoopAlerts.Clear();
+            return;
+        }
+
+        foreach (var (key, hold) in _heldCrashLoopAlerts.ToList())
+        {
+            var heldSession = _store.Get_Session_OrNull(key.OrchId);
+
+            // A CLOSED orchestration's held alert is dropped, and BOTH reasons are real.
+            //
+            // Close_Orchestration asks for the Telegram topic to be DELETED —
+            // Delete_TelegramTopic_FireAndForget, called immediately after _store.Close_Orchestration.
+            // Stated precisely, because the looser version of this sentence was itself a finding
+            // (rev-6 F7): the call is conditional on there being a topic id, it is fire-and-forget,
+            // and it swallows-and-logs its failure — so a delete refused for want of rights leaves
+            // the topic alive. The stored TelegramTopicId is never cleared by any of this; what goes
+            // is the topic, not the id. When the delete does land, every later send against that id
+            // fails for ever; before it lands there is a window in which the alert WOULD arrive —
+            // the owner texted that a session is crash-looping in an orchestration they just ended.
+            //
+            // It is still NOT the bound below: that covers the cases nothing here can see — a topic
+            // the owner deleted from their phone, revoked bot rights — which Telegram answers 400
+            // for ever regardless of what this session thinks its state is.
+            // GENERAL IS NOT A CLOSED ORCHESTRATION, and treating it as one silenced the session
+            // that is the owner's own counterpart. General keeps no session.json and never gets
+            // one, so Get_Session_OrNull("general") returns null ALWAYS — not on an edge, on every
+            // tick — and this exit read that null as "closed, topic deleted". Its crash-loop alert
+            // was therefore discarded every single time, logged at INFO as an expected ending, for
+            // the one orchestration that is never closed and whose topic is alive and receiving.
+            // The watchdog emits once per episode, so the escalation was gone for good (rev-7 G1).
+            //
+            // The check is now the QUESTION IT MEANT: is this orchestration closed? General cannot
+            // be, and an unknown orchId still can — a session.json that has gone means the
+            // orchestration went with it.
+            if (key.OrchId != ChannelDiscovery.GENERAL_ORCH_ID && (heldSession == null || heldSession.ClosedUtc != null))
+            {
+                _heldCrashLoopAlerts.Remove(key);
+
+                // TWO STATES, TWO MESSAGES, because only one of them is a close. Get_Session_OrNull
+                // returns null on exactly one condition — session.json is not there — and
+                // Close_Orchestration PRESERVES that file (CreateFrom_Existing_Closed, saved back).
+                // So a closed orchestration always has a session.json, and an absent one was never
+                // closed: the single message asserted "the orchestration is closed" on the one
+                // disjunct where closure is definitionally impossible (rev-6 F6).
+                //
+                // G4 removed a deletion this line never checked, and replaced it with "so nothing is
+                // watching its topic" — which this line never checked either, and which is LESS
+                // checkable than the claim it replaced: several states satisfy ClosedUtc != null with
+                // the topic alive and readable (rev-6 F5). Each message now stops at what was
+                // computed, which for the closed case is the closure and nothing else.
+                if (heldSession == null)
+                    _log.Log_Warning(key.OrchId, $"Crash-loop alert dropped — there is no session.json for this orchestration: {key.AlertText}");
+                else
+                    _log.Log_Info(key.OrchId, $"Crash-loop alert dropped — the orchestration is closed: {key.AlertText}");
+
                 continue;
+            }
+
+            // AND A BOUND, because the hold turned "one failed send" into a retry with no ceiling.
+            // It counts ATTEMPTS, never elapsed time: a meeting or a DND spell holds the alert
+            // WITHOUT trying, and a wall-clock bound would let a long meeting spend the budget and
+            // discard an alert that was never once offered to Telegram.
+            //
+            // The give-up says WHICH alert and WHY. An alert that quietly stops retrying is the
+            // lost-alert failure returning through the door the hold just closed (decision 21).
+            if (hold.Attempts >= CRASH_LOOP_ALERT_MAX_ATTEMPTS)
+            {
+                _heldCrashLoopAlerts.Remove(key);
+                _log.Log_Warning(key.OrchId, $"Crash-loop alert GIVEN UP undelivered after {hold.Attempts} failed sends: {key.AlertText}");
+                continue;
+            }
+
+            // The EFFECTIVE MODE, not silence alone. Gating on Is_TopicSilenced pushed this straight
+            // to the phone for a topic explicitly set to DEFERRED — bypassing the frozen cursor that
+            // deferral promises — while app-wide DND held it, because the tick returns above this
+            // line. The two DNDs behaved oppositely for the same alert, and neither behaviour was
+            // written down anywhere (rev-6 F9, 2026-08-13). Held for both now: it is the same
+            // question, and the hold above is what makes holding safe rather than lossy.
+            if (Resolve_EffectiveMode(key.OrchId) != TelegramDeliveryModes.Normal)
+                continue;
+
+            // BACKOFF INSTEAD OF DROPPING. This removed the alert BEFORE the attempt, with a real
+            // reason: retrying every tick against a failing endpoint earns a server-side throttle.
+            // That reasoning does not survive the watchdog's ONE-SHOT semantics — it emits at
+            // CRASH_LOOP_THRESHOLD and the counter resets only when the slot comes alive — so a
+            // single 502 meant the owner was never told at all. Holding with a backoff answers the
+            // throttle concern without paying for it in lost alerts (rev-6 F3, 2026-08-13).
+            if (hold.LastAttemptUtc != default && DateTime.UtcNow - hold.LastAttemptUtc < TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS))
+                continue;
+
+            // The attempt is counted BEFORE it is made, so a send that throws still spends one — the
+            // bound must count what was tried, not what came back.
+            _heldCrashLoopAlerts[key] = new CrashLoopAlertHold(DateTime.UtcNow, hold.Attempts + 1);
 
             try
             {
-                var session = _store.Get_Session_OrNull(alert.OrchId);
-                await _telegramClient.Send_Message_Async(session?.TelegramTopicId, alert.AlertText, cancellationToken);
+                // NULL-CONDITIONAL, and it is load-bearing rather than defensive: General has no
+                // session, and a null thread id is how this client addresses the General topic. The
+                // non-conditional form was safe only while the exit above dropped every sessionless
+                // orchestration — the bug that exit had. Fixing one without the other would have
+                // turned a silent discard into a NullReferenceException on the same path.
+                await _telegramClient.Send_Message_Async(heldSession?.TelegramTopicId, key.AlertText, cancellationToken);
+
+                // Dropped only after a CONFIRMED send — the rule 71a849a applied to three memos
+                // while this site, its own immediate predecessor, contradicted it.
+                _heldCrashLoopAlerts.Remove(key);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                // FILTERED, and the filter is the fix. An HttpClient TIMEOUT throws
+                // TaskCanceledException, which IS an OperationCanceledException — so the unfiltered
+                // form rethrew a timeout as if the app were shutting down, and this loop died with
+                // the mirror tick around it.
+                //
+                // WHAT THAT BUYS, narrowed to what it delivers (rev-6, 2026-08-14). The tick survives
+                // a timeout here only when it had nothing else to send: the very next call,
+                // Send_StallAlerts_Async, rethrows bare on the same shape, and so do the budget
+                // alerts and the channel poll. Against a wedged endpoint every send times out, so
+                // the tick still dies one call later. One site is fixed, not the tick.
+                //
+                // NOR WAS THIS THE PATH THAT LOGGED NOTHING. The rethrow reached
+                // Run_MirrorLoop_Async's `catch (Exception ex)` and was logged as an ERROR carrying
+                // the whole exception. The real gain is ATTRIBUTION — which orchestration, which
+                // alert — and the price is a LEVEL: an ERROR with a stack becomes a WARNING with
+                // ex.Message. Worth it, and said out loud so nobody meets it as a surprise.
+                //
+                // What is unchanged and was always true: the attempt is counted one line above the
+                // send, so a timeout spent the give-up budget while this handler added nothing of its
+                // own to the log.
+                //
+                // AND THIS SITE WAS NOT THE OUTLIER — counted in this file at this sha rather than
+                // asserted: 43 `catch (OperationCanceledException`, 6 filtered, 37 unfiltered (5 and
+                // 38 before this change). Two unfiltered handlers sit 13 lines below a filtered one
+                // near the top, so even "the handlers at the top" does not hold. The 37 are their own
+                // ledger line, not this commit's (rev-7 G2, rev-6 F1/F2/F3, 2026-08-14).
                 throw;
             }
             catch (Exception ex)
             {
-                _log.Log_Warning(alert.OrchId, $"Crash-loop alert send failed: {ex.Message}");
+                _log.Log_Warning(key.OrchId, $"Crash-loop alert send failed, holding it for retry: {ex.Message}");
             }
         }
     }
@@ -1021,7 +1214,12 @@ internal sealed class BridgeEngineModel(
             if (Has_AnySessionWorkedWithin(session, STALL_ALERT_MINUTES))
                 continue;
 
-            if (!_stallAlertedOrchIds.Add(session.OrchId))
+            // SAME SHAPE AS THE BUDGET ALERT, found by sweeping the file for it rather than by a
+            // review: this took the token first, so both a meeting and a thrown send spent it on an
+            // alert nobody received. It is less severe only because it has a release above (traffic
+            // resuming clears it), so the loss is confined to the current stall rather than the
+            // process — the token is now taken after a confirmed send, like the other two.
+            if (_stallAlertedOrchIds.Contains(session.OrchId))
                 continue;
 
             if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
@@ -1032,6 +1230,9 @@ internal sealed class BridgeEngineModel(
             try
             {
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
+
+                // After a CONFIRMED send, so a failed one retries next tick.
+                _stallAlertedOrchIds.Add(session.OrchId);
                 _log.Log_Warning(session.OrchId, alertText);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
@@ -1379,6 +1580,14 @@ internal sealed class BridgeEngineModel(
             // two, so anything appearing between them is new and gets reported rather than absorbed.
             Baseline_IfUnseen(channel);
 
+            // BRACKET THE READ. `imp-2` named the one writer neither dead hypothesis covers:
+            // Channel_Compactor rewrites the live file wholesale rather than appending, which is a
+            // far wider window for a reader. This stat is what lets the next occurrence say whether
+            // ANY writer touched the file while it was being read — one stamp at report time would
+            // have nothing to compare against. It costs one stat per channel per tick, on a path
+            // that already reads every channel's full text.
+            var beforeRead = ChannelFile_Snapshot.Take_OrUnknown(channel.FilePath);
+
             var malformed = ChannelShape_Validator.Find_MalformedHeaders(UsageTotals_Reader.Read_Text_Safe(channel.FilePath));
 
             if (malformed.Count == 0)
@@ -1386,6 +1595,17 @@ internal sealed class BridgeEngineModel(
 
             List<(int LineNumber, string Line)> unreported = [];
 
+            // MASTER'S SHAPE ON PURPOSE — this memo is NOT this branch's to fix. The defect is real
+            // (the memo is committed here, before the append that reports these entries, so a failed
+            // append marks them reported for ever and the memo has no release) and it was fixed here
+            // independently, in the same lines, by `fix/atomic-channel-appends`. Two implementations
+            // of one fix carried most of that pair's 23 conflict regions, the largest count in the
+            // repo, and the class — "a memo recording work as done, moved to after the append
+            // succeeded", seven sites — belongs to that branch by ruling (supervisor, 2026-08-14).
+            //
+            // So these lines are byte-identical to master, deliberately, so that fix applies cleanly.
+            // UNTIL IT MERGES THIS SITE IS UNPROTECTED: the append below throws rather than returning
+            // false, and a throw here takes the rest of the mirror tick with it.
             foreach (var entry in malformed)
             {
                 // NEW IS THE WHOLE QUESTION NOW. This used to be `isNew && !isFirstSight`, because
@@ -1404,6 +1624,23 @@ internal sealed class BridgeEngineModel(
 
             if (unreported.Count == 0)
                 continue;
+
+            // THE BYTES, to the log only — nobody with a phone can act on a hex dump (decision 15).
+            //
+            // LOGGED BEFORE THE APPEND, AND THAT ORDERING IS DELIBERATE — do not "tidy" it to sit
+            // after the append to match the memo below it. A MEMO must be recorded after a confirmed
+            // write, because it must never record work that did not happen. A DIAGNOSTIC must be
+            // written before, because it must not vanish in exactly the case it exists to explain:
+            // an append that fails is the occurrence, and logging afterwards loses the evidence for
+            // it. Two different things, two different correct orderings, and they do not conflict
+            // (supervisor's ruling, 2026-08-14).
+            //
+            // Without this, the only record of an occurrence was the report itself — and twice on
+            // 2026-08-13 that report could not settle the question its own subject was sitting on.
+            var fileAcrossRead = ChannelFile_Snapshot.Describe_ChangeAcrossRead(beforeRead, ChannelFile_Snapshot.Take_OrUnknown(channel.FilePath));
+
+            foreach (var entry in unreported)
+                _log.Log_Warning(channel.OrchId, $"Malformed header — {Path.GetFileName(channel.FilePath)} line {entry.LineNumber} — {ChannelShape_Validator.Diagnose(entry.Line)} {fileAcrossRead}");
 
             if (!ChannelAppender.Append_AppEntry(
                     channel.FilePath, AppEntryAudiences.Agent,
@@ -1636,27 +1873,41 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // DEFERRED, NOT DROPPED — and BELOW the release above, which is reconciliation rather than
+        // attention, exactly as Sync_Flag is in the ledger check. An earlier version of this bail sat
+        // at the top of the method with a comment claiming nothing was reconciled below it; that line
+        // IS the reconciliation, and it is the only release this key has (the member-scoped sites key
+        // on "orchId/memberId", a disjoint namespace, and the stored timestamp is never read, so
+        // nothing else and no expiry can heal it).
+        //
+        // What that cost: a spell that ENDED during a meeting — the owner directs the supervisor to
+        // answer the reports, which is work a meeting explicitly continues — kept its token, and the
+        // NEXT spell, with a genuinely unanswered report in it, could not be nudged at all
+        // (rev-7 P2, 2026-08-13).
+        var presence = Resolve_Presence(session.OrchId);
+
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
+            return;
+
         // Once per quiet spell, not once per tick.
         if (_nudgedMemberUtc.ContainsKey(session.OrchId))
             return;
 
-        // Memo AFTER the nudge lands: it is once per quiet spell, and the spell only clears when
-        // every member stops waiting. Recording it for a nudge that was never written would leave
-        // the supervisor un-nudged for the entire remaining stall.
-        if (!ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
+        // The token is spent only on a nudge that LANDED — the memo goes AFTER, because this key's
+        // only release is the empty-waiting-list branch above, so recording it for an entry that was
+        // never written leaves the supervisor un-nudged for the whole remaining stall. The helper
+        // answers false for both reasons that can stop it: the owner is at the terminal, or the
+        // channel was locked for the whole budget (which it names in the log).
+        if (!Append_SupervisorAttention_UnlessMeeting(
+                session.OrchId,
                 $"unread reports waiting on you — {string.Join(", ", waitingMembers)}",
                 $"{string.Join(", ", waitingMembers)} filed entries you have not answered, and nothing has moved since. Read each of those channels from your last entry down and give a verdict. If your monitor is no longer running, arm a fresh one.",
-                DateTime.Now))
-        {
-            _log.Log_Warning(session.OrchId, "Supervisor idle-nudge could not be appended (channel locked) — not recorded as nudged; the next tick retries");
+                presence))
             return;
-        }
 
         _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
 
         _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
-        Raise_OrchestrationActivity(session.OrchId);
     }
 
     /// <summary>Returns whether the nudge was actually written — see the guard at the append.</summary>
@@ -1818,32 +2069,44 @@ internal sealed class BridgeEngineModel(
                 lastVerdictUtc = Read_LedgerDebtStamp_OrDefault(session.OrchId);
 
             var isBehind = LedgerHealth_Tracker.Is_LedgerBehind(_paths, session.OrchId, lastVerdictUtc == default ? null : lastVerdictUtc);
-            LedgerHealth_Tracker.Sync_Flag(_paths, session.OrchId, isBehind);
 
-            if (!isBehind)
-            {
+            // The ORDER of the two halves is the correctness here, so the step owns it: the flag is
+            // reconciled even in a meeting (lifting a block is not an interruption), while the alert
+            // and its once-per-spell token are deferred. LedgerHealth_Step's own doc has the wedge
+            // that the other order produces.
+            // ONE read of presence for this orchestration's whole ledger decision — the mirror loop
+            // decides here while the inbound loop can flip presence, so asking twice lets the token
+            // be committed on one answer and the append refused on the other (rev-7 P5).
+            var presence = Resolve_Presence(session.OrchId);
+
+            var ledgerOutcome = LedgerHealth_Step.Reconcile(
+                _paths,
+                session.OrchId,
+                isBehind,
+                alreadyReported: _ledgerBehindReportedOrchIds.Contains(session.OrchId),
+                suppressed: OwnerPresence_Policy.Suppresses_SupervisorAttention(presence));
+
+            // FORGETTING is reconciliation and happens regardless; REMEMBERING is a claim that the
+            // alert went out, so it waits for the append (see Nudge_IdleSupervisor for the same rule
+            // and the same reason: the safe wrapper returns false where it once threw).
+            if (!ledgerOutcome.RemembersReported)
                 _ledgerBehindReportedOrchIds.Remove(session.OrchId);
-            }
-            else if (!_ledgerBehindReportedOrchIds.Contains(session.OrchId))
+
+            // The set is the "already told them" record and it is added only once the telling
+            // SUCCEEDED. Adding it as the condition rather than as the consequence meant a locked
+            // channel silenced the warning permanently while the flag file kept blocking the
+            // supervisor's turn end — a deadlock with nothing anywhere explaining it. The helper
+            // answers false for both reasons: the owner is at the terminal, or the channel stayed
+            // locked (which it names in the log, and the next tick retries).
+            if (ledgerOutcome.ShouldAppendAlert
+                && Append_SupervisorAttention_UnlessMeeting(
+                    session.OrchId,
+                    "PLAN.md is behind your verdicts",
+                    "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
+                    presence))
             {
-                // The set is the "already told them" record and it is added only once the telling
-                // succeeded. Adding it as the branch condition meant a locked channel silenced the
-                // warning permanently while the flag file kept blocking the supervisor's turn end —
-                // a deadlock with nothing anywhere explaining it.
-                if (!ChannelAppender.Append_AppEntry(
-                        _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
-                        "PLAN.md is behind your verdicts",
-                        "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
-                        DateTime.Now))
-                {
-                    _log.Log_Warning(session.OrchId, "Ledger-behind warning could not be appended (channel locked) — not recorded as reported; the next tick retries");
-                    continue;
-                }
-
                 _ledgerBehindReportedOrchIds.Add(session.OrchId);
-
                 _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
-                Raise_OrchestrationActivity(session.OrchId);
             }
 
             Report_LedgerShape(session);
@@ -1876,6 +2139,20 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Report_LedgerShape(IOrchestrationSession session)
     {
+        // Above the FINGERPRINT, not at the append: recording the offending set while suppressed
+        // marks this shape as already reported, and the complaint never comes back after the meeting.
+        //
+        // Safe at the TOP here, unlike the nudge above, and for a reason worth stating rather than
+        // asserting: the memo below is CONTENT-ADDRESSED, not a one-shot token. Any later change to
+        // the offending set differs from what is remembered and fires on its own, and a set that
+        // cleared during the meeting simply re-records as empty afterwards. A tick skipped here
+        // therefore cannot strand anything — which is exactly what a skipped tick DOES do to a
+        // presence token (rev-7 P2) or to a flag nothing else deletes (LedgerHealth_Step).
+        var presence = Resolve_Presence(session.OrchId);
+
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
+            return;
+
         var planFile = _paths.Get_PlanFile(session.OrchId);
 
         if (!File.Exists(planFile))
@@ -1899,20 +2176,15 @@ internal sealed class BridgeEngineModel(
         // Fingerprint AFTER the warning lands: it suppresses re-reporting until the offending set
         // changes, so recording it for a warning that was never written hides the problem until the
         // supervisor happens to edit those same lines.
-        if (!ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
-                "PLAN.md has lines that cannot show progress",
-                $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
-                DateTime.Now))
-        {
-            _log.Log_Warning(session.OrchId, "PLAN.md shape warning could not be appended (channel locked) — fingerprint not recorded; the next tick retries");
+        if (!Append_SupervisorAttention_UnlessMeeting(
+            session.OrchId,
+            "PLAN.md has lines that cannot show progress",
+            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
+            presence))
             return;
-        }
 
         _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
-
         _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
-        Raise_OrchestrationActivity(session.OrchId);
     }
 
     /// <summary>Runaway guard: a per-orchestration token ceiling the owner sets in config.json.</summary>
@@ -1930,13 +2202,14 @@ internal sealed class BridgeEngineModel(
 
             var (_, tokens) = UsageTotals_Reader.Build_OrchestrationTotals(_paths, session);
 
-            if (tokens < budgetTokens.Value)
-                continue;
-
-            if (!_budgetAlertedOrchIds.Add(session.OrchId))
-                continue;
-
-            if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+            // The token is spent only on an alert that actually WENT OUT — this took it before
+            // consulting the mode (rev-7 P1), and then before the send itself (rev-6). Nothing
+            // anywhere releases it, so either order lost the alert for the life of the process.
+            if (!BudgetAlert_Planner.Should_Send(
+                    tokens,
+                    budgetTokens.Value,
+                    alreadyAlerted: _budgetAlertedOrchIds.Contains(session.OrchId),
+                    Resolve_EffectiveMode(session.OrchId)))
                 continue;
 
             var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: {UsageTotals_Reader.Format_Tokens(tokens)} used — past the {UsageTotals_Reader.Format_Tokens(budgetTokens.Value)} budget you set.";
@@ -1944,6 +2217,11 @@ internal sealed class BridgeEngineModel(
             try
             {
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
+
+                // THE ONLY WRITE. After a CONFIRMED send, so a failure retries on the next tick
+                // instead of being remembered as delivered — the rule from "the owner's answer
+                // survives a failed Telegram send", which this file had not carried across.
+                _budgetAlertedOrchIds.Add(session.OrchId);
                 _log.Log_Warning(session.OrchId, alertText);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
@@ -2110,7 +2388,11 @@ internal sealed class BridgeEngineModel(
             // DEFERRED topics are not polled at all, so their offsets FREEZE and everything they
             // produced replays the moment the mode goes back to Normal. (Silenced topics ARE
             // polled — their traffic is dropped, deliberately never replayed.)
-            if (Resolve_EffectiveMode(channel.OrchId) == TelegramDeliveryModes.Deferred)
+            //
+            // The topic's OWN deferral is asked about separately from the effective mode, because
+            // presence turns a Deferred topic into a Silenced one — which would poll it and consume
+            // the very backlog the deferral was holding. See Freezes_Offsets.
+            if (EffectiveMode_Resolver.Freezes_Offsets(Resolve_EffectiveMode(channel.OrchId), session.TelegramMode))
                 continue;
 
             // WAIT holds BOTH directions. It means "hold on, I am still writing" — so the
@@ -2428,21 +2710,14 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     TelegramDeliveryModes Resolve_EffectiveMode(string orchId)
     {
-        if (orchId != ChannelDiscovery.GENERAL_ORCH_ID)
-        {
-            var topicMode = _store.Get_Session_OrNull(orchId)?.TelegramMode ?? TelegramDeliveryModes.Normal;
-
-            if (topicMode != TelegramDeliveryModes.Normal)
-                return topicMode;
-        }
-
-        if (_telegramMuted)
-            return TelegramDeliveryModes.Deferred;
-
-        if (_silenceAllTopics)
-            return TelegramDeliveryModes.Silenced;
-
-        return TelegramDeliveryModes.Normal;
+        // GATHERS, decides nothing — the ORDER of these opinions is the decision, and it is not one
+        // a reader or a test could see while it lived here (rev-4, 2026-08-13).
+        return EffectiveMode_Resolver.Resolve(
+            Resolve_Presence(orchId),
+            isGeneral: orchId == ChannelDiscovery.GENERAL_ORCH_ID,
+            topicMode: _store.Get_Session_OrNull(orchId)?.TelegramMode ?? TelegramDeliveryModes.Normal,
+            appWideDeferred: _telegramMuted,
+            appWideSilenced: _silenceAllTopics);
     }
 
     /// <summary>Silence is TOTAL for a topic: its mirrored entries AND its alerts.</summary>
@@ -2513,10 +2788,15 @@ internal sealed class BridgeEngineModel(
                 };
             }
 
-            // It asked; now it stops. The hook refuses every tool until the owner answers.
+            // It asked; now it stops. The hook refuses every tool until the owner answers — unless
+            // the owner is IN this orchestration's terminal, where the answer is being typed at the
+            // session itself and the flag would freeze the very conversation it is waiting for.
             if (channel.IsOwnerChannel)
             {
-                Raise_AwaitingAnswerFlag(channel.OrchId);
+                if (OwnerPresence_Policy.Should_RaiseAwaitingAnswer(Resolve_Presence(channel.OrchId)))
+                    Raise_AwaitingAnswerFlag(channel.OrchId);
+                else
+                    _log.Log_Info(channel.OrchId, "Terminal mode: question asked WITHOUT the awaiting-answer block — the owner is in this session's terminal");
             }
         }
     }
@@ -3678,36 +3958,6 @@ internal sealed class BridgeEngineModel(
             _log.Log_Warning(confirmation.OrchId, $"answerCallbackQuery failed on a close confirmation: {ex.Message}");
         }
 
-        // Record the decision on the prompt itself BEFORE acting: confirming deletes the topic, and
-        // an edit sent afterwards would have nowhere to land.
-        if (tap.MessageId != null)
-        {
-            // WHAT THE TOPIC IS LEFT SAYING, and it followed the close wording unconditionally — so a
-            // promoted orchestration's topic read "Closed — you confirmed" for ever, about something
-            // that had just gained two sessions.
-            //
-            // The kind comes from the FILE, like every other decision on this path. An unreadable one
-            // yields neutral wording rather than the close wording: guessing "closed" is how a record
-            // comes to say the opposite of what happened.
-            var decided = CloseConfirmationPrompt_Builder.Build_DecidedText(
-                tappedKind,
-                confirmation.OrchId,
-                confirmation.Confirms);
-
-            try
-            {
-                await client.Edit_MessageText_Async(tap.MessageId.Value, decided, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _log.Log_Warning(confirmation.OrchId, $"Could not record the close decision on the prompt: {ex.Message}");
-            }
-        }
-
         // A TAP IS THE OWNER SPEAKING, and this path returns before the generic routing that would
         // otherwise say so. Without it, declining a close woke the supervisor into a session where
         // the awaiting-answer hook denied every tool call until the flag expired — the owner would
@@ -3718,15 +3968,94 @@ internal sealed class BridgeEngineModel(
         Clear_OpenQuestions(confirmation.OrchId);
         Clear_AwaitingAnswerFlag(confirmation.OrchId);
 
-        if (confirmation.Confirms)
-            Execute_ConfirmedClose(confirmation);
-        else
-            Decline_CloseConfirmation(confirmation);
+        var result = confirmation.Confirms
+            ? Execute_ConfirmedClose(confirmation)
+            : Decline_CloseConfirmation(confirmation);
+
+        // THE DECISION IS RECORDED AFTER THE OUTCOME IS KNOWN, and it used to be recorded before.
+        //
+        // The old order had a stated reason — "confirming deletes the topic, and an edit sent
+        // afterwards would have nowhere to land". It is INAPPLICABLE to member closes, which delete no
+        // topic; and for orchestration closes it was a GENUINE GUARANTEE rather than a race, because
+        // the edit was awaited and the executor is synchronous, so the edit's round-trip finished
+        // before deleteForumTopic was constructed. Moving it gives that up knowingly.
+        //
+        // THE TRADE IS STILL RIGHT: the guarantee protected a message being destroyed in the same
+        // breath — the prompt lives IN the topic the close deletes, so nothing durable was bought by
+        // it, while the durable record goes to the General topic, which is never deleted. And on every
+        // outcome where the topic SURVIVES (member closes, declines, NotAttempted, and orchestration
+        // closes whose delete fails) this order is the only one that can tell the truth.
+        //
+        // Uncertain is NOT in that list, and it was: rev-6 corrected its own argument after this
+        // comment quoted it. Where the topic stands depends on WHERE the throw landed —
+        // Execute_Close deletes the topic at :2542 and appends to the general channel at :2544, so the
+        // canonical Uncertain (that append failing) has the topic already being torn down, exactly as
+        // Closed does. A throw at :2537-:2539 leaves it standing. It belongs on neither side of an
+        // unconditional list, so it is on neither; the argument only ever needed one member.
+        //
+        // THIS ORDER IS PINNED, and an earlier version of this comment claimed it could not be. Which
+        // sentence belongs to which outcome is covered in CloseConfirmationPrompt_Builder; that the
+        // edit happens AFTER the outcome is known is asserted by
+        // CloseTapArchiveProbeTests.ACloseThatThrewNeverTellsTheOwnerItSucceeded, which drives a real
+        // tap through a close that throws and reads the text this line sends. An edit written before
+        // the attempt can only ever claim success, so "Closed — you confirmed" on a failed close
+        // proves the edit ran first.
+        //
+        // The claim it replaces — "the suite cannot reach this, BridgeEngineModel is internal sealed
+        // with no InternalsVisibleTo" — is true of a decision made INSIDE this class and false of its
+        // EFFECTS: BridgeEngine_Factory is public and takes interfaces only, so the engine can be
+        // driven end to end. CloseImplementerGuardProbeTests did that first, and its summary records
+        // two members declaring the same wiring unpinnable before a reviewer pinned it. Do not re-add
+        // the stronger claim.
+        if (tap.MessageId != null)
+        {
+            try
+            {
+                await client.Edit_MessageText_Async(
+                    tap.MessageId.Value,
+                    CloseConfirmationPrompt_Builder.Describe_Decision(confirmation.OrchId, result.Request, result.Outcome),
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // ROUTINE ONLY WHERE THE TOPIC IS BEING DELETED UNDERNEATH THIS EDIT, which is not the
+                // same as "the close succeeded". A successful MEMBER close returns Closed too and
+                // deletes no topic, so keying the quiet path on the outcome alone silenced the case
+                // where the prompt is still standing with two live buttons on it.
+                //
+                // Exact rather than approximate here: we are holding a live client and a message
+                // inside the orchestration's own topic, so an orchestration close on this path always
+                // started the deletion.
+                var topicIsBeingDeleted =
+                    result.Outcome == CloseTapOutcomes.Closed
+                    && result.Request?.Kind == ParkedCloseKinds.Orchestration;
+
+                var message = $"Could not record the close decision on the prompt: {ex.Message}";
+
+                // A warning that fires on the healthy path is how a log stops being read; a failed
+                // edit anywhere else means the owner is looking at a prompt that says something untrue.
+                if (topicIsBeingDeleted)
+                    _log.Log_Info(confirmation.OrchId, message);
+                else
+                    _log.Log_Warning(confirmation.OrchId, message);
+            }
+        }
 
         return true;
     }
 
-    void Execute_ConfirmedClose(CloseConfirmation confirmation)
+    /// <summary>
+    /// Runs the close and SAYS WHAT HAPPENED. It returned void, which is precisely why its caller
+    /// could not wait for it and announced success up front instead.
+    ///
+    /// WHICH outcome is chosen is not decided here — <see cref="CloseTapOutcome_Decider"/> owns that,
+    /// because a decision made in this class cannot be reached by the suite and this one is the fix.
+    /// </summary>
+    CloseTapResult Execute_ConfirmedClose(CloseConfirmation confirmation)
     {
         var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
 
@@ -3756,14 +4085,19 @@ internal sealed class BridgeEngineModel(
                 "NOT executed — your request could not be read just now",
                 "The owner's tap arrived, but your request file could not be read at that moment, so nothing was done. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
-            return;
+            return new CloseTapResult(CloseTapOutcome_Decider.Decide(null, null), null);
         }
+
+        Exception? failure = null;
 
         // WHAT THE TAP ACTUALLY AUTHORISED, set by the arm that runs rather than derived from the
         // kind afterwards. It was `Kind == Promotion ? "promoted" : "closed"` — which archived the
         // UNKNOWN-KIND arm, the one that deliberately does nothing, under the label "closed". The
         // comment three lines below said a wrong label leaves an audit trail saying the opposite of
         // what happened, and the arm that produced one was added in the same commit as the comment.
+        //
+        // IT IS ONLY HALF THE ARCHIVE WORD. This says what was authorised; whether it COMPLETED is
+        // the outcome's to say, and a run that threw is filed "uncertain" whatever arm it was in.
         var archiveLabel = "unexecuted";
 
         try
@@ -3820,20 +4154,53 @@ internal sealed class BridgeEngineModel(
                     confirmation.OrchId,
                     $"A confirmed request carried a kind this build cannot execute ('{request.Kind}') — NOTHING was done ({confirmation.ParkedPath})");
             }
+
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Already logged and reported to the general channel by Execute_Close. Swallowed HERE
             // because this runs on the inbound loop with nobody watching, and a throw would take the
             // loop down; the owner's own close does the opposite and surfaces it.
+            //
+            // SWALLOWED IS NOT UNREPORTED, and it used to be. Execute_Close marks the orchestration
+            // closed before it kills the sessions, so a throw between those two can leave it flagged
+            // closed with its terminals alive — and nothing re-offers it, because the store already
+            // says closed. It is kept rather than discarded so the outcome can say we do not know,
+            // instead of telling the owner it worked.
+            failure = ex;
         }
-        finally
-        {
-            // "closed" on a promotion would leave an audit trail saying the opposite of what happened
-            // to an orchestration that is still running — and so would "closed" on a kind this build
-            // could not execute at all, which is what the ternary here used to produce.
-            Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, archiveLabel);
-        }
+
+        // ARCHIVED HERE RATHER THAN IN A `finally`, AND THE ORDER MATTERS MORE THAN IT LOOKS.
+        //
+        // Describe_ForArchive can throw — deliberately, because a close that was never attempted has
+        // no archive word and that impossibility is worth stating. A throw raised inside a `finally`
+        // REPLACES any exception still in flight, so putting it there made the guard's safety depend
+        // on the catch above staying broad enough to leave nothing in flight. Narrow that catch later
+        // for a perfectly good reason and the `finally` would discard the real exception and report
+        // this one instead: the true failure invisible, the reported one a lie about it.
+        //
+        // The `finally` was guaranteeing nothing anyway. The catch swallows without rethrowing and the
+        // try body has no return, so control reaches this line on both paths regardless — it was
+        // redundant, and the redundancy was what carried the hazard.
+        //
+        // DO NOT MOVE THIS BACK INSIDE A `finally` for symmetry with the other archive call sites.
+        //
+        // The audit record is also what outlives the prompt: it filed "closed" whether or not the
+        // executor threw, so the artefact a person reads while reconstructing an incident asserted the
+        // very thing the owner's sentence was changed to stop asserting.
+        //
+        // TWO HALVES, TWO SOURCES. `archiveLabel` is what the tap authorised — "closed", "promoted",
+        // or "unexecuted" for a kind this build cannot act on — and it comes from the arm that ran,
+        // because deriving it from the kind afterwards is what filed a promotion under "closed". The
+        // OUTCOME is whether that run completed, and it overrides on failure: a throw is "uncertain"
+        // whichever arm it was in.
+        var outcome = CloseTapOutcome_Decider.Decide(request, failure);
+
+        Archive_ResolvedRequest_BestEffort(
+            confirmation.ParkedPath,
+            CloseTapOutcome_Decider.Describe_ForArchive(outcome, archiveLabel));
+
+        return new CloseTapResult(outcome, request);
     }
 
     /// <summary>
@@ -3874,7 +4241,7 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    void Decline_CloseConfirmation(CloseConfirmation confirmation)
+    CloseTapResult Decline_CloseConfirmation(CloseConfirmation confirmation)
     {
         var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
 
@@ -3896,7 +4263,19 @@ internal sealed class BridgeEngineModel(
             + "Do NOT drop the request again. If you believe the work really is finished, say so in one line and let them answer.");
 
         Report_CloseOutcome_ToGeneral(confirmation.OrchId, "declined by the owner", request);
-        Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "declined");
+        // THE WORD COMES FROM THE DECIDER, not from a literal here. This was the one archive site
+        // still choosing its own, which left Describe_ForArchive's Declined case reachable only from
+        // the confirmed path — where it can never be selected — so the suite was asserting a branch
+        // production does not call while the branch production DOES call went unpinned. Changing that
+        // literal to "closed" filed every refused close as a completed one, and nothing reddened.
+        Archive_ResolvedRequest_BestEffort(
+            confirmation.ParkedPath,
+            CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcomes.Declined));
+
+        // The request travels back for the same reason it does on the confirmed path: the sentence
+        // replacing the prompt has to name what the prompt named. It is null here when the file could
+        // not be read, and the wording falls back rather than guessing — `subject` above does the same.
+        return new CloseTapResult(CloseTapOutcomes.Declined, request);
     }
 
     /// <summary>
@@ -4107,6 +4486,7 @@ internal sealed class BridgeEngineModel(
                 // /pending become canned English requests routed to the general supervisor.
                 List<ITelegramOwnerMessage> routableMessages = [];
                 List<(string Command, long? ThreadId)> modeCommands = [];
+                List<long?> presenceCommands = [];
 
                 foreach (var message in batch.OwnerMessages)
                 {
@@ -4121,9 +4501,22 @@ internal sealed class BridgeEngineModel(
 
                     var command = Get_BotCommand_OrNull(message.Text);
 
+                    // ARRIVING FROM TELEGRAM AT ALL proves the owner is not at this orchestration's
+                    // terminal, so terminal mode ends by itself — the same shape as the auto-unmute,
+                    // and for the same reason: a mode they must remember to turn off is one they get
+                    // trapped by. /pc excludes itself, or the command would be undone by its own
+                    // delivery.
+                    Flip_ToRemote_IfOwnerTextedFromTelegram(message.MessageThreadId, command == "pc");
+
                     // Telegram's own command menu only allows [a-z0-9_], so the menu entries are
                     // mute_all/dnd_all while a hand-typed mute-all works just as well.
-                    if (command == "dnd" || command == "mute" || command == "unmute"
+                    if (command == "pc")
+                    {
+                        // Deferred with the mode commands, and for the same reason: toggling must not
+                        // race the ✓ acks of the batch it arrived in.
+                        presenceCommands.Add(message.MessageThreadId);
+                    }
+                    else if (command == "dnd" || command == "mute" || command == "unmute"
                         || command == "dnd-all" || command == "mute-all" || command == "dnd_all" || command == "mute_all")
                     {
                         // Deferred until after the loop: toggling must not race the ✓ acks, and a
@@ -4222,6 +4615,9 @@ internal sealed class BridgeEngineModel(
                 foreach (var modeCommand in modeCommands)
                     await Apply_ModeCommand_Async(client, modeCommand.Command, modeCommand.ThreadId, cancellationToken);
 
+                foreach (var presenceThreadId in presenceCommands)
+                    await Apply_PresenceCommand_Async(client, presenceThreadId, cancellationToken);
+
                 // Our own topic renames make Telegram post "changed the topic name" notices —
                 // delete them so a mode toggle leaves the conversation clean.
                 foreach (var serviceMessageId in batch.TopicServiceMessageIds)
@@ -4311,6 +4707,7 @@ internal sealed class BridgeEngineModel(
                     ("dnd", "Toggle 🌙 this topic — hold its messages for later (in General: everywhere)"),
                     ("mute_all", "Toggle 🔕 everywhere"),
                     ("dnd_all", "Toggle 🌙 everywhere"),
+                    ("pc", "Toggle 💻 THIS topic — I'm at its terminal, don't text or block"),
                     ("italian", "Toggle 🇮🇹 — translate what I send you"),
                 ],
                 cancellationToken);
@@ -4947,6 +5344,138 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// `/pc` — the owner is (or is no longer) at THIS orchestration's terminal. Scoped to the topic
+    /// it was typed in, like the mode commands; a `/pc_all` is deliberately NOT built yet, but this
+    /// is one loop away from being one.
+    /// </summary>
+    async Task Apply_PresenceCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        // NO THREAD ID IS THE GENERAL TOPIC, and the owner sits at that terminal too — it is the
+        // session they talk to most. General keeps no session.json, so its meeting flag IS its
+        // presence rather than a projection of one.
+        if (messageThreadId == null)
+        {
+            var generalPresence = OwnerPresence_Policy.Toggle(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID));
+
+            Sync_MeetingFlag_AndReport(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
+            Apply_Presence_ToAwaitingAnswerFlag(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
+            _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"Owner presence → {generalPresence}");
+            Tell_Supervisor_AboutPresence(ChannelDiscovery.GENERAL_ORCH_ID, generalPresence);
+
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Presence(generalPresence), cancellationToken);
+            return;
+        }
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "/pc works in an orchestration's topic or in General — it says which terminal you are sitting at.", cancellationToken);
+            return;
+        }
+
+        try
+        {
+            var newPresence = OwnerPresence_Policy.Toggle(session.OwnerPresence);
+
+            _store.Set_OwnerPresence(session.OrchId, newPresence);
+            Sync_MeetingFlag_AndReport(session.OrchId, newPresence);
+            Apply_Presence_ToAwaitingAnswerFlag(session.OrchId, newPresence);
+            _log.Log_Info(session.OrchId, $"Owner presence → {newPresence}");
+            Raise_OrchestrationActivity(session.OrchId);
+
+            Tell_Supervisor_AboutPresence(session.OrchId, newPresence);
+
+            // Sent BEFORE the new presence takes hold on the next tick, so the confirmation itself
+            // is not the first thing terminal mode drops.
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Presence(newPresence), cancellationToken);
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "'/pc' failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"could not change presence: {ex.Message}", cancellationToken);
+        }
+    }
+
+    static string Describe_Presence(OwnerPresenceModes presence)
+    {
+        return presence == OwnerPresenceModes.Terminal
+            ? "💻 TERMINAL — I will not text this topic, and its supervisor will not stop to wait for a tap. Talk to it in its terminal; anything you send here puts it back to remote."
+            : "📱 REMOTE — texting resumes, and questions here will wait for your answer again.";
+    }
+
+    /// <summary>
+    /// The supervisor must be TOLD, not left to infer it: in terminal mode it should ask in the
+    /// terminal and stop writing QUESTION:/OPTION: lines that will never be tapped.
+    /// </summary>
+    void Tell_Supervisor_AboutPresence(string orchId, OwnerPresenceModes presence)
+    {
+        var subject = presence == OwnerPresenceModes.Terminal
+            ? "the owner is now AT YOUR TERMINAL — talk to them there"
+            : "the owner is back on Telegram — questions are texted again";
+
+        var text = presence == OwnerPresenceModes.Terminal
+            ? "They are sitting in front of this session (💻). Ask them in the terminal, in plain prose: do NOT write "
+                + "QUESTION:/OPTION: lines, because nothing is being texted and there are no buttons to tap.\n\n"
+                + "You will also NOT be stopped after asking — the awaiting-answer block is off while they are here, "
+                + "so keep working unless what you asked actually gates the next step. Anything they send from "
+                + "Telegram puts this topic back to remote, and you get an entry here when it happens."
+            : "They are on their phone again (📱). Questions are texted, the awaiting-answer block is back on, and "
+                + "the usual protocol applies: ask ONE question, with options, and stop.";
+
+        var channelFile = orchId == ChannelDiscovery.GENERAL_ORCH_ID
+            ? _paths.GeneralChannelFile
+            : _paths.Get_OwnerChannelFile(orchId);
+
+        Append_AppEntry_Safe(channelFile, Channels.AppEntryAudiences.Agent, subject, text, DateTime.Now);
+        Raise_OrchestrationActivity(orchId);
+    }
+
+    /// <summary>
+    /// Any owner message ARRIVING FROM TELEGRAM proves they are holding a phone, so it ends EVERY
+    /// meeting rather than only the one whose topic they typed in — they cannot be at a terminal and
+    /// texting. This was topic-scoped, which left terminal mode with a single exit and an owner who
+    /// walked away without toggling leaving that orchestration silent indefinitely (rev-4 F6).
+    /// The decision is <see cref="OwnerPresenceFlip_Planner"/>'s; this does the moving.
+    /// </summary>
+    void Flip_ToRemote_IfOwnerTextedFromTelegram(long? messageThreadId, bool isPresenceCommandItself)
+    {
+        var textedOrchId = messageThreadId == null
+            ? ChannelDiscovery.GENERAL_ORCH_ID
+            : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value)?.OrchId;
+
+        // General carries its presence in the FLAG rather than a session, so it is gathered by hand
+        // and moved by hand — it has no session.json for the store to update.
+        List<OrchestrationPresence> presences =
+        [
+            new(ChannelDiscovery.GENERAL_ORCH_ID, Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID)),
+        ];
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc == null)
+                presences.Add(new OrchestrationPresence(session.OrchId, session.OwnerPresence));
+        }
+
+        foreach (var orchId in OwnerPresenceFlip_Planner.Resolve_Flips(presences, textedOrchId, isPresenceCommandItself))
+        {
+            if (orchId != ChannelDiscovery.GENERAL_ORCH_ID)
+                _store.Set_OwnerPresence(orchId, OwnerPresenceModes.Remote);
+
+            Sync_MeetingFlag_AndReport(orchId, OwnerPresenceModes.Remote);
+
+            _log.Log_Info(
+                orchId,
+                orchId == textedOrchId
+                    ? "Owner presence → Remote (they texted this topic)"
+                    : "Owner presence → Remote (they texted Telegram, so they are not at this terminal either)");
+
+            Tell_Supervisor_AboutPresence(orchId, OwnerPresenceModes.Remote);
+        }
+    }
+
     async Task Apply_AppWideMode_Async(ITelegramApiClient client, long? messageThreadId, TelegramDeliveryModes wantedMode, bool forceNormal, CancellationToken cancellationToken)
     {
         var alreadyOn = wantedMode == TelegramDeliveryModes.Deferred ? _telegramMuted : _silenceAllTopics;
@@ -5003,7 +5532,7 @@ internal sealed class BridgeEngineModel(
 
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId));
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence);
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -5514,19 +6043,29 @@ internal sealed class BridgeEngineModel(
                 // panel shows it live — which is the whole reason the app writes this and not the hook.
                 _log.Log_Warning(session.OrchId, description);
 
-                var reported = ChannelAppender.Append_AppEntry(
-                    _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
+                // THE BODY IS THE MARKER'S OWN SENTENCE AND NOTHING ELSE. It used to append "this is
+                // almost always the machine rather than the code — a machine that cannot fork cannot
+                // run them", which is a CAUSE nobody established: the marker says which predicate
+                // could not be evaluated and why, and the app has no way to know whether that was the
+                // machine or the guard. Pinned by GuardReportProbeTests, which asserts the body
+                // equals Describe_OrNull and names both invented claims.
+                var reported = Append_SupervisorAttention_UnlessMeeting(
+                    session.OrchId,
                     Status.GuardNotInForce_Marker.ENTRY_SUBJECT,
                     description,
-                    DateTime.Now);
+                    Resolve_Presence(session.OrchId));
 
-                // The marker goes ONLY if the report went. The catch below states this contract and
-                // used to enforce it for free, because a failed append THREW; once the appender
-                // started returning false instead, nothing threw, the delete ran anyway, and a
-                // report that was never written destroyed the record that would have retried it.
+                // The marker goes ONLY if the report went, and it is DEFERRED rather than dropped
+                // for either reason the report can be withheld: the owner is at the terminal, or the
+                // channel stayed locked. The catch below states this contract and used to enforce it
+                // for free, because a failed append THREW; once the appender started returning false
+                // instead, nothing threw, the delete ran anyway, and a report that was never written
+                // destroyed the record that would have retried it. Deleting it during a meeting
+                // would be the same loss by the other route — a standing warning that the guard is
+                // not running, dropped instead of held, with the supervisor never learning of it.
                 if (!reported)
                 {
-                    _log.Log_Warning(session.OrchId, "Guard-not-in-force report could not be appended (channel locked) — the marker survives and the next tick retries");
+                    _log.Log_Warning(session.OrchId, "Guard-not-in-force report was not appended (the owner is at the terminal, or the channel was locked) — the marker survives and the next tick retries");
                     continue;
                 }
 
@@ -5554,6 +6093,17 @@ internal sealed class BridgeEngineModel(
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
+                continue;
+
+            // Above the SIGNATURE, not at the append: storing it while suppressed marks this exact
+            // set of idle members as already flagged, and the flag never returns after the meeting.
+            //
+            // Safe at the TOP, for the same reason as Report_LedgerShape and NOT for the reason the
+            // nudge needed: the signature below is CONTENT-ADDRESSED, so any later change to who is
+            // idle fires on its own and a tick skipped here strands nothing.
+            var presence = Resolve_Presence(session.OrchId);
+
+            if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
                 continue;
 
             List<Status.IdleMember.IIdleMember> idle = [];
@@ -5590,41 +6140,27 @@ internal sealed class BridgeEngineModel(
             if (signature == (lastSignature ?? ""))
                 continue;
 
-            // Nothing idle: record the empty signature and move on — no write, nothing to fail.
+            // Nobody idle is FORGETTING — recorded regardless, so the next idle set flags again. A
+            // non-empty signature CLAIMS the flag was delivered, so it waits for the append: it
+            // re-fires only when the idle SET changes, and recording it for a flag that was never
+            // written means this exact set is never flagged again.
             if (idle.Count == 0)
             {
                 _flaggedIdleMembersByOrchId[session.OrchId] = signature;
                 continue;
             }
 
-            // Signature AFTER the flag lands. It re-fires only when the idle SET changes, so
-            // recording it for a flag that was never written means this exact set is never flagged
-            // again.
-            if (!Flag_IdleMembers_Entry(session, signature))
-            {
-                _log.Log_Warning(session.OrchId, "Idle-member flag could not be appended (channel locked) — signature not recorded; the next tick retries");
+            if (!Append_SupervisorAttention_UnlessMeeting(
+                    session.OrchId,
+                    Status.Retirement_Advisor.FLAG_SUBJECT,
+                    $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
+                    presence))
                 continue;
-            }
 
             _flaggedIdleMembersByOrchId[session.OrchId] = signature;
-            continue;
+            _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
         }
     }
-
-    /// <summary>Extracted so the caller can record its signature only when the entry landed.</summary>
-    bool Flag_IdleMembers_Entry(IOrchestrationSession session, string signature)
-    {
-        if (!ChannelAppender.Append_AppEntry(
-                _paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent,
-                Status.Retirement_Advisor.FLAG_SUBJECT,
-                $"{signature} — each declared STANDING BY and has nothing owed. Close what you are finished with: an idle member holds a window, a watcher and a context, and bills for all three. This is a REMINDER, not an instruction — if you still want one of them, keep it and ignore this.",
-                DateTime.Now))
-            return false;
-
-        _log.Log_Info(session.OrchId, $"Idle members flagged to the supervisor — {signature}");
-        return true;
-    }
-
 
     /// <summary>
     /// GATHERS, decides nothing. A closed member's channel is never read — 64% of 3.65 MB per tick —
@@ -5756,7 +6292,8 @@ internal sealed class BridgeEngineModel(
         try
         {
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
-            var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(baseName, Resolve_EffectiveMode(session.OrchId));
+            var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence);
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
@@ -6223,33 +6760,196 @@ internal sealed class BridgeEngineModel(
     /// the answer arrives. Queueing its output instead would have left it working in the
     /// background, which is precisely what makes an answer arrive against a changed world.
     /// </summary>
-    void Raise_AwaitingAnswerFlag(string orchId)
+    /// <summary>
+    /// Every app-generated entry whose PURPOSE is to get the supervisor working — nudges, ledger
+    /// complaints, idle flags, the periodic status. ONE choke point rather than a guard at each call
+    /// site: terminal mode has to suppress all of them, and six scattered checks is five chances to
+    /// add a seventh site later without noticing it interrupts the owner's meeting.
+    /// <para>
+    /// Returns whether it wrote. Traffic that is NOT attention-seeking keeps the raw appender: the
+    /// presence entries themselves (one of which is the resume signal), /resume, and away mode.
+    /// </para>
+    /// </summary>
+    /// <param name="presence">
+    /// The presence the CALLER already decided on. It is a parameter rather than a second
+    /// <c>Resolve_Presence</c> because these decisions run on the mirror loop while `/pc` is handled
+    /// on the inbound loop, so a flip can land between the two reads: the caller commits its
+    /// once-per-spell token on the first value and this method then refuses on the second, spending
+    /// the token on an entry nobody receives — the exact defect the callers exist to avoid
+    /// (rev-7 P5, 2026-08-13). Passing it also keeps this the single choke point: a new site must
+    /// supply the input, and cannot quietly skip the check.
+    /// </param>
+    bool Append_SupervisorAttention_UnlessMeeting(string orchId, string subject, string body, OwnerPresenceModes presence, Channels.AppEntryAudiences audience = Channels.AppEntryAudiences.Agent)
+    {
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
+            return false;
+
+        // The return value means "an entry is on disk", so a failed append must answer FALSE. It
+        // used to be an unconditional true because the append could only throw; now that a throw is
+        // caught, saying true would be the same defect this file spent the evening fixing — a
+        // caller logging a success for something that never landed.
+        if (!Append_AppEntry_Safe(_paths.Get_OwnerChannelFile(orchId), audience, subject, body, DateTime.Now))
+            return false;
+
+        Raise_OrchestrationActivity(orchId);
+        return true;
+    }
+
+    /// <summary>
+    /// Where the owner is for this orchestration. GENERAL has no session.json, so its meeting FILE is
+    /// the state rather than a projection of it — the owner sits at that terminal too, and refusing
+    /// it presence would have left the one session they talk to most as the only one that cannot go
+    /// quiet.
+    /// </summary>
+    OwnerPresenceModes Resolve_Presence(string orchId)
+    {
+        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
+        {
+            return Status.MeetingFlag_Marker.Is_InMeeting(_paths, orchId)
+                ? OwnerPresenceModes.Terminal
+                : OwnerPresenceModes.Remote;
+        }
+
+        return _store.Get_Session_OrNull(orchId)?.OwnerPresence ?? OwnerPresenceModes.Remote;
+    }
+
+    /// <summary>
+    /// Makes every meeting flag match its session's presence. Runs on every tick because it is two
+    /// file existence checks per orchestration, and because it is what stops a flag outliving the
+    /// mode: an app that died mid-meeting clears the flag as soon as it is running again.
+    /// </summary>
+    void Sync_MeetingFlags()
+    {
+        foreach (var session in _store.Load_All())
+        {
+            // A closed orchestration is never in a meeting, whatever its last presence said.
+            var presence = session.ClosedUtc == null ? session.OwnerPresence : OwnerPresenceModes.Remote;
+
+            Sync_MeetingFlag_AndReport(session.OrchId, presence);
+        }
+    }
+
+    /// <summary>
+    /// The ONE route every meeting-flag write goes through, so no site can forget to report a
+    /// failure. A flag that cannot be deleted silences a watcher permanently, and a session that has
+    /// stopped hearing anyone looks identical from outside to one that is simply quiet — so the
+    /// failure is named in the log rather than swallowed (decision 21: a guard that cannot evaluate
+    /// its predicate says so).
+    /// </summary>
+    bool Sync_MeetingFlag_AndReport(string orchId, OwnerPresenceModes presence)
+    {
+        var changed = Status.MeetingFlag_Marker.Sync(_paths, orchId, presence, out var failure);
+
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
+        else if (changed)
+            _log.Log_Info(orchId, $"Meeting flag {(presence == OwnerPresenceModes.Terminal ? "raised" : "cleared")} — this session's watcher goes {(presence == OwnerPresenceModes.Terminal ? "silent" : "live")}");
+
+        return changed;
+    }
+
+    /// <summary>
+    /// EVERY append this engine makes goes through here, and the reason is a whole tick rather than
+    /// one entry.
+    ///
+    /// <para>
+    /// <c>ChannelAppender</c> throws on failure, and these calls sit on the mirror tick with no
+    /// try around them — so one throw escapes to <see cref="Run_MirrorLoop_Async"/>, is logged as the
+    /// generic "Mirror tick failed", and skips **the entire rest of that tick**: the poll, the
+    /// mirror, the ledger check, the status push, compaction, <c>Persist_BridgeState</c>. A failed
+    /// Telegram send loses one alert; a failed local append loses one alert AND everything downstream
+    /// of it, with one line in the log that names neither the file nor the operation.
+    /// </para>
+    /// <para>
+    /// AND THE TRIGGER IS REAL, NOT THEORETICAL: <c>File.AppendAllText</c> opens the target
+    /// deny-write, so two concurrent appenders do not interleave — the second throws. This app runs
+    /// two loops that both append. `imp-9` measured 40 parallel appends producing 13 IOExceptions.
+    /// </para>
+    /// <para>
+    /// This is HALF a fix and must not be read as the whole one. It stops a throw taking the tick
+    /// down and names what failed; it does NOT stop the throw. `imp-9`'s <c>ChannelWrite_Lock</c>
+    /// removes the trigger inside the app, and the two are needed together: without the lock this
+    /// still drops entries (loudly, one at a time), and without this a single unlucky append still
+    /// costs a tick. Neither branch is sufficient alone.
+    /// </para>
+    /// </summary>
+    /// <param name="audience">
+    /// WHO the entry is for, decided at the point of writing rather than guessed from its wording
+    /// later. The mirror routes on this tag, so an Agent entry never reaches the phone.
+    /// </param>
+    bool Append_AppEntry_Safe(string channelFilePath, Channels.AppEntryAudiences audience, string subject, string body, DateTime nowLocal)
     {
         try
         {
-            File.WriteAllText(
-                Path.Combine(_paths.Get_OrchestrationFolder(orchId), AWAITING_ANSWER_FLAG_FILE),
-                DateTime.UtcNow.ToString("O"));
+            // THE APPENDER'S OWN ANSWER IS THE ANSWER. Since `imp-9`'s ChannelWrite_Lock landed,
+            // Append_AppEntry no longer throws on contention — it returns false when the channel
+            // stayed locked for the whole budget. Discarding that and returning an unconditional
+            // true would reintroduce the exact defect this wrapper's callers guard against: a memo
+            // recorded for an entry that is not on disk, suppressing the retry the next tick owes.
+            if (ChannelAppender.Append_AppEntry(channelFilePath, audience, subject, body, nowLocal))
+                return true;
+
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"Channel append could not take the lock — '{subject}' to '{channelFilePath}' was NOT written; nothing is recorded as done, so the next tick retries it");
+
+            return false;
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            _log.Log_Warning(orchId, $"Could not raise the awaiting-answer flag: {ex.Message}");
+            // Decision 21: name WHICH operation failed and on WHICH path. "Append failed" would be
+            // the same silence in different words, and this entry is now lost — nothing retries it.
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"Channel append FAILED and the entry is lost — '{subject}' to '{channelFilePath}' — {exception.GetType().Name}: {exception.Message}");
+
+            return false;
         }
+    }
+
+    /// <summary>The owner's own words, same protection and the same lost-entry warning.</summary>
+    void Append_OwnerEntry_Safe(string channelFilePath, string messageText, DateTime nowLocal)
+    {
+        try
+        {
+            ChannelAppender.Append_OwnerEntry(channelFilePath, messageText, nowLocal);
+        }
+        catch (Exception exception)
+        {
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"OWNER message append FAILED and the message is lost — '{channelFilePath}' — {exception.GetType().Name}: {exception.Message}");
+        }
+    }
+
+    void Raise_AwaitingAnswerFlag(string orchId)
+    {
+        Status.AwaitingAnswerFlag_Marker.Raise(_paths, orchId, out var failure);
+
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
     }
 
     void Clear_AwaitingAnswerFlag(string orchId)
     {
-        try
-        {
-            var flagFile = Path.Combine(_paths.Get_OrchestrationFolder(orchId), AWAITING_ANSWER_FLAG_FILE);
+        Status.AwaitingAnswerFlag_Marker.Clear(_paths, orchId, out var failure);
 
-            if (File.Exists(flagFile))
-                File.Delete(flagFile);
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Warning(orchId, $"Could not clear the awaiting-answer flag: {ex.Message}");
-        }
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
+    }
+
+    /// <summary>
+    /// What a presence change does to an already-raised block, which is the half `/pc` was missing:
+    /// it stopped the NEXT block and left the current one standing for its full ten-minute expiry,
+    /// with the owner in front of a session that would not answer them.
+    /// </summary>
+    void Apply_Presence_ToAwaitingAnswerFlag(string orchId, OwnerPresenceModes presence)
+    {
+        if (Status.AwaitingAnswerFlag_Marker.Apply_Presence(_paths, orchId, presence, out var failure))
+            _log.Log_Info(orchId, "The owner is at the terminal — the question block was lifted so the session can talk to them");
+
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
     }
 
     /// <summary>
@@ -6801,6 +7501,14 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
 
+            // MEETING: skipped BEFORE the stamp, deliberately. Stamping here would restart the
+            // 30-minute clock on every tick of the meeting, so the owner would leave terminal mode
+            // and then wait up to half an hour for the first status. Leaving the stamp alone means
+            // the very next tick after they return posts one — which IS the "what waited while we
+            // talked" summary, built by the formatter that already exists rather than a second copy.
+            if (OwnerPresence_Policy.Suppresses_SupervisorAttention(session.OwnerPresence))
+                continue;
+
             // No mode gate here: the status now rides the channel, so Normal mirrors it, Deferred
             // queues it (newest only) and Silenced drops it — all handled by the mirror already.
             var plan = PeriodicStatusSlot_Planner.Decide(now, Last_PeriodicStatusSlot_OrNull(session.OrchId));
@@ -6822,7 +7530,7 @@ internal sealed class BridgeEngineModel(
             // because "imp-1 is blocked waiting for you" is exactly what they need to know.
             if (Is_AwayMode())
             {
-                Post_StatusEntry(session.OrchId, Build_AwayUpdateText(session));
+                Post_StatusEntry(session.OrchId, Build_AwayUpdateText(session), session.OwnerPresence);
                 continue;
             }
 
@@ -6832,7 +7540,7 @@ internal sealed class BridgeEngineModel(
             if (!Has_WorkInFlight(session))
                 continue;
 
-            Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session));
+            Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session), session.OwnerPresence);
         }
 
         await Task.CompletedTask;
@@ -7277,20 +7985,21 @@ internal sealed class BridgeEngineModel(
     ///   Silenced — dropped, because the owner is reading the terminal live.
     /// Doing this by hand at each send site would have meant reimplementing all three.
     /// </summary>
-    void Post_StatusEntry(string orchId, string text)
+    void Post_StatusEntry(string orchId, string text, OwnerPresenceModes presence)
     {
-        // Return deliberately discarded: this is the periodic status, and a dropped one is SUPERSEDED
-        // rather than lost — the next carries the current state, and the Deferred path already
-        // collapses queued statuses to the newest for the same reason. Retrying it would deliver a
-        // stale snapshot the following tick is about to replace. Nothing records it as done, so
-        // nothing is left claiming work that did not happen.
-        ChannelAppender.Append_AppEntry(
-            _paths.Get_OwnerChannelFile(orchId), AppEntryAudiences.Owner,
-            MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
-            text,
-            DateTime.Now);
-
-        Raise_OrchestrationActivity(orchId);
+        // Suppressed WITHOUT spending the slot during a meeting (see Push_PeriodicStatus_Async), so
+        // the first tick after the owner leaves terminal mode posts a fresh status — which IS the
+        // "what waited while we talked" summary, built by the formatter that already exists.
+        //
+        // The presence is the CALLER's — the one it already decided the slot on — so the decision
+        // and the append cannot disagree about where the owner is (rev-7 P5).
+        //
+        // The helper's return is deliberately discarded, and only here: a dropped periodic status is
+        // SUPERSEDED rather than lost — the next carries the current state, and the Deferred path
+        // already collapses queued statuses to the newest for the same reason. Retrying it would
+        // deliver a stale snapshot the following tick is about to replace. Nothing records it as
+        // done, so nothing is left claiming work that did not happen.
+        Append_SupervisorAttention_UnlessMeeting(orchId, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, text, presence, Channels.AppEntryAudiences.Owner);
     }
 
     /// <summary>

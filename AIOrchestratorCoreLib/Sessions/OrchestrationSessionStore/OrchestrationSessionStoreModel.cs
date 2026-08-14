@@ -161,6 +161,15 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithOwnerPresence(session, presence));
+        }
+    }
+
     public void Set_MemberPid(string orchId, string memberId, int? pid)
     {
         lock (_writeLock)

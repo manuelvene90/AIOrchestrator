@@ -39,6 +39,7 @@ public static class SessionJson_Serializer
             ["implementerModelOverride"] = session.ImplementerModelOverride,
             ["members"] = membersArray,
             ["telegramMode"] = session.TelegramMode.ToString(),
+            ["ownerPresence"] = session.OwnerPresence.ToString(),
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
         };
 
@@ -90,7 +91,23 @@ public static class SessionJson_Serializer
             members,
             Read_TelegramMode(root),
             Get_DateTime_OrNull(root, "closedUtc"),
-            Get_Long_OrNull(root, "statusLineMessageId"));
+            Get_Long_OrNull(root, "statusLineMessageId"),
+            Read_OwnerPresence(root));
+    }
+
+    /// <summary>
+    /// Absent means REMOTE, which is what every session written before this field says. A missing
+    /// key must not read as "the owner is at the terminal" — that would suppress the awaiting-answer
+    /// flag for orchestrations nobody has ever put in terminal mode.
+    /// </summary>
+    static Telegram.OwnerPresenceModes Read_OwnerPresence(JsonObject root)
+    {
+        var node = root["ownerPresence"];
+
+        if (node != null && Enum.TryParse<Telegram.OwnerPresenceModes>(node.GetValue<string>(), out var parsed))
+            return parsed;
+
+        return Telegram.OwnerPresenceModes.Remote;
     }
 
     /// <summary>Reads the mode, still honouring the older boolean "telegramSilenced" key.</summary>
