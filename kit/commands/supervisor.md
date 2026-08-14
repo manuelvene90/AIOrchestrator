@@ -993,6 +993,23 @@ while true; do
 done
 ```
 
+**THE RULES THIS SCRIPT ENCODES — every one is load-bearing, none is a preference. The accounts
+below are why; read the relevant one BEFORE you propose changing, relaxing or "improving" any of
+them, because every one of these looks like ceremony from the outside and that is exactly how each
+came to be broken the first time.**
+
+- **A failed read is NOT a change.** `read_fp` checks each command's status and leaves `prev`
+  untouched when it cannot read.
+- **Your own append is not traffic.** `foreign_change` suppresses only when EVERY changed channel is
+  provably yours, per channel and never per tick. Any doubt fires.
+- **Never narrow the fingerprint to a text pattern.**
+- **Use a Monitor, never a `run_in_background` Bash task**, and never re-introduce re-arming or a
+  turn-start baseline.
+- **The `.meeting` check stays in that exact shape** — above the read, `continue` without advancing
+  `prev`. The APP writes and removes that file.
+- When it wakes you: read ALL channels, act, write your entries, end your turn. The monitor keeps
+  running — you do not touch it again.
+
 **A failed read is not a change, and the old `cat` pipeline could not tell you which had happened.**
 It discarded every exit status — the pipeline's status is `cut`'s, which succeeds on anything — so a
 read that could not run fired anyway. **One failed read produced exactly two phantom wakes**, one
@@ -1015,10 +1032,12 @@ handled exactly as below.
 whatever reached the pipe, so a `cat` that fails entirely hashes EMPTY INPUT and yields
 `d41d8cd98f00b204e9800998ecf8427e` — a perfectly valid-looking digest, with exit status 0. There is
 no output you could inspect to tell that apart from a real fingerprint, which is why the fix is not a
-retry or an emptiness check but a change of instrument: `md5sum` given the files directly returns
-non-zero if ANY of them could not be read, reports per file, and needs no buffer of every channel's
-bytes on a machine that is short of memory. `nullglob` is what keeps an orchestration with no
-implementers yet from looking permanently unreadable.
+retry or an emptiness check but a change of instrument: the commands are run PER FILE and each
+status is checked, so a file that could not be read is visible as a failure rather than as a change,
+and nothing has to buffer every channel's bytes on a machine that is short of memory. (This sentence
+used to describe one `md5sum` given all the files at once; that stopped being true when the
+fingerprint went per-file to tell your own appends from everyone else's.) `nullglob` is what keeps an
+orchestration with no implementers yet from looking permanently unreadable.
 
 `read_fp` keeps `prev` untouched when it cannot read, so an append that lands during a failed spell
 still fires on the next successful read — nothing is lost by waiting. After twelve consecutive
