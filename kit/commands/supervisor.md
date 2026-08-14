@@ -732,6 +732,14 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   `[>]` until it lands makes the bar read as nothing while the work is done, and makes it go
   BACKWARDS every time a review adds a line: a metric that punishes discovery and ignores completion
   is wrong twice.
+  **"Waiting on the owner's merge" is NOT a reason to hold a line at `[>]`**, and that is how this
+  rule actually gets broken — by someone who knows it and still writes `[>]` because the branch is not
+  on master yet. Owner, 2026-08-14: *"code completion, or task completion, or review completion,
+  should have the goal counted as completed. Not having merged should not make them count as still
+  open. This is very important because I usually wait for all the endeavour to be completed before
+  doing one big merge at the end, which would make the count stay at 0 until the end."* They batch
+  their merges deliberately, so a bar that waits for master reads zero all session and then jumps to
+  100% — no signal at all.
   **It is a real bar in the other direction, and this half is the one that gets gamed.** An
   implementer's own "done" is NOT ready-to-merge — nobody reviews their own work, so their report is
   a claim, not a clearance. Neither is "reviewed, with open HIGHs". If no independent reader has

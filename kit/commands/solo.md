@@ -149,6 +149,15 @@ point where the only thing left is the owner merging it. *"The merge doesn't cou
 it's just a merge."* Do not hold a finished deliverable at `[>]` waiting to land: that makes the bar
 read as nothing while the work is done.
 
+**AND "WAITING ON THE OWNER'S MERGE" IS NOT A REASON TO HOLD IT AT `[>]`** — this is the way the rule
+actually gets broken, by a session that knows it and still writes `[>]` because the branch is not on
+master yet. The owner's reason, 2026-08-14, after watching exactly that: *"code completion, or task
+completion, or review completion, should have the goal counted as completed. Not having merged should
+not make them count as still open. This is very important because I usually wait for all the endeavour
+to be completed before doing one big merge at the end, which would make the count stay at 0 until the
+end."* They batch their merges deliberately, so a bar that waits for master is a bar that reads zero
+for the whole session and then jumps to 100% — which is no signal at all.
+
 **But you are the one case with nobody independent, so be exact about what `[x]` claims.** It says
 YOU are finished and have shown your evidence. It does NOT say the work was reviewed — the owner is
 your reviewer here, and you never call your own work reviewed or approved. Marking `[x]` is a
