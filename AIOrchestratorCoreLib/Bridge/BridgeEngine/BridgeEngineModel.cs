@@ -876,7 +876,21 @@ internal sealed class BridgeEngineModel(
         List<string> channelFiles = [_paths.Get_OwnerChannelFile(session.OrchId)];
 
         foreach (var member in session.Members)
+        {
+            // A RETIRED MEMBER DOES NOT VOUCH FOR A LIVE ORCHESTRATION (rev-8's F5). Every other member
+            // loop in this file carries this guard; this one was the exception, and the direction is
+            // one-way: the span is the MINIMUM, so a closed member's channel can only LOWER it and
+            // therefore only ever mask a stall.
+            //
+            // Reachable by the ordinary route rather than an exotic one: a member is normally closed
+            // just after filing its last report, so at the moment of closing its last conversation
+            // entry is RECENT by construction — and for the next twenty-five minutes that farewell
+            // vouches for everybody else's silence.
+            if (member.ClosedUtc != null)
+                continue;
+
             channelFiles.Add(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId));
+        }
 
         foreach (var channelFile in channelFiles)
         {

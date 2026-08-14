@@ -48,6 +48,7 @@ public class StallAlertClockProbeTests : IDisposable
     readonly IOrchestrationLauncher _launcher;
     readonly IBridgeEngine _engine;
     readonly FailableTelegram_Fake _telegram;
+    readonly IOrchestrationSessionStore _store;
 
     public StallAlertClockProbeTests()
     {
@@ -59,6 +60,7 @@ public class StallAlertClockProbeTests : IDisposable
         Directory.CreateDirectory(_paths.RequestsFolder);
 
         var store = OrchestrationSessionStore_Factory.Create(_paths);
+        _store = store;
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
         var log = OrchestrationLog_Factory.Create(_paths);
 
@@ -276,6 +278,59 @@ public class StallAlertClockProbeTests : IDisposable
         var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0, NEGATIVE_WINDOW_MILLISECONDS);
 
         Assert.False(alerted, "the owner was texted about a stall while a session had demonstrably worked five minutes earlier");
+    }
+
+    /// <summary>
+    /// A RETIRED MEMBER DOES NOT VOUCH FOR A LIVE ORCHESTRATION — rev-8's F5, and it is reachable by a
+    /// plainer route than the one reported.
+    ///
+    /// F5 is filed as a consistency defect: this is the only member loop in the file without a
+    /// `ClosedUtc` guard, and the reported route — an app write landing in a retired member's channel —
+    /// is narrow. But the span is the MINIMUM across channels, and **a member is normally closed just
+    /// after it files its last report**, so its channel's last conversation entry is RECENT by
+    /// construction at the moment of closing. For the next twenty-five minutes that dead member's
+    /// farewell vouches for everybody else's silence.
+    ///
+    /// Here imp-1 has been silent forty minutes and a closed member reported two minutes ago. The
+    /// orchestration is stalled and must be reported; the retired channel must not be consulted at all.
+    /// </summary>
+    [Fact]
+    public async Task AClosedMembersFarewellDoesNotVouchForAStalledOrchestration()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        var silentSince = DateTime.Now.AddMinutes(-OLDER_THAN_THE_STALL_THRESHOLD_MINUTES);
+        var justReported = DateTime.Now.AddMinutes(-2);
+
+        Age_Session(session.OrchId, silentSince);
+
+        foreach (var member in session.Members)
+            File.SetLastWriteTime(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId), silentSince);
+
+        Write_Channel(
+            _paths.Get_ImplementerChannelFile(session.OrchId, session.Members[0].MemberId),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — brief\nimplement the parser\n",
+            silentSince);
+
+        // The member that filed its last report two minutes ago and was retired for it.
+        var retiring = session.Members[1].MemberId;
+
+        Write_Channel(
+            _paths.Get_ImplementerChannelFile(session.OrchId, retiring),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — brief\nreview it\n\n"
+            + $"## [2] FROM reviewer — {justReported:yyyy-MM-dd HH:mm} — review filed, no findings\ndone\n",
+            justReported);
+
+        _store.Close_Member(session.OrchId, retiring);
+
+        Write_Channel(
+            _paths.Get_OwnerChannelFile(session.OrchId),
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
+            silentSince);
+
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0);
+
+        Assert.True(alerted, "a retired member's farewell masked a live stall — closed members are not consulted by any other loop in this file");
     }
 
     /// <summary>
