@@ -190,10 +190,26 @@ public static class ChannelFile_Lock
     /// <summary>
     /// Breaks a lock whose holder looks dead, by RENAMING it aside rather than deleting it.
     /// <para>
-    /// The rename is load-bearing. Two writers can both decide the same lock is stale; if both
-    /// delete it, both then acquire and the protocol has produced exactly the collision it exists
-    /// to prevent. Only one rename can succeed, so only one breaker wins and the other simply
-    /// finds the lock gone and races for it normally.
+    /// The rename is load-bearing: two writers can both decide the same lock is stale, and if both
+    /// DELETED it both would then acquire — exactly the collision the protocol exists to prevent.
+    /// </para>
+    /// <para>
+    /// WHAT SERIALISES THE TWO BREAKERS IS THE SOURCE DISAPPEARING, NOT THE DESTINATION. This
+    /// comment used to say "only one rename can succeed", and that is FALSE: each breaker renames to
+    /// its own <c>.broken.{guid}</c> path, so they never compete for a destination at all. The
+    /// second breaker fails because <c>lockDirectory</c> is already gone. The distinction is not
+    /// pedantic — it is the whole reason the window below exists, and the wrong version reads as
+    /// settled, which is what stopped anyone looking. (rev-6, DEEP review of 6ef7c09, finding F.)
+    /// </para>
+    /// <para>
+    /// THE RESIDUAL WINDOW, stated because it is real: staleness is judged, and then the move
+    /// happens. If the holder releases and a NEW writer acquires in between, the move succeeds and
+    /// breaks a live lock that is zero seconds old. rev-6 measured 0 natural hits in 400 trials and
+    /// reproduced it with a forced scheduling point, so it is narrow and it is not impossible.
+    /// There is no compare-and-swap on a directory, so it cannot be closed by ordering alone — it is
+    /// instead DETECTED, by carrying the token of the lock that was judged and checking the lock
+    /// that was actually broken still carries it. A break that hits the wrong lock is put back and
+    /// reported rather than proceeding silently.
     /// </para>
     /// </summary>
     static void Break_IfStale(string lockDirectory)
@@ -202,23 +218,112 @@ public static class ChannelFile_Lock
             return;
 
         // Captured BEFORE the move: afterwards the path is gone, and a report that cannot say whose
-        // lock was broken is not evidence of anything.
+        // lock was broken is not evidence of anything. The token identifies the acquisition we
+        // judged — a pid is reused and a path is reused, but a token is minted per acquire.
+        var judgedToken = Read_OwnerField_OrNull(Path.Combine(lockDirectory, OWNER_FILE_NAME), "token");
+
+        Try_BreakStale(lockDirectory, judgedToken);
+    }
+
+    /// <summary>
+    /// Breaks the lock at <paramref name="lockDirectory"/>, verifying it is still the acquisition
+    /// identified by <paramref name="judgedToken"/>, and returns whether it was broken.
+    /// <para>
+    /// Public as an additive overload because the identity check is the whole substance of the fix
+    /// and there is no <c>InternalsVisibleTo</c> here: a rule decided in a private method is
+    /// unreachable from a test, and this one has to be provable without racing the scheduler.
+    /// Pass the token read from the lock BEFORE judging it stale.
+    /// </para>
+    /// <para>
+    /// A null <paramref name="judgedToken"/> means the lock had no readable token — a bash-created
+    /// or half-written lock. The break then proceeds unverified, because refusing would make a
+    /// metadata-less lock unbreakable, which is the defect fixed in d39ad14 and must not come back.
+    /// </para>
+    /// </summary>
+    public static bool Try_BreakStale(string lockDirectory, string? judgedToken)
+    {
         var holder = Describe_Holder(lockDirectory);
+        var brokenPath = $"{lockDirectory}.broken.{Guid.NewGuid():N}";
 
         try
         {
             // The broken lock is kept, not deleted: a lock that had to be broken is evidence about
             // a writer that died holding it, and that is worth more on disk than a tidy folder.
-            Directory.Move(lockDirectory, $"{lockDirectory}.broken.{Guid.NewGuid():N}");
-
-            ChannelLock_Diagnostics.Report(
-                $"Channel lock: broke a stale lock on '{Path.GetFileName(lockDirectory)}' — it was held by {holder} "
-                + $"for more than {STALE_SECONDS}s and never released. The broken lock is kept beside the channel.");
+            Directory.Move(lockDirectory, brokenPath);
         }
         catch
         {
             // Another writer broke it first, or it cleared on its own. Either way it is no longer
             // this caller's problem and the next attempt will find out.
+            return false;
+        }
+
+        if (Is_TheLockWeJudged(brokenPath, judgedToken))
+        {
+            ChannelLock_Diagnostics.Report(
+                $"Channel lock: broke a stale lock on '{Path.GetFileName(lockDirectory)}' — it was held by {holder} "
+                + $"for more than {STALE_SECONDS}s and never released. The broken lock is kept beside the channel.");
+
+            return true;
+        }
+
+        // We broke somebody else's LIVE lock: the holder we judged released, and a new writer
+        // acquired, between the judgement and the move. Put it back.
+        var restored = Restore_AfterBreakingTheWrongLock(brokenPath, lockDirectory);
+
+        // "Broken" means the path is free for the next acquire. A successful restore means it is
+        // occupied again by its rightful holder, so nothing was broken.
+        return !restored;
+    }
+
+    /// <summary>
+    /// Whether the directory just broken still carries the token that was judged stale. An
+    /// unreadable token on either side is treated as a match — see <see cref="Try_BreakStale"/> for
+    /// why a metadata-less lock must stay breakable.
+    /// </summary>
+    static bool Is_TheLockWeJudged(string brokenPath, string? judgedToken)
+    {
+        if (judgedToken == null)
+            return true;
+
+        var brokenToken = Read_OwnerField_OrNull(Path.Combine(brokenPath, OWNER_FILE_NAME), "token");
+
+        return brokenToken == null || brokenToken == judgedToken;
+    }
+
+    /// <summary>
+    /// Moves a wrongly-broken lock back and reports it, returning whether the restore succeeded.
+    /// <para>
+    /// Restoring can itself fail — a third writer may have acquired the free path in the interval.
+    /// That case is UNRECOVERABLE and is reported as such rather than swallowed: two writers now
+    /// believe they hold the channel, and the only thing that helps whoever reads the log is being
+    /// told exactly that. The release-by-token check in <see cref="Release_IfStillOurs"/> is what
+    /// stops the displaced holder from deleting the newcomer's lock on its way out.
+    /// </para>
+    /// </summary>
+    static bool Restore_AfterBreakingTheWrongLock(string brokenPath, string lockDirectory)
+    {
+        var channelName = Path.GetFileName(lockDirectory);
+
+        try
+        {
+            Directory.Move(brokenPath, lockDirectory);
+
+            ChannelLock_Diagnostics.Report(
+                $"Channel lock: NEAR MISS on '{channelName}' — a lock judged stale was released and RE-ACQUIRED by "
+                + "another writer before it could be broken, so the break hit a live lock. It has been put back and "
+                + "no writer lost its lock. This is the narrow window documented on Break_IfStale.");
+
+            return true;
+        }
+        catch
+        {
+            ChannelLock_Diagnostics.Report(
+                $"Channel lock: BROKE A LIVE LOCK on '{channelName}' and COULD NOT PUT IT BACK — the path was taken "
+                + $"again in the interval. A live writer has lost its lock; its entry may be written unserialised. The "
+                + $"displaced lock is at '{Path.GetFileName(brokenPath)}'.");
+
+            return false;
         }
     }
 
