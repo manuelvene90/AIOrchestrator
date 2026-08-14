@@ -115,18 +115,70 @@ public class CloseConfirmationPromptTests
     }
 
     /// <summary>
+    /// THE DECISION MUST NAME WHAT THE PROMPT NAMED. Every one of these sentences used to open
+    /// "Close 'crm-2'?" whatever had been tapped, so retiring one member announced itself under the
+    /// orchestration's name — which this file's own header calls the worst version of this feature.
+    /// The kind was in hand at the call site and was being discarded on the way back.
+    /// </summary>
+    [Fact]
+    public void AMemberDecisionNamesTheMemberAndNotTheOrchestrationAlone()
+    {
+        foreach (var outcome in Enum.GetValues<CloseTapOutcomes>())
+        {
+            var text = CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", MEMBER, outcome);
+
+            Assert.Contains("member 'imp-2'", text);
+            Assert.Contains("crm-2", text);
+        }
+    }
+
+    /// <summary>
+    /// The half-close sentence is the one where naming the wrong subject does real damage: told about
+    /// "its sessions", the owner believes the whole orchestration may be half-closed when a single
+    /// implementer failed to die.
+    /// </summary>
+    [Fact]
+    public void AnUncertainMemberCloseSaysTheMemberMayBeRunning_NotTheSessions()
+    {
+        var text = CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", MEMBER, CloseTapOutcomes.Uncertain);
+
+        Assert.Contains("'imp-2' may still be running", text);
+        Assert.DoesNotContain("its sessions may still be running", text);
+    }
+
+    /// <summary>
+    /// An unreadable request is the ONE case where nobody can say what the tap was about, so the
+    /// wording falls back to the orchestration rather than guessing at a member.
+    /// </summary>
+    [Fact]
+    public void WithNoReadableRequestTheWordingFallsBackToTheOrchestration()
+    {
+        var text = CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", null, CloseTapOutcomes.NotAttempted);
+
+        Assert.Contains("⚠️ Close 'crm-2'?", text);
+        Assert.DoesNotContain("member", text);
+    }
+
+    /// <summary>
     /// The tap did not take, and saying so is what keeps the FRESH prompt from arriving as a
     /// contradiction: the request is deliberately left parked, so the owner is asked again while a
     /// success message would still be on their screen.
     /// </summary>
+    /// <summary>
+    /// It says the tap did not take — which is what keeps the FRESH prompt from arriving as a
+    /// contradiction — and it does NOT promise the re-ask unconditionally. "You will be asked again
+    /// shortly" is true only while the file stays readable; a persistently unreadable one is archived
+    /// and reported to the requester, and the owner is never asked and never told.
+    /// </summary>
     [Fact]
-    public void ACloseThatWasNeverAttemptedSaysNothingChanged()
+    public void ACloseThatWasNeverAttemptedSaysNothingChanged_WithoutPromisingTheReAsk()
     {
         var text = Decide(CloseTapOutcomes.NotAttempted);
 
         Assert.Contains("NOT closed", text);
         Assert.Contains("nothing was changed", text);
-        Assert.Contains("asked again", text);
+        Assert.Contains("if it can be read", text);
+        Assert.DoesNotContain("asked again shortly", text);
         Assert.DoesNotContain("✅", text);
     }
 
@@ -136,18 +188,25 @@ public class CloseConfirmationPromptTests
     /// "we do not know" rendered as success is how the owner ends up believing live sessions are dead,
     /// and rendered as failure it invites them to re-close something already half-closed.
     /// </summary>
+    /// <summary>
+    /// ASSERTED WHOLE, not by fragments. The fragment version caught every SUBSTITUTION and none of the
+    /// additions: appending " Everything was closed successfully." to the sentence contains no ✅, no
+    /// "Closed — you confirmed" and no "NOT closed", keeps the four sentences distinct, and would have
+    /// left the suite green while the sentence claimed success.
+    ///
+    /// It also has to be ACTIONABLE. It said "check the app", which sends the owner to a card that
+    /// reads closed and dimmed, with the close button disabled and the one control that would reach a
+    /// still-running session hidden. So it names what is unusual instead: recorded as closed, nothing
+    /// will ask again, and the error is where errors land.
+    /// </summary>
     [Fact]
     public void AnUncertainCloseClaimsNeitherSuccessNorFailure()
     {
-        var text = Decide(CloseTapOutcomes.Uncertain);
-
-        Assert.Contains("did not complete", text);
-        Assert.Contains("may still be running", text);
-        Assert.Contains("check the app", text);
-
-        Assert.DoesNotContain("✅", text);
-        Assert.DoesNotContain("Closed — you confirmed", text);
-        Assert.DoesNotContain("NOT closed", text);
+        Assert.Equal(
+            "⚠️ Close 'crm-2'?\n\n"
+            + "⚠️ Close did not complete. It is recorded as closed, its sessions may still be running, "
+            + "and you will NOT be asked again. The error is in the General topic.",
+            Decide(CloseTapOutcomes.Uncertain));
     }
 
     /// <summary>
@@ -162,15 +221,24 @@ public class CloseConfirmationPromptTests
         Assert.Equal(texts.Count, texts.Distinct().Count());
     }
 
+    /// <summary>
+    /// This replaces a case that asserted every decision contains the ORCHESTRATION id — which was
+    /// true, and pinned the defect: a member decision naming only "crm-2" satisfied it, so fixing the
+    /// wording would have required deleting a passing test. A test that cements a defect is worse than
+    /// no test. What actually matters is that the owner can tell WHICH close this is about.
+    /// </summary>
     [Fact]
-    public void EveryDecisionNamesTheOrchestration()
+    public void EveryDecisionIdentifiesWhatWasClosed()
     {
         foreach (var outcome in Enum.GetValues<CloseTapOutcomes>())
-            Assert.Contains("crm-2", CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", outcome));
+        {
+            Assert.Contains("crm-2", CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", ORCHESTRATION, outcome));
+            Assert.Contains("imp-2", CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", MEMBER, outcome));
+        }
     }
 
     static string Decide(CloseTapOutcomes outcome)
     {
-        return CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", outcome);
+        return CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", ORCHESTRATION, outcome);
     }
 }

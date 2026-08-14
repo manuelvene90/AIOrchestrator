@@ -36,18 +36,52 @@ public static class CloseConfirmationPrompt_Builder
     /// failure and point at the one place that can answer, because "we do not know" rendered as either
     /// is how the owner ends up believing live sessions are dead.
     /// </summary>
-    public static string Describe_Decision(string orchId, CloseTapOutcomes outcome)
+    /// <param name="request">
+    /// What the tap was about, or null when it could not be read — the ONE case where the wording
+    /// cannot name a member, because nobody can say whether there was one.
+    /// </param>
+    public static string Describe_Decision(string orchId, IParkedCloseRequest? request, CloseTapOutcomes outcome)
     {
+        var isMember = request?.Kind == ParkedCloseKinds.Implementer;
+
+        // THE HEADER MUST NAME WHAT THE PROMPT NAMED. Both sentences used to open "Close '{orchId}'?"
+        // whatever had been tapped, so retiring one member reported itself under the orchestration's
+        // name — the exact failure this class's own header calls the worst version of this feature.
+        var header = isMember
+            ? $"⚠️ Close member '{request!.MemberId}' in '{orchId}'?"
+            : $"⚠️ Close '{orchId}'?";
+
+        // WHAT MIGHT STILL BE RUNNING is the member, or the whole orchestration. Saying "sessions" for
+        // a one-member close tells the owner something far worse than what happened.
+        var survivors = isMember ? $"'{request!.MemberId}' may still be running" : "its sessions may still be running";
+
         var line = outcome switch
         {
-            CloseTapOutcomes.Declined => "✋ Kept open — you declined. Its sessions keep running.",
+            CloseTapOutcomes.Declined => isMember
+                ? "✋ Kept open — you declined. That session keeps running."
+                : "✋ Kept open — you declined. Its sessions keep running.",
+
             CloseTapOutcomes.Closed => "✅ Closed — you confirmed.",
-            CloseTapOutcomes.NotAttempted => "⚠️ NOT closed — your request could not be read just now, so nothing was changed. You will be asked again shortly.",
-            CloseTapOutcomes.Uncertain => "⚠️ Close did not complete. Some sessions may still be running — check the app.",
+
+            // NO PROMISE THAT MAY NOT BE KEPT. This said "you will be asked again shortly", which is
+            // true only while the file stays readable — a persistently unreadable one is archived and
+            // reported to the REQUESTER, and the owner is never asked and never told. The condition is
+            // now stated rather than dropped.
+            CloseTapOutcomes.NotAttempted =>
+                "⚠️ NOT closed — the request could not be read, so nothing was changed. You will be asked again if it can be read on the next sweep.",
+
+            // THE OUTCOME THIS WHOLE CHANGE EXISTS FOR, and it has to be ACTIONABLE as well as honest.
+            // It said "check the app" and sent the owner to a card that reads closed and dimmed, with
+            // the close button disabled and "Show session" hidden — the one control that would reach a
+            // session still running. It now says what is unusual about this outcome instead: the close
+            // is recorded, nothing will ask again, and the error is where errors actually land.
+            CloseTapOutcomes.Uncertain =>
+                $"⚠️ Close did not complete. It is recorded as closed, {survivors}, and you will NOT be asked again. The error is in the General topic.",
+
             _ => throw new ArgumentOutOfRangeException(nameof(outcome), $"unhandled close outcome '{outcome}'"),
         };
 
-        return $"⚠️ Close '{orchId}'?\n\n{line}";
+        return $"{header}\n\n{line}";
     }
 
     /// <summary>

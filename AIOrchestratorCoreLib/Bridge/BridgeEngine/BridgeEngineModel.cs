@@ -2862,17 +2862,9 @@ internal sealed class BridgeEngineModel(
         Clear_OpenQuestions(confirmation.OrchId);
         Clear_AwaitingAnswerFlag(confirmation.OrchId);
 
-        CloseTapOutcomes outcome;
-
-        if (confirmation.Confirms)
-        {
-            outcome = Execute_ConfirmedClose(confirmation);
-        }
-        else
-        {
-            Decline_CloseConfirmation(confirmation);
-            outcome = CloseTapOutcomes.Declined;
-        }
+        var result = confirmation.Confirms
+            ? Execute_ConfirmedClose(confirmation)
+            : Decline_CloseConfirmation(confirmation);
 
         // THE DECISION IS RECORDED AFTER THE OUTCOME IS KNOWN, and it used to be recorded before.
         //
@@ -2896,7 +2888,7 @@ internal sealed class BridgeEngineModel(
             {
                 await client.Edit_MessageText_Async(
                     tap.MessageId.Value,
-                    CloseConfirmationPrompt_Builder.Describe_Decision(confirmation.OrchId, outcome),
+                    CloseConfirmationPrompt_Builder.Describe_Decision(confirmation.OrchId, result.Request, result.Outcome),
                     cancellationToken);
             }
             catch (OperationCanceledException)
@@ -2905,14 +2897,23 @@ internal sealed class BridgeEngineModel(
             }
             catch (Exception ex)
             {
-                // ROUTINE ON A SUCCESSFUL CLOSE and only there: the topic is being deleted underneath
-                // this edit, so losing the race is the healthy path and a warning that fires on the
-                // healthy path is how a log stops being read. On every other outcome the topic is
-                // still standing, so a failed edit means the owner is looking at a stale prompt that
-                // says something untrue — which is the whole defect this change exists to fix.
+                // ROUTINE ONLY WHERE THE TOPIC IS BEING DELETED UNDERNEATH THIS EDIT, which is not the
+                // same as "the close succeeded". A successful MEMBER close returns Closed too and
+                // deletes no topic, so keying the quiet path on the outcome alone silenced the case
+                // where the prompt is still standing with two live buttons on it.
+                //
+                // Exact rather than approximate here: we are holding a live client and a message
+                // inside the orchestration's own topic, so an orchestration close on this path always
+                // started the deletion.
+                var topicIsBeingDeleted =
+                    result.Outcome == CloseTapOutcomes.Closed
+                    && result.Request?.Kind == ParkedCloseKinds.Orchestration;
+
                 var message = $"Could not record the close decision on the prompt: {ex.Message}";
 
-                if (outcome == CloseTapOutcomes.Closed)
+                // A warning that fires on the healthy path is how a log stops being read; a failed
+                // edit anywhere else means the owner is looking at a prompt that says something untrue.
+                if (topicIsBeingDeleted)
                     _log.Log_Info(confirmation.OrchId, message);
                 else
                     _log.Log_Warning(confirmation.OrchId, message);
@@ -2925,8 +2926,11 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// Runs the close and SAYS WHAT HAPPENED. It returned void, which is precisely why its caller
     /// could not wait for it and announced success up front instead.
+    ///
+    /// WHICH outcome is chosen is not decided here — <see cref="CloseTapOutcome_Decider"/> owns that,
+    /// because a decision made in this class cannot be reached by the suite and this one is the fix.
     /// </summary>
-    CloseTapOutcomes Execute_ConfirmedClose(CloseConfirmation confirmation)
+    CloseTapResult Execute_ConfirmedClose(CloseConfirmation confirmation)
     {
         var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
 
@@ -2953,8 +2957,10 @@ internal sealed class BridgeEngineModel(
                 "close NOT executed — the request could not be read just now",
                 "The owner's tap arrived, but your request file could not be read at that moment, so nothing was closed. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
-            return CloseTapOutcomes.NotAttempted;
+            return new CloseTapResult(CloseTapOutcome_Decider.Decide(null, null), null);
         }
+
+        Exception? failure = null;
 
         try
         {
@@ -2974,9 +2980,8 @@ internal sealed class BridgeEngineModel(
                     "The owner confirmed it with a tap.");
             }
 
-            return CloseTapOutcomes.Closed;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Already logged and reported to the general channel by Execute_Close. Swallowed HERE
             // because this runs on the inbound loop with nobody watching, and a throw would take the
@@ -2985,17 +2990,19 @@ internal sealed class BridgeEngineModel(
             // SWALLOWED IS NOT UNREPORTED, and it used to be. Execute_Close marks the orchestration
             // closed before it kills the sessions, so a throw between those two can leave it flagged
             // closed with its terminals alive — and nothing re-offers it, because the store already
-            // says closed. The caller now hears that and tells the owner we do not know, rather than
-            // telling them it worked.
-            return CloseTapOutcomes.Uncertain;
+            // says closed. It is kept rather than discarded so the outcome can say we do not know,
+            // instead of telling the owner it worked.
+            failure = ex;
         }
         finally
         {
             Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "closed");
         }
+
+        return new CloseTapResult(CloseTapOutcome_Decider.Decide(request, failure), request);
     }
 
-    void Decline_CloseConfirmation(CloseConfirmation confirmation)
+    CloseTapResult Decline_CloseConfirmation(CloseConfirmation confirmation)
     {
         var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
 
@@ -3013,6 +3020,11 @@ internal sealed class BridgeEngineModel(
 
         Report_CloseOutcome_ToGeneral(confirmation.OrchId, "declined by the owner", request);
         Archive_ResolvedRequest_BestEffort(confirmation.ParkedPath, "declined");
+
+        // The request travels back for the same reason it does on the confirmed path: the sentence
+        // replacing the prompt has to name what the prompt named. It is null here when the file could
+        // not be read, and the wording falls back rather than guessing — `subject` above does the same.
+        return new CloseTapResult(CloseTapOutcomes.Declined, request);
     }
 
     /// <summary>
