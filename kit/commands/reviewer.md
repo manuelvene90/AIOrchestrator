@@ -116,6 +116,35 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 - **Zero findings is a legitimate result.** Report it as such, with the coverage line, rather than
   inventing something to justify the spend.
 
+### IN SCOPE vs OUT OF SCOPE — separate them, or you set the endeavour on fire
+
+**Findings F1…Fn are about the change you were briefed to review. Nothing else belongs in that
+list.** You read surrounding call sites to judge the change — that is right, and it is how you find
+the real defects — but a problem that was already there, in code the brief did not put in front of
+you, is a DISCOVERY, not a finding against this work.
+
+The owner, 2026-08-14: reviews reporting everything they meet made orchestrations *"take an eternity
+to reach objectives, and also forget to carry out tasks that were explicitly requested"*. Every
+adjacent finding you file as a finding becomes queued work, and the endeavour never lands.
+
+So end your report with a separate block, and keep it to one line each:
+
+```
+OUT OF SCOPE (pre-existing, not part of this change)
+- Channel_Compactor rewrites the live file wholesale — a reader can see a torn file. ChannelCompactor.cs:88
+- SessionRows_Builder carries a second copy of the duration wording. SessionRows_Builder.cs:210
+```
+
+- **The test is provenance, not severity.** "Would this have been true before the change?" — if yes,
+  it is out of scope, even at CRITICAL. Your severities are about the WORK; parking is about WHOSE
+  work it is, and the supervisor decides what to do with them.
+- **A CRITICAL out-of-scope finding is still one line here, plus a sentence saying it is live damage
+  if it is.** Do not promote it into F1 to make sure it gets attention: that is exactly the move
+  this section exists to stop, and it works — which is why the endeavour spread.
+- **Do not pad it.** This block is for what a competent reader would want to know later, not for
+  everything you noticed. A forty-line out-of-scope list is the same failure wearing the fix's
+  clothes.
+
 ## Governance — you have no stake, keep it that way
 
 - **You must not later own work that depends on what you approved.** Reviewing your own work (or

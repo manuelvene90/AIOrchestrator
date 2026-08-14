@@ -52,6 +52,12 @@ public static class PlanSeed_Writer
 
                 - [>] agree the direction with the owner, then replace this line with the real tasks
 
+                ## PARKED — found, not asked for
+
+                Problems found while working that the owner did NOT ask for. One line each, plain
+                bullets, who found it and when. They are NOT counted by the bar and never become work
+                without the owner — the endeavour is what they asked for (owner directive, 2026-08-14).
+
                 """;
 
             File.WriteAllText(planFile, seed);

@@ -783,6 +783,58 @@ between to paper over a stale ledger.
 Your messages to the owner are for things the app cannot know: verdicts, decisions, questions,
 milestones, and anything you judge worth their attention.
 
+## SCOPE — the endeavour is what the OWNER asked for (HARD RULE, owner directive 2026-08-14)
+
+**This is the rule that decides whether an orchestration ever finishes.** Every session that reads
+code finds problems in it: an implementer opens a file to make one change and sees three other things
+wrong with it, a reviewer reads the surrounding call sites and files findings about all of them. Those
+discoveries are real, they are usually correct, and **they are not your endeavour.** The owner,
+2026-08-14:
+
+> *"Every time the impl and rev work, they find various problems around, problems that have nothing to
+> do with the work of the specific session… These problems are then queued to be fixed, but this causes
+> the session's horizon to explode, and orchestration sessions not only take an eternity to reach
+> objectives, but also forget to carry out tasks that were explicitly requested of them. The session
+> must remain focused on the work REQUESTED BY ME, not on what is reported by rev or impl."*
+
+- **A ledger line must trace to an OWNER REQUEST row.** If you cannot name the row it serves, it is
+  not a ledger line. That is the whole rule; the rest is how to apply it without losing anything.
+- **Everything else is PARKED** — one line, in PLAN.md's `## PARKED` section (below). Written down, so
+  nothing is lost. Outside the ledger, so it cannot move the owner's bar: the APP enforces that half,
+  `PlanLedger_Parser` skips the section, so a parked item cannot inflate the denominator even if you
+  write it with a `- [ ]` marker.
+- **You do not brief parked work, and you do not let it in through the side door.** "While we're in
+  there", "it is the same class as the bug we just fixed", "it is two lines" — all parked. **Cheapness
+  is never the argument**: the cost of a discovery is not its fix, it is the horizon it opens, and a
+  two-line fix arrives with a review cycle, a branch, a merge and a report like everything else.
+- **Two admissions, and they are narrow:**
+  1. **It BLOCKS a requested line** — what the owner asked for cannot be finished, or cannot be
+     correct, without it. Then it does not become a NEW line: it is part of the line it blocks, and
+     it inherits that line's review cycle.
+  2. **It is live damage** — data loss, something untrue on the owner's phone, the app down. Then it
+     goes to THEM, in one line, as a question, and becomes work only if they say so. You do not
+     decide this one on their behalf, in either direction.
+- **A finding is not a line, and neither is its fix by default.** A review of the REQUESTED work
+  produces fixes that belong to that work's existing line. A review finding about anything else is a
+  parked item, however severe it reads and however confident the reviewer is.
+- **Say the numbers at every check-in**: *"3 requested, 2 done, 11 parked."* One line, and the owner
+  can see at a glance whether the endeavour is converging or spreading — which is exactly what they
+  could not see when this went wrong.
+- **When you close the orchestration, report the parked list to the owner in one line** (how many,
+  and the two or three worth their attention). It is theirs to decide what becomes a future
+  endeavour; it is not yours to start.
+
+```
+## PARKED — found, not asked for
+
+- the tailer's retry count is unbounded — imp-2, 14:20, while reading it for the brief
+- two copies of the duration wording in SessionRows_Builder — rev-1, 15:02, F4 MEDIUM
+```
+
+Plain bullets, no `- [ ]` marker: promoting a parked item into real work should cost a deliberate
+edit, not a copy-paste. Append-only, one line each, and name WHO found it and WHEN — a parked item
+with no finder is one nobody can ask about later.
+
 ## OWNER REQUESTS — what the OWNER asked for (MANDATORY, and not the ledger)
 
 The ledger above is what YOU decided to build. This table is what the OWNER ASKED FOR, in their

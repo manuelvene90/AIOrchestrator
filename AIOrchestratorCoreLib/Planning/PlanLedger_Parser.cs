@@ -15,6 +15,11 @@ namespace AIOrchestratorCoreLib.Planning;
 /// every orchestration ended below 100% — the owner's complaint was that "no session has ever
 /// finished at 100%, as if the denominator were larger than it should be". It is additive: no
 /// existing ledger contains one, so every file parses exactly as it did.
+///
+/// NOT EVERY TASK LINE IN THE FILE IS A LEDGER LINE. The sections named by
+/// <see cref="PlanLedger_Sections"/> — PARKED and OWNER REQUESTS — are skipped, so a discovery
+/// nobody asked for cannot move the owner's bar by being written down. Read that class for why the
+/// boundary is enforced here rather than left to the role commands.
 /// </summary>
 public static partial class PlanLedger_Parser
 {
@@ -38,11 +43,19 @@ public static partial class PlanLedger_Parser
         // back into a document's order is not possible once the order has been thrown away.
         List<PlanLedgerLine> lines = [];
 
+        // WHICH SECTION WE ARE IN, because a task line under PARKED is not owed work. It is a plain
+        // flag rather than a heading stack: the boundary is "this section or not", and every heading
+        // level ends the previous section for that question.
+        var inNonLedgerSection = false;
+
         foreach (var rawLine in planText.Split('\n'))
         {
+            if (PlanLedger_Sections.Is_Heading(rawLine))
+                inNonLedgerSection = PlanLedger_Sections.Opens_NonLedgerSection(rawLine);
+
             var match = TaskLine_Regex().Match(rawLine.TrimEnd('\r'));
 
-            if (!match.Success)
+            if (!match.Success || inNonLedgerSection)
                 continue;
 
             var marker = match.Groups[1].Value;

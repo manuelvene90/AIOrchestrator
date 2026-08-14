@@ -123,6 +123,20 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     `orchestrator.log.jsonl` (the app tails it; not Telegram, see 15; not stderr, which nothing
     reads), one appended line naming WHICH predicate failed and why. "Could not extract a tool name
     from the payload" is actionable; "hook error" is the silence again.
+22. **THE ENDEAVOUR IS WHAT THE OWNER ASKED FOR — everything else is PARKED** (owner directive
+    2026-08-14, after `ai-orchestrator-4`). Every session that reads code finds problems in it, and
+    those discoveries were becoming work: the horizon exploded, orchestrations *"took an eternity to
+    reach objectives and also forgot to carry out tasks that were explicitly requested"*. That
+    session's PLAN.md ended with 40+ heading sections of findings and rulings, and three branches
+    were left unmerged with twenty worktrees open. **A ledger line must trace to an OWNER REQUEST
+    row**; anything else goes as one line into PLAN.md's `## PARKED` section — written down so it is
+    not lost, outside the denominator so it cannot move the owner's bar. Two admissions only: it
+    BLOCKS a requested line (then it is part of that line, not a new one), or it is live damage,
+    which goes to the OWNER as a question. **Cheapness is never the argument** — the cost of a
+    discovery is not its fix, it is the horizon it opens. Per decision 21 the app enforces the half
+    it can: `PlanLedger_Parser` skips the sections named by `PlanLedger_Sections`, so a parked item
+    cannot inflate the bar even written with a `- [ ]` marker. Reviewers separate findings from
+    `OUT OF SCOPE` by PROVENANCE, not severity; implementers report `NOTICED (not fixed)`.
 
 ## Resolved Decisions (2026-08-06, owner)
 

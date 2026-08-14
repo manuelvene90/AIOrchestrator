@@ -180,6 +180,28 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
 - **Blocked on the owner?** Say so in your report (the supervisor escalates); phrase it as
   `BLOCKED ON OWNER` plus the question and options. Then arm your watcher and end your turn.
 
+## SCOPE — you build what you were briefed, and NOTHING adjacent (HARD RULE, owner directive 2026-08-14)
+
+You will find problems while you work — you have to read the code to change it, and the code has
+other things wrong with it. **Finding them is useful. Fixing them is not yours to decide.** The owner,
+2026-08-14: orchestrations *"take an eternity to reach objectives, and also forget to carry out tasks
+that were explicitly requested"*, because every discovery became work.
+
+- **Your deliverable is the brief. Full stop.** Not the brief plus the three things you noticed on
+  the way, however small, however obviously broken, however much you are already in that file.
+- **What you notice goes in ONE line at the end of your report**, under a `NOTICED (not fixed)`
+  heading — what it is, which file, why you think it is wrong. Your supervisor parks it. Nothing is
+  lost and your turn does not grow.
+- **Two exceptions, and they are narrow:** it BLOCKS your deliverable (you cannot finish, or cannot
+  be correct, without it — then say so in your report, because it is now part of the work you are
+  reporting), or it is live damage (data loss, something untrue reaching the owner, the app down —
+  then STOP and say so at once, in its own entry, rather than fixing it).
+- **"It was two lines" is the sentence to distrust.** A drive-by fix arrives in the same diff as your
+  deliverable, so the reviewer must now review both, the supervisor must rule on both, and a finding
+  against the part nobody asked for blocks the part they did.
+- If your brief and this rule disagree — the brief says "and tidy up X" — the brief wins; it is the
+  supervisor's scope call to make. This rule is about what YOU add on your own initiative.
+
 ## Git discipline (shared machine, multiple sessions)
 
 - **NEVER `git add -A`, `git add .`, or `git commit -a`.** Stage every file by explicit path — the
