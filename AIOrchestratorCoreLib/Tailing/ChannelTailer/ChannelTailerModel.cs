@@ -141,10 +141,23 @@ internal sealed class ChannelTailerModel : IChannelTailer
 
         if (fileLength.Value > state.Offset)
         {
-            var delta = Read_From(channel.FilePath, state.Offset, fileLength.Value);
-            state.Pending.Append(delta);
-            state.Offset = fileLength.Value;
-            state.QuietPolls = 0;
+            var (text, byteCount) = Read_From(channel.FilePath, state.Offset, fileLength.Value);
+            state.Pending.Append(text);
+
+            // ADVANCE BY WHAT WAS READ, NEVER BY THE FILE LENGTH. Stream.Read may legally return
+            // fewer bytes than asked for; taking the length on trust moved the cursor past bytes
+            // nobody had seen, and nothing ever read them again — silent loss, in the one component
+            // whose contract is at-least-once delivery to the owner's phone, and invisible
+            // afterwards because the channel file on disk is perfectly intact.
+            state.Offset += byteCount;
+
+            // A read that returned NOTHING is not activity. Counting it as such would reset the
+            // quiet counter on every poll, and a trailing entry waiting out its quiet window would
+            // never flush.
+            if (byteCount > 0)
+                state.QuietPolls = 0;
+            else
+                state.QuietPolls++;
         }
         else
         {
@@ -418,14 +431,15 @@ internal sealed class ChannelTailerModel : IChannelTailer
         return info.Length;
     }
 
-    static string Read_From(string filePath, long fromOffset, long toOffset)
+    /// <summary>
+    /// Reads the delta and reports how many bytes it ACTUALLY got — see
+    /// <see cref="StreamDelta_Reader"/> for why the count is the whole point.
+    /// </summary>
+    static (string Text, long ByteCount) Read_From(string filePath, long fromOffset, long toOffset)
     {
         using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         stream.Seek(fromOffset, SeekOrigin.Begin);
 
-        var buffer = new byte[toOffset - fromOffset];
-        var read = stream.Read(buffer, 0, buffer.Length);
-
-        return Encoding.UTF8.GetString(buffer, 0, read);
+        return StreamDelta_Reader.Read_Delta(stream, toOffset - fromOffset);
     }
 }

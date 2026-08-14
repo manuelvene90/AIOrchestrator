@@ -112,7 +112,7 @@ public partial class MainWindow : Window
         {
             attempts++;
 
-            var focused = AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment("GENERAL");
+            var focused = AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(AIOrchestratorCoreLib.Spawning.SessionWindowTitle_Builder.GENERAL_TITLE);
 
             if (focused || attempts >= 5)
                 focusTimer.Stop();
@@ -274,7 +274,7 @@ public partial class MainWindow : Window
             StateText = stateText,
             StateBrush = Find_Brush("StateNew"),
             LastActivityText = lastActivity,
-            FocusTitleFragment = "GENERAL",
+            FocusTitleFragment = AIOrchestratorCoreLib.Spawning.SessionWindowTitle_Builder.GENERAL_TITLE,
         };
 
         return new OrchestrationCardView
@@ -607,12 +607,12 @@ public partial class MainWindow : Window
             if (session == null)
                 return;
 
-            List<string> titleFragments = [$"SUP · {session.OrchId}"];
+            List<string> titleFragments = [AIOrchestratorCoreLib.Spawning.SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId)];
 
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc == null)
-                    titleFragments.Add($"{member.MemberId.ToUpperInvariant()} · {session.OrchId}");
+                    titleFragments.Add(AIOrchestratorCoreLib.Spawning.SessionWindowTitle_Builder.Build_ForMember(member.MemberId, session.OrchId));
             }
 
             Tile_Terminals(titleFragments, card.OrchId);
@@ -638,7 +638,7 @@ public partial class MainWindow : Window
             foreach (var session in _store.Load_All())
             {
                 if (session.ClosedUtc == null)
-                    titleFragments.Add($"SUP · {session.OrchId}");
+                    titleFragments.Add(AIOrchestratorCoreLib.Spawning.SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId));
             }
 
             Tile_Terminals(titleFragments, ChannelDiscovery.GENERAL_ORCH_ID);

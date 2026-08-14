@@ -10,12 +10,19 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// Persists bridge progress (.bridge-state.json): per-file mirror offsets and the last processed
 /// Telegram update id, so an app restart neither re-mirrors old entries nor re-routes old messages.
 /// <para>
-/// Losing this file is survivable; corrupting it must never be fatal. A fresh cursor means Telegram
-/// re-serves the updates it still has queued and the tailers re-mirror a little recent traffic —
-/// duplicate lines in a topic, i.e. noise the owner can read past. A load that THROWS is a different
-/// order of harm: its only caller runs on the app's startup path, so an exception there means the
-/// bridge is never constructed at all and the app comes up permanently Telegram-blind, with no way
-/// back until a human finds and deletes the file. Noise beats losing the owner's remote control.
+/// STARTING WITHOUT THIS FILE IS NOT FREE, and an earlier version of this comment claimed it was —
+/// "duplicate lines the owner can read past". It is the opposite: the tailer baselines a file it has
+/// never seen at its CURRENT length, so everything appended between the last saved offset and this
+/// start is never mirrored at all. A one-way hole, and a silent one, because the channel file on
+/// disk stays intact. Inbound is nearly vacuous in the other direction — with the update id at 0,
+/// Telegram re-serves only what it never had confirmed.
+/// </para>
+/// <para>
+/// It is still the right trade against a load that THROWS: the only caller runs on the app's startup
+/// path, so an exception there means the bridge is never constructed at all and the app comes up
+/// permanently Telegram-blind, with no way back until a human finds and deletes the file. Losing
+/// some recent traffic beats losing the owner's remote control — but it IS a loss, and every path
+/// that produces an empty cursor now says so.
 /// </para>
 /// </summary>
 public static class BridgeState_Store
@@ -50,7 +57,14 @@ public static class BridgeState_Store
         Dictionary<string, long> emptyOffsets = [];
 
         if (!File.Exists(paths.BridgeStateFile))
+        {
+            // Normal on a first run and never normal afterwards, and the store cannot tell the two
+            // apart from here — so it states the CONSEQUENCE and leaves the judgement to the reader.
+            // Silence was the defect: this is the same one-way hole as a corrupt file, with nothing
+            // to quarantine and, until now, nothing at any log level either.
+            log?.Log_Warning(GLOBAL_ORCH_ID, Describe_EmptyCursor(paths, "does not exist"));
             return (emptyOffsets, 0L);
+        }
 
         string text;
 
@@ -62,13 +76,18 @@ public static class BridgeState_Store
         {
             // Broad by intent: locked, denied, unreadable sector — the cause changes nothing here.
             // The file may well be intact, so it is NOT quarantined; this run just starts blind.
-            log?.Log_Warning(GLOBAL_ORCH_ID, $"Bridge cursor file '{paths.BridgeStateFile}' could not be read ({readException.Message}) — starting from an empty cursor, so recent traffic may be mirrored twice");
+            log?.Log_Warning(GLOBAL_ORCH_ID, Describe_EmptyCursor(paths, $"could not be read ({readException.Message})"));
             return (emptyOffsets, 0L);
         }
 
-        // An empty file is the ordinary shape of "saved but never filled", not damage: no quarantine.
+        // Not quarantined: an empty file is also the ordinary shape of "created but never filled".
+        // It is logged because it is equally the signature of an interrupted write, and it was the
+        // last input here that produced an empty cursor at no log level at all.
         if (string.IsNullOrWhiteSpace(text))
+        {
+            log?.Log_Warning(GLOBAL_ORCH_ID, Describe_EmptyCursor(paths, "is empty"));
             return (emptyOffsets, 0L);
+        }
 
         try
         {
@@ -149,8 +168,20 @@ public static class BridgeState_Store
 
         log?.Log_Error(
             GLOBAL_ORCH_ID,
-            $"Bridge cursor file '{paths.BridgeStateFile}' {reason} — starting from an EMPTY cursor, so queued Telegram updates and recent channel entries may arrive a second time; {evidence}",
+            $"{Describe_EmptyCursor(paths, reason)}; {evidence}",
             cause);
+    }
+
+    /// <summary>
+    /// ONE SENTENCE FOR ALL FOUR PATHS to an empty cursor (missing, unreadable, empty, corrupt), so
+    /// none of them can drift into describing a different consequence than the others. It used to
+    /// promise DUPLICATES — "may arrive a second time" — which is worse than saying nothing: a reader
+    /// who believes it goes looking for repeated messages and concludes nothing was lost, when what
+    /// actually happened is that channel entries written before this start were never mirrored.
+    /// </summary>
+    static string Describe_EmptyCursor(ISupervisionPaths paths, string reason)
+    {
+        return $"Bridge cursor file '{paths.BridgeStateFile}' {reason} — starting from an EMPTY cursor: every channel is baselined at its current length, so entries written before this start are NOT mirrored (a hole, not duplicates)";
     }
 
     /// <summary>Renames the damaged file to a timestamped sibling; returns null if that failed.</summary>

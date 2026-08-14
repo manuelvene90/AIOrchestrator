@@ -49,7 +49,7 @@ public static class SpawnCommand_Builder
 
         var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model)} '/supervisor {orchId}'", pidFilePath);
 
-        return Build_WindowsTerminalCommand($"SUP · {orchId}", SUPERVISOR_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForSupervisor(orchId), SUPERVISOR_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>
@@ -69,7 +69,7 @@ public static class SpawnCommand_Builder
         var claudeCommand = $"{Build_ClaudeInvocation(model)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
         var script = Build_SessionScript("reviewer", orchId, memberId, claudeCommand, pidFilePath);
 
-        return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", REVIEWER_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), REVIEWER_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>Basic orchestrations: one session, orange, talking straight to the owner.</summary>
@@ -86,7 +86,7 @@ public static class SpawnCommand_Builder
 
         var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/solo {orchId}'", pidFilePath);
 
-        return Build_WindowsTerminalCommand($"SOLO · {orchId}", SOLO_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), SOLO_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>The orchestration's green press-secretary voice: narrates, never works (see communicator.md).</summary>
@@ -96,7 +96,7 @@ public static class SpawnCommand_Builder
 
         var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(model)} '/communicator {orchId}'", pidFilePath);
 
-        return Build_WindowsTerminalCommand($"COM · {orchId}", COMMUNICATOR_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForCommunicator(orchId), COMMUNICATOR_TAB_COLOR, repoPath, script);
     }
 
     public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string pidFilePath)
@@ -105,7 +105,7 @@ public static class SpawnCommand_Builder
 
         var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/implementer {orchId}/{memberId}'", pidFilePath);
 
-        return Build_WindowsTerminalCommand($"{memberId.ToUpperInvariant()} · {orchId}", IMPLEMENTER_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), IMPLEMENTER_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>
@@ -122,7 +122,7 @@ public static class SpawnCommand_Builder
     {
         var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(model)} '/general-supervisor'", pidFilePath);
 
-        return Build_WindowsTerminalCommand("GENERAL", GENERAL_TAB_COLOR, generalHomeFolder, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.GENERAL_TITLE, GENERAL_TAB_COLOR, generalHomeFolder, script);
     }
 
     /// <summary>Fallback when Windows Terminal (wt.exe) is not installed: a plain PowerShell window.</summary>

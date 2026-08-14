@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
+using AIOrchestratorCoreLib.Spawning;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Usage;
@@ -66,7 +67,7 @@ public static class SessionRows_Builder
             StateText = isOpen ? (isWorkingNow ? "working now" : "idle — waiting") : "closed",
             StateBrush = isOpen ? findBrush("StateWorking") : findBrush("StateClosed"),
             LastActivityText = File.Exists(ownerChannel) ? Get_LastWriteText(ownerChannel) : "",
-            FocusTitleFragment = $"SUP · {session.OrchId}",
+            FocusTitleFragment = SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId),
 
             // API-EQUIVALENT usage, not a charge — subscription plans are not billed per token.
             DetailText = cost == null ? "" : $"usage ≈${cost.Value:F2} equiv (not billed)",
@@ -91,7 +92,7 @@ public static class SessionRows_Builder
             StateBrush = isOpen ? findBrush("AccentCommunicator") : findBrush("StateClosed"),
             LastActivityText = "",
             DetailText = cost == null ? "" : $"≈${cost.Value:F2} equiv",
-            FocusTitleFragment = $"COM · {session.OrchId}",
+            FocusTitleFragment = SessionWindowTitle_Builder.Build_ForCommunicator(session.OrchId),
             ShowButtonVisibility = isOpen ? Visibility.Visible : Visibility.Collapsed,
         };
     }
@@ -137,7 +138,7 @@ public static class SessionRows_Builder
             StateBrush = isClosed ? findBrush("StateClosed") : findBrush(isWorkingNow ? "StateWorking" : MemberState_Descriptor.Brush_Key(state)),
             LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",
             DetailText = Build_MemberDetailText(entries, usageFile, channelFile),
-            FocusTitleFragment = $"{memberId.ToUpperInvariant()} · {session.OrchId}",
+            FocusTitleFragment = SessionWindowTitle_Builder.Build_ForMember(memberId, session.OrchId),
             ShowButtonVisibility = isClosed ? Visibility.Collapsed : Visibility.Visible,
 
             // A closed member inside a still-open card dims on its own; closed cards dim as a whole.
