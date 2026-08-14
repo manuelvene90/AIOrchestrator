@@ -14,6 +14,17 @@ public static partial class PlanShape_Validator
     [GeneratedRegex(@"\b(tasks?|items?|steps?|points?)\s*\d+\s*[-–—]\s*\d+", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
     private static partial Regex TaskRange_Regex();
 
+    /// <summary>
+    /// FOUR MARKERS, NOT FIVE — `- [-]` is left out on purpose and this is not the drift it looks
+    /// like. A not-doing line is excluded from the denominator and can never represent progress, so
+    /// complaining that it lumps several tasks together would be pure noise about a line that costs
+    /// nothing. Alerts the owner cannot act on are exactly what decision 15 removed from this feature.
+    ///
+    /// Said here because the identical four-marker regex in two OTHER files was genuine drift, found
+    /// the same evening — `- [-]` was added to the parser additively and every copy of its list went
+    /// stale. A reader sweeping for that pattern will arrive here next, and the answer is "correct as
+    /// written".
+    /// </summary>
     [GeneratedRegex(@"^\s*-\s*\[(x|X| |>|!)\]\s*(.*)$", RegexOptions.Compiled)]
     private static partial Regex TaskLine_Regex();
 

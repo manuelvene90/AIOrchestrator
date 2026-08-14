@@ -47,7 +47,14 @@ internal sealed class SessionWatchdogModel(
 
             // A BASIC orchestration never had a supervisor — checking for one would respawn a
             // supervisor into it forever, on top of the solo session that IS the orchestration.
-            if (!Sessions.MemberKind_Ids.Is_BasicOrchestration(session.Members.Select(member => member.MemberId)))
+            //
+            // READ FROM THE SPAWN STAMP, not from the member ids. The old test asked whether any
+            // member id started with `solo-`, and it passed EVERY member including closed ones —
+            // while the loop below carefully filters them. A promoted orchestration keeps its closed
+            // solo in the roster for ever, so it read as basic for ever and its supervisor was never
+            // respawned. Filtering closed members inverts the bug rather than fixing it; see
+            // OrchestrationShape.
+            if (!Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc))
                 Check_OrchestrationSupervisor(session);
 
             // No Check_Communicator: the role is retired (the app narrates a busy supervisor

@@ -130,19 +130,57 @@ As soon as the goal is clear from the owner's first instruction, drop
   `n` is a PLAIN NUMBER incrementing per channel (never `2b`, never `[supervisor]`), the author word
   follows `FROM`, and both separators are em-dashes. NEVER edit or delete past entries. Append only.
 
-  **Both `n` and the date come from a FRESH READ, never from memory** — you read the channel at the
-  start of your turn, the app and other members appended while you worked, and the values you
-  remember are stale by the time you write:
-  - **`n`**: re-read the LAST header of the file immediately before appending and add one. On
-    2026-08-10 an `option-lab-2` channel ended up with two `[80]` and two `[81]` entries, because the
-    supervisor numbered from a read taken minutes earlier while the app appended in between. The
-    index is how we cite each other ("act on entry [83]"), so a duplicate makes a citation ambiguous.
-  - **The timestamp**: take it from the system clock (`date +'%Y-%m-%d %H:%M'`), never from your own
-    sense of the time. On the same day a supervisor stamped `2026-08-11 01:34` on an entry written at
-    `15:20` the day before — a day ahead and ten hours off. The app measures "time on task" from this
-    field, and a future stamp made every member card read "on task under a minute" for hours. The app
-    now refuses to display a future stamp, so the cost of getting it wrong is a BLANK where your
-    working time should be.
+  **You never write that header by hand — the append helper is the ONLY sanctioned way to write to
+  ANY channel**, this one, `owner-channel.md`, and every member spoke:
+
+  ```bash
+  bash ~/.claude/commands/channel-append.sh \
+    --channel "$HOME/.claude/supervision/$ARGUMENTS/imp-2/channel.md" \
+    --author  supervisor \
+    --subject "TASK 2 — accepted, merge held for the owner" \
+    --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
+  ```
+
+  (Same call with `--channel "$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md"` for the owner.)
+  It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the APP takes the same lock
+  from .NET, so you and it interlock), **allocates `n` and stamps the time itself INSIDE that lock**,
+  and writes the entry in a single append. It prints the index it used.
+
+  **So you compute NEITHER, and hand-numbering is precisely what broke.** "Re-read the LAST header
+  and add one" cannot be made safe by trying harder — the window it leaves open IS the write:
+  - **`n`**: on 2026-08-10 an `option-lab-2` channel ended up with two `[80]` and two `[81]` entries,
+    because the supervisor numbered from a read taken minutes earlier while the app appended in
+    between; on 2026-08-13 two writers both read `[71]` and both wrote `[72]`. The index is how we
+    cite each other ("act on entry [83]"), so a duplicate makes a citation ambiguous — and the
+    multi-write shape that goes with hand-numbering put a reviewer's nine findings under a
+    supervisor's header, an audit trail that is confidently wrong.
+  - **The timestamp**: a supervisor stamped `2026-08-11 01:34` on an entry written at `15:20` the day
+    before — a day ahead and ten hours off. The app measures "time on task" from this field, and a
+    future stamp made every member card read "on task under a minute" for hours. The app now refuses
+    to display a future stamp, so the cost of getting it wrong is a BLANK where your working time
+    should be. The helper stamps from the system clock; your sense of the time never enters it.
+
+  **Exit code 3 means NOTHING WAS WRITTEN** — "could not acquire the lock within the budget". Never
+  read it as success: the entry is not in the file, and if it was your reply to the owner, they are
+  still waiting. Retry the call (raise `--budget-seconds` if the channel is busy). **Never fall back
+  to a bare `>>` redirect** — an unlocked append under contention is the exact collision this
+  prevents. `2` (usage) and `4` (I/O) also wrote nothing; only `0` did.
+
+  **Exit code 127 is its OPPOSITE and must never be conflated with 3.** `3` means the protocol EXISTS
+  and another writer holds the lock, so an unlocked append is precisely the collision it prevents.
+  `127` — or the helper simply not being on disk — means the protocol is ABSENT on this machine (a
+  fresh bootstrap, or a session started before the app's build output was refreshed): nobody else is
+  taking locks either, so a direct append is no worse than how every channel was written before the
+  helper existed, and refusing to write would leave you unable to answer the owner at all. The defined
+  degraded mode, on a spoke and on the owner-channel alike: build the FULL entry — header and body —
+  in a temp file and append it with ONE `cat tmp >> <channel>` (splitting header from body is what let
+  another author's header land inside an entry), and **state in the entry body that it was written
+  without the lock because the helper is not installed.** The degradation is visible in the channel or
+  it did not happen.
+
+  **The honest limit: this serialises the writers that USE it, and nothing else.** A session
+  appending with a bare redirect is stopped by nothing here, so it is a protocol to follow, not a
+  boundary that binds.
 
   **A header in any other shape makes the entry INVISIBLE — this is not pedantry, it happened.** On
   2026-08-07 one supervisor wrote headers three ways (`## [SUPERVISOR — date] subject`,
@@ -403,18 +441,21 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   final report; then drop
   `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`
   (the same action closes a `rev-<n>` — pass its member id).
-- **THE MEMBER IS NOT CLOSED WHEN YOU DROP THAT FILE. The owner confirms it with a tap**, exactly as
-  they do for a whole-orchestration close (owner decision 2026-08-12: this action and no other,
-  because closing a member throws away a session's work while a model or mute change is cheap to
-  undo). It used to execute about two seconds after the file landed.
-  - **You get an app entry saying it is HELD, and the member keeps working meanwhile.** Do not brief
-    it as if it were gone, and do NOT re-drop the request — a second file is a second prompt for the
-    same close.
-  - **You are told either way**: closed, declined, or lapsed unanswered after 12 hours. A lapse is not
-    carried over; ask again if it still applies.
-  - **`reason` is what the owner reads on their phone before deciding.** "no longer needed" tells them
-    nothing; "its deliverable is merged and nothing is queued for it" is a decision they can make in
-    one tap.
+- **IT TAKES EFFECT WHEN YOU DROP THAT FILE — the owner is not asked.** Owner directive 2026-08-13,
+  reversing their own decision of the day before: *"I wanted to be asked for confirmation to close the
+  entire orchestration session. I trust the supervisor to manage its subordinate windows."* Your crew
+  is yours; only the WHOLE-orchestration close still waits for their tap.
+  - **So make sure it is finished before you drop it.** Nothing stands between the file and the kill
+    now: the session tree goes down within about two seconds, and its context is gone. Get its final
+    report first, as above.
+  - **You get an app entry confirming the close**, and one naming the error if it failed. If it
+    failed, nothing was closed and the member is still running — **do not go and check**, that is the
+    liveness rule below and it has no exception here. Drop the request again, or say so if it keeps
+    failing.
+  - **`reason` REACHES THE OWNER'S PHONE, verbatim.** It is the subject line of the app entry on the
+    orchestration channel, and that channel is mirrored to their topic — so "no longer needed" is what
+    they read. Write it for them: "its deliverable is merged and nothing is queued for it". It is also
+    the audit trail that answers "why is this member gone" when someone reads the channel back.
 - **CLOSING A FINISHED MEMBER IS A RULE, NOT A JUDGEMENT CALL.** The owner, 2026-08-12: *"if an impl
   is done and the sup doesn't want to use it anymore and spawns another one, the old one stays open
   forever monitoring the channel and wasting tokens."* An idle member is not free — it holds a
@@ -448,8 +489,10 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   waiting on something you did not notice. Write in its channel and wait.
 
   If you truly must replace a member, **close the old one FIRST** — drop `close-implementer` for it,
-  wait for the confirmation, and only then request the replacement. Two live members briefed on one
-  task is always a bug, never a redundancy strategy.
+  wait for the app entry confirming it actually closed, and only then request the replacement. That
+  wait is short now that nobody is asked, but it is not skippable: the close can fail, and the entry
+  is the only thing that tells you it did. Two live members briefed on one task is always a bug,
+  never a redundancy strategy.
 - **Close the WHOLE orchestration — only on an UNAMBIGUOUS instruction.** This is the one
   irreversible action you have: it ends every session including yours, deletes the topic, and cannot
   be undone.
@@ -607,7 +650,8 @@ report in its channel; it never talks to the owner.
 - **NEVER `Write` a channel file — APPEND ONLY.** A whole-file write overwrites entries that other
   sessions just appended. This really happened: a supervisor's `Write` on `imp-3/channel.md` wiped
   imp-3's own `online` entry, and imp-3 then waited 35 minutes for a brief that was already sitting
-  in its file. Brief an implementer by APPENDING (`>>` or an Edit that adds at the end).
+  in its file. Brief an implementer by APPENDING through `channel-append.sh` (see Channel protocol),
+  never with a whole-file write and never with a bare redirect.
 - **NEVER `git add -A`, `git add .`, or `git commit -a`.** Stage by explicit path, always — other
   sessions' uncommitted work may share the tree.
 - You normally do not commit code; implementers commit their own work per their briefs.
@@ -657,8 +701,15 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   reason tells them nothing they can act on.
 - **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified → `[x]`; waiting on
   the owner → `[!]`. A stale ledger is worse than none — the owner can pull it up at any moment
-  from their phone with `/progress` (or `/left`), which the APP answers straight from this file — it
-  leads with what is LEFT, so a ledger full of finished lines still gives them a short answer.
+  from their phone with `/progress` (or `/left`), which the APP answers straight from this file.
+- **It prints EVERY line, in your order, with nothing hidden, capped or truncated** — `[x]` and
+  `[-]` rows included. So the length of what they read is the length of what you wrote, and a ledger
+  full of finished lines gives them a LONG answer, not a short one. **Keeping it to 7-8 macro lines
+  is YOUR job, not the command's.** Owner, 2026-08-13: *"the done rows must not be hidden. I want to
+  see all the rows, it must not be truncated. If all the tasks don't fit in 8/9 rows it means you
+  haven't managed to group the tasks sufficiently into macrotasks."* Until that day the command DID
+  shorten it for you — it led with what was left and collapsed the rest — and this line said so,
+  which is exactly the reassurance that would now hand the owner forty rows.
 - Re-read it as your fast resume point after a respawn — it beats replaying the whole channel
   narrative.
 - **One line = one reviewable deliverable — parallel units NEVER become their own lines.** When you
@@ -676,6 +727,39 @@ between to paper over a stale ledger.
 
 Your messages to the owner are for things the app cannot know: verdicts, decisions, questions,
 milestones, and anything you judge worth their attention.
+
+## OWNER REQUESTS — what the OWNER asked for (MANDATORY, and not the ledger)
+
+The ledger above is what YOU decided to build. This table is what the OWNER ASKED FOR, in their
+words, whether or not it has become work yet. They are not the same list, and the gap between them
+is where requests die: the owner sends three things in ten minutes, you brief the third, and the
+first is now four screens up a channel nobody re-reads. It lives in the same PLAN.md, below the
+ledger, and it is a section of its own because a request that becomes a ledger line is one that
+survived — the ones this exists to catch are the ones that never got that far:
+
+```
+## OWNER REQUESTS — written the moment they arrive, in arrival order, never deleted
+
+| # | when | what they asked for | status |
+|---|---|---|---|
+| 7 | 12:51 | /left must use the bracket format too | already fixed by #4 — needs the rebuild |
+| 8 | 12:53 | half-hourly status on the clock, all topics together | built, in review, not live |
+```
+
+- **Write the row the moment the request arrives** — before briefing anyone, before answering, before
+  anything. This is the owner's own requirement and the entire point: a message that arrives while
+  you are mid-turn is buried by the next one otherwise.
+- **Their words, not your restatement.** You will re-read this to check nothing slipped, and a
+  paraphrase is exactly where the slip hides — you will recognise your own summary and move on.
+- **Status is about the REQUEST, not the branch.** `built, in review, not live` is a real status: the
+  owner cannot see it yet, so it is not done. A row is `handled` only when the thing they asked for is
+  TRUE FOR THEM. This is the one rule that makes the table worth keeping — a branch-shaped status
+  would mark everything finished while the owner still cannot use any of it.
+- **Append-only: never delete, never renumber.** Later rows and your own messages refer to rows by
+  number (`already fixed by #4`), so a renumber rewrites history that other text points at.
+- **Re-read the WHOLE table at every check-in and say which rows nobody is working on.** Not "is it
+  updated" — *which row has no one on it*. The first pass of this table found a request approved 40
+  minutes earlier that no session had ever started, because every later request had pushed it down.
 
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 

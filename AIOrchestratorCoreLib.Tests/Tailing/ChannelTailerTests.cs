@@ -175,6 +175,106 @@ public class ChannelTailerTests : IDisposable
     }
 
     [Fact]
+    public void OwedEntry_ReadButNotYetEmitted_IsDeclaredUndelivered()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+
+        // The poll that READS the entry emits nothing: it is the trailing entry and the quiet-poll
+        // window has not elapsed. Those bytes are owed to Telegram all the same, and this is the
+        // window in which the bridge used to ask "does this channel owe anything?" and be told no.
+        var readPoll = tailer.Poll([_channel]);
+
+        Assert.Empty(readPoll.CompletedAppends);
+        Assert.True(tailer.Has_UndeliveredEntries(_channelFile, out var unevaluableReason));
+        Assert.Null(unevaluableReason);
+    }
+
+    [Fact]
+    public void Set_Offset_DiscardsTheBytesThatBelongedToThePreRewriteFile()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+        tailer.Poll([_channel]);
+
+        // Those bytes were read out of the OLD file. After a rewrite they describe a file that no
+        // longer exists in that shape, so holding them would mean emitting text at offsets that mean
+        // something else now. Compaction's guards make this state unreachable through the step —
+        // which is exactly why the discard needs its own test rather than an inferred one.
+        File.WriteAllText(_channelFile, "## [0] FROM app — d — compacted\n\narchived\n");
+        tailer.Set_Offset(_channelFile, new FileInfo(_channelFile).Length);
+
+        var afterRewrite = Collect_Entries(tailer, polls: 4);
+
+        Assert.Empty(afterRewrite);
+        Assert.False(tailer.Has_UndeliveredEntries(_channelFile, out _));
+    }
+
+    [Fact]
+    public void Set_Offset_DiscardsUNCONFIRMEDBytesToo_SoAPreRewriteEntryIsNotReSent()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+
+        // EMITTED and never confirmed, so the text sits in Unconfirmed — the retry buffer. The other
+        // Set_Offset test leaves that buffer empty, which is why it cannot pin this half: without the
+        // discard, the next poll rewinds this text out of a file that no longer contains it and
+        // delivers the owner an entry from before the rewrite, a second time.
+        Emit_UntilAnAppendArrives(tailer);
+
+        File.WriteAllText(_channelFile, "## [0] FROM app — d — compacted\n\narchived\n");
+        tailer.Set_Offset(_channelFile, new FileInfo(_channelFile).Length);
+
+        Assert.Empty(Collect_Entries(tailer, polls: 4));
+    }
+
+    [Fact]
+    public void Get_OffsetsSnapshot_BytesReadButNeverEmitted_AreReReadAfterARestart()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
+
+        // ONE poll: the bytes are in Pending and the quiet-poll window has not elapsed, so nothing
+        // has been emitted. The process dies here — the persisted cursor must therefore point BEFORE
+        // them, or the next process starts past an entry the owner never saw. The unconfirmed case
+        // has its own test; this is the other half, and it is the window this branch is about.
+        tailer.Poll([_channel]);
+
+        var restarted = ChannelTailer_Factory.Create(tailer.Get_OffsetsSnapshot());
+        var afterRestart = Collect_Entries(restarted, polls: 4);
+
+        Assert.Equal("report", Assert.Single(afterRestart).Subject);
+    }
+
+    IReadOnlyList<AIOrchestratorCoreLib.Channels.ChannelEntry.IChannelEntry> Collect_Entries(IChannelTailer tailer, int polls)
+    {
+        List<AIOrchestratorCoreLib.Channels.ChannelEntry.IChannelEntry> entries = [];
+
+        for (var i = 0; i < polls; i++)
+        {
+            foreach (var append in tailer.Poll([_channel]).CompletedAppends)
+            {
+                entries.AddRange(append.Entries);
+                tailer.Confirm_Append(append.Channel.FilePath);
+            }
+        }
+
+        return entries;
+    }
+
+    [Fact]
     public void Poll_TruncatedFile_ReportsAnomalyAndRecovers()
     {
         File.WriteAllText(_channelFile, "some long seed content here\n");
@@ -239,5 +339,97 @@ public class ChannelTailerTests : IDisposable
             .ToList();
 
         Assert.Equal("report", Assert.Single(reEmitted).Subject);
+    }
+
+    /// <summary>
+    /// THE DEFECT, pinned as it behaves rather than as it ought to. A last entry whose file has no
+    /// trailing newline PARSES and then sits in Pending forever: the quiet flush is its only exit and
+    /// that flush requires the line break.
+    /// </summary>
+    [Fact]
+    public void Poll_LastEntryWithoutATrailingNewline_IsNeverEmitted()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        // No terminating newline — the whole defect is that one absent character.
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green");
+
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+        var quietPoll2 = tailer.Poll([_channel]);
+
+        Assert.Empty(quietPoll2.CompletedAppends);
+    }
+
+    /// <summary>
+    /// And the tailer SAYS SO. It will not flush — content cannot tell a complete entry from one
+    /// still being written, and flushing early would emit a truncated entry and then drop its
+    /// remainder as headerless noise — but the silence itself is the harm, so the condition travels
+    /// back to the bridge to be logged.
+    /// </summary>
+    [Fact]
+    public void Poll_AHeldTrailingEntry_IsREPORTED_SoTheSilenceIsVisible()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green");
+
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+        var quietPoll2 = tailer.Poll([_channel]);
+
+        Assert.Contains(_channelFile, quietPoll2.HeldTrailingEntryFiles);
+    }
+
+    /// <summary>
+    /// A TERMINATED channel is never reported. Without this the warning would fire for every healthy
+    /// channel on every quiet tick, which is the noise that makes a log unreadable — and it is the
+    /// case that would pass vacuously if the report were simply "quiet".
+    /// </summary>
+    [Fact]
+    public void Poll_ATerminatedChannel_IsNotReportedAsHeld()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green\n");
+
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+        var quietPoll2 = tailer.Poll([_channel]);
+
+        Assert.Empty(quietPoll2.HeldTrailingEntryFiles);
+        Assert.Single(quietPoll2.CompletedAppends);
+    }
+
+    /// <summary>
+    /// Nothing is LOST — the held entry emits intact as soon as any header follows it. That is what
+    /// makes a visible delay the right trade against emitting a half-written entry and silently
+    /// discarding its tail.
+    /// </summary>
+    [Fact]
+    public void Poll_AHeldEntry_EmitsIntactAsSoonAsAHeaderFollowsIt()
+    {
+        File.WriteAllText(_channelFile, "seed\n");
+        var tailer = ChannelTailer_Factory.Create_Fresh();
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green");
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+        tailer.Poll([_channel]);
+
+        File.AppendAllText(_channelFile, "\n\n## [2] FROM supervisor — d — verdict\n\nnoted\n");
+
+        var afterHeader = tailer.Poll([_channel]);
+
+        var append = Assert.Single(afterHeader.CompletedAppends);
+        Assert.Equal("report", append.Entries[0].Subject);
+        Assert.Equal("all green", append.Entries[0].Body);
     }
 }

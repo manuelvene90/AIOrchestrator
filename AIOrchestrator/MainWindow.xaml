@@ -71,7 +71,7 @@
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                                 <Button Content="＋ Implementer" Tag="{Binding}" Click="AddImplementerButton_Click" Margin="0,0,6,0"
-                                                        Visibility="{Binding OrchestrationButtonsVisibility}"
+                                                        Visibility="{Binding AddMemberButtonVisibility}"
                                                         IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"/>
                                                 <Button Content="{Binding SilenceGlyph}" Tag="{Binding}" Click="SilenceButton_Click" Margin="0,0,6,0"
                                                         Visibility="{Binding OrchestrationButtonsVisibility}"

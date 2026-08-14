@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 
 namespace AIOrchestratorCoreLib.Channels;
 
@@ -77,6 +77,21 @@ public static partial class ChannelShape_Validator
 
     [GeneratedRegex(@"^##\s+(\[[^\]]*\]|FROM\s)", RegexOptions.IgnoreCase)]
     private static partial Regex Attempted_Header_Regex();
+
+    /// <summary>
+    /// The key a caller remembers a reported header by, scoped to its channel so two channels carrying
+    /// the same line are two facts.
+    ///
+    /// ONE COMPOSITION, because there were two: the engine's sweep and the baseline pass each spelled
+    /// this out, byte-identical, with nothing holding them together. A memo keyed even slightly
+    /// differently from the one that reads it never matches, so every header would be reported for ever
+    /// — and that failure looks exactly like the invisible-entry bug the memo exists to stop
+    /// (decision 12, rev-10 F3).
+    /// </summary>
+    public static string Build_MemoKey(string channelFilePath, string headerLine)
+    {
+        return $"{channelFilePath}|{headerLine}";
+    }
 
     /// <summary>
     /// The channel entry the app posts when it finds one — it must say what to do, not just complain.

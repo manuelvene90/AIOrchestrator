@@ -31,7 +31,16 @@ public static class SessionRows_Builder
         IOrchestrationSession session)
     {
         // No communicator row — the role is retired; the app narrates a busy supervisor itself.
-        List<MemberRowView> rows = [Build_SupervisorRow(paths, findBrush, session)];
+        //
+        // AND NO SUPERVISOR ROW ON A BASIC ORCHESTRATION, which used to be prepended unconditionally:
+        // the card showed a SUPERVISOR reading "idle — waiting", in a working-state colour, with a
+        // live "Show" button that could only ever fail to find a window — for a session that does not
+        // exist and cannot be created. The Telegram side has always said this correctly ("One solo
+        // session spawned — no supervisor, no implementers"), so the two owner-facing surfaces
+        // disagreed about what a basic orchestration is.
+        List<MemberRowView> rows = OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc)
+            ? []
+            : [Build_SupervisorRow(paths, findBrush, session)];
 
         foreach (var member in session.Members)
             rows.Add(Build_MemberRow(paths, findBrush, session, member));
@@ -96,7 +105,9 @@ public static class SessionRows_Builder
         var memberId = member.MemberId;
         var channelFile = paths.Get_ImplementerChannelFile(session.OrchId, memberId);
 
-        var entries = ChannelEntry_Parser.Parse_All(SafeFile_Reader.Read_Text_Safe(channelFile));
+        // WHOLE HISTORY: the card's state chip is the same question the Telegram surfaces ask, and the
+        // two must not disagree about a member because one of them stopped reading at the compaction.
+        var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
         var state = MemberState_Resolver.Resolve(entries);
         var usageFile = paths.Get_ImplementerPidFile(session.OrchId, memberId).Replace(".pid", ".usage.json");
 
@@ -113,7 +124,15 @@ public static class SessionRows_Builder
         return new MemberRowView
         {
             MemberLabel = memberId,
-            RoleBrush = findBrush(kind == MemberKinds.Reviewer ? "AccentReviewer" : "AccentImplementer"),
+
+            // A SOLO is neither: it is the whole orchestration talking to the owner, so it borrows the
+            // supervisor's accent rather than reading as one more implementer among none.
+            RoleBrush = findBrush(kind switch
+            {
+                MemberKinds.Reviewer => "AccentReviewer",
+                MemberKinds.Solo => "AccentSupervisor",
+                _ => "AccentImplementer",
+            }),
             StateText = isClosed ? "closed" : Describe_MemberState(state, isWorkingNow),
             StateBrush = isClosed ? findBrush("StateClosed") : findBrush(isWorkingNow ? "StateWorking" : MemberState_Descriptor.Brush_Key(state)),
             LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",

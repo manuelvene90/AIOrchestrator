@@ -78,12 +78,16 @@ public class CloseConfirmationPromptTests
     /// The mid-sentence wording the held / declined / lapsed notices all share. One source, because
     /// four copies of "this orchestration" is how the notice about retiring one member comes to tell
     /// a supervisor its whole orchestration was up for closure.
+    ///
+    /// IT CARRIES ITS OWN VERB NOW. The earlier version named only the object and let each caller
+    /// supply the verb, which is fine while every request is a close and produced "You asked to close
+    /// the promotion to a full crew" the day one was not.
     /// </summary>
     [Fact]
-    public void TheSubjectDescriptionNamesTheMemberButNotForAnOrchestration()
+    public void TheAskDescriptionNamesTheMemberButNotForAnOrchestration()
     {
-        Assert.Equal("'imp-2'", CloseConfirmationPrompt_Builder.Describe_Subject(MEMBER));
-        Assert.Equal("this orchestration", CloseConfirmationPrompt_Builder.Describe_Subject(ORCHESTRATION));
+        Assert.Equal("the close of 'imp-2'", CloseConfirmationPrompt_Builder.Describe_AskedFor(MEMBER));
+        Assert.Equal("the close of this orchestration", CloseConfirmationPrompt_Builder.Describe_AskedFor(ORCHESTRATION));
     }
 
     /// <summary>
