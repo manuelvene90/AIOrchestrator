@@ -112,6 +112,41 @@ public class CloseTapArchiveProbeTests : IDisposable
     }
 
     /// <summary>
+    /// THE ORDERING ITSELF, which I twice declared unpinnable and which is this branch's whole subject.
+    ///
+    /// The prompt used to be edited to "✅ Closed — you confirmed" BEFORE the close was attempted. That
+    /// is invisible to any test of the sentence mapping — each outcome still maps faithfully — and it
+    /// is invisible to the archive cases above, which never look at what the owner was shown. But it is
+    /// perfectly visible HERE: an edit written before the attempt can only ever claim success, so on a
+    /// close that threw, a prompt reading "Closed — you confirmed" proves the edit ran first.
+    ///
+    /// Move the edit back above the execution and this fails. Nothing else on the branch does.
+    /// </summary>
+    [Fact]
+    public async Task ACloseThatThrewNeverTellsTheOwnerItSucceeded()
+    {
+        await Drive_ToTheTap_Async(
+            beforeTap: Break_TheGeneralChannel,
+            until: () => _telegram.EditedTexts.Count > 0);
+
+        var decision = Assert.Single(_telegram.EditedTexts);
+
+        Assert.Contains("did not complete", decision);
+        Assert.DoesNotContain("✅", decision);
+        Assert.DoesNotContain("Closed — you confirmed", decision);
+    }
+
+    [Fact]
+    public async Task ACloseThatRanTellsTheOwnerSo()
+    {
+        await Drive_ToTheTap_Async(
+            beforeTap: null,
+            until: () => _telegram.EditedTexts.Count > 0);
+
+        Assert.Contains("✅ Closed — you confirmed.", Assert.Single(_telegram.EditedTexts));
+    }
+
+    /// <summary>
     /// Ask, tap and outcome all inside ONE engine loop, and that is not tidiness.
     ///
     /// The registered callback data lives in memory. Cancelling the loop between the ask and the tap
@@ -225,10 +260,24 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
     const string EMPTY_UPDATES = "{\"ok\":true,\"result\":[]}";
 
     readonly object _lock = new();
+    readonly List<string> _editedTexts = [];
     string? _queuedUpdatesJson;
     long _nextMessageId = 9100;
 
     public string? ConfirmData { get; private set; }
+
+    /// <summary>
+    /// What the prompt was REPLACED with. This is the only place the ordering of the fix is visible
+    /// from outside: an edit written before the close was attempted can only ever say it succeeded.
+    /// </summary>
+    public IReadOnlyList<string> EditedTexts
+    {
+        get
+        {
+            lock (_lock)
+                return _editedTexts.ToList();
+        }
+    }
 
     public void Queue_Updates(string updatesJson)
     {
@@ -296,7 +345,13 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
 
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            _editedTexts.Add(text);
+
+        return Task.CompletedTask;
+    }
 
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
 

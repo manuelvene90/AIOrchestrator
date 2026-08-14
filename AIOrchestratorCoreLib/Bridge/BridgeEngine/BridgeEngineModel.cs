@@ -2869,19 +2869,31 @@ internal sealed class BridgeEngineModel(
         // THE DECISION IS RECORDED AFTER THE OUTCOME IS KNOWN, and it used to be recorded before.
         //
         // The old order had a stated reason — "confirming deletes the topic, and an edit sent
-        // afterwards would have nowhere to land" — which does not survive being checked. It is false
-        // for member closes, which delete no topic; for orchestration closes the deletion is a
-        // fire-and-forget Task.Run, so the old order won a race rather than a guarantee; and when the
-        // topic HAS gone, a failed edit costs nothing because the message went with it. Set against
-        // that: writing it first told the owner "Closed — you confirmed" for a close that touched
-        // nothing, and for one that marked the orchestration closed while its sessions kept running.
+        // afterwards would have nowhere to land". It is INAPPLICABLE to member closes, which delete no
+        // topic; and for orchestration closes it was a GENUINE GUARANTEE rather than a race, because
+        // the edit was awaited and the executor is synchronous, so the edit's round-trip finished
+        // before deleteForumTopic was constructed. Moving it gives that up knowingly.
         //
-        // NOTHING IN THE SUITE PINS THIS ORDER. Which sentence belongs to which outcome is decided in
-        // CloseConfirmationPrompt_Builder.Describe_Decision and is covered there, one case per
-        // outcome; that this edit happens AFTER the outcome is known is a property of statement order
-        // in this method, which the suite cannot reach — BridgeEngineModel is `internal sealed` with
-        // no `InternalsVisibleTo`. Moving this block back above the execution compiles, passes every
-        // test, and restores the exact defect described above.
+        // THE TRADE IS STILL RIGHT: the guarantee protected a message being destroyed in the same
+        // breath — the prompt lives IN the topic the close deletes, so nothing durable was bought by
+        // it, while the durable record goes to the General topic, which is never deleted. And on every
+        // outcome where the topic SURVIVES (member closes, declines, NotAttempted, Uncertain, and
+        // orchestration closes whose delete fails) this order is the only one that can tell the truth.
+        //
+        // THIS ORDER IS PINNED, and an earlier version of this comment claimed it could not be. Which
+        // sentence belongs to which outcome is covered in CloseConfirmationPrompt_Builder; that the
+        // edit happens AFTER the outcome is known is asserted by
+        // CloseTapArchiveProbeTests.ACloseThatThrewNeverTellsTheOwnerItSucceeded, which drives a real
+        // tap through a close that throws and reads the text this line sends. An edit written before
+        // the attempt can only ever claim success, so "Closed — you confirmed" on a failed close
+        // proves the edit ran first.
+        //
+        // The claim it replaces — "the suite cannot reach this, BridgeEngineModel is internal sealed
+        // with no InternalsVisibleTo" — is true of a decision made INSIDE this class and false of its
+        // EFFECTS: BridgeEngine_Factory is public and takes interfaces only, so the engine can be
+        // driven end to end. CloseImplementerGuardProbeTests did that first, and its summary records
+        // two members declaring the same wiring unpinnable before a reviewer pinned it. Do not re-add
+        // the stronger claim.
         if (tap.MessageId != null)
         {
             try
