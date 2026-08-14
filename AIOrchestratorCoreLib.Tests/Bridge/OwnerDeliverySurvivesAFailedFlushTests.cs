@@ -160,6 +160,53 @@ public class OwnerDeliverySurvivesAFailedFlushTests : IDisposable
             $"the first delivery did not fail, so this proves nothing.{Environment.NewLine}{_log.Dump()}");
     }
 
+    /// <summary>
+    /// THE CANCELLATION ROUTE SPECIFICALLY, which the case above does NOT cover and which I claimed
+    /// before I had pinned it.
+    /// <para>
+    /// The receipt block's <c>catch (OperationCanceledException) { throw; }</c> sits INSIDE the
+    /// <c>foreach</c>, so a cancellation-shaped failure escaped the loop and destroyed every delivery
+    /// behind it — the route that survives imp-7's catch filter. The case above throws
+    /// <c>InvalidOperationException</c> and therefore leaves that route untested: restoring the
+    /// rethrow left it green.
+    /// </para>
+    /// <para>
+    /// <c>TaskCanceledException</c> is the honest shape rather than a contrivance — it is what an
+    /// <c>HttpClient</c> TIMEOUT throws, and the translator is an HTTP call.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ACancellationShapedFailureDoesNotTakeTheRestOfTheBatchDownWithIt()
+    {
+        var first = _launcher.Start_Orchestration("RepoOne", _tempRepo);
+        var second = _launcher.Start_Orchestration("RepoTwo", _tempRepo);
+
+        _store.Set_TelegramTopicId(first.OrchId, TOPIC_ID);
+        _store.Set_TelegramTopicId(second.OrchId, TOPIC_ID + 1);
+
+        Seed_OwnerChannel(first.OrchId);
+        Seed_OwnerChannel(second.OrchId);
+
+        _translator.Throw_OnlyFor(FIRST_TEXT);
+        _translator.Throw_AsCancellation();
+
+        _telegram.Queue_OwnerMessage(Build_TwoOwnerMessagesJson());
+
+        var secondChannel = _paths.Get_OwnerChannelFile(second.OrchId);
+
+        Assert.True(
+            await Run_Until_Async(() => File.ReadAllText(secondChannel).Contains(SECOND_TEXT), 40_000),
+            "THE DEFECT: a cancellation-shaped failure escaped the loop and took the rest of the batch with it. "
+            + "An HttpClient timeout in the translator throws exactly this, so it is the ordinary case rather than "
+            + "the exotic one."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.True(
+            _log.Has_Line_Containing("failed mid-delivery"),
+            $"the first delivery did not fail, so this proves nothing.{Environment.NewLine}{_log.Dump()}");
+    }
+
     void Seed_OwnerChannel(string orchId)
     {
         var channelFile = _paths.Get_OwnerChannelFile(orchId);
@@ -232,12 +279,20 @@ internal sealed class ThrowingTranslator_Fake : IMessageTranslator
 {
     readonly object _lock = new();
     bool _throwing = true;
+    bool _asCancellation;
     string? _onlyForText;
 
     public void Stop_Throwing()
     {
         lock (_lock)
             _throwing = false;
+    }
+
+    /// <summary>What an <c>HttpClient</c> timeout actually throws, and the shape that used to escape.</summary>
+    public void Throw_AsCancellation()
+    {
+        lock (_lock)
+            _asCancellation = true;
     }
 
     public void Throw_OnlyFor(string text)
@@ -251,7 +306,12 @@ internal sealed class ThrowingTranslator_Fake : IMessageTranslator
         lock (_lock)
         {
             if (_throwing && (_onlyForText == null || text.Contains(_onlyForText, StringComparison.Ordinal)))
+            {
+                if (_asCancellation)
+                    throw new TaskCanceledException("translation timed out");
+
                 throw new InvalidOperationException("translation service unreachable");
+            }
         }
 
         return Task.FromResult(text);
