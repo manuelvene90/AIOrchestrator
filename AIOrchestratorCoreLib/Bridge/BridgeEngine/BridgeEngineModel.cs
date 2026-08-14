@@ -2994,21 +2994,31 @@ internal sealed class BridgeEngineModel(
             // instead of telling the owner it worked.
             failure = ex;
         }
-        finally
-        {
-            // The audit record says which of the two happened, because it is what outlives the prompt.
-            // It filed "closed" either way, so the artefact a person reads while reconstructing an
-            // incident asserted the very thing the owner's sentence was changed to stop asserting.
-            //
-            // Decide is called here and again below rather than hoisted: it is pure and both calls
-            // pass the same two values, so they cannot disagree — and restructuring a try/finally that
-            // has just been reviewed is the larger risk of the two.
-            Archive_ResolvedRequest_BestEffort(
-                confirmation.ParkedPath,
-                CloseTapOutcome_Decider.Describe_ForArchive(CloseTapOutcome_Decider.Decide(request, failure)));
-        }
+        // ARCHIVED HERE RATHER THAN IN A `finally`, AND THE ORDER MATTERS MORE THAN IT LOOKS.
+        //
+        // Describe_ForArchive can throw — deliberately, because a close that was never attempted has
+        // no archive word and that impossibility is worth stating. A throw raised inside a `finally`
+        // REPLACES any exception still in flight, so putting it there made the guard's safety depend
+        // on the catch above staying broad enough to leave nothing in flight. Narrow that catch later
+        // for a perfectly good reason and the `finally` would discard the real exception and report
+        // this one instead: the true failure invisible, the reported one a lie about it.
+        //
+        // The `finally` was guaranteeing nothing anyway. The catch swallows without rethrowing and the
+        // try body has no return, so control reaches this line on both paths regardless — it was
+        // redundant, and the redundancy was what carried the hazard.
+        //
+        // DO NOT MOVE THIS BACK INSIDE A `finally` for symmetry with the other archive call sites.
+        //
+        // The audit record is also what outlives the prompt: it filed "closed" whether or not the
+        // executor threw, so the artefact a person reads while reconstructing an incident asserted the
+        // very thing the owner's sentence was changed to stop asserting.
+        var outcome = CloseTapOutcome_Decider.Decide(request, failure);
 
-        return new CloseTapResult(CloseTapOutcome_Decider.Decide(request, failure), request);
+        Archive_ResolvedRequest_BestEffort(
+            confirmation.ParkedPath,
+            CloseTapOutcome_Decider.Describe_ForArchive(outcome));
+
+        return new CloseTapResult(outcome, request);
     }
 
     CloseTapResult Decline_CloseConfirmation(CloseConfirmation confirmation)
