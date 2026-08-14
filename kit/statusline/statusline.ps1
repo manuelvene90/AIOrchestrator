@@ -93,7 +93,22 @@ if ($role -and $raw) {
 if ($role -eq 'supervisor') {
     Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $orchId $esc[0m $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
-elseif ($role -in @('implementer','reviewer','solo')) {
+elseif ($role -eq 'solo') {
+    # THE SOLO CARRIES THE PROGRESS TOO, and it was the one role that did not. The suffix was wired
+    # onto the supervisor line only, so in a BASIC orchestration — where there IS no supervisor and
+    # the solo owns PLAN.md by its own role command — the ledger the app was faithfully writing to
+    # .progress.json had nobody rendering it. The owner asked for this enrichment and then reported
+    # it missing (2026-08-14), looking at a solo's terminal.
+    #
+    # Same call, not a copy of the logic: one renderer, so the terminal cannot disagree with the
+    # owner's phone.
+    $memberUpper = if ($member) { $member.ToUpper() } else { 'SOLO' }
+    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
+}
+elseif ($role -in @('implementer','reviewer')) {
+    # NOT the members: an implementer's terminal showing the orchestration's overall percentage would
+    # invite it to reason about work that is not its own. The ledger belongs to whoever talks to the
+    # owner.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'IMPLEMENTER' }
     Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m $model"
 }
