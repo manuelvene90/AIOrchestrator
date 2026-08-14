@@ -2936,17 +2936,13 @@ internal sealed class BridgeEngineModel(
             // Told to the REQUESTER, in its own channel, because that is where this guard promised
             // an answer either way — the general channel cannot be read by the session waiting.
             Append_OrchestrationAppEntry(
-                // HELD AT Owner, and NOT judged differently from the other eight in this family. The
-                // rule that made them agent traffic applies here too — the wording is addressed to the
-                // asker. But the owner has already been told "Closed — you confirmed", edited into
-                // their prompt BEFORE the close is attempted, and on this path nothing was closed: this
-                // entry is the only thing that reaches them saying so. A correction to a false success
-                // must reach the person who was told the falsehood.
-                //
-                // The real defect is the ORDER — the prompt claims success before the operation runs —
-                // and it is a separate ledger line. When the success message follows the outcome, this
-                // becomes genuinely agent-only and flips with the rest.
-                confirmation.OrchId, AppEntryAudiences.Owner,
+                // Agent, with the rest of the family. It was held at Owner while the app edited the
+                // owner's prompt to "Closed — you confirmed" BEFORE attempting the close, because on
+                // this path nothing is closed and this entry was the only correction reaching them.
+                // `fa1b46c` records the decision after the outcome is known, so there is no longer a
+                // false success for this entry to correct, and its wording — addressed to the asker —
+                // puts it back with the other eight.
+                confirmation.OrchId, AppEntryAudiences.Agent,
                 "close NOT executed — the request could not be read just now",
                 "The owner's tap arrived, but your request file could not be read at that moment, so nothing was closed. It has been left in place and they will be asked again shortly. Do not re-drop it.");
 
@@ -3042,16 +3038,12 @@ internal sealed class BridgeEngineModel(
             _log.Log_Info(request.OrchId, $"A close request lapsed unanswered after {CloseConfirmation_Parking.EXPIRY_HOURS} h");
 
             Append_OrchestrationAppEntry(
-                // HELD AT Owner for the same reason as the unreadable-request path above, and equally
-                // not judged differently from the other eight. On expiry the owner's prompt is never
-                // edited: their phone keeps a close question with two live-looking buttons for a
-                // request that no longer exists, and this entry is the only thing that ever said so.
-                //
-                // The real defect is again not the tag — it is that expiry corrects the registrations
-                // and the channel but never the message the owner is looking at. Once expiry edits the
-                // prompt the way the tap path already does, this becomes genuinely agent-only and flips
-                // with the rest.
-                request.OrchId, AppEntryAudiences.Owner,
+                // Agent, with the rest of the family, released alongside the unreadable-request path
+                // above by `fa1b46c`. It was held because expiry corrected the registrations and the
+                // channel but never the message the owner was looking at, leaving this entry as their
+                // only notice. Its wording — "the owner never answered" — was always addressed to the
+                // agent, which is why holding it was about what rode on it rather than about the rule.
+                request.OrchId, AppEntryAudiences.Agent,
                 $"close of {CloseConfirmationPrompt_Builder.Describe_Subject(request)} LAPSED — the owner never answered",
                 $"Your close request sat unanswered for {CloseConfirmation_Parking.EXPIRY_HOURS} hours, so it has expired and nothing was closed. "
                 + "It is not carried over: a close must reflect the situation at the moment it is confirmed, not a stale one. Ask again if it still applies.");
