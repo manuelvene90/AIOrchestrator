@@ -20,6 +20,7 @@ using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Status;
+using AIOrchestratorCoreLib.Tailing;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Tailing.CompletedChannelAppend;
 using AIOrchestratorCoreLib.Telegram;
@@ -790,26 +791,35 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Archives the old tail of long channels so respawned sessions boot cheaply. Runs AFTER the
-    /// mirror poll and re-anchors the tailer's offset to the rewritten file — otherwise the
-    /// shrink reads as a protocol anomaly and the whole file is re-mirrored to Telegram.
+    /// DISCOVERS the channels and hands each to <see cref="Channel_CompactionStep.Compact_IfAllowed"/>.
+    /// It no longer archives anything itself and no longer re-anchors the cursor — both moved into
+    /// the step, along with the guards, so the suite drives the same code the tick does.
+    ///
+    /// <para>
+    /// What stays true here: it runs AFTER the mirror poll, and discovery is deliberately WIDER than
+    /// the poll — which is exactly why the step's first guard exists, since a channel the poll
+    /// skipped has a frozen cursor that must not be re-anchored to a rewritten file.
+    /// </para>
+    /// <para>
+    /// The archive-and-re-anchor reasoning lives with the code that does it. This docstring described
+    /// this method's old body for two commits after that body moved (rev-7, 2026-08-13) — the same
+    /// prose-outliving-code shape the comment inside the loop already had to correct once.
+    /// </para>
     /// </summary>
     void Compact_LongChannels()
     {
         foreach (var channel in ChannelDiscovery.Find_ChannelFiles(_paths))
         {
-            // A channel that still owes Telegram a delivery must not be rewritten underneath the
-            // tailer: compaction re-anchors the offset to the new file, and the entries waiting to
-            // be retried would go with it. It compacts on a later tick, once the send lands.
-            if (_tailer.Has_UnconfirmedEntries(channel.FilePath))
-                continue;
-
-            var newLength = Channel_Compactor.Compact_IfNeeded(channel.FilePath);
+            // Guards, archive and re-anchor all live in the step, because a guard that only exists
+            // here is a guard whose only proof is a copy of itself in a test file. That reason is
+            // sound and it is the only one: the sentence that used to sit here — "this engine cannot
+            // be constructed from a test" — was FALSE. BridgeEngine_Factory.Create is public, and
+            // ChannelCompactionLoopProbeTests drives this very loop through it.
+            var newLength = Channel_CompactionStep.Compact_IfAllowed(_tailer, channel.FilePath, _log, channel.OrchId);
 
             if (newLength == null)
                 continue;
 
-            _tailer.Set_Offset(channel.FilePath, newLength.Value);
             _log.Log_Info(channel.OrchId, $"Channel compacted — older entries archived beside it ({Path.GetFileName(channel.FilePath)})");
         }
     }
