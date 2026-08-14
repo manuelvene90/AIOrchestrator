@@ -668,17 +668,66 @@ Monitor(
 
 ```bash
 sup="$HOME/.claude/supervision/$ARGUMENTS"
-fingerprint() { cat "$sup"/imp-*/channel.md "$sup"/rev-*/channel.md "$sup/owner-channel.md" 2>/dev/null | md5sum | cut -d' ' -f1; }
-prev="$(fingerprint)"
+shopt -s nullglob
+
+# Sets FP, or returns non-zero with FP_ERR naming the command that failed. md5sum takes the files
+# DIRECTLY — never `cat … | md5sum` — so that a failed read is visible; see below.
+read_fp() {
+  FP=""; FP_ERR=""
+  local files out
+  files=( "$sup"/imp-*/channel.md "$sup"/rev-*/channel.md "$sup/owner-channel.md" )
+  if ! out="$(md5sum "${files[@]}" 2>/dev/null)" || [ -z "$out" ]; then FP_ERR="md5sum"; return 1; fi
+  FP="$out"
+}
+
+# The watcher drops a FACT; the APP writes the record. Never write the log file from here.
+mark_unreadable() {
+  [ -d "$sup" ] || return 0
+  printf '%s\n%s\n%s\n%s\n\n' "watcher" "the channel fingerprints" \
+    "$1 failed — fingerprint taken as unknown, not as a change" "supervisor" \
+    > "$sup/.guard-not-in-force" 2>/dev/null
+  return 0
+}
+
+prev=""; fails=0
+if read_fp; then prev="$FP"; else fails=1; mark_unreadable "$FP_ERR"; fi
 while true; do
   sleep 5
-  cur="$(fingerprint)"
-  if [ "$cur" != "$prev" ]; then
-    echo "CHANNELS CHANGED on $ARGUMENTS — read every channel from your last entry down, act on it, append your entries."
-    prev="$cur"
+  if read_fp; then
+    fails=0
+    if [ -n "$prev" ] && [ "$FP" != "$prev" ]; then
+      echo "CHANNELS CHANGED on $ARGUMENTS — read every channel from your last entry down, act on it, append your entries."
+    fi
+    prev="$FP"
+  else
+    fails=$((fails + 1))
+    if [ "$fails" -eq 1 ]; then mark_unreadable "$FP_ERR"; fi
+    if [ "$fails" -eq 12 ]; then
+      echo "WATCHER BLIND — the channels have been unreadable for about a minute ($FP_ERR failing). This is NOT a change notification: read them yourself, and expect the machine to be out of memory or disk."
+    fi
   fi
 done
 ```
+
+**A failed read is not a change, and the old `cat` pipeline could not tell you which had happened.**
+It discarded every exit status — the pipeline's status is `cut`'s, which succeeds on anything — so a
+read that could not run fired anyway. **One failed read produced exactly two phantom wakes**, one
+going into the failure and one coming out. Measured on 2026-08-14: this monitor fired on changed
+channels upwards of a hundred times in a day and the large majority found nothing new, while an
+implementer's channel that had not been touched for 27 minutes woke it four times.
+
+**Your shape was the worse of the two, and this is why `cat` is gone.** `cat … | md5sum` hashes
+whatever reached the pipe, so a `cat` that fails entirely hashes EMPTY INPUT and yields
+`d41d8cd98f00b204e9800998ecf8427e` — a perfectly valid-looking digest, with exit status 0. There is
+no output you could inspect to tell that apart from a real fingerprint, which is why the fix is not a
+retry or an emptiness check but a change of instrument: `md5sum` given the files directly returns
+non-zero if ANY of them could not be read, reports per file, and needs no buffer of every channel's
+bytes on a machine that is short of memory. `nullglob` is what keeps an orchestration with no
+implementers yet from looking permanently unreadable.
+
+`read_fp` keeps `prev` untouched when it cannot read, so an append that lands during a failed spell
+still fires on the next successful read — nothing is lost by waiting. After twelve consecutive
+failures the loop says it is blind, once, in words that cannot be mistaken for traffic.
 
 **Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
 2026-08-07 twenty-nine background watchers were killed across four sessions of one orchestration,

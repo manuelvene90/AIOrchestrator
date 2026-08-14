@@ -169,6 +169,8 @@ Both halves are now fixed, and the reading side is already immune:
 
 **Reader side (done, and stronger than pattern-matching):** the persistent Monitor fingerprints the
 WHOLE FILE (`wc -c` + `md5sum`). Any byte that changes is traffic, so no wording can hide from it.
+(The loop that does the fingerprinting was itself defective until 2026-08-14 — it could not tell a
+changed file from a file it had failed to read. See Mode D below.)
 All the role commands now say explicitly not to narrow it to a text pattern, with this incident as
 the reason — otherwise the next session "optimises" it into a grep and reintroduces the bug.
 
@@ -207,6 +209,70 @@ Supervisor-side prose was tightened too (`kit/commands/supervisor.md`) — but p
 lever here, which is why the detector exists.
 
 ---
+
+## Mode D — a healthy watcher that fires when NOTHING changed (added 2026-08-14)
+
+The three modes above are all ways a session goes **silent**. This is the opposite failure, and it
+had been running against every session in the orchestration for a full day before anyone measured it.
+
+**The measurement.** `imp-8`'s channel file, sampled at 11:11 on 2026-08-14: mtime 10:44:18, size
+120661, md5 `ba9bd363c70b4690977738d3b44c0209` — **unchanged for 27 minutes**, during which its
+monitor fired **four times**, each time saying the channel had changed. Corroborated independently
+from the supervisor's own session, whose monitor had fired "upwards of a hundred times" that day with
+the large majority finding nothing new; it had been read as the cost of a busy orchestration.
+
+**The mechanism, in the loop this document introduced:**
+
+```bash
+fingerprint() { wc -c < "$ch" 2>/dev/null; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; }
+```
+
+Neither command's exit status is checked and both errors are discarded — and the function's own
+status is `cut`'s, which succeeds on anything, so **no failure could ever be detected**. A read that
+could not run returned an empty or partial fingerprint, which compared unequal to the real one and
+fired; the next successful poll compared unequal again and fired a second time. **One failed read,
+exactly two phantom wakes**, with nothing anywhere recording that a read had failed. Reproduced with
+a shimmed `md5sum`: two fires from one failure, on a file that never changed.
+
+**The supervisor's variant was worse, and it is why `cat` is gone from it.** `cat … | md5sum` hashes
+whatever reached the pipe, so a `cat` that failed entirely hashed EMPTY INPUT and produced
+`d41d8cd98f00b204e9800998ecf8427e` — a valid-looking digest with exit status 0, indistinguishable by
+inspection from a real fingerprint. No emptiness check can catch that, because the output is not
+empty. It is now `md5sum` given the files directly, which returns non-zero if any file could not be
+read, reports per file, and buffers nothing.
+
+**Why it is a HIGH rather than a nuisance.** It burned a turn in every session simultaneously; it
+trains members to distrust the wake, and a member that learns wakes are usually empty will eventually
+skim a real one; and it correlates with exactly the condition where real traffic matters most, since
+the paging exhaustion that makes forks fail is what causes the failed reads in the first place.
+
+**It is the same class as four other findings of that week** — `hook-behaviour-check.sh` certifying
+code it never ran, a probe returning ALLOW for two different reasons, a test suite printing SUCCESS
+over an aborted run, and the guard alert inventing a cause. An instrument that cannot evaluate its
+predicate must SAY SO, not answer with confidence. This one answered "changed".
+
+### The fix, and what it does not cover
+
+`read_fp` checks each command and returns non-zero with the failing command named, and the loop
+**keeps `prev` untouched** rather than treating an unknown as a difference. Nothing is lost by
+waiting: an append that lands during a failed spell still differs from the preserved `prev` and fires
+on the next successful read. The failure itself goes out as a `.guard-not-in-force` marker — the app
+writes the record, per the split `kit/hooks/hook-log.sh` documents — naming which command failed and
+which member tripped it.
+
+**Not covered, stated rather than discovered:**
+
+- A channel that stays unreadable produces ONE blind alarm after twelve consecutive failures and then
+  nothing. That is deliberate (a repeat that is a notification is a waterfall) but it means a
+  permanently unreadable channel is announced once and not again.
+- A change the fingerprint cannot see — a file replaced with byte-identical content — is invisible as
+  it always was.
+- The watcher process dying is still Mode B's problem, not this one's.
+
+`kit/hooks/watcher-behaviour-check.sh` is the control. It **extracts the bash block from each role
+command and executes it**, rewriting only two lines of loop plumbing (`while true` → driven by steps,
+`sleep 5` → apply the next step) and refusing to run if either rewrite fails to apply — so there is
+no second copy of the loop to drift, and a harness that cannot find its subject cannot certify it.
 
 ## Live experiment still running
 

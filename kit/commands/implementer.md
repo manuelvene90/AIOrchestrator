@@ -206,17 +206,61 @@ Monitor(
 
 ```bash
 ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
-fingerprint() { wc -c < "$ch" 2>/dev/null; md5sum "$ch" 2>/dev/null | cut -d' ' -f1; }
-prev="$(fingerprint)"
+
+# Sets FP, or returns non-zero with FP_ERR naming the command that failed. A read that FAILED is
+# not a read that saw something different — see "A failed read is not a change" below.
+read_fp() {
+  FP=""; FP_ERR=""
+  local size hash
+  if ! size="$(wc -c < "$ch" 2>/dev/null)" || [ -z "$size" ]; then FP_ERR="wc -c"; return 1; fi
+  if ! hash="$(md5sum "$ch" 2>/dev/null)"  || [ -z "$hash" ]; then FP_ERR="md5sum"; return 1; fi
+  FP="$size ${hash%% *}"
+}
+
+# The watcher drops a FACT; the APP writes the record. Never write the log file from here.
+mark_unreadable() {
+  local orch="$HOME/.claude/supervision/${AIORCH_ID:-}"
+  [ -n "${AIORCH_ID:-}" ] && [ -d "$orch" ] || return 0
+  printf '%s\n%s\n%s\n%s\n\n' "watcher" "the channel fingerprint" \
+    "$1 failed — fingerprint taken as unknown, not as a change" "${AIORCH_MEMBER:-}" \
+    > "$orch/.guard-not-in-force" 2>/dev/null
+  return 0
+}
+
+prev=""; fails=0
+if read_fp; then prev="$FP"; else fails=1; mark_unreadable "$FP_ERR"; fi
 while true; do
   sleep 5
-  cur="$(fingerprint)"
-  if [ "$cur" != "$prev" ]; then
-    echo "YOUR CHANNEL CHANGED — read from your last entry down, act on it, append your boundary report."
-    prev="$cur"
+  if read_fp; then
+    fails=0
+    if [ -n "$prev" ] && [ "$FP" != "$prev" ]; then
+      echo "YOUR CHANNEL CHANGED — read from your last entry down, act on it, append your boundary report."
+    fi
+    prev="$FP"
+  else
+    fails=$((fails + 1))
+    if [ "$fails" -eq 1 ]; then mark_unreadable "$FP_ERR"; fi
+    if [ "$fails" -eq 12 ]; then
+      echo "WATCHER BLIND — your channel has been unreadable for about a minute ($FP_ERR failing). This is NOT a change notification: read the file yourself, and expect the machine to be out of memory or disk."
+    fi
   fi
 done
 ```
+
+**A failed read is not a change — this is the defect the old loop had.** The old one discarded both
+commands' exit statuses and always returned success, so a `wc` or `md5sum` that could not run
+produced an empty or partial fingerprint, which compared unequal to the real one and fired. **One
+failed read produced exactly two phantom wakes** — one going into the failure, one coming out — and
+nothing anywhere recorded that a read had failed. Measured on 2026-08-14: a channel untouched for 27
+minutes woke its member four times, and the supervisor's own monitor fired "upwards of a hundred
+times" in a day with the large majority finding nothing. It is worst on a machine that is out of
+memory, which is exactly when forks fail and when real traffic matters most.
+
+So `read_fp` checks each command and **keeps `prev` untouched when it cannot read**. Nothing is lost
+by waiting: if an append lands during a failed spell, the next successful read still differs from the
+preserved `prev` and fires then. The one case it cannot cover is a channel that stays unreadable, so
+after twelve consecutive failures the loop says so — once, in words that cannot be mistaken for
+traffic — rather than going quiet and letting you sleep through real entries.
 
 **Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
 2026-08-07, twenty-nine background watchers were killed across four sessions of one orchestration,

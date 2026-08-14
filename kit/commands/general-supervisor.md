@@ -224,17 +224,54 @@ Monitor(
 
 ```bash
 gc="$HOME/.claude/supervision/general/channel.md"   # = ./channel.md in your working directory
-fingerprint() { md5sum "$gc" 2>/dev/null | cut -d' ' -f1; }
-prev="$(fingerprint)"
+
+# Sets FP, or returns non-zero with FP_ERR naming the command that failed. A read that FAILED is
+# not a read that saw something different — see below.
+read_fp() {
+  FP=""; FP_ERR=""
+  local size hash
+  if ! size="$(wc -c < "$gc" 2>/dev/null)" || [ -z "$size" ]; then FP_ERR="wc -c"; return 1; fi
+  if ! hash="$(md5sum "$gc" 2>/dev/null)"  || [ -z "$hash" ]; then FP_ERR="md5sum"; return 1; fi
+  FP="$size ${hash%% *}"
+}
+
+# The watcher drops a FACT; the APP writes the record. Never write the log file from here.
+mark_unreadable() {
+  local orch="$HOME/.claude/supervision/general"
+  [ -d "$orch" ] || return 0
+  printf '%s\n%s\n%s\n%s\n\n' "watcher" "the general channel fingerprint" \
+    "$1 failed — fingerprint taken as unknown, not as a change" "general supervisor" \
+    > "$orch/.guard-not-in-force" 2>/dev/null
+  return 0
+}
+
+prev=""; fails=0
+if read_fp; then prev="$FP"; else fails=1; mark_unreadable "$FP_ERR"; fi
 while true; do
   sleep 5
-  cur="$(fingerprint)"
-  if [ "$cur" != "$prev" ]; then
-    echo "GENERAL CHANNEL CHANGED — read from your last entry down, act, reply."
-    prev="$cur"
+  if read_fp; then
+    fails=0
+    if [ -n "$prev" ] && [ "$FP" != "$prev" ]; then
+      echo "GENERAL CHANNEL CHANGED — read from your last entry down, act, reply."
+    fi
+    prev="$FP"
+  else
+    fails=$((fails + 1))
+    if [ "$fails" -eq 1 ]; then mark_unreadable "$FP_ERR"; fi
+    if [ "$fails" -eq 12 ]; then
+      echo "WATCHER BLIND — the general channel has been unreadable for about a minute ($FP_ERR failing). This is NOT a change notification: read the file yourself, and expect the machine to be out of memory or disk."
+    fi
   fi
 done
 ```
+
+**A failed read is not a change.** The old loop discarded `md5sum`'s exit status and always returned
+success, so a read that could not run produced an empty fingerprint, compared unequal to the real
+one, and fired — **one failed read, two phantom wakes**, with nothing recording that a read had
+failed. `read_fp` now keeps `prev` untouched when it cannot read, so an append that lands during a
+failed spell still fires on the next successful read; and after twelve consecutive failures it says
+plainly that it is blind rather than going quiet on you. The owner's traffic is what is at stake
+here, so the silent half matters more than the noisy one.
 
 **Why a Monitor and not a `run_in_background` Bash task — this is measured, not preference.** On
 2026-08-07 twenty-nine background watchers were killed across four sessions of one orchestration,
