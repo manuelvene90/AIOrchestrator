@@ -5936,6 +5936,20 @@ internal sealed class BridgeEngineModel(
             // A timeout leaves the message very probably still there and still editable, so the ids
             // are KEPT and the next repeat edits as normal. If it really is gone, the edit fails
             // again with a non-timeout error and the reset runs then.
+            //
+            // NOT PINNED, AND THE CONSTANTS ABOVE ARE WHY — do not read the absent test as an
+            // oversight. This branch is only observable on the SECOND narration: the first must fail
+            // with a timeout, and the repeat must then be watched to see whether it EDITS (ids kept,
+            // correct) or SENDS (ids cleared, the waterfall). NARRATION_FIRST_DELAY_SECONDS = 45 plus
+            // NARRATION_REPEAT_SECONDS = 180 puts the earliest observation 225 SECONDS out, against a
+            // suite that runs in about 80 — and a slow suite stops being run, which trades one pinned
+            // `if` for an unmeasured everything.
+            //
+            // Making those two windows injectable unlocks this, Announce_SupervisorFree_Async's
+            // fallback skip below, rev-5's R2 on the nudge windows and imp-6's G3 — four blocked tests,
+            // one seam. Deferred until after the merge on purpose: this file is touched by fourteen
+            // branches and is the worst hotspot on the conflict map, so the seam is worth building and
+            // building it here first is not.
             var lostTheMessage = ex is not OperationCanceledException;
 
             // A failed EDIT must not freeze the narration forever on a dead message id: drop it so
@@ -6005,6 +6019,18 @@ internal sealed class BridgeEngineModel(
             // same tick — two ~90-second waits in a loop that ticks every 2 seconds, which is worse
             // than the abort the filter above removes. The announcement is not lost: the next tick
             // finds the turn still ended and tries again against an endpoint that may have recovered.
+            //
+            // NOT PINNED, AND THE COST WAS MEASURED RATHER THAN GUESSED. Reaching here needs
+            // `pending.LastNarratedUtc != default`, so a test must first spend NARRATION_FIRST_DELAY_
+            // SECONDS = 45 and then flip the supervisor from mid-turn to free by rewriting usage files
+            // under a running engine. Worse, the harness cannot currently tell the two outcomes apart:
+            // FailableTelegram_Fake.Count_Attempts_Containing counts by TEXT FRAGMENT and the edit
+            // above and the fallback send below both carry TURN_ENDED_TEXT, so it needs a fake that
+            // records the METHOD — plus a positive control proving a NON-timeout failure still sends
+            // the fallback, because asserting only the absence is the nothing-is-ALLOW trap.
+            //
+            // ~60 s and a harness change to pin one `if`. The same seam named at Narrate_BusySupervisor_
+            // Async covers this too; see there for why it is deferred until after the merge.
             if (ex is OperationCanceledException)
                 return;
 
