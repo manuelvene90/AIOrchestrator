@@ -422,7 +422,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Implementer, "STANDING BY", "2026-08-12 18:30"),
             (ChannelAuthors.App, "you stopped mid-task", "2026-08-12 18:58"));
 
-        Assert.Equal(30, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Equal(30, Nudge_Decider.Measure_QuietFor(entries, now)!.Value.TotalMinutes, 1);
     }
 
     /// <summary>
@@ -440,7 +440,7 @@ public class NudgeDeciderTests
             (ChannelAuthors.Supervisor, "brief", "2026-08-12 18:00"),
             (ChannelAuthors.Implementer, "done, commit 8b58b2e", "2026-08-12 18:58"));
 
-        Assert.Equal(2, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Equal(2, Nudge_Decider.Measure_QuietFor(entries, now)!.Value.TotalMinutes, 1);
     }
 
     /// <summary>
@@ -460,7 +460,7 @@ public class NudgeDeciderTests
 
         var entries = Stamped((ChannelAuthors.Implementer, "STANDING BY", "not a date at all"));
 
-        Assert.Equal(45, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Null(Nudge_Decider.Measure_QuietFor(entries, now));
     }
 
     /// <summary>
@@ -478,7 +478,33 @@ public class NudgeDeciderTests
 
         var entries = Stamped((ChannelAuthors.Implementer, "STANDING BY", now.AddHours(6).ToString("yyyy-MM-dd HH:mm")));
 
-        Assert.Equal(45, Nudge_Decider.Measure_QuietFor(entries, file, now).TotalMinutes, 1);
+        Assert.Null(Nudge_Decider.Measure_QuietFor(entries, now));
+    }
+
+    /// <summary>
+    /// AN APP ENTRY DOES NOT DATE A CHANNEL — rev-8's F1, and this case is the R9 assertion inverted.
+    ///
+    /// It used to require 20 minutes here, measured from the app's own `/resume` entry. R9 was right
+    /// that the FILE is the wrong source — compaction moves the file's stamp with nobody having
+    /// spoken — and the remedy took the wrong half: on a channel holding only app entries, the app's
+    /// own write became the clock. Measuring the CONVERSATION is immune to compaction and to the app
+    /// both, which is what R9 should have asked for.
+    ///
+    /// So an app-only channel is not "quiet for zero"; it is a channel nobody can date, and every
+    /// caller reads null as past the threshold. The stall alert that could never fire for an
+    /// orchestration whose session died silently is this assertion's real subject.
+    /// </summary>
+    [Fact]
+    public void AnAppOnlyChannelCannotBeDatedAtAll()
+    {
+        var now = new DateTime(2026, 8, 12, 19, 0, 0);
+        var file = Write_TempChannel();
+
+        File.SetLastWriteTime(file, now);
+
+        var entries = Stamped((ChannelAuthors.App, "GO AHEAD — resume", "2026-08-12 18:40"));
+
+        Assert.Null(Nudge_Decider.Measure_QuietFor(entries, now));
     }
 
     static string Write_TempChannel()

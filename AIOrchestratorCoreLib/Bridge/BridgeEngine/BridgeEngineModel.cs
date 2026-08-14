@@ -837,7 +837,7 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            var quietFor = DateTime.UtcNow - Get_LastChannelActivityUtc(session);
+            var quietFor = Get_OrchestrationQuietFor(session);
 
             if (quietFor.TotalMinutes < STALL_ALERT_MINUTES)
             {
@@ -846,8 +846,9 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
-            // Someone is actually working (transcript growing): a long thinking turn, not a stall.
-            if (Is_AnySessionMidTurn(session))
+            // Someone is actually working, or worked inside the window: a long thinking turn or a turn
+            // that has just ended, not a stall. Wider than "mid-turn" on purpose — see the method.
+            if (Has_AnySessionWorkedWithin(session, STALL_ALERT_MINUTES))
                 continue;
 
             if (!_stallAlertedOrchIds.Add(session.OrchId))
@@ -874,34 +875,98 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    DateTime Get_LastChannelActivityUtc(IOrchestrationSession session)
+    /// <summary>
+    /// How long this orchestration has been quiet — the SHORTEST quiet across its channels, since any
+    /// one of them speaking means the orchestration is alive.
+    ///
+    /// THE THIRD CLOCK, and the last of them to stop reading file stamps (rev-7's F1). It used to take
+    /// the max <c>File.GetLastWriteTimeUtc</c> over the owner channel and every member channel, so any
+    /// write that SAID NOTHING marked the whole orchestration alive: a compaction's rename-over, a
+    /// request confirmation, a `/resume` broadcast — and, self-referentially, **the supervisor nudge
+    /// this engine fires itself.** The app wrote to say a report was waiting, and that write told the
+    /// stall detector everything was fine. A liveness signal its own alarm resets is not a liveness
+    /// signal.
+    ///
+    /// It goes through the SAME reader as both nudge clocks rather than measuring its own way — that
+    /// is the whole point of the branch this arrived on, and a fourth private notion of "quiet" is how
+    /// there came to be three.
+    ///
+    /// LOCAL throughout, deliberately. <see cref="Nudge_Decider.Measure_QuietFor"/> reads agent stamps
+    /// and file stamps, both local wall time, so mixing a UTC `now` in here would make every span two
+    /// hours short on this machine and suppress the alert rather than fire it — the silent direction.
+    /// The comparison is done in TimeSpans for the same reason: nothing has to be converted, so
+    /// nothing can be converted wrongly.
+    /// </summary>
+    TimeSpan Get_OrchestrationQuietFor(IOrchestrationSession session)
     {
-        var latest = session.CreatedUtc;
+        var now = DateTime.Now;
+
+        // An orchestration cannot have been quiet for longer than it has existed — and with entry
+        // stamps in play that is no longer automatic, because a stamp inside a channel can predate
+        // the session that owns it.
+        var quietFor = now - session.CreatedUtc.ToLocalTime();
 
         List<string> channelFiles = [_paths.Get_OwnerChannelFile(session.OrchId)];
 
         foreach (var member in session.Members)
+        {
+            // A RETIRED MEMBER DOES NOT VOUCH FOR A LIVE ORCHESTRATION (rev-8's F5). Every other member
+            // loop in this file carries this guard; this one was the exception, and the direction is
+            // one-way: the span is the MINIMUM, so a closed member's channel can only LOWER it and
+            // therefore only ever mask a stall.
+            //
+            // Reachable by the ordinary route rather than an exotic one: a member is normally closed
+            // just after filing its last report, so at the moment of closing its last conversation
+            // entry is RECENT by construction — and for the next twenty-five minutes that farewell
+            // vouches for everybody else's silence.
+            if (member.ClosedUtc != null)
+                continue;
+
             channelFiles.Add(_paths.Get_ImplementerChannelFile(session.OrchId, member.MemberId));
+        }
 
         foreach (var channelFile in channelFiles)
         {
             if (!File.Exists(channelFile))
                 continue;
 
-            var lastWrite = File.GetLastWriteTimeUtc(channelFile);
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var channelQuietFor = Nudge_Decider.Measure_QuietFor(entries, now);
 
-            if (lastWrite > latest)
-                latest = lastWrite;
+            // A CHANNEL THAT CANNOT BE DATED CONTRIBUTES NOTHING TO THE MINIMUM, and skipping is the
+            // noisy direction here rather than the quiet one. This span is the SHORTEST across
+            // channels, so any value at all pulls it down and can mask a stall; treating an
+            // unmeasurable channel as recent activity would let one unreadable stamp vouch for a
+            // whole orchestration being alive.
+            if (channelQuietFor != null && channelQuietFor < quietFor)
+                quietFor = channelQuietFor.Value;
         }
 
-        return latest;
+        return quietFor;
     }
 
     /// <summary>
     /// A session mid-turn is writing its transcript RIGHT NOW (the status line hands us the exact
     /// path). Falls back to the probe file's own mtime when a transcript path is unavailable.
     /// </summary>
-    bool Is_AnySessionMidTurn(IOrchestrationSession session)
+    /// <summary>
+    /// Did any session in this orchestration demonstrably WORK inside the window — not "say" anything,
+    /// but write a transcript?
+    ///
+    /// EVIDENCE OF LIFE OUTRANKS AN AGENT'S OWN STAMP, and that is the whole reason this is wider than
+    /// the mid-turn question it replaces (rev-8's F3). The quiet span is computed from `DateText`, which
+    /// item 12 declares untrusted input, and the trusted reader refuses only stamps in the FUTURE — a
+    /// stamp drifted into the PAST passes unchallenged. A supervisor that runs a forty-minute turn and
+    /// stamps its entry with the time it read at turn START looks forty minutes silent the moment the
+    /// turn ends, and the owner is texted about a session that had just spoken. The channel cannot
+    /// refute that stamp; the filesystem can, because the app writes these files rather than an agent.
+    ///
+    /// THIS NARROWS THE ALERT AND THE NARROWING IS DELIBERATE: an orchestration whose sessions worked
+    /// inside the window but have stopped SPEAKING is no longer alerted on. We hold evidence of life
+    /// inside the window, so claiming a stall would be asserting more than we know — and this is the
+    /// same judgement the mid-turn check already made, over a longer horizon.
+    /// </summary>
+    bool Has_AnySessionWorkedWithin(IOrchestrationSession session, int minutes)
     {
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
 
@@ -916,7 +981,9 @@ internal sealed class BridgeEngineModel(
 
         foreach (var usageFile in usageFiles)
         {
-            if (Is_SessionMidTurn(usageFile))
+            var lastActivityUtc = SessionActivity_Probe.Get_LastActivityUtc_OrNull(usageFile);
+
+            if (lastActivityUtc != null && (DateTime.UtcNow - lastActivityUtc.Value).TotalMinutes < minutes)
                 return true;
         }
 
@@ -997,10 +1064,14 @@ internal sealed class BridgeEngineModel(
                 // nothing reaches the threshold and every nudge in the system stops — silently, with
                 // a green suite. NudgeClockProbeTests pins this call for that reason; the decision is
                 // pure and pinned four ways, and all four passed while this line was wrong.
-                var quietFor = Nudge_Decider.Measure_QuietFor(entries, channelFile, DateTime.Now);
+                var quietFor = Nudge_Decider.Measure_QuietFor(entries, DateTime.Now);
                 var alreadyNudged = _nudgedMemberUtc.TryGetValue(memberKey, out var nudgedUtc);
 
-                if (!alreadyNudged && quietFor.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+                // NULL IS PAST THE THRESHOLD, never under it. An unreadable clock means nobody can say
+                // this member is working, and the expensive mistake is the one that stays quiet: the
+                // gate below still holds it to one nudge per unanswered thing, so the cost of being
+                // wrong here is a single wake.
+                if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
                     continue;
 
                 // Transcript growing = genuinely working (a long build, a big read). NOT orphaned:
@@ -1216,7 +1287,23 @@ internal sealed class BridgeEngineModel(
             if (!Nudge_Decider.Owes_MemberAVerdict(entries))
                 continue;
 
-            if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile)).TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+            // ONE READER FOR BOTH CLOCKS. This path used to measure the member's channel by its FILE
+            // stamp while the member-nudge path above measured the conversation — so the same channel
+            // was "quiet for 20 minutes" to one and "quiet for 0" to the other, and the quiet-clock
+            // fix looked complete while the half that reports to the supervisor still reset on every
+            // app write. A compaction is the sharpest case: its rename-over advances the stamp with
+            // NOBODY having spoken, so a report owed for twenty minutes went unreported. `/resume`
+            // did it too, unboundedly, having no dedupe.
+            //
+            // LOCAL `now`, and it must stay local — Measure_QuietFor reads agent stamps and the file
+            // stamp, both local wall time. The UtcNow this line used to pass was correct only because
+            // it was paired with GetLastWriteTimeUtc; handing UtcNow to the shared reader on this
+            // machine (UTC+2) would make the span NEGATIVE and silence the path completely.
+            // Null — nothing here can be dated — is PAST the threshold, so the supervisor is told
+            // rather than left to assume silence means nothing is waiting.
+            var memberQuietFor = Nudge_Decider.Measure_QuietFor(entries, DateTime.Now);
+
+            if (memberQuietFor != null && memberQuietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
                 continue;
 
             waitingMembers.Add(member.MemberId);
@@ -1249,7 +1336,7 @@ internal sealed class BridgeEngineModel(
         string memberId,
         string channelFile,
         Channels.ChannelEntry.IChannelEntry lastEntry,
-        TimeSpan quietFor,
+        TimeSpan? quietFor,
         bool dormantMidWork,
         CancellationToken cancellationToken)
     {
@@ -1271,16 +1358,16 @@ internal sealed class BridgeEngineModel(
         var subject = Nudge_Wording.Subject_For(dormantMidWork);
 
         var body = dormantMidWork
-            ? Nudge_Wording.Body_ForOpenWindow(lastEntry.Index, SessionDuration_Formatter.Describe(quietFor))
+            ? Nudge_Wording.Body_ForOpenWindow(lastEntry.Index, Nudge_Wording.Describe_QuietFor(quietFor))
             : Nudge_Wording.Body_ForUnansweredTraffic(
                 lastEntry.Index,
                 lastEntry.Author.ToString().ToLowerInvariant(),
-                SessionDuration_Formatter.Describe(quietFor));
+                Nudge_Wording.Describe_QuietFor(quietFor));
 
         ChannelAppender.Append_AppEntry(channelFile, subject, body, DateTime.Now);
 
         var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
-        _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {SessionDuration_Formatter.Describe(quietFor)} — nudged");
+        _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {Nudge_Wording.Describe_QuietFor(quietFor)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
 
         // The owner is NOT told. This is routine self-healing that already worked — the nudge is

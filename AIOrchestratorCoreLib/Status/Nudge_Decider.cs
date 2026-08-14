@@ -119,10 +119,14 @@ public static class Nudge_Decider
     /// legitimate nudge by up to the full 8 minutes, for a member that was genuinely stalled.
     ///
     /// The stamp is AGENT-WRITTEN and therefore not trusted: it goes through the one trusted reader,
-    /// which refuses a future date. When it cannot be read the file stamp is used exactly as before —
-    /// the old behaviour, which is noisy rather than silent, and that is the right direction to fall
-    /// back in. A quiet clock that cannot be computed must never make a member look busy: that would
-    /// suppress the nudge for a session that really had stopped.
+    /// which refuses a future date. **When nothing here can be dated this returns NULL, and null means
+    /// PAST THE THRESHOLD at every call site** — a quiet clock that cannot be computed must never make
+    /// a member look busy, because that suppresses the nudge for a session that really had stopped.
+    ///
+    /// That sentence used to sit above a fallback that did the opposite. The file's age was described
+    /// here as "the old behaviour, noisy rather than silent"; it is neither, because the file stamp
+    /// moves on every app write and on a compaction that says nothing, so the member read as busy. The
+    /// rule was right and had simply never been implemented.
     ///
     /// ONE CLOCK, and `now` must be LOCAL because both sources are: agent stamps are local wall time
     /// and so is the file stamp read here. It is the same mismatch that once made a 30-second backoff
@@ -146,7 +150,14 @@ public static class Nudge_Decider
     /// the nudge threshold, and every alarm in the system goes silent while the suite stays green.
     /// <c>NudgeClockProbeTests</c> exists for that one mutation.
     /// </param>
-    public static TimeSpan Measure_QuietFor(IReadOnlyList<IChannelEntry> entries, string channelFilePath, DateTime now)
+    /// <remarks>
+    /// THE CHANNEL PATH IS GONE FROM THIS SIGNATURE and that is part of the fix, not tidying. It
+    /// existed only to stat the file, and a parameter that no longer does anything is a signature
+    /// claiming a source the code has stopped reading — the same species as a docstring that outruns
+    /// its function, one level up. Removing it makes "this clock does not touch the filesystem"
+    /// checkable by anyone who reads the first line.
+    /// </remarks>
+    public static TimeSpan? Measure_QuietFor(IReadOnlyList<IChannelEntry> entries, DateTime now)
     {
         var lastConversationEntry = MemberState_Resolver.Find_LastConversationEntry_OrNull(entries);
 
@@ -154,7 +165,51 @@ public static class Nudge_Decider
             && SessionDuration_Formatter.Try_ReadTrustedStamp(lastConversationEntry.DateText, now, out var spokenAt))
             return now - spokenAt;
 
-        return now - File.GetLastWriteTime(channelFilePath);
+        // THE CONVERSATION IS THE ONLY THING THIS COUNTS, AND THERE IS NO SECOND SOURCE (rev-8's F1).
+        //
+        // A step here once measured the last ENTRY of any author when no conversation could be found.
+        // It was meant for R9 — a clock immune to compaction, since entry stamps survive a rename-over
+        // and the file's does not — and it bought that with the wrong half: on a channel holding only
+        // app entries, THE APP'S OWN WRITE BECAME THE CLOCK. Measuring the conversation is immune to
+        // compaction AND to the app, which is what R9 should have asked for.
+        //
+        // What that cost, live in this orchestration on 2026-08-13: a member that died at boot without
+        // writing has a channel of zero entries; a `/resume` gives it exactly one, FROM app, stamped
+        // now; every nudge appends another and resets this clock; and because
+        // Get_OrchestrationQuietFor takes the MINIMUM across channels, the whole orchestration read as
+        // quiet for at most 8 minutes against a 25-minute threshold. The stall alert could never fire
+        // for an orchestration in which a session died silently — the one case it exists for — and the
+        // write holding it down was the app's own.
+        //
+        // THE THROTTLE THIS REMOVES WAS NEVER DESIGNED. For app-only channels the one-nudge gate is
+        // skipped (no conversation identity to record), so the only thing preventing a nudge every
+        // tick was this clock being reset by the nudge itself — a throttle made of the defect it
+        // throttles. It moves to the gate, which is `5f3dc1f`'s sentinel plus `25060c9`; see this
+        // commit's message for the merge ordering that requires.
+        //
+        // NOT TOUCHED, DELIBERATELY: <see cref="Has_UnansweredInboundTraffic"/> still counts app
+        // entries. Two readers, two purposes, one set of entries — the clock must stop treating the
+        // app's writes as LIFE without eligibility losing them, or a nudged member falls out of the
+        // eligible set and a genuinely dead session can never escalate. Two fixes have been withdrawn
+        // for exactly that, and they reinterpreted the PREDICATE, not this.
+
+        // NULL IS "CANNOT BE COMPUTED", AND EVERY CALLER MUST READ IT AS PAST THE THRESHOLD.
+        //
+        // This used to return the FILE's age, described one paragraph above as "the old behaviour,
+        // which is noisy rather than silent". It was neither: the file stamp moves on every app write
+        // and on a compaction's rename-over, so the fallback reported "quiet for ~0" for a member
+        // nobody had heard from — the member looked BUSY, which is the one outcome the rule above
+        // forbids. A guarantee stated in a docstring and contradicted by the line under it is worse
+        // than no guarantee, because it is the one the next reader relies on.
+        //
+        // Reachable through documented behaviour rather than in theory: a single future-dated stamp on
+        // the last entry defeats both steps above — it is a conversation entry, so the first refuses
+        // it, and it is also the last entry, so the second refuses the same text — and item 12 records
+        // future stamps happening twice in this orchestration's own channels in one day.
+        //
+        // There is no third source worth inventing. The honest answer is that the conversation cannot
+        // be dated, and the safe direction for that answer is to wake somebody.
+        return null;
     }
 
     /// <summary>
