@@ -4507,6 +4507,18 @@ internal sealed class BridgeEngineModel(
             _store.Set_TelegramTopicId(session.OrchId, newTopicId);
 
             _appliedTopicNames[session.OrchId] = topicName;
+
+            // AND THE RETRY STAMP GOES WITH THE TOPIC IT WAS ABOUT (rev-10's F2). The stamp means "an
+            // attempt on this orchestration told us nothing"; once the topic has been deleted and
+            // recreated, the thing it was about no longer exists, and leaving it would gate the NEW
+            // topic's first name sync for up to the remainder of 30 s.
+            //
+            // It bites exactly when the glyph carries information: the name applied at creation is the
+            // two-argument decoration, so an away or quiet glyph still has to be synced afterwards —
+            // and that sync is the one being held. Bounded and self-healing, which is why it is LOW,
+            // but it is a stale memo about a deleted object and those do not improve with age.
+            _topicNameRetryAfterUtc.Remove(session.OrchId);
+
             Take_KnownTopicMessageIds(messageThreadId);
             Take_ReceiptMessageId_OrNull(messageThreadId);
 
