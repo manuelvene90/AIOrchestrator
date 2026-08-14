@@ -1,0 +1,264 @@
+using AIOrchestratorCoreLib.Bridge.BridgeEngine;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
+using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Tests.Channels;
+using AIOrchestratorCoreLib.Tests.Launching;
+using AIOrchestratorCoreLib.Translation.MessageTranslator;
+using Xunit;
+
+namespace AIOrchestratorCoreLib.Tests.Bridge;
+
+/// <summary>
+/// AN OWNER MESSAGE MUST SURVIVE EVERY WAY OUT OF THE FLUSH, NOT JUST THE APPEND'S OWN FAILURE.
+/// <para>
+/// <c>Take_ReadyDeliveries</c> empties the buffer for the WHOLE BATCH before the loop body runs, so
+/// from that moment the local variables are the only copy of the owner's words. The append's failure
+/// was covered by R1's put-back; the other routes out were not — a translator that throws destroyed
+/// the text outright, and any escape from the loop destroyed every delivery still to come in the
+/// batch along with it.
+/// </para>
+/// <para>
+/// THE TRANSLATOR IS THE ROUTE USED HERE because it is the one that runs BEFORE the append and after
+/// the drain — the exact window where the message exists nowhere else. It reaches the loop through a
+/// factory seam rather than a race, so nothing here depends on timing.
+/// </para>
+/// </summary>
+[Collection(CHANNEL_LOCK_COLLECTION.NAME)]
+public class OwnerDeliverySurvivesAFailedFlushTests : IDisposable
+{
+    const long SUPERGROUP_CHAT_ID = -1002233445566;
+    const long OWNER_USER_ID = 555000111;
+    const long TOPIC_ID = 4242;
+
+    const string FIRST_TEXT = "did the overnight rebuild finish";
+    const string SECOND_TEXT = "and is the ledger clean yet";
+
+    readonly string _tempRoot;
+    readonly string _tempRepo;
+    readonly ISupervisionPaths _paths;
+    readonly IOrchestrationSessionStore _store;
+    readonly IOrchestrationLauncher _launcher;
+    readonly IBridgeEngine _engine;
+    readonly FailableTelegram_Fake _telegram;
+    readonly RecordingLog_Fake _log;
+    readonly ThrowingTranslator_Fake _translator;
+
+    public OwnerDeliverySurvivesAFailedFlushTests()
+    {
+        _tempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-flush-escape-{Guid.NewGuid():N}");
+        _tempRepo = Path.Combine(_tempRoot, "repo");
+        Directory.CreateDirectory(_tempRepo);
+
+        _paths = SupervisionPaths_Factory.Create(_tempRoot);
+        Directory.CreateDirectory(_paths.RequestsFolder);
+
+        // The Italian layer is ON here, unlike every other engine test: it is what puts the
+        // translator on the delivery path at all, and the translator is the escape being pinned.
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":true}}");
+
+        File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
+
+        _store = OrchestrationSessionStore_Factory.Create(_paths);
+        _log = new RecordingLog_Fake();
+        _telegram = new FailableTelegram_Fake();
+        _translator = new ThrowingTranslator_Fake();
+
+        var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
+
+        _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
+
+        _engine = BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
+            _paths, configProvider, _store, _launcher, _log, _telegram, _translator);
+    }
+
+    public void Dispose()
+    {
+        Directory.Delete(_tempRoot, recursive: true);
+    }
+
+    /// <summary>
+    /// The two halves fail for disjoint reasons: while the translator throws the text is absent from
+    /// the channel and the engine says it kept it; once the translator recovers the SAME text
+    /// arrives, which can only happen if it was put back.
+    /// <para>
+    /// It also pins that the ORIGINAL is put back, not a half-translated working copy — the assertion
+    /// is on the owner's exact words.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ATranslatorThatThrowsDoesNotDestroyTheOwnersMessage()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        Seed_OwnerChannel(session.OrchId);
+
+        var ownerChannel = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        _telegram.Queue_OwnerMessage(Build_OwnerMessageJson(FIRST_TEXT, 4101));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Line_Containing("failed mid-delivery"), 40_000),
+            "the flush never reached a throwing translator, so nothing below means anything."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.DoesNotContain(FIRST_TEXT, File.ReadAllText(ownerChannel));
+
+        // The only copy is now whatever the engine kept. Before this fix the throw escaped the loop
+        // and the owner's words existed nowhere.
+        _translator.Stop_Throwing();
+
+        Assert.True(
+            await Run_Until_Async(() => File.ReadAllText(ownerChannel).Contains(FIRST_TEXT), 40_000),
+            "THE DEFECT: the owner's message was destroyed by a failure BETWEEN the drain and the append. "
+            + "Take_ReadyDeliveries had already emptied the buffer, so an escape from the loop was the end of it."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+    }
+
+    /// <summary>
+    /// A SECOND message must not die because a FIRST one failed. The whole batch leaves the buffer
+    /// together, so an escape from the loop used to take every delivery still to come with it — the
+    /// route that survives imp-7's catch filter through the cancellation path.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task OneFailedDeliveryDoesNotTakeTheRestOfTheBatchDownWithIt()
+    {
+        var first = _launcher.Start_Orchestration("RepoOne", _tempRepo);
+        var second = _launcher.Start_Orchestration("RepoTwo", _tempRepo);
+
+        _store.Set_TelegramTopicId(first.OrchId, TOPIC_ID);
+        _store.Set_TelegramTopicId(second.OrchId, TOPIC_ID + 1);
+
+        Seed_OwnerChannel(first.OrchId);
+        Seed_OwnerChannel(second.OrchId);
+
+        // Only the FIRST orchestration's delivery throws; the second must be unaffected.
+        _translator.Throw_OnlyFor(FIRST_TEXT);
+
+        // BOTH in ONE update batch, which is both how Telegram really delivers them and what puts
+        // them in the SAME drained batch — the exact state where an escape destroyed the one behind.
+        // (Queue_OwnerMessage REPLACES rather than appends, so two calls would only queue the second.)
+        _telegram.Queue_OwnerMessage(Build_TwoOwnerMessagesJson());
+
+        var secondChannel = _paths.Get_OwnerChannelFile(second.OrchId);
+
+        Assert.True(
+            await Run_Until_Async(() => File.ReadAllText(secondChannel).Contains(SECOND_TEXT), 40_000),
+            "THE DEFECT: a delivery that failed took the rest of the batch with it. Every delivery had already "
+            + "been removed from the buffer, so the ones behind the failure were never re-delivered."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        // And the failed one is still safe rather than traded away for the second.
+        Assert.True(
+            _log.Has_Line_Containing("failed mid-delivery"),
+            $"the first delivery did not fail, so this proves nothing.{Environment.NewLine}{_log.Dump()}");
+    }
+
+    void Seed_OwnerChannel(string orchId)
+    {
+        var channelFile = _paths.Get_OwnerChannelFile(orchId);
+
+        if (!File.Exists(channelFile))
+            File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
+    }
+
+    /// <summary>Two owner messages in one poll, bound for two different topics.</summary>
+    static string Build_TwoOwnerMessagesJson()
+    {
+        return "{\"ok\":true,\"result\":["
+            + Build_MessageObject(FIRST_TEXT, 4201, TOPIC_ID) + ","
+            + Build_MessageObject(SECOND_TEXT, 4202, TOPIC_ID + 1)
+            + "]}";
+    }
+
+    static string Build_MessageObject(string text, int updateId, long topicId)
+    {
+        return $"{{\"update_id\":{updateId},\"message\":{{\"message_id\":{updateId},"
+            + $"\"message_thread_id\":{topicId},\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\"}}}}";
+    }
+
+    static string Build_OwnerMessageJson(string text, int updateId, long topicId = TOPIC_ID)
+    {
+        return $"{{\"ok\":true,\"result\":[{{\"update_id\":{updateId},\"message\":{{\"message_id\":{updateId},"
+            + $"\"message_thread_id\":{topicId},\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\"}}}}]}}";
+    }
+
+    async Task<bool> Run_Until_Async(Func<bool> condition, int maxMilliseconds)
+    {
+        using var cancellation = new CancellationTokenSource();
+
+        var loop = _engine.Run_Async(cancellation.Token);
+        var satisfied = false;
+
+        for (var waited = 0; waited < maxMilliseconds; waited += 100)
+        {
+            if (condition())
+            {
+                satisfied = true;
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+
+        await cancellation.CancelAsync();
+
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+            // The only way these loops end.
+        }
+
+        return satisfied || condition();
+    }
+}
+
+/// <summary>
+/// Fails the way a translator really can — a network call that throws — so the escape between the
+/// drain and the append is reachable without racing anything.
+/// </summary>
+internal sealed class ThrowingTranslator_Fake : IMessageTranslator
+{
+    readonly object _lock = new();
+    bool _throwing = true;
+    string? _onlyForText;
+
+    public void Stop_Throwing()
+    {
+        lock (_lock)
+            _throwing = false;
+    }
+
+    public void Throw_OnlyFor(string text)
+    {
+        lock (_lock)
+            _onlyForText = text;
+    }
+
+    public Task<string> Translate_ToEnglish_Async(string text, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            if (_throwing && (_onlyForText == null || text.Contains(_onlyForText, StringComparison.Ordinal)))
+                throw new InvalidOperationException("translation service unreachable");
+        }
+
+        return Task.FromResult(text);
+    }
+
+    public Task<string> Translate_ToItalian_Async(string text, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(text);
+    }
+}

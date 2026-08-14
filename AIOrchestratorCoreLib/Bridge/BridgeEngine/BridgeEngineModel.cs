@@ -5218,92 +5218,127 @@ internal sealed class BridgeEngineModel(
 
         foreach (var delivery in _ownerDeliveryBuffer.Take_ReadyDeliveries(DateTime.UtcNow))
         {
-            // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
-            lock (_ownerStateLock)
-            {
-                _holdReceipts.Remove(delivery.Key);
-            }
-
-            (string OrchId, long? ThreadId) target;
-
-            lock (_deliveryLock)
-            {
-                if (!_deliveryTargets.TryGetValue(delivery.Key, out target))
-                {
-                    _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner delivery for '{delivery.Key}' has no recorded target — dropped");
-                    continue;
-                }
-            }
-
-            var deliveryText = delivery.Value;
-
-            // Italian layer: the SESSION must only ever see English — translate the aggregated
-            // owner text before it touches the channel. Already-English text passes unchanged.
-            if (_configProvider.Get_Current().TelegramItalianLayer)
-                deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
-
-            // Counted BEFORE the owner entry lands, so a later increase can only mean the
-            // supervisor answered THIS message.
-            var supervisorEntryCountBefore = Count_SupervisorEntries(delivery.Key);
-
-            // Take_ReadyDeliveries REMOVED this from the buffer before we got here, so the only copy
-            // of the owner's message is the local variable. A failed append that simply fell through
-            // would destroy it — which is worse than the collision the lock exists to prevent, and is
-            // why "fail the write" cannot mean "drop the write" on this path.
-            if (!ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now))
-            {
-                // Put it back and mark it ready: the owner has already waited out one aggregation
-                // window and must not serve a second one for a lock they know nothing about.
-                _ownerDeliveryBuffer.Add_Segment(delivery.Key, deliveryText, DateTime.UtcNow);
-                _ownerDeliveryBuffer.Release(delivery.Key);
-
-                _log.Log_Warning(target.OrchId,
-                    $"Owner message NOT delivered — '{Path.GetFileName(delivery.Key)}' stayed locked by another writer for the whole budget; it is back in the buffer and the next tick retries it");
-
-                continue;
-            }
-
-            _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
-            Raise_OrchestrationActivity(target.OrchId);
-
-            if (_telegramClient == null || _telegramMuted)
-                continue;
-
+            // TAKE_READYDELIVERIES HAS ALREADY EMPTIED THE BUFFER FOR EVERY KEY IN THIS BATCH, so from
+            // here the local variables are the only copy of the owner's words. The append's own
+            // failure is handled below with a put-back; this wrapper covers the OTHER ways out, which
+            // were not — a translator that throws destroys the text outright, and any escape from the
+            // loop destroys every delivery still to come in the batch as well.
             try
             {
-                // The batch's ✓ becomes "✓✓" — plus a TRUTHFUL handoff line (can the recipient
-                // answer now, or is it mid-turn with the communicator covering the wait?). One
-                // message that evolves, never a pile of ✓ / ✓✓ / thinking lines.
-                var handoffLine = Build_HandoffLine(target.OrchId);
+                await Deliver_OwnerMessage_Async(delivery, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                // The ORIGINAL, never the possibly-half-translated working copy: a partially
+                // translated string becoming the owner's message is worse than a late one, and it
+                // would be near-impossible to diagnose from outside.
+                _ownerDeliveryBuffer.Add_Segment(delivery.Key, delivery.Value, DateTime.UtcNow);
+                _ownerDeliveryBuffer.Release(delivery.Key);
 
-                var receiptText = Should_SendHandoffLine(target.OrchId, handoffLine)
-                    ? $"✓✓  ·  {handoffLine}"
-                    : "✓✓";
+                _log.Log_Error(
+                    GLOBAL_ORCH_ID,
+                    $"Owner message for '{Path.GetFileName(delivery.Key)}' failed mid-delivery — it is back in the buffer and the next tick retries it",
+                    exception);
 
-                var receiptMessageId = await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
+                // CONTINUE, deliberately, including on cancellation. Rethrowing here is what let one
+                // failure take the rest of the batch down with it: every remaining delivery had
+                // already been removed from the buffer and would never be re-delivered. Each key is
+                // independent, and the put-back above means a cancelled run loses nothing either.
+            }
+        }
+    }
 
-                // Tracked until the supervisor actually answers — the owner must never be left
-                // staring at a receipt frozen on "thinking…".
-                lock (_ownerStateLock)
+    /// <summary>
+    /// One owner message, from the buffer to the supervisor's channel and back to the owner as a
+    /// receipt. Throws on any failure that is not the append's own — the caller puts the message back.
+    /// </summary>
+    async Task Deliver_OwnerMessage_Async(KeyValuePair<string, string> delivery, CancellationToken cancellationToken)
+    {
+        // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
+        lock (_ownerStateLock)
+        {
+            _holdReceipts.Remove(delivery.Key);
+        }
+
+        (string OrchId, long? ThreadId) target;
+
+        lock (_deliveryLock)
+        {
+            if (!_deliveryTargets.TryGetValue(delivery.Key, out target))
+            {
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner delivery for '{delivery.Key}' has no recorded target — dropped");
+                return;
+            }
+        }
+
+        var deliveryText = delivery.Value;
+
+        // Italian layer: the SESSION must only ever see English — translate the aggregated
+        // owner text before it touches the channel. Already-English text passes unchanged.
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
+
+        // Counted BEFORE the owner entry lands, so a later increase can only mean the
+        // supervisor answered THIS message.
+        var supervisorEntryCountBefore = Count_SupervisorEntries(delivery.Key);
+
+        // Take_ReadyDeliveries REMOVED this from the buffer before we got here, so the only copy
+        // of the owner's message is the local variable. A failed append that simply fell through
+        // would destroy it — which is worse than the collision the lock exists to prevent, and is
+        // why "fail the write" cannot mean "drop the write" on this path.
+        if (!ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now))
+        {
+            // Put it back and mark it ready: the owner has already waited out one aggregation
+            // window and must not serve a second one for a lock they know nothing about.
+            _ownerDeliveryBuffer.Add_Segment(delivery.Key, deliveryText, DateTime.UtcNow);
+            _ownerDeliveryBuffer.Release(delivery.Key);
+
+            _log.Log_Warning(target.OrchId,
+                $"Owner message NOT delivered — '{Path.GetFileName(delivery.Key)}' stayed locked by another writer for the whole budget; it is back in the buffer and the next tick retries it");
+
+            return;
+        }
+
+        _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
+        Raise_OrchestrationActivity(target.OrchId);
+
+        if (_telegramClient == null || _telegramMuted)
+            return;
+
+        try
+        {
+            // The batch's ✓ becomes "✓✓" — plus a TRUTHFUL handoff line (can the recipient
+            // answer now, or is it mid-turn with the communicator covering the wait?). One
+            // message that evolves, never a pile of ✓ / ✓✓ / thinking lines.
+            var handoffLine = Build_HandoffLine(target.OrchId);
+
+            var receiptText = Should_SendHandoffLine(target.OrchId, handoffLine)
+                ? $"✓✓  ·  {handoffLine}"
+                : "✓✓";
+
+            var receiptMessageId = await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
+
+            // Tracked until the supervisor actually answers — the owner must never be left
+            // staring at a receipt frozen on "thinking…".
+            lock (_ownerStateLock)
+            {
+                _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
                 {
-                    _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
-                    {
-                        ThreadId = target.ThreadId,
-                        ReceiptMessageId = receiptMessageId,
-                        SupervisorEntryCountAtDelivery = supervisorEntryCountBefore,
-                        DeliveredUtc = DateTime.UtcNow,
-                        Nudged = false,
-                    };
-                }
+                    ThreadId = target.ThreadId,
+                    ReceiptMessageId = receiptMessageId,
+                    SupervisorEntryCountAtDelivery = supervisorEntryCountBefore,
+                    DeliveredUtc = DateTime.UtcNow,
+                    Nudged = false,
+                };
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _log.Log_Warning(target.OrchId, $"Delivery receipt send failed: {ex.Message}");
-            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(target.OrchId, $"Delivery receipt send failed: {ex.Message}");
         }
     }
 
@@ -5617,13 +5652,21 @@ internal sealed class BridgeEngineModel(
         // rather than suppressing the nudge forever. Recording it after the append instead would
         // reopen the double-nudge race the lock above exists to close — a worse trade for a smaller
         // problem. The lock's own diagnostics report the failure either way.
-        ChannelAppender.Append_AppEntry(
+        var nudged = ChannelAppender.Append_AppEntry(
             _paths.Get_OwnerChannelFile(orchId),
             "that message was too long for a phone",
             Brevity_Policy.Build_NudgeBody(mirroredText),
             DateTime.Now);
 
-        _log.Log_Info(orchId, $"Supervisor message exceeded the brevity cap ({Brevity_Policy.Count_Lines(mirroredText)} lines) — nudged");
+        // The return is consulted for the SENTENCE ONLY, and that does not disturb the deliberate
+        // discard above: nothing is queued, nothing is retried, and the cooldown still records before
+        // the append. It used to say "nudged" unconditionally, so a locked channel produced a
+        // confident wrong statement sitting beside the lock's own diagnostic contradicting it.
+        _log.Log_Info(
+            orchId,
+            nudged
+                ? $"Supervisor message exceeded the brevity cap ({Brevity_Policy.Count_Lines(mirroredText)} lines) — nudged"
+                : $"Supervisor message exceeded the brevity cap ({Brevity_Policy.Count_Lines(mirroredText)} lines) — NOT nudged, the channel was locked; the cooldown still applies, so the next overlong message in {Brevity_Policy.NUDGE_COOLDOWN_MINUTES} minutes is the next chance");
     }
 
     /// <summary>
