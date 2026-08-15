@@ -30,6 +30,49 @@ public static class MemberState_Descriptor
         };
     }
 
+    /// <summary>The one wording for a session that has spoken and is waiting on the owner.</summary>
+    public const string WAITING_ON_OWNER = "waiting on you";
+
+    /// <summary>
+    /// WHAT THE OWNER ACTUALLY WANTS TO KNOW, in three states rather than two.
+    ///
+    /// "idle" used to cover everything that was not mid-turn, and the owner called it out on
+    /// 2026-08-15 while we were mid-conversation: *"I know you're not idle because we're talking …
+    /// especially because you had just asked me a question, and I had answered you, so you were
+    /// definitely reasoning."* The label was literally true — no turn inside the two-minute window —
+    /// and it reads as ABSENT when the truth is WAITING. In a conversation neither side is mid-turn
+    /// most of the time, so "idle" was the state the owner saw almost whenever they looked.
+    ///
+    /// The third state is not a new judgement: it is <see cref="OwnerOwesReply_Decider"/>, the same
+    /// question the stall alert asks, so the card and the alert cannot disagree about whose move it
+    /// is.
+    ///
+    /// It applies ONLY to the session that talks to the owner. An implementer waiting on its
+    /// supervisor is not waiting on THEM, and telling the owner otherwise would hand them a queue
+    /// that is not theirs to clear.
+    /// </summary>
+    public static string Describe_ForOwner(MemberStates state, bool isWorkingNow, bool ownerOwesReply)
+    {
+        if (isWorkingNow)
+        {
+            return state switch
+            {
+                MemberStates.WritingWindowOpen => "working now (writing window open)",
+                MemberStates.BlockedOnOwner => "working now (was blocked on you)",
+                MemberStates.AwaitingSupervisorReview => "working now (report filed)",
+                _ => "working now",
+            };
+        }
+
+        // BEFORE the declared state, deliberately: "new — no traffic" and "standing by" are both
+        // states a waiting session can be in, and either one shown to the owner while their answer
+        // is the only thing missing is the same misreading in different words.
+        if (ownerOwesReply)
+            return WAITING_ON_OWNER;
+
+        return Describe(state);
+    }
+
     public static string Brush_Key(MemberStates state)
     {
         return state switch
