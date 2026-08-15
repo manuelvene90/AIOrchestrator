@@ -1247,7 +1247,15 @@ internal sealed class BridgeEngineModel(
             if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
                 continue;
 
-            var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: quiet for {SessionDuration_Formatter.Describe(quietFor)} and no session is working — the supervisor may have ended its turn without re-arming its watcher. Text it to wake it up.";
+            // THE SEVENTH SITE THAT NAMED A SUPERVISOR, and the one SpeakerLabel_Formatter's summary
+            // predicted: prose rather than a prefix, so the coloured label could not be dropped in and
+            // it was written by hand. A basic orchestration has never had a supervisor, and the owner
+            // read the alert as nonsense — correctly.
+            var speaker = Mirroring.SpeakerLabel_Formatter.Describe_Noun(
+                isGeneral: false,
+                isBasic: Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc));
+
+            var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: quiet for {SessionDuration_Formatter.Describe(quietFor)} and no session is working — {speaker} may have ended its turn without re-arming its watcher. Text it to wake it up.";
 
             try
             {

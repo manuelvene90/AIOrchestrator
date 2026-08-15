@@ -33,6 +33,34 @@ public class ABasicOrchestrationIsNotNarratedAsASupervisorTests
     }
 
     /// <summary>
+    /// THE PROSE FORM, added 2026-08-15 after the owner got this on a solo topic: "quiet for 28 min
+    /// and no session is working — THE SUPERVISOR may have ended its turn without re-arming its
+    /// watcher." Their verdict: "makes no sense."
+    ///
+    /// It was the seventh site, and the one this formatter's own summary predicted: the alert builds
+    /// a SENTENCE, so the coloured label could not be dropped into it and the words were written by
+    /// hand instead. A label and a noun are the same question with two shapes, so they live together.
+    /// </summary>
+    [Fact]
+    public void EachVoiceAlsoHasANounForMidSentence()
+    {
+        Assert.Equal("the session", SpeakerLabel_Formatter.Describe_Noun(isGeneral: false, isBasic: true));
+        Assert.Equal("the supervisor", SpeakerLabel_Formatter.Describe_Noun(isGeneral: false, isBasic: false));
+        Assert.Equal("the general supervisor", SpeakerLabel_Formatter.Describe_Noun(isGeneral: true, isBasic: false));
+    }
+
+    /// <summary>
+    /// The property, not the string: no sentence the app writes about a BASIC orchestration may
+    /// contain the word "supervisor" — including the general supervisor's own noun, which would be
+    /// just as wrong in an orchestration topic.
+    /// </summary>
+    [Fact]
+    public void ASolosNoun_NeverContainsTheWordSupervisor()
+    {
+        Assert.DoesNotContain("supervisor", SpeakerLabel_Formatter.Describe_Noun(isGeneral: false, isBasic: true), System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// The one the owner complained about, stated as the property rather than as the string: nothing
     /// the app says ABOUT a basic orchestration may name a supervisor.
     /// </summary>
