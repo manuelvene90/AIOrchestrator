@@ -50,4 +50,30 @@ public static class SpeakerLabel_Formatter
 
         return isBasic ? SOLO : SUPERVISOR;
     }
+
+    /// <summary>The general supervisor, named inside a sentence.</summary>
+    public const string GENERAL_NOUN = "the general supervisor";
+
+    /// <summary>An orchestration's supervisor, named inside a sentence.</summary>
+    public const string SUPERVISOR_NOUN = "the supervisor";
+
+    /// <summary>The single session of a basic orchestration, named inside a sentence.</summary>
+    public const string SOLO_NOUN = "the session";
+
+    /// <summary>
+    /// THE SAME QUESTION, ANSWERED FOR A SENTENCE RATHER THAN A PREFIX. The coloured label opens a
+    /// line ("🟠 Solo: turn ended…"); this one goes mid-sentence, where a glyph reads as noise.
+    ///
+    /// It exists because the stall alert was the SEVENTH site — the one this class's own summary
+    /// predicted — and it said "the supervisor may have ended its turn" to the owner of a basic
+    /// orchestration that has never had one. It was prose rather than a prefix, so the label could
+    /// not be dropped in, and that is exactly how a seventh copy comes to be written by hand.
+    /// </summary>
+    public static string Describe_Noun(bool isGeneral, bool isBasic)
+    {
+        if (isGeneral)
+            return GENERAL_NOUN;
+
+        return isBasic ? SOLO_NOUN : SUPERVISOR_NOUN;
+    }
 }
