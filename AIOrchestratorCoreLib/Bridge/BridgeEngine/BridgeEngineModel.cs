@@ -132,11 +132,15 @@ internal sealed class BridgeEngineModel(
     /// FOUR SECONDS WAS TOO SHORT TO BE HELD. WAIT can only stop a message that is still in the
     /// buffer, and four seconds is less than it takes to realise you have more to say and type a
     /// word — measured on the owner's machine, a WAIT five seconds behind its message arrived after
-    /// the take and stopped nothing. Eight is their number (2026-08-15), chosen against the only
-    /// cost there is: every message reaches the session that much later, which is nothing beside a
-    /// turn that runs for minutes.
+    /// the take and stopped nothing.
+    ///
+    /// SIX, because the ⏸ button changed what the window has to be long enough FOR. It went to eight
+    /// while holding meant typing; with a tap sitting under the receipt the owner set it back down
+    /// themselves (2026-08-15) — "with the button we can reduce the window". The number is a balance
+    /// between how long a hold takes to express and how long every message waits, and the button
+    /// moved the first half of that.
     /// </summary>
-    const int OWNER_AGGREGATION_SECONDS = 8;
+    const int OWNER_AGGREGATION_SECONDS = 6;
 
     /// <summary>A forgotten WAIT must not swallow the owner's messages forever.</summary>
     const int OWNER_HOLD_CAP_SECONDS = 60;
