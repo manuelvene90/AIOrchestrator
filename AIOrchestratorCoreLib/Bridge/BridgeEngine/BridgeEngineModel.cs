@@ -7472,6 +7472,30 @@ internal sealed class BridgeEngineModel(
             }
         }
 
+        // WAIT RACES THE AGGREGATION WINDOW, and it was losing. The window is 4 seconds, so a message
+        // is usually already TAKEN from the buffer by the time the owner types "wait" — and a take is
+        // irreversible, so the hold set a moment later applied to nothing and the message went out
+        // anyway. Measured on da-vinci-fintech-suite-6, 2026-08-15: buffered 08:36:47, WAIT accepted
+        // 08:36:52, delivered 08:37:04. The owner saw ✓✓ and "thinking…" seconds after their own wait
+        // and read it exactly right — "it seems it's already working on what I wrote despite the
+        // wait." It was.
+        //
+        // Re-asked HERE, immediately before the append, because that is the last moment the answer is
+        // still true: everything above (target lookup, translation) can take seconds. Put back rather
+        // than dropped — the segment keeps its ordinal, so it lands in the owner's original order
+        // when GO comes.
+        //
+        // THE HONEST LIMIT: once the append has landed the session may already have read it, and no
+        // amount of checking can un-send it. This narrows the window to the append itself; it does
+        // not close it.
+        if (_ownerDeliveryBuffer.Is_Holding(delivery.Key))
+        {
+            _ownerDeliveryBuffer.Restore_Segment(delivery.Key, delivery.Value.Text, delivery.Value.FirstOrdinal);
+
+            _log.Log_Info(target.OrchId, "Owner message held mid-delivery — WAIT arrived after it left the buffer; it is back in the buffer until GO");
+            return;
+        }
+
         var deliveryText = delivery.Value.Text;
 
         // Italian layer: the SESSION must only ever see English — translate the aggregated
