@@ -35,6 +35,15 @@ public class StallAlertClockProbeTests : IDisposable
     const int OLDER_THAN_THE_STALL_THRESHOLD_MINUTES = 40;
 
     /// <summary>
+    /// What identifies the stall alert to these tests. It used to be the literal "quiet for", which
+    /// pinned the WORDING rather than the behaviour: rewriting the sentence on 2026-08-15 — when the
+    /// alert stopped blaming a session for the owner's own silence — turned three passing tests red
+    /// while every property they exist to protect still held. This phrase is the alert's subject
+    /// matter rather than its phrasing, and a rewrite that no longer says it is a different alert.
+    /// </summary>
+    const string STALL_ALERT_MARKER = "waiting on your reply";
+
+    /// <summary>
     /// How long to wait before concluding an alert did NOT fire. The positive cases in this file fire
     /// on the first tick in about 200 ms, so this is generous rather than tight — but it is a WINDOW,
     /// and an absence proven by waiting is weaker evidence than a presence. It is stated here so the
@@ -98,7 +107,7 @@ public class StallAlertClockProbeTests : IDisposable
     {
         Start_StalledOrchestration_WithADeadMemberCarryingOnlyAResumeEntry();
 
-        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0);
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing(STALL_ALERT_MARKER) > 0);
 
         Assert.True(
             alerted,
@@ -110,7 +119,7 @@ public class StallAlertClockProbeTests : IDisposable
     {
         Start_StalledOrchestration_WithAFreshAppEntryInTheOwnerChannel();
 
-        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0);
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing(STALL_ALERT_MARKER) > 0);
 
         Assert.True(
             alerted,
@@ -186,7 +195,7 @@ public class StallAlertClockProbeTests : IDisposable
             $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
             silentSince);
 
-        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0, NEGATIVE_WINDOW_MILLISECONDS);
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing(STALL_ALERT_MARKER) > 0, NEGATIVE_WINDOW_MILLISECONDS);
 
         Assert.False(alerted, "a working orchestration was reported as stalled — the span is the shortest across channels, not the longest");
     }
@@ -224,7 +233,7 @@ public class StallAlertClockProbeTests : IDisposable
             $"## [1] FROM app — {DateTime.Now:yyyy-MM-dd HH:mm} — GO AHEAD — resume\npick up where you left off\n",
             DateTime.Now.AddMinutes(-5));
 
-        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0, NEGATIVE_WINDOW_MILLISECONDS);
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing(STALL_ALERT_MARKER) > 0, NEGATIVE_WINDOW_MILLISECONDS);
 
         Assert.False(alerted, "a five-minute-old orchestration was reported as stalled — the floor is its own age, in local time");
     }
@@ -275,7 +284,7 @@ public class StallAlertClockProbeTests : IDisposable
         // …and the filesystem says the supervisor was working five minutes ago.
         Record_SessionActivity(session.OrchId, DateTime.Now.AddMinutes(-5));
 
-        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0, NEGATIVE_WINDOW_MILLISECONDS);
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing(STALL_ALERT_MARKER) > 0, NEGATIVE_WINDOW_MILLISECONDS);
 
         Assert.False(alerted, "the owner was texted about a stall while a session had demonstrably worked five minutes earlier");
     }
@@ -328,7 +337,7 @@ public class StallAlertClockProbeTests : IDisposable
             $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
             silentSince);
 
-        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing("quiet for") > 0);
+        var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing(STALL_ALERT_MARKER) > 0);
 
         Assert.True(alerted, "a retired member's farewell masked a live stall — closed members are not consulted by any other loop in this file");
     }
