@@ -60,11 +60,18 @@ public static class SessionRows_Builder
         var cost = Read_SessionCost_OrNull(supervisorUsageFile);
         var isWorkingNow = isOpen && SessionActivity_Probe.Is_MidTurn(supervisorUsageFile);
 
+        // Same three states as a member row: a supervisor that has asked the owner something is
+        // waiting on THEM, not idle. Read from the owner channel, which is where that exchange lives.
+        var ownerOwesReply = isOpen && AIOrchestratorCoreLib.Status.OwnerOwesReply_Decider.Decide(
+            ChannelHistory_Counter.Read_AllEntries(ownerChannel));
+
         return new MemberRowView
         {
             MemberLabel = "SUPERVISOR",
             RoleBrush = findBrush("AccentSupervisor"),
-            StateText = isOpen ? (isWorkingNow ? "working now" : "idle — waiting") : "closed",
+            StateText = isOpen
+                ? (isWorkingNow ? "working now" : ownerOwesReply ? MemberState_Descriptor.WAITING_ON_OWNER : "idle — waiting")
+                : "closed",
             StateBrush = isOpen ? findBrush("StateWorking") : findBrush("StateClosed"),
             LastActivityText = File.Exists(ownerChannel) ? Get_LastWriteText(ownerChannel) : "",
             FocusTitleFragment = SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId),
@@ -122,6 +129,13 @@ public static class SessionRows_Builder
         // and its findings must never be mistaken for work in progress. It gets its own accent.
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
 
+        // ONLY the session that talks to the owner can be waiting on THEM. An implementer waiting on
+        // its supervisor is not the owner's queue to clear, and saying so would hand them one that
+        // is not theirs. For a solo the entries above ARE the owner channel, so no second read.
+        var ownerOwesReply = !isClosed
+            && kind == MemberKinds.Solo
+            && AIOrchestratorCoreLib.Status.OwnerOwesReply_Decider.Decide(entries);
+
         return new MemberRowView
         {
             MemberLabel = memberId,
@@ -134,7 +148,7 @@ public static class SessionRows_Builder
                 MemberKinds.Solo => "AccentSupervisor",
                 _ => "AccentImplementer",
             }),
-            StateText = isClosed ? "closed" : Describe_MemberState(state, isWorkingNow),
+            StateText = isClosed ? "closed" : Describe_MemberState(state, isWorkingNow, ownerOwesReply),
             StateBrush = isClosed ? findBrush("StateClosed") : findBrush(isWorkingNow ? "StateWorking" : MemberState_Descriptor.Brush_Key(state)),
             LastActivityText = File.Exists(channelFile) ? Get_LastWriteText(channelFile) : "",
             DetailText = Build_MemberDetailText(entries, usageFile, channelFile),
@@ -240,22 +254,14 @@ public static class SessionRows_Builder
     }
 
     /// <summary>
-    /// What the owner actually wants to know. A session whose transcript is growing is WORKING,
-    /// whatever the channel markers claim; the declared state is shown alongside so the protocol
-    /// information is not lost (e.g. "working now (writing window open)").
+    /// MOVED TO <see cref="MemberState_Descriptor.Describe_ForOwner"/>, where the suite can reach it.
+    /// This switch used to live here, in a project `dotnet test` never compiles — the same reason the
+    /// descriptor itself was moved out, recorded in that class: a member state added while a copy sat
+    /// here left three switches throwing on the happy path with 484 tests green.
     /// </summary>
-    public static string Describe_MemberState(MemberStates state, bool isWorkingNow)
+    public static string Describe_MemberState(MemberStates state, bool isWorkingNow, bool ownerOwesReply)
     {
-        if (!isWorkingNow)
-            return MemberState_Descriptor.Describe(state);
-
-        return state switch
-        {
-            MemberStates.WritingWindowOpen => "working now (writing window open)",
-            MemberStates.BlockedOnOwner => "working now (was blocked on you)",
-            MemberStates.AwaitingSupervisorReview => "working now (report filed)",
-            _ => "working now",
-        };
+        return MemberState_Descriptor.Describe_ForOwner(state, isWorkingNow, ownerOwesReply);
     }
 
     public static double? Read_SessionCost_OrNull(string usageFilePath)

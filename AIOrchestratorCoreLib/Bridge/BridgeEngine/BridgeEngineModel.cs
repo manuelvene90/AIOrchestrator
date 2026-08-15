@@ -6434,9 +6434,14 @@ internal sealed class BridgeEngineModel(
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
         var supervisorUsage = Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE);
 
+        // Whose move it is, read once for this whole status block: the supervisor row and a solo's
+        // member row are the same conversation, so they must not answer it differently.
+        var ownerOwesReply = Status.OwnerOwesReply_Decider.Decide(
+            ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId))));
+
         var supervisorLine = SessionActivity_Probe.Is_MidTurn(supervisorUsage)
             ? $"working now{Describe_Activity_Suffix(supervisorUsage)}"
-            : "idle — waiting";
+            : ownerOwesReply ? MemberState_Descriptor.WAITING_ON_OWNER : "idle — waiting";
 
         // WHICH ROWS this carries is StatusRoster_Builder's — including the one that must NOT be
         // here for a basic orchestration. See that class for why the decision moved out.
@@ -6460,7 +6465,13 @@ internal sealed class BridgeEngineModel(
                 ? $" · last wrote {SessionDuration_Formatter.Describe(DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile))} ago"
                 : "";
 
-            memberLines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow)}{lastWrite}");
+            // Only the owner-facing session can be waiting on the OWNER; an implementer waits on its
+            // supervisor, and handing the owner that queue would be telling them to clear one that is
+            // not theirs.
+            var memberOwesTheOwner = ownerOwesReply
+                && Sessions.MemberKind_Ids.Resolve_Kind(member.MemberId) == Sessions.MemberKinds.Solo;
+
+            memberLines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow, memberOwesTheOwner)}{lastWrite}");
         }
 
         // The header carries the ledger counts, so "who is doing what" and "how far along are we"
@@ -6486,14 +6497,19 @@ internal sealed class BridgeEngineModel(
         return SessionActivity_Probe.Is_MidTurn(usageFilePath) ? "working now" : idleText;
     }
 
-    static string Describe_DeclaredState(MemberStates declared, bool workingNow)
+    static string Describe_DeclaredState(MemberStates declared, bool workingNow, bool ownerOwesReply)
     {
         // ONE copy, in a project the test suite compiles. This switch used to be a duplicate of the
         // card builder's — item 12 — and the pair is why adding a state left three consumers
         // throwing on the happy path with 484 tests green.
         var declaredText = MemberState_Descriptor.Describe(declared);
 
-        return workingNow ? $"working now (channel says: {declaredText})" : declaredText;
+        if (workingNow)
+            return $"working now (channel says: {declaredText})";
+
+        // The third state the owner asked for: a session that has spoken and is waiting on them is
+        // not idle. Same question the stall alert asks, so the two cannot disagree.
+        return ownerOwesReply ? MemberState_Descriptor.WAITING_ON_OWNER : declaredText;
     }
 
     /// <summary>
