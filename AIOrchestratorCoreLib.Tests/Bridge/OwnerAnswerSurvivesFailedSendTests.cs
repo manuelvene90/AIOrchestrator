@@ -514,6 +514,11 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;

@@ -137,6 +137,39 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("editMessageText", payload, cancellationToken);
     }
 
+    /// <summary>
+    /// Rewrites a message AND the buttons under it in one call.
+    ///
+    /// The plain edit above is not a subset of this one — it sends no <c>reply_markup</c>, and
+    /// Telegram reads that as "remove the keyboard". That is exactly what the question flow wants
+    /// (recording a choice strips the buttons), and exactly what the hold receipt does NOT: its
+    /// button has to CHANGE from ⏸ Wait to ▶ GO as the state changes. Two methods rather than an
+    /// optional argument, so neither behaviour can be reached by accident.
+    /// </summary>
+    public async Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        var keyboardRows = new JsonArray();
+
+        foreach (var button in buttons)
+        {
+            keyboardRows.Add(new JsonArray(new JsonObject
+            {
+                ["text"] = button.Label,
+                ["callback_data"] = button.Data,
+            }));
+        }
+
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_id"] = messageId,
+            ["text"] = text,
+            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = keyboardRows },
+        };
+
+        await Post_Async("editMessageText", payload, cancellationToken);
+    }
+
     static long? Read_MessageId_OrNull(string responseJson)
     {
         try
