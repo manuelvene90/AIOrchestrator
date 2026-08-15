@@ -1247,15 +1247,25 @@ internal sealed class BridgeEngineModel(
             if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
                 continue;
 
+            // ONLY WHEN THE OWNER OWES A REPLY (their ruling, 2026-08-15). Quiet alone was the old
+            // trigger and it fired on the owner's own silence: the session had nothing to do and was
+            // idle exactly as designed, and they were told to wake something that was not asleep.
+            // The other direction — the owner spoke and the SESSION went quiet — is already covered
+            // by the reply nudge, which wakes the session instead of asking them to.
+            if (!Status.OwnerOwesReply_Decider.Decide(
+                    ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId)))))
+                continue;
+
             // THE SEVENTH SITE THAT NAMED A SUPERVISOR, and the one SpeakerLabel_Formatter's summary
             // predicted: prose rather than a prefix, so the coloured label could not be dropped in and
-            // it was written by hand. A basic orchestration has never had a supervisor, and the owner
-            // read the alert as nonsense — correctly.
+            // it was written by hand. A basic orchestration has never had a supervisor.
             var speaker = Mirroring.SpeakerLabel_Formatter.Describe_Noun(
                 isGeneral: false,
                 isBasic: Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc));
 
-            var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: quiet for {SessionDuration_Formatter.Describe(quietFor)} and no session is working — {speaker} may have ended its turn without re-arming its watcher. Text it to wake it up.";
+            // Says what is actually true now: they are the one holding it up. The old wording blamed
+            // a session that had done nothing wrong, which is why it read as nonsense.
+            var alertText = $"⚠️ {session.DisplayName ?? session.OrchId}: {speaker} has been waiting on your reply for {SessionDuration_Formatter.Describe(quietFor)} and nothing is running.";
 
             try
             {
