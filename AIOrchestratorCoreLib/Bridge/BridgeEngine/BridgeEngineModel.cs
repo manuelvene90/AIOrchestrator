@@ -126,7 +126,17 @@ internal sealed class BridgeEngineModel(
     /// slow. The multi-message case is covered explicitly by WAIT … GO instead of by making
     /// everyone wait (owner directive).
     /// </summary>
-    const int OWNER_AGGREGATION_SECONDS = 4;
+    /// <summary>
+    /// How long a message waits before it is delivered, so a burst of texts arrives as ONE turn.
+    ///
+    /// FOUR SECONDS WAS TOO SHORT TO BE HELD. WAIT can only stop a message that is still in the
+    /// buffer, and four seconds is less than it takes to realise you have more to say and type a
+    /// word — measured on the owner's machine, a WAIT five seconds behind its message arrived after
+    /// the take and stopped nothing. Eight is their number (2026-08-15), chosen against the only
+    /// cost there is: every message reaches the session that much later, which is nothing beside a
+    /// turn that runs for minutes.
+    /// </summary>
+    const int OWNER_AGGREGATION_SECONDS = 8;
 
     /// <summary>A forgotten WAIT must not swallow the owner's messages forever.</summary>
     const int OWNER_HOLD_CAP_SECONDS = 60;
@@ -6715,6 +6725,11 @@ internal sealed class BridgeEngineModel(
         if (await Try_HandleCloseConfirmationTap_Async(client, tap, cancellationToken))
             return;
 
+        // The hold button, for the same reason: it is a control the APP owns, not an answer to
+        // forward to a session.
+        if (await Try_HandleHoldTap_Async(client, tap, cancellationToken))
+            return;
+
         (long? ThreadId, string OptionText, long GroupId, string QuestionText) registered;
         bool found;
 
@@ -6865,14 +6880,20 @@ internal sealed class BridgeEngineModel(
             {
                 long? receiptId;
 
+                // The typed WAIT gets the same ▶ GO button the tapped one does. Two ways in, one way
+                // out: an owner who typed WAIT should not have to type GO because the button only
+                // appears on the path they did not take.
+                (string Data, string Label)[] releaseButton =
+                    [(HoldButton_Data.Build(HoldButtonActions.Go, message.MessageThreadId), HoldButton_Data.GO_LABEL)];
+
                 if (existingTickId != null)
                 {
-                    await client.Edit_MessageText_Async(existingTickId.Value, Build_HoldReceiptText(heldAlready), cancellationToken);
+                    await client.Edit_MessageTextWithButtons_Async(existingTickId.Value, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
                     receiptId = existingTickId;
                 }
                 else
                 {
-                    receiptId = await client.Send_Message_Async(message.MessageThreadId, Build_HoldReceiptText(heldAlready), cancellationToken);
+                    receiptId = await client.Send_MessageWithButtons_Async(message.MessageThreadId, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
                 }
 
                 lock (_ownerStateLock)
@@ -7269,6 +7290,124 @@ internal sealed class BridgeEngineModel(
     /// Counts a message that landed during a hold, and rewrites the WAIT acknowledgement in place.
     /// Held messages get no tick of their own, so without this the owner is typing into silence.
     /// </summary>
+    /// <summary>
+    /// The ⏸/▶ button under a receipt — the owner's one-tap WAIT and GO.
+    ///
+    /// It does exactly what the typed words do, by calling the same buffer, because two ways to hold
+    /// that behave differently is worse than one way that is slow to type. What the button adds is
+    /// the seconds: typing WAIT loses a race with the aggregation window often enough that the owner
+    /// noticed, and a tap is the difference between catching the message and not.
+    ///
+    /// The button message ITSELF becomes the receipt — edited in place, ⏸ Wait to ▶ GO and back —
+    /// so a conversation does not grow a new message per hold. Repeats edit, they never stack
+    /// (decision 14).
+    ///
+    /// Returns false for a tap that is not ours, so an option answer falls through untouched.
+    /// </summary>
+    async Task<bool> Try_HandleHoldTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
+    {
+        var parsed = HoldButton_Data.Parse_OrNull(tap.Data);
+
+        if (parsed == null)
+            return false;
+
+        var (action, threadId) = parsed.Value;
+        var targetKey = Resolve_TargetChannelFile_OrNull(threadId);
+
+        // ANSWERED FIRST, WHATEVER HAPPENS NEXT: an unanswered callback leaves the button spinning
+        // on the phone, which reads as the app being dead at the exact moment they are asking it to
+        // stop something.
+        await Answer_CallbackTap_BestEffort_Async(
+            client, tap.CallbackQueryId, targetKey == null ? "no orchestration in this topic" : "✓", cancellationToken);
+
+        if (targetKey == null)
+            return true;
+
+        if (action == HoldButtonActions.Hold)
+        {
+            _ownerDeliveryBuffer.Hold(targetKey, DateTime.UtcNow);
+            _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped WAIT — delivery held until GO");
+        }
+        else
+        {
+            _ownerDeliveryBuffer.Release(targetKey);
+            _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped GO — releasing held messages");
+        }
+
+        var heldCount = _ownerDeliveryBuffer.Count_Pending(targetKey);
+
+        if (tap.MessageId != null)
+        {
+            lock (_ownerStateLock)
+            {
+                if (action == HoldButtonActions.Hold)
+                    _holdReceipts[targetKey] = new HoldReceipt { MessageId = tap.MessageId, HeldCount = heldCount };
+                else
+                    _holdReceipts.Remove(targetKey);
+            }
+
+            await Rewrite_HoldButtonMessage_BestEffort_Async(client, tap.MessageId.Value, action, threadId, heldCount, cancellationToken);
+        }
+
+        // GO means "I am done typing", so the wait for the next mirror tick — up to 2 s — is dead
+        // time. Same reasoning as the typed GO, which flushes immediately for exactly this reason.
+        if (action == HoldButtonActions.Go)
+            await Flush_OwnerDeliveries_Async(cancellationToken);
+
+        return true;
+    }
+
+    async Task Rewrite_HoldButtonMessage_BestEffort_Async(
+        ITelegramApiClient client, long messageId, HoldButtonActions action, long? threadId, int heldCount, CancellationToken cancellationToken)
+    {
+        // After a HOLD the button becomes the release; after a GO it goes back to offering a hold,
+        // because the next message is already on its way and they may want to stop that one too.
+        var nextAction = action == HoldButtonActions.Hold ? HoldButtonActions.Go : HoldButtonActions.Hold;
+        var nextLabel = action == HoldButtonActions.Hold ? HoldButton_Data.GO_LABEL : HoldButton_Data.HOLD_LABEL;
+        var text = action == HoldButtonActions.Hold ? Build_HoldReceiptText(heldCount) : "✓";
+
+        try
+        {
+            await client.Edit_MessageTextWithButtons_Async(
+                messageId, text, [(HoldButton_Data.Build(nextAction, threadId), nextLabel)], cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The hold itself already happened; a stale button label is cosmetic beside that.
+            _log.Log_Warning(Describe_ThreadOrch(threadId), $"Hold button not rewritten: {ex.Message}");
+        }
+    }
+
+    async Task Answer_CallbackTap_BestEffort_Async(
+        ITelegramApiClient client, string callbackQueryId, string text, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.Answer_CallbackQuery_Async(callbackQueryId, text, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"answerCallbackQuery failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>The log scope for a tap, which carries a topic and no message to read one from.</summary>
+    string Describe_ThreadOrch(long? messageThreadId)
+    {
+        if (messageThreadId == null)
+            return ChannelDiscovery.GENERAL_ORCH_ID;
+
+        return _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value)?.OrchId ?? GLOBAL_ORCH_ID;
+    }
+
     async Task Update_HoldReceipt_Async(
         ITelegramApiClient client, Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
     {
@@ -7292,7 +7431,14 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await client.Edit_MessageText_Async(receipt.MessageId.Value, Build_HoldReceiptText(receipt.HeldCount), cancellationToken);
+            // WITH the release button: a plain edit sends no reply_markup, which Telegram reads as
+            // "remove the keyboard" — so counting up the held messages would silently take away the
+            // ▶ GO the owner is meant to press.
+            await client.Edit_MessageTextWithButtons_Async(
+                receipt.MessageId.Value,
+                Build_HoldReceiptText(receipt.HeldCount),
+                [(HoldButton_Data.Build(HoldButtonActions.Go, message.MessageThreadId), HoldButton_Data.GO_LABEL)],
+                cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -7307,10 +7453,21 @@ internal sealed class BridgeEngineModel(
     /// <summary>The buffer keys on the channel file — one resolver, so hold and delivery cannot disagree.</summary>
     string? Resolve_TargetChannelFile_OrNull(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message)
     {
-        if (message.MessageThreadId == null)
+        return Resolve_TargetChannelFile_OrNull(message.MessageThreadId);
+    }
+
+    /// <summary>
+    /// The same question from a THREAD ID alone, for the hold button: a callback tap arrives with a
+    /// topic and no message, so it cannot go through the overload above. One implementation, because
+    /// a second spelling of "which channel is this topic" is how the button would come to hold a
+    /// different channel than the word does.
+    /// </summary>
+    string? Resolve_TargetChannelFile_OrNull(long? messageThreadId)
+    {
+        if (messageThreadId == null)
             return _paths.GeneralChannelFile;
 
-        var session = _store.Find_ByTelegramTopicId_OrNull(message.MessageThreadId.Value);
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         return session == null ? null : _paths.Get_OwnerChannelFile(session.OrchId);
     }
@@ -7692,7 +7849,15 @@ internal sealed class BridgeEngineModel(
     {
         try
         {
-            var messageId = await client.Send_Message_Async(messageThreadId, "✓", cancellationToken);
+            // THE TICK CARRIES THE HOLD BUTTON, because it lands exactly where the owner is already
+            // looking — directly under what they just sent — and a tap beats typing WAIT by the
+            // seconds that decide whether the hold catches the message at all. Their words:
+            // "clicking a button is faster than typing wait."
+            var messageId = await client.Send_MessageWithButtons_Async(
+                messageThreadId,
+                "✓",
+                [(HoldButton_Data.Build(HoldButtonActions.Hold, messageThreadId), HoldButton_Data.HOLD_LABEL)],
+                cancellationToken);
 
             if (messageId != null)
             {

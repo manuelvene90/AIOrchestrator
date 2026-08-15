@@ -394,6 +394,15 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    /// <summary>Recorded the same way: to this fake's readers an edit is an edit, buttons or not.</summary>
+    public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            _editedTexts.Add(text);
+
+        return Task.CompletedTask;
+    }
+
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;

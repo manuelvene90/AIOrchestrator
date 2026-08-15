@@ -36,6 +36,13 @@ public interface ITelegramApiClient
     Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Rewrites a message AND its buttons. Distinct from the plain edit because that one sends no
+    /// reply_markup, which Telegram reads as "remove the keyboard" — right for a question whose
+    /// answer has been recorded, wrong for a receipt whose button must change from ⏸ Wait to ▶ GO.
+    /// </summary>
+    Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
+
+    /// <summary>
     /// sendMessage with an inline keyboard — one tappable button per (data, label) pair. Returns
     /// the message id so a tap can rewrite it to show WHICH option was chosen.
     /// </summary>
