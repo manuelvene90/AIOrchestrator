@@ -176,4 +176,57 @@ public class OwnerDeliveryBufferTests
         Assert.False(buffer.Has_PendingDeliveries());
         Assert.Equal(0, buffer.Count_Pending("chan-a"));
     }
+
+    /// <summary>
+    /// WAIT RACES THE AGGREGATION WINDOW AND WAS LOSING. The window is four seconds in the app, so by
+    /// the time the owner types "wait" the message has usually already been TAKEN — and a take is
+    /// irreversible. Measured on da-vinci-fintech-suite-6, 2026-08-15: buffered 08:36:47, WAIT
+    /// accepted 08:36:52, delivered 08:37:04, and the owner watched ✓✓ and "thinking…" appear seconds
+    /// after their own wait.
+    ///
+    /// The engine now re-asks Is_Holding immediately before the append and puts the segment back.
+    /// What this pins is the buffer half of that: a segment restored into a HELD delivery must stay
+    /// put until GO, rather than coming straight back out on the next tick.
+    /// </summary>
+    [Fact]
+    public void ASegmentPutBackIntoAHeldDelivery_StaysUntilGo()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(4, holdCapSeconds: 60);
+        buffer.Add_Segment("chan-a", "launch it yourself", T0);
+
+        var taken = buffer.Take_ReadyDeliveries(T0.AddSeconds(5));
+        Assert.Single(taken);
+
+        // The owner's WAIT, one second after the take.
+        buffer.Hold("chan-a", T0.AddSeconds(6));
+        buffer.Restore_Segment("chan-a", taken["chan-a"].Text, taken["chan-a"].FirstOrdinal);
+
+        Assert.True(buffer.Is_Holding("chan-a"));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(30)));
+
+        buffer.Release("chan-a");
+
+        var released = buffer.Take_ReadyDeliveries(T0.AddSeconds(31));
+        Assert.Equal("launch it yourself", released["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// And the cap still applies to it, or a forgotten WAIT would swallow a message that had already
+    /// been on its way out — the failure the cap exists to prevent, reached through the put-back.
+    /// </summary>
+    [Fact]
+    public void ARestoredHeldSegment_StillEscapesOnTheIdleCap()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(4, holdCapSeconds: 60);
+        buffer.Add_Segment("chan-a", "launch it yourself", T0);
+
+        var taken = buffer.Take_ReadyDeliveries(T0.AddSeconds(5));
+
+        buffer.Hold("chan-a", T0.AddSeconds(6));
+        buffer.Restore_Segment("chan-a", taken["chan-a"].Text, taken["chan-a"].FirstOrdinal);
+
+        var afterCap = buffer.Take_ReadyDeliveries(T0.AddSeconds(6 + 61));
+
+        Assert.Equal("launch it yourself", afterCap["chan-a"].Text);
+    }
 }
