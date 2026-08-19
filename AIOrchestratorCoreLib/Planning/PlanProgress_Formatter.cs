@@ -158,7 +158,25 @@ public static class PlanProgress_Formatter
         if (progress.Lines.Count == 0)
             return "the ledger is empty";
 
-        return string.Join('\n', progress.Lines.Select(line => $"[{line.Marker}] {line.Text}"));
+        // TOP-LEVEL ONLY since 2026-08-19 — "Progress should be high-level, showing like 4 or 5
+
+        // lines like bird's eye view". The detail did not disappear: /tasks renders every line,
+
+        // which is what the 2026-08-13 directive ("the done rows must not be hidden") was really
+
+        // protecting. It has a command of its own now instead of sharing this one.
+
+        var macro = progress.Lines.Where(line => !line.IsSubTask).ToList();
+
+
+
+        if (macro.Count == 0)
+
+            return "the ledger has only sub-tasks — nothing is grouped under a macro line";
+
+
+
+        return string.Join('\n', macro.Select(line => $"[{line.Marker}] {line.Text}"));
     }
 
     /// <summary>
@@ -176,8 +194,10 @@ public static class PlanProgress_Formatter
     /// </summary>
     public static string Describe_Unfinished(IPlanProgress progress)
     {
+        // Bird's eye here too, by the same request: /left is /progress with the finished rows gone,
+        // so the two must agree on altitude — otherwise the shorter list would be the longer one.
         var unfinished = progress.Lines
-            .Where(line => line.Marker != "x" && line.Marker != "-")
+            .Where(line => !line.IsSubTask && line.Marker != "x" && line.Marker != "-")
             .ToList();
 
         if (unfinished.Count == 0)

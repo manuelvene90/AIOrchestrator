@@ -396,6 +396,75 @@ public class PlanProgressFormatterTests
             PlanProgress_Formatter.Describe_Unfinished(Parse("- [x] shipped", "- [-] dropped")!));
     }
 
+    /// <summary>
+    /// THE TWO ALTITUDES (owner, 2026-08-19). The ledgers already carried the hierarchy — a stage at
+    /// column 0 with its pieces indented under it — and the parser threw the indentation away, so
+    /// every command printed one flat list. "Progress should be high-level, showing like 4 or 5
+    /// lines like bird's eye view... Tasks instead should go into individual small sub-tasks."
+    /// </summary>
+    [Fact]
+    public void Describe_Ledger_ShowsTheMacroLinesOnly()
+    {
+        var text = PlanProgress_Formatter.Describe_Ledger(Nested()!);
+
+        Assert.Contains("[>] build stage B", text);
+        Assert.Contains("[x] ship the parser", text);
+        Assert.DoesNotContain("B5a", text);
+        Assert.DoesNotContain("B5b", text);
+    }
+
+    /// <summary>
+    /// AND /tasks KEEPS EVERYTHING. This is the half that makes the change safe: the 2026-08-13
+    /// directive was "the done rows must not be hidden", and it is still honoured — by a command of
+    /// its own rather than by every command carrying the full list.
+    /// </summary>
+    [Fact]
+    public void Describe_EveryLine_StillShowsTheSubTasks()
+    {
+        var text = PlanProgress_Formatter.Describe_EveryLine(Nested()!);
+
+        Assert.Contains("build stage B", text);
+        Assert.Contains("B5a", text);
+        Assert.Contains("B5b", text);
+        Assert.Contains("ship the parser", text);
+    }
+
+    /// <summary>
+    /// /left is /progress minus the finished rows, so it must share the altitude. If it did not, the
+    /// SHORTER list would somehow be the longer one.
+    /// </summary>
+    [Fact]
+    public void Describe_Unfinished_IsAlsoBirdsEye()
+    {
+        var text = PlanProgress_Formatter.Describe_Unfinished(Nested()!);
+
+        Assert.Contains("[>] build stage B", text);
+        Assert.DoesNotContain("B5a", text);
+        Assert.DoesNotContain("ship the parser", text);
+    }
+
+    /// <summary>The parser is where the hierarchy is read, and it reads it from the indentation.</summary>
+    [Fact]
+    public void TheParserMarksIndentedLinesAsSubTasks()
+    {
+        var lines = Nested()!.Lines;
+
+        Assert.False(lines[0].IsSubTask);
+        Assert.True(lines[1].IsSubTask);
+        Assert.True(lines[2].IsSubTask);
+        Assert.False(lines[3].IsSubTask);
+    }
+
+    /// <summary>A stage with its pieces indented beneath it — the shape the real ledgers use.</summary>
+    static IPlanProgress? Nested()
+    {
+        return Parse(
+            "- [>] build stage B",
+            "  - [>] B5a the refusal is its own outcome",
+            "  - [x] B5b the run total stops being derived",
+            "- [x] ship the parser");
+    }
+
     static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0, int notDoing = 0, int blockedOnOwner = 0)
     {
         return PlanProgress_Factory.Create(done, inProgress, blocked, notDoing, total, null, [], [], [], null, null, blockedOnOwner);
