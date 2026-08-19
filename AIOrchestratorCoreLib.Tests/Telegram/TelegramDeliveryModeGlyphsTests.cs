@@ -115,4 +115,65 @@ public class TelegramDeliveryModeGlyphsTests
         Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("🧪 crm bug"));
         Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("✈ 🧪 crm bug"));
     }
+
+    /// <summary>
+    /// THE OWNER ASKED TO SEE IT FROM THE TOPIC LIST (2026-08-19): "from the topic name I should be
+    /// able to immediately understand if some topic needs me for a response, whether blocking or
+    /// not". Two glyphs, because one would answer half the question.
+    /// </summary>
+    [Fact]
+    public void AWaitingTopicSaysSo_AndSaysWhetherItIsStopped()
+    {
+        Assert.Equal(
+            "❓ crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Normal, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Wanted));
+
+        Assert.Equal(
+            "⛔ crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Normal, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Blocking));
+    }
+
+    /// <summary>
+    /// It CONCATENATES rather than replacing — their word. It leads, because it is the only glyph
+    /// here that asks something OF them; the rest describe what the app is doing.
+    /// </summary>
+    [Fact]
+    public void TheReplyGlyphLeadsAndKeepsTheOthers()
+    {
+        Assert.Equal(
+            "❓ 🧪 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: true, ownerReply: OwnerReplyStates.Wanted));
+
+        Assert.Equal(
+            "⛔ ✈ 🔕 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: true, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Blocking));
+    }
+
+    /// <summary>Without the strip, every rename would stack another ❓ onto the name.</summary>
+    [Fact]
+    public void Strip_RemovesTheReplyGlyphs()
+    {
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("❓ crm bug"));
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("⛔ ✈ 🔕 crm bug"));
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("❓ 🧪 crm bug"));
+    }
+
+    /// <summary>Nothing waiting draws nothing — the default must stay silent.</summary>
+    [Fact]
+    public void NoReplyWantedDrawsNoGlyph()
+    {
+        Assert.Equal(
+            "crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Normal, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None));
+    }
 }

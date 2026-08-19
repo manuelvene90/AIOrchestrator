@@ -35,6 +35,22 @@ public static class TelegramDeliveryMode_Glyphs
     public const string AWAITING_TEST = "🧪";
 
     /// <summary>
+    /// SOMEBODY IS WAITING ON THE OWNER, and the endeavour is still moving meanwhile.
+    /// </summary>
+    public const string REPLY_WANTED = "❓";
+
+    /// <summary>
+    /// Waiting on the owner AND STOPPED. A member has declared BLOCKED ON OWNER, so this topic is
+    /// not merely owed an answer — it cannot proceed without one.
+    ///
+    /// Two glyphs rather than one because the owner asked for exactly that distinction (2026-08-19):
+    /// they want to see from the topic list "if some topic needs me for a response, whether blocking
+    /// or not". One symbol for both would answer half the question and cost them the opening of
+    /// every topic to find out which half.
+    /// </summary>
+    public const string REPLY_BLOCKING = "⛔";
+
+    /// <summary>
     /// Away mode's own glyph — app-wide. Deliberately NOT the moon: that already means Deferred,
     /// and two different states sharing a symbol in the topic list is worse than no symbol.
     /// </summary>
@@ -86,8 +102,20 @@ public static class TelegramDeliveryMode_Glyphs
         bool isAway,
         bool isQuiet,
         OwnerPresenceModes presence,
-        bool isAwaitingTest = false)
+        bool isAwaitingTest = false,
+        OwnerReplyStates ownerReply = OwnerReplyStates.None)
     {
+        // OUTERMOST, ahead of every other glyph — the owner asked for it "at the beginning of the
+        // topic name, to concatenate with other possible icons". It is also the only glyph here that
+        // asks something OF them; the rest describe what the app is doing.
+        var replyPrefix = ownerReply switch
+        {
+            OwnerReplyStates.Blocking => $"{REPLY_BLOCKING} ",
+            OwnerReplyStates.Wanted => $"{REPLY_WANTED} ",
+            OwnerReplyStates.None => "",
+            _ => throw new Exception($"Unhandled OwnerReplyStates: {ownerReply}"),
+        };
+
         // AWAITING-TEST OUTRANKS BOTH the mode glyph and terminal presence, and that ordering is the
         // point of the state. The other two describe how messages are being delivered right now;
         // this one says DO NOT CLOSE THIS YET. Losing it because the owner happens to be sitting in
@@ -96,14 +124,14 @@ public static class TelegramDeliveryMode_Glyphs
         {
             var withTest = $"{AWAITING_TEST} {baseName}";
 
-            return isAway ? $"{AWAY} {withTest}" : withTest;
+            return replyPrefix + (isAway ? $"{AWAY} {withTest}" : withTest);
         }
 
         if (presence == OwnerPresenceModes.Terminal)
         {
             var withTerminal = $"{TERMINAL} {baseName}";
 
-            return isAway ? $"{AWAY} {withTerminal}" : withTerminal;
+            return replyPrefix + (isAway ? $"{AWAY} {withTerminal}" : withTerminal);
         }
 
         var withMode = mode switch
@@ -115,9 +143,9 @@ public static class TelegramDeliveryMode_Glyphs
         };
 
         if (isAway)
-            return $"{AWAY} {withMode}";
+            return $"{replyPrefix}{AWAY} {withMode}";
 
-        return isQuiet ? $"{QUIET} {withMode}" : withMode;
+        return replyPrefix + (isQuiet ? $"{QUIET} {withMode}" : withMode);
     }
 
     /// <summary>
@@ -137,6 +165,8 @@ public static class TelegramDeliveryMode_Glyphs
     static bool Starts_WithAnyGlyph(string topicName)
     {
         return topicName.StartsWith(DEFERRED, StringComparison.Ordinal)
+            || topicName.StartsWith(REPLY_WANTED, StringComparison.Ordinal)
+            || topicName.StartsWith(REPLY_BLOCKING, StringComparison.Ordinal)
             || topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal)
             || topicName.StartsWith(SILENCED, StringComparison.Ordinal)
             || topicName.StartsWith(AWAY, StringComparison.Ordinal)
@@ -155,6 +185,12 @@ public static class TelegramDeliveryMode_Glyphs
 
         if (topicName.StartsWith(TERMINAL, StringComparison.Ordinal))
             return TERMINAL.Length;
+
+        if (topicName.StartsWith(REPLY_WANTED, StringComparison.Ordinal))
+            return REPLY_WANTED.Length;
+
+        if (topicName.StartsWith(REPLY_BLOCKING, StringComparison.Ordinal))
+            return REPLY_BLOCKING.Length;
 
         if (topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal))
             return AWAITING_TEST.Length;

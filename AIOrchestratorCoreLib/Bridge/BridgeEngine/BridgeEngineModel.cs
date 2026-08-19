@@ -5969,7 +5969,7 @@ internal sealed class BridgeEngineModel(
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
                 baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-                session.AwaitingTest);
+                session.AwaitingTest, Last_OwnerReplyState(session.OrchId));
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -6213,10 +6213,17 @@ internal sealed class BridgeEngineModel(
             // never showed would restart the clock on a line that did not move.
             var ledger = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
 
+            var members = Build_TopicStatusMembers(session);
+
+            // Filled HERE because these entries are already read for the status line — the topic-name
+            // sync then spends nothing to draw the glyph.
+            lock (_ownerStateLock)
+                _ownerReplyStateByOrchId[session.OrchId] = Resolve_OwnerReplyState(session, members);
+
             var plan = Telegram.TopicStatusLine_Planner.Plan(
                 session.DisplayName ?? session.OrchId,
                 ledger,
-                Build_TopicStatusMembers(session),
+                members,
                 DateTime.Now,
                 session.StatusLineMessageId,
                 lastText,
@@ -6755,7 +6762,7 @@ internal sealed class BridgeEngineModel(
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
                 baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-                session.AwaitingTest);
+                session.AwaitingTest, Last_OwnerReplyState(session.OrchId));
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
@@ -8314,6 +8321,50 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>Per orchestration: the ledger figures currently on the status line, and since when.</summary>
     readonly Dictionary<string, FiguresStamp> _figuresSinceByOrchId = [];
+
+    /// <summary>
+    /// Per orchestration: whether this topic is waiting on the OWNER, and whether that has stopped
+    /// the work — the glyph the topic list carries.
+    ///
+    /// CACHED RATHER THAN COMPUTED WHERE IT IS USED, and that is the whole reason it exists as a
+    /// field. Sync_TopicNames_BestEffort_Async runs EVERY tick; resolving this there would read
+    /// every member channel of every orchestration every two seconds, which is the per-tick channel
+    /// cost this file has already been trimmed for once. It is filled in on the status-line pass,
+    /// which has those entries in hand anyway, so the glyph costs no extra read at all.
+    ///
+    /// Absent means None: a topic the status-line pass has not reached yet shows no glyph rather
+    /// than a guessed one.
+    /// </summary>
+    readonly Dictionary<string, Telegram.OwnerReplyStates> _ownerReplyStateByOrchId = [];
+
+    /// <summary>
+    /// BLOCKING WINS over merely wanted: a member that has declared BLOCKED ON OWNER cannot proceed,
+    /// and "someone is waiting" understates that. Read from the entries the caller already has.
+    /// </summary>
+    Telegram.OwnerReplyStates Resolve_OwnerReplyState(IOrchestrationSession session, IReadOnlyList<Telegram.TopicStatusMember.ITopicStatusMember> members)
+    {
+        foreach (var member in members)
+        {
+            if (member.IsClosed)
+                continue;
+
+            if (Status.MemberState_Resolver.Resolve(member.Entries) == Status.MemberStates.BlockedOnOwner)
+                return Telegram.OwnerReplyStates.Blocking;
+        }
+
+        var ownerEntries = ChannelEntry_Parser.Parse_All(
+            UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId)));
+
+        return Status.OwnerOwesReply_Decider.Decide(ownerEntries)
+            ? Telegram.OwnerReplyStates.Wanted
+            : Telegram.OwnerReplyStates.None;
+    }
+
+    Telegram.OwnerReplyStates Last_OwnerReplyState(string orchId)
+    {
+        lock (_ownerStateLock)
+            return _ownerReplyStateByOrchId.TryGetValue(orchId, out var state) ? state : Telegram.OwnerReplyStates.None;
+    }
 
     /// <summary>
     /// Records the figures this tick and answers how long they have stood still — null when they
