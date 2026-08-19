@@ -536,6 +536,13 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     bool _awayActive;
 
+    /// <summary>
+    /// Per orchestration: the away digest last SENT, so an identical one is never sent again.
+    /// Guarded by _ownerStateLock — written from the mirror loop and cleared from the inbound one.
+    /// See <see cref="AwayDigest_Decider"/> for the 30-minute loop this ends.
+    /// </summary>
+    readonly Dictionary<string, string> _lastAwayDigestByOrchId = [];
+
     /// <summary>The owner's last message in ANY topic — presence anywhere counts everywhere.</summary>
     DateTime _lastOwnerMessageUtc = DateTime.UtcNow;
 
@@ -1259,6 +1266,14 @@ internal sealed class BridgeEngineModel(
                 continue;
 
             if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+                continue;
+
+            // AWAY MODE SUPPRESSES THIS ENTIRELY. "Waiting on your reply and nothing is running" is,
+            // while away, a description of the owner's own deliberate absence — decision 15's exact
+            // test: an alert they cannot act on does not go to Telegram. The away digest already
+            // carries the one fact this would have added, and the token is NOT taken here, so the
+            // first tick after they return alerts normally if the stall is still real.
+            if (Is_AwayMode())
                 continue;
 
             // ONLY WHEN THE OWNER OWES A REPLY (their ruling, 2026-08-15). Quiet alone was the old
@@ -6998,6 +7013,17 @@ internal sealed class BridgeEngineModel(
             if (Is_AnySessionWorking(session))
                 continue;
 
+            // AWAY MODE HOLDS IT RATHER THAN RELEASING IT. This exists to break a deadlock in which
+            // the owner never saw a question — but away mode has already PARKED every open question
+            // and told them in as many words to ignore the backlog, so there is no deadlock left to
+            // break and the release is one more message at somebody who is asleep.
+            //
+            // Deliberately ABOVE the removal, which is the whole point: the entry is KEPT, so the
+            // first tick after the owner comes back releases it exactly as it would have. Holding it
+            // is a delay; consuming it here would be a loss.
+            if (Is_AwayMode())
+                continue;
+
             lock (_ownerStateLock)
             {
                 _lastSuppressedEntry.Remove(session.OrchId);
@@ -8031,7 +8057,23 @@ internal sealed class BridgeEngineModel(
             // because "imp-1 is blocked waiting for you" is exactly what they need to know.
             if (Is_AwayMode())
             {
-                Post_StatusEntry(session.OrchId, Build_AwayUpdateText(session), session.OwnerPresence);
+                // ONLY WHEN SOMETHING CHANGED (owner's call, 2026-08-19). An unchanged digest is not
+                // merely redundant on their phone: it is APPENDED TO THE CHANNEL, and an append is
+                // what a session's watcher fires on — so it wakes a session that has nothing to do,
+                // which writes STANDING BY, which re-arms both of the app's OTHER alert paths. That is
+                // 30-minute limit cycle in AwayDigest_Decider's docstring. Not sending it is what
+                // breaks the loop, so this is a correctness guard rather than a politeness one.
+                var digest = Build_AwayUpdateText(session);
+
+                if (!AwayDigest_Decider.Should_Send(Last_AwayDigest_OrNull(session.OrchId), digest))
+                    continue;
+
+                // REMEMBERED ONLY ON A CONFIRMED WRITE. Recording it first would let a channel that
+                // stayed locked for the whole budget count as a delivery, and because an unchanged
+                // digest is never re-sent, that away spell would go silent entirely.
+                if (Post_StatusEntry(session.OrchId, digest, session.OwnerPresence))
+                    Remember_AwayDigest(session.OrchId, digest);
+
                 continue;
             }
 
@@ -8051,6 +8093,21 @@ internal sealed class BridgeEngineModel(
     DateTime? Last_PeriodicStatusSlot_OrNull(string orchId)
     {
         return _lastPeriodicStatusSlot.TryGetValue(orchId, out var slot) ? slot : null;
+    }
+
+    /// <summary>The away digest last sent for this orchestration, or null in a fresh away spell.</summary>
+    string? Last_AwayDigest_OrNull(string orchId)
+    {
+        lock (_ownerStateLock)
+            return _lastAwayDigestByOrchId.TryGetValue(orchId, out var digest) ? digest : null;
+    }
+
+    /// <summary>Recorded only AFTER a confirmed append — a digest remembered but never written would
+    /// silence the whole away spell, since an unchanged one is never re-sent.</summary>
+    void Remember_AwayDigest(string orchId, string digest)
+    {
+        lock (_ownerStateLock)
+            _lastAwayDigestByOrchId[orchId] = digest;
     }
 
     /// <summary>
@@ -8092,6 +8149,10 @@ internal sealed class BridgeEngineModel(
 
             _lastOwnerMessageUtc = DateTime.UtcNow;
             _awayActive = false;
+
+            // The next away spell starts from null, so its FIRST digest always sends rather than
+            // being compared against a snapshot from hours ago and silently swallowed.
+            _lastAwayDigestByOrchId.Clear();
 
             foreach (var tracker in _awayTrackers.Values)
             {
@@ -8486,7 +8547,8 @@ internal sealed class BridgeEngineModel(
     ///   Silenced — dropped, because the owner is reading the terminal live.
     /// Doing this by hand at each send site would have meant reimplementing all three.
     /// </summary>
-    void Post_StatusEntry(string orchId, string text, OwnerPresenceModes presence)
+    /// <returns>Whether the entry was actually written — see the note at the append.</returns>
+    bool Post_StatusEntry(string orchId, string text, OwnerPresenceModes presence)
     {
         // Suppressed WITHOUT spending the slot during a meeting (see Push_PeriodicStatus_Async), so
         // the first tick after the owner leaves terminal mode posts a fresh status — which IS the
@@ -8495,12 +8557,19 @@ internal sealed class BridgeEngineModel(
         // The presence is the CALLER's — the one it already decided the slot on — so the decision
         // and the append cannot disagree about where the owner is (rev-7 P5).
         //
-        // The helper's return is deliberately discarded, and only here: a dropped periodic status is
-        // SUPERSEDED rather than lost — the next carries the current state, and the Deferred path
-        // already collapses queued statuses to the newest for the same reason. Retrying it would
-        // deliver a stale snapshot the following tick is about to replace. Nothing records it as
-        // done, so nothing is left claiming work that did not happen.
-        Append_SupervisorAttention_UnlessMeeting(orchId, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, text, presence, Channels.AppEntryAudiences.Owner);
+        // The helper's return is now HANDED BACK rather than discarded, and the reason it used to be
+        // discarded is worth keeping: a dropped periodic status is SUPERSEDED rather than lost — the
+        // next one carries the current state, and the Deferred path collapses queued statuses to the
+        // newest for the same reason. That held while every slot posted unconditionally.
+        //
+        // The away digest broke the premise. It is change-gated (owner's call, 2026-08-19), so an
+        // unchanged digest is never re-sent — and a spell whose one append was dropped by a locked
+        // channel would then go silent ENTIRELY rather than merely late. The old comment here ended
+        // "nothing records it as done, so nothing is left claiming work that did not happen"; that
+        // invariant is exactly what a remembered-but-unwritten digest would break, so the away caller
+        // records its delivery only on a true. The periodic caller still discards it, for the
+        // original reason.
+        return Append_SupervisorAttention_UnlessMeeting(orchId, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, text, presence, Channels.AppEntryAudiences.Owner);
     }
 
     /// <summary>
