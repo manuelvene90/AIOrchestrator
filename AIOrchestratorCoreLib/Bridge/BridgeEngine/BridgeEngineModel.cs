@@ -2287,30 +2287,47 @@ internal sealed class BridgeEngineModel(
         var working = Is_AnySessionWorking(session);
 
         if (working)
-        {
             _quietSinceUtc.Remove(session.OrchId);
-            _reportedStaleInProgress.Remove(session.OrchId);
-            return;
-        }
-
-        if (!_quietSinceUtc.TryGetValue(session.OrchId, out var quietSince))
-        {
+        else if (!_quietSinceUtc.ContainsKey(session.OrchId))
             _quietSinceUtc[session.OrchId] = DateTime.UtcNow;
-            return;
-        }
 
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(
             UsageTotals_Reader.Read_Text_Safe(_paths.Get_PlanFile(session.OrchId)));
 
-        var unworked = Planning.StaleInProgress_Detector.Find_UnworkedInProgressLines(
-            progress, anySessionWorking: false, quietFor: DateTime.UtcNow - quietSince);
+        // Tracked EVERY tick, busy or idle. The age rule is the whole point of the owner's ruling of
+        // 2026-08-19, and a clock that ran only while the orchestration was quiet would have exactly
+        // the blind spot they hit: the busiest orchestration is never checked at all.
+        var firstSeen = Note_InProgressLines(session.OrchId, progress);
 
-        if (unworked.Count == 0)
+        // THE IDLE RULE FIRST, because it is the stronger claim — nothing is running AND the ledger
+        // says otherwise. The age rule is weaker: the sessions may be perfectly busy and only the
+        // LINE has gone still. So it speaks only when the idle rule is silent, and each keeps its own
+        // wording rather than one message hedging between two different reasons.
+        var unworked = _quietSinceUtc.TryGetValue(session.OrchId, out var quietSince)
+            ? Planning.StaleInProgress_Detector.Find_UnworkedInProgressLines(
+                progress, anySessionWorking: working, quietFor: DateTime.UtcNow - quietSince)
+            : [];
+
+        IReadOnlyList<string> byAge = unworked.Count > 0
+            ? []
+            : Planning.StaleInProgress_Detector.Find_UnmovedInProgressLines(progress, firstSeen, DateTime.UtcNow);
+
+        if (unworked.Count == 0 && byAge.Count == 0)
+        {
+            // Released, so a set that comes back after being put right is flagged again.
+            _reportedStaleInProgress.Remove(session.OrchId);
             return;
+        }
+
+        var offending = unworked.Count > 0 ? unworked : byAge;
+
+        var describe = unworked.Count > 0
+            ? Planning.StaleInProgress_Detector.Describe(offending)
+            : Planning.StaleInProgress_Detector.Describe_Unmoved(offending);
 
         // CONTENT-ADDRESSED, like the shape complaint: it re-fires when the offending SET changes,
         // so a session that fixes one line and leaves another still hears about the one it left.
-        var signature = string.Join("\n", unworked);
+        var signature = string.Join("\n", offending);
 
         if (_reportedStaleInProgress.TryGetValue(session.OrchId, out var reported) && reported == signature)
             return;
@@ -2318,7 +2335,7 @@ internal sealed class BridgeEngineModel(
         if (!Append_SupervisorAttention_UnlessMeeting(
                 session.OrchId,
                 "PLAN.md claims work that nobody is doing",
-                Planning.StaleInProgress_Detector.Describe(unworked),
+                describe,
                 presence))
             return;
 
@@ -2328,7 +2345,9 @@ internal sealed class BridgeEngineModel(
         // sent — the deadlock this file has already paid for once.
         _ledgerDebtSinceUtc[session.OrchId] = DateTime.UtcNow;
 
-        _log.Log_Warning(session.OrchId, $"PLAN.md claims {unworked.Count} line(s) in progress while nothing is running — flagged for the turn-end hook");
+        _log.Log_Warning(session.OrchId, unworked.Count > 0
+            ? $"PLAN.md claims {unworked.Count} line(s) in progress while nothing is running — flagged for the turn-end hook"
+            : $"PLAN.md has {byAge.Count} line(s) claiming [>] unchanged for over an hour — flagged for the turn-end hook");
     }
 
     /// <summary>Runaway guard: a per-orchestration token ceiling the owner sets in config.json.</summary>
@@ -8117,6 +8136,36 @@ internal sealed class BridgeEngineModel(
     DateTime? Last_PeriodicStatusSlot_OrNull(string orchId)
     {
         return _lastPeriodicStatusSlot.TryGetValue(orchId, out var slot) ? slot : null;
+    }
+
+    /// <summary>Per orchestration: each currently-open `[>]` line, and when it first appeared in that shape.</summary>
+    readonly Dictionary<string, Dictionary<string, DateTime>> _inProgressSinceByOrchId = [];
+
+    /// <summary>
+    /// Records this tick's `[>]` lines and returns when each was first seen. Lines that have changed
+    /// or left `[>]` are DROPPED, so editing a line to say where it has got to resets its clock —
+    /// that edit is a report, which is exactly what the age rule is asking for.
+    /// </summary>
+    IReadOnlyDictionary<string, DateTime> Note_InProgressLines(string orchId, Planning.PlanProgress.IPlanProgress? progress)
+    {
+        lock (_ownerStateLock)
+        {
+            if (!_inProgressSinceByOrchId.TryGetValue(orchId, out var seen))
+            {
+                seen = [];
+                _inProgressSinceByOrchId[orchId] = seen;
+            }
+
+            var current = progress?.InProgressTasks ?? [];
+
+            foreach (var line in current)
+                seen.TryAdd(line, DateTime.UtcNow);
+
+            foreach (var gone in seen.Keys.Where(line => !current.Contains(line)).ToList())
+                seen.Remove(gone);
+
+            return seen;
+        }
     }
 
     sealed class FiguresStamp

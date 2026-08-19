@@ -32,6 +32,12 @@ public class AnInProgressLineNobodyIsWorkingOnTests
 
     static IPlanProgress? Parse() => PlanLedger_Parser.Parse_OrNull(PLAN);
 
+    /// <summary>A ledger written inline, for the cases that need a shape the shared fixture does not have.</summary>
+    static IPlanProgress? ParseLines(params string[] lines)
+    {
+        return PlanLedger_Parser.Parse_OrNull(string.Join("\n", lines));
+    }
+
     /// <summary>The exact case the owner watched: two finished lines held open while nothing ran.</summary>
     [Fact]
     public void QuietForLongEnoughMakesEveryInProgressLineAFalseClaim()
@@ -120,4 +126,63 @@ public class AnInProgressLineNobodyIsWorkingOnTests
         // The offending line is quoted back — a complaint that does not say WHICH line is a nag.
         Assert.Contains("the solo's status line reads orange", text);
     }
+
+    /// <summary>
+    /// THE GAP THAT MATTERED (owner, 2026-08-19). The idle rule above resets whenever ANY session is
+    /// mid-turn, so an orchestration whose supervisor works all day is never checked — and those are
+    /// the ones whose ledgers drift furthest. `arb portfolio UX` read 117/134 on finished work, with
+    /// eleven `[>]` lines the idle rule had never once looked at.
+    /// </summary>
+    [Fact]
+    public void ALineUnchangedForOverAnHourIsFlaggedHoweverBusyTheSessionsAre()
+    {
+        var progress = ParseLines("- [>] build stage B", "- [>] rev-8 REVIEW, 16 findings, all dispatched");
+
+        var now = new DateTime(2026, 8, 19, 18, 0, 0, DateTimeKind.Utc);
+
+        var firstSeen = new Dictionary<string, DateTime>
+        {
+            ["build stage B"] = now.AddMinutes(-59),
+            ["rev-8 REVIEW, 16 findings, all dispatched"] = now.AddMinutes(-61),
+        };
+
+        var flagged = StaleInProgress_Detector.Find_UnmovedInProgressLines(progress, firstSeen, now);
+
+        Assert.Equal(["rev-8 REVIEW, 16 findings, all dispatched"], flagged);
+    }
+
+    /// <summary>
+    /// A LINE FIRST SEEN THIS TICK IS NOT STALE. Without this, every line would be flagged the moment
+    /// the app started, which is the false alarm that teaches an agent to ignore the whole guard.
+    /// </summary>
+    [Fact]
+    public void ALineNotSeenBeforeIsNotFlagged()
+    {
+        var progress = ParseLines("- [>] build stage B");
+
+        Assert.Empty(StaleInProgress_Detector.Find_UnmovedInProgressLines(progress, new Dictionary<string, DateTime>(), DateTime.UtcNow));
+    }
+
+    [Fact]
+    public void NoLedgerMeansNothingToFlag()
+    {
+        Assert.Empty(StaleInProgress_Detector.Find_UnmovedInProgressLines(null, new Dictionary<string, DateTime>(), DateTime.UtcNow));
+    }
+
+    /// <summary>
+    /// The age message must NOT claim nothing is running — that is false in the case it exists for,
+    /// and an agent reading a guard that misdescribes its own trigger learns to discount it. It also
+    /// names `- [?]`, because "waiting on the owner" now has its own marker.
+    /// </summary>
+    [Fact]
+    public void TheAgeMessageDoesNotClaimNothingIsRunning()
+    {
+        var text = StaleInProgress_Detector.Describe_Unmoved(["rev-8 REVIEW, 16 findings, all dispatched"]);
+
+        Assert.DoesNotContain("Nothing has been mid-turn", text);
+        Assert.Contains("Sessions being busy is not the question", text);
+        Assert.Contains("- [?]", text);
+        Assert.Contains("rev-8 REVIEW, 16 findings, all dispatched", text);
+    }
+
 }
