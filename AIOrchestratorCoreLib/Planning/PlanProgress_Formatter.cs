@@ -3,7 +3,7 @@ using AIOrchestratorCoreLib.Planning.PlanProgress;
 namespace AIOrchestratorCoreLib.Planning;
 
 /// <summary>
-/// The one wording for "how far along is this" — "57/76 done (75%) · 2 running · 1 BLOCKED".
+/// The one wording for "how far along is this" — "57/76 done (75%) · 2 running · 1 task blocked".
 /// Shared by /progress, /status and the periodic push so the three can never quote different
 /// figures for the same ledger.
 /// </summary>
@@ -11,7 +11,7 @@ public static class PlanProgress_Formatter
 {
     public static string Describe_Counts(IPlanProgress progress)
     {
-        var blockedPart = progress.Blocked > 0 ? $" · {progress.Blocked} BLOCKED" : "";
+        var blockedPart = Describe_Blocked(progress);
         var runningPart = progress.InProgress > 0 ? $" · {progress.InProgress} running" : "";
 
         // The dropped count travels WITH the percentage, always. A marker that removes weight from
@@ -21,6 +21,44 @@ public static class PlanProgress_Formatter
         var notDoingPart = progress.NotDoing > 0 ? $" · {progress.NotDoing} not doing" : "";
 
         return $"{progress.Done}/{progress.Total} done{Describe_Percent(progress)}{runningPart}{blockedPart}{notDoingPart}";
+    }
+
+    /// <summary>
+    /// The blocked segment, and the ONE place the owner is told a block is theirs.
+    ///
+    /// "task blocked", never a bare "BLOCKED" (owner's call, 2026-08-19): the member roster printed
+    /// directly UNDER this count says BLOCKED ON OWNER for a SESSION, so one word carried two
+    /// meanings in a single message and the owner read a blocked ledger LINE as a stuck session.
+    ///
+    /// PASSIVE BY CONSTRUCTION, which was the owner's hard condition: *"I don't want it to continue
+    /// spontaneously prompting or to have another annoying loop pop up."* This adds no send path, no
+    /// trigger and no cadence — it is more words on a status they already receive, so there is
+    /// nothing here that CAN fire twice. The morning this was asked for was spent removing a loop.
+    ///
+    /// Severity is arithmetic, never a list count: `Total - Done - Blocked` is what can still move.
+    /// Reading `OpenTasks.Count` instead would answer 0 for any caller that passes the counts without
+    /// the lists — which three test builders do, and which would have made "nothing else can move"
+    /// the answer for a perfectly healthy ledger.
+    /// </summary>
+    static string Describe_Blocked(IPlanProgress progress)
+    {
+        if (progress.Blocked == 0)
+            return "";
+
+        var segment = $" · {progress.Blocked} task{(progress.Blocked == 1 ? "" : "s")} blocked";
+
+        if (progress.BlockedOnOwner == 0)
+            return segment;
+
+        var severity = progress.Total - progress.Done - progress.Blocked > 0
+            ? "the rest continues"
+            : "nothing else can move";
+
+        // Collapsed when every blocked line is theirs, because "1 task blocked · 1 needs you" says
+        // the same number twice on a phone screen.
+        return progress.BlockedOnOwner == progress.Blocked
+            ? $"{segment}, needs you — {severity}"
+            : $"{segment} · {progress.BlockedOnOwner} needs you — {severity}";
     }
 
     /// <summary>

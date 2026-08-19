@@ -1,7 +1,11 @@
 namespace AIOrchestratorCoreLib.Planning;
 
 /// <summary>
-/// THE FIVE LEDGER MARKERS, once.
+/// THE LEDGER MARKERS, once. Six of them since 2026-08-19.
+///
+/// Deliberately NOT "the six markers" in this line: the previous version of this sentence said FIVE
+/// and had to be corrected by the change that added the sixth, which is the same staleness the class
+/// exists to prevent, one level up. The count lives in ALL; the prose does not restate it.
 ///
 /// They were written down five times — two role commands, the parser's docstring, the supervisor
 /// ledger hook, and the seed text — and by the time anyone counted, TWO of the copies had drifted to
@@ -27,6 +31,13 @@ public static class PlanLedger_Markers
         (">", "in progress"),
         ("x", "done"),
         ("!", "blocked"),
+
+        // BLOCKED ON THE OWNER SPECIFICALLY, and separate from `!` by the owner's own call
+        // (2026-08-19, choosing this over inferring it from the line's words). `!` had been carrying
+        // both kinds: `arb portfolio UX` showed a `[!]` line blocked on a REVIEWER while the owner
+        // read the count as something waiting on them, asked what had got stuck, and nothing had.
+        // Only the supervisor knows which kind it is, so only the supervisor can say.
+        ("?", "blocked on the owner"),
 
         // NOT "dropped" and not "cancelled": it is the only marker that removes weight from the
         // denominator, and the wording has to survive being read by someone deciding whether to use

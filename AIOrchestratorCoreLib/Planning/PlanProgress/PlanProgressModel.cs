@@ -4,6 +4,7 @@ internal sealed class PlanProgressModel(
     int done,
     int inProgress,
     int blocked,
+    int blockedOnOwner,
     int notDoing,
     int total,
     string? currentTaskText,
@@ -16,6 +17,7 @@ internal sealed class PlanProgressModel(
     public int Done { get; } = done;
     public int InProgress { get; } = inProgress;
     public int Blocked { get; } = blocked;
+    public int BlockedOnOwner { get; } = blockedOnOwner;
     public int NotDoing { get; } = notDoing;
     public int Total { get; } = total;
     public string? CurrentTaskText { get; } = currentTaskText;

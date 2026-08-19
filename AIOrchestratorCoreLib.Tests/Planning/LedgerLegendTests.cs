@@ -97,7 +97,7 @@ public class LedgerLegendTests
     public void TheMarkerListIsWhatEverythingElseAssumes()
     {
         Assert.Equal(
-            [(" ", "open"), (">", "in progress"), ("x", "done"), ("!", "blocked"), ("-", "not doing")],
+            [(" ", "open"), (">", "in progress"), ("x", "done"), ("!", "blocked"), ("?", "blocked on the owner"), ("-", "not doing")],
             PlanLedger_Markers.ALL);
     }
 

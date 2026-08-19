@@ -15,8 +15,9 @@ public static partial class PlanShape_Validator
     private static partial Regex TaskRange_Regex();
 
     /// <summary>
-    /// FOUR MARKERS, NOT FIVE — `- [-]` is left out on purpose and this is not the drift it looks
-    /// like. A not-doing line is excluded from the denominator and can never represent progress, so
+    /// EVERY MARKER EXCEPT `- [-]`, which is left out on purpose and is not the drift it looks like.
+    /// (`- [?]` was added 2026-08-19 and belongs here: a line blocked on the owner is still owed, so
+    /// one that lumps several deliverables together still hides progress.) A not-doing line is excluded from the denominator and can never represent progress, so
     /// complaining that it lumps several tasks together would be pure noise about a line that costs
     /// nothing. Alerts the owner cannot act on are exactly what decision 15 removed from this feature.
     ///
@@ -25,7 +26,7 @@ public static partial class PlanShape_Validator
     /// stale. A reader sweeping for that pattern will arrive here next, and the answer is "correct as
     /// written".
     /// </summary>
-    [GeneratedRegex(@"^\s*-\s*\[(x|X| |>|!)\]\s*(.*)$", RegexOptions.Compiled)]
+    [GeneratedRegex(@"^\s*-\s*\[(x|X| |>|!|\?)\]\s*(.*)$", RegexOptions.Compiled)]
     private static partial Regex TaskLine_Regex();
 
     /// <summary>Beyond this many separators one line is plainly carrying a list of deliverables.</summary>

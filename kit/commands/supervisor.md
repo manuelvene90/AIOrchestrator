@@ -724,7 +724,8 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
 
 - **Create it the moment the owner approves a direction** (same moment you set the orchestration
   name). One task per line, this exact convention:
-  `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked` · `- [-] not doing`
+  `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked` · `- [?] blocked on the owner` ·
+  `- [-] not doing`
   Short imperative task texts; headers/notes are ignored by the parser.
 - **DONE MEANS READY TO MERGE (owner directive, 2026-08-13).** `- [x]` is: built, reviewed by
   someone who did NOT write it, and no open blocking finding against it. **Not landed on the default
@@ -756,11 +757,18 @@ bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h".
   (`57/57 done (100%) · 3 not doing`), so dropping work is visible by design — you cannot reach 100%
   by dropping the remainder, you can only make it obvious that you did. Work you have merely stopped
   doing without deciding stays `[ ]` or `[!]`.
-- **Blocked lines should say what they are blocked ON**: `- [!] migrate the state file — blocked on:
+- **`- [?]` is blocked ON THE OWNER; `- [!]` is blocked on anything else** (owner's call,
+  2026-08-19). This is the ONLY thing that tells them a block is theirs to clear: the app counts `[?]`
+  and says so on the status they already read — "1 task blocked, needs you — the rest continues", or
+  "nothing else can move" when every remaining line is stuck behind it. Nothing else infers it, and
+  nothing chases them about it, so a block you file as `[!]` is one they will never be asked about.
+  Get it wrong the other way and you cry wolf: a `[?]` waiting on a REVIEWER sends them looking for a
+  decision that was never theirs, which is what this marker was created to stop.
+- **Blocked lines should say what they are blocked ON**: `- [?] migrate the state file — blocked on:
   owner decision on the schema`. The owner reads these verbatim in `/left`, and "blocked" without a
   reason tells them nothing they can act on.
 - **Update it at EVERY boundary**: brief sent → mark `[>]`; report verified **and cleared by a
-  reviewer who did not write it** → `[x]`; waiting on the owner → `[!]`. A report you have accepted
+  reviewer who did not write it** → `[x]`; waiting on the owner → `[?]`. A report you have accepted
   at your own boundary but nobody independent has read is still `[>]` — your acceptance is not the
   clearance, and the merge that follows is not the completion. A stale ledger is worse than none —
   the owner can pull it up at any moment from their phone with `/progress` (or `/left`), which the
