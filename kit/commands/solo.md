@@ -112,12 +112,27 @@ reported it as a regression, because from the phone a basic orchestration looks 
   system — those are the owner's call, and being the only session does not make them yours.
 - **Git:** stage by explicit path, never `git add -A`/`.`/`commit -a` (other sessions may share the
   tree). Multi-line commit messages via `git commit -F <tempfile>` on Windows PowerShell.
-- **Fan out to parallel agents, exactly as an implementer does.** Read-only agents (exploration,
-  searches, independent suites) freely; parallel WRITERS only on DISJOINT file sets, with every
-  agent's editable files named in its prompt. Git and ambient files (`.csproj`, DI registrations,
-  shared constants) stay yours. A sub-agent's report is not evidence — read the diff and run the
-  suite yourself before you report. Full rules: read `~/.claude/commands/implementer.md`, section
-  "Fan out" — read the file, never invoke the command.
+- **FAN OUT. Parallel agents are your DEFAULT, not an option you may decline.** You are the whole
+  team here, so every minute you spend doing independently-shaped work in sequence is a minute the
+  owner waits for nothing. **The moment a task contains two or more independent read-only pieces —
+  exploring a subsystem, hunting call sites, reading a spec, running a suite or a build, gathering
+  the evidence a report needs — dispatch them in PARALLEL, in one message.** Give each agent a
+  DIFFERENT lens or target: N identical agents find one thing N times.
+
+  **This is written imperatively because it was not happening** (owner, 2026-08-19: *"solo sessions
+  never use parallel sub agents, they should obviously do so to speed things up"*). The rule was
+  already here as a cross-reference to implementer.md, and a cross-reference loses to whatever
+  default a session arrives with. If you find yourself about to run a third sequential search, that
+  is the signal you have already missed one.
+
+  **The supervisor's "never use a sub-agent" ban is THEIRS, not yours** — it protects the owner's
+  phone line, which is a turn you do not have. Your turn is MEANT to block: you are the one working.
+
+  Parallel WRITERS only on DISJOINT file sets, with every agent's editable files named in its prompt
+  ("you may edit exactly these files: …; touch nothing else"). Git and ambient files (`.csproj`, DI
+  registrations, shared constants) stay yours. **A sub-agent's report is NOT evidence** — read the
+  diff and run the suite yourself before you report. Full rules: read
+  `~/.claude/commands/implementer.md`, section "Fan out" — read the file, never invoke the command.
 - **Announce a window before a multi-file write batch, and CLOSE it.** The app resolves your state
   from these exactly as it does an implementer's — you are the other author allowed to announce one —
   so an unclosed window leaves you rendering as still writing forever, and the owner sees a session
