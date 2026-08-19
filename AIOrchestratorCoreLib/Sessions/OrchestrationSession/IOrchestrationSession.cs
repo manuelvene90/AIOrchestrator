@@ -51,6 +51,22 @@ public interface IOrchestrationSession
     Telegram.TelegramDeliveryModes TelegramMode { get; }
 
     /// <summary>
+    /// The owner has finished this endeavour but has NOT tested it yet, so it must not be closed.
+    ///
+    /// SEPARATE FROM <see cref="TelegramMode"/> on purpose, and this is the whole design. The owner
+    /// asked for a state "identical to /mute but with a different icon" (2026-08-19), and a fourth
+    /// delivery mode would mean re-deriving mute's behaviour at every branch that asks whether a
+    /// message is DROPPED or merely queued — nine of them. As a flag beside the mode, /test IS mute:
+    /// the behaviour is identical by construction rather than by careful enumeration, and only the
+    /// glyph differs.
+    ///
+    /// PERSISTED, because it is a reminder. Their words: they mute a finished endeavour and then
+    /// "remind myself that all the muted ones still need testing before I close them" — a note that
+    /// vanished when the app restarted would not be one.
+    /// </summary>
+    bool AwaitingTest { get; }
+
+    /// <summary>
     /// WHERE THE OWNER IS for this orchestration. TERMINAL means they are in its terminal: nothing
     /// is pushed to Telegram and — the half that matters — no question raises the awaiting-answer
     /// flag, so the supervisor never freezes waiting for a tap that is being typed at it instead.

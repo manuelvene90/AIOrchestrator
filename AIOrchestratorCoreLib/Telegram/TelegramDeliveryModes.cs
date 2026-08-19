@@ -24,6 +24,17 @@ public static class TelegramDeliveryMode_Glyphs
     public const string SILENCED = "🔕";
 
     /// <summary>
+    /// FINISHED, BUT NOT YET TESTED BY THE OWNER — so do not close it. Their own workflow, made
+    /// visible: they were muting a completed endeavour and then remembering, unaided, which of the
+    /// muted ones still needed testing (2026-08-19).
+    ///
+    /// It REPLACES the silenced glyph rather than sitting beside it. /test IS mute — the delivery
+    /// mode really is Silenced underneath — so drawing 🔕 🧪 together would state one fact twice,
+    /// the same reasoning that makes TERMINAL replace the mode glyph rather than accompany it.
+    /// </summary>
+    public const string AWAITING_TEST = "🧪";
+
+    /// <summary>
     /// Away mode's own glyph — app-wide. Deliberately NOT the moon: that already means Deferred,
     /// and two different states sharing a symbol in the topic list is worse than no symbol.
     /// </summary>
@@ -74,8 +85,20 @@ public static class TelegramDeliveryMode_Glyphs
         TelegramDeliveryModes mode,
         bool isAway,
         bool isQuiet,
-        OwnerPresenceModes presence)
+        OwnerPresenceModes presence,
+        bool isAwaitingTest = false)
     {
+        // AWAITING-TEST OUTRANKS BOTH the mode glyph and terminal presence, and that ordering is the
+        // point of the state. The other two describe how messages are being delivered right now;
+        // this one says DO NOT CLOSE THIS YET. Losing it because the owner happens to be sitting in
+        // the terminal would hide the reminder at exactly the moment they might act on it.
+        if (isAwaitingTest)
+        {
+            var withTest = $"{AWAITING_TEST} {baseName}";
+
+            return isAway ? $"{AWAY} {withTest}" : withTest;
+        }
+
         if (presence == OwnerPresenceModes.Terminal)
         {
             var withTerminal = $"{TERMINAL} {baseName}";
@@ -114,6 +137,7 @@ public static class TelegramDeliveryMode_Glyphs
     static bool Starts_WithAnyGlyph(string topicName)
     {
         return topicName.StartsWith(DEFERRED, StringComparison.Ordinal)
+            || topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal)
             || topicName.StartsWith(SILENCED, StringComparison.Ordinal)
             || topicName.StartsWith(AWAY, StringComparison.Ordinal)
             || topicName.StartsWith(QUIET, StringComparison.Ordinal)
@@ -131,6 +155,9 @@ public static class TelegramDeliveryMode_Glyphs
 
         if (topicName.StartsWith(TERMINAL, StringComparison.Ordinal))
             return TERMINAL.Length;
+
+        if (topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal))
+            return AWAITING_TEST.Length;
 
         if (topicName.StartsWith(SILENCED, StringComparison.Ordinal))
             return SILENCED.Length;

@@ -71,4 +71,48 @@ public class TelegramDeliveryModeGlyphsTests
         Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("💻 crm bug"));
         Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("✈ 💻 crm bug"));
     }
+
+    /// <summary>
+    /// 🧪 REPLACES the mode glyph, because /test IS mute underneath — the delivery mode really is
+    /// Silenced, so drawing 🔕 🧪 together would state one fact twice.
+    /// </summary>
+    [Fact]
+    public void AwaitingTest_ReplacesTheModeGlyph()
+    {
+        Assert.Equal(
+            "🧪 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: true));
+    }
+
+    /// <summary>
+    /// AND IT OUTRANKS TERMINAL PRESENCE, which otherwise replaces every mode glyph. The others say
+    /// how messages are being delivered; this one says DO NOT CLOSE THIS YET — losing it because the
+    /// owner is sitting in the terminal would hide the reminder exactly when they might act on it.
+    /// </summary>
+    [Fact]
+    public void AwaitingTest_SurvivesTerminalPresence()
+    {
+        Assert.Equal(
+            "🧪 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Terminal, isAwaitingTest: true));
+
+        // Away is app-wide and about their phone, so it still shows alongside.
+        Assert.Equal(
+            "✈ 🧪 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: true, isQuiet: false,
+                OwnerPresenceModes.Terminal, isAwaitingTest: true));
+    }
+
+    /// <summary>Without the strip, every rename would stack another 🧪 onto the name.</summary>
+    [Fact]
+    public void Strip_RemovesTheAwaitingTestGlyph()
+    {
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("🧪 crm bug"));
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("✈ 🧪 crm bug"));
+    }
 }

@@ -33,7 +33,8 @@ public static class OrchestrationSession_Factory
         TelegramDeliveryModes telegramMode,
         DateTime? closedUtc,
         long? statusLineMessageId = null,
-        OwnerPresenceModes ownerPresence = OwnerPresenceModes.Remote)
+        OwnerPresenceModes ownerPresence = OwnerPresenceModes.Remote,
+        bool awaitingTest = false)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -41,7 +42,7 @@ public static class OrchestrationSession_Factory
         return new OrchestrationSessionModel(
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
-            telegramMode, ownerPresence, closedUtc, statusLineMessageId);
+            telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest);
     }
 
     /// <summary>
@@ -112,6 +113,15 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, telegramMode: mode);
     }
 
+    /// <summary>
+    /// Finished-but-untested. Orthogonal to the delivery mode, which /test sets to Silenced beside
+    /// this — see IOrchestrationSession.AwaitingTest for why it is a flag and not a fourth mode.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithAwaitingTest(IOrchestrationSession existing, bool awaitingTest)
+    {
+        return CreateFrom_Existing(existing, awaitingTest: awaitingTest, awaitingTestWasSet: true);
+    }
+
     /// <summary>Where the owner IS — orthogonal to the delivery mode, which stays as they set it.</summary>
     public static IOrchestrationSession CreateFrom_Existing_WithOwnerPresence(IOrchestrationSession existing, OwnerPresenceModes presence)
     {
@@ -146,7 +156,12 @@ public static class OrchestrationSession_Factory
         OwnerPresenceModes? ownerPresence = null,
         DateTime? closedUtc = null,
         long? statusLineMessageId = null,
-        bool statusLineMessageIdWasSet = false)
+        bool statusLineMessageIdWasSet = false,
+        bool awaitingTest = false,
+
+        // A bool cannot say "unchanged" on its own, so it carries the same wasSet flag the nullable
+        // overrides above use — without it, every unrelated copy would silently clear this.
+        bool awaitingTestWasSet = false)
     {
         return Create(
             existing.OrchId,
@@ -164,6 +179,7 @@ public static class OrchestrationSession_Factory
             telegramMode ?? existing.TelegramMode,
             closedUtc ?? existing.ClosedUtc,
             statusLineMessageIdWasSet ? statusLineMessageId : existing.StatusLineMessageId,
-            ownerPresence ?? existing.OwnerPresence);
+            ownerPresence ?? existing.OwnerPresence,
+            awaitingTestWasSet ? awaitingTest : existing.AwaitingTest);
     }
 }

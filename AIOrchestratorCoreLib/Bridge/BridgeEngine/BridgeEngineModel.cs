@@ -4858,6 +4858,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "test")
+                    {
+                        await Toggle_AwaitingTest_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "close")
                     {
                         await Request_Close_FromCommand_Async(client, message.MessageThreadId, cancellationToken);
@@ -4988,6 +4992,7 @@ internal sealed class BridgeEngineModel(
                     ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
+                    ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
                     ("close", "End THIS orchestration — you confirm with a tap"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
@@ -5530,6 +5535,68 @@ internal sealed class BridgeEngineModel(
     /// the JSON can claim a confirmation that did not happen, because no field can wave a request
     /// through. This adds a way to ASK, not a way to skip the asking.
     /// </summary>
+    /// <summary>
+    /// Marks an endeavour FINISHED BUT UNTESTED: muted exactly as /mute mutes, and flagged so the
+    /// topic carries 🧪 instead of 🔕.
+    ///
+    /// Their workflow, made visible (2026-08-19): they were muting a completed endeavour and then
+    /// remembering unaided which of the muted ones still needed testing before being closed.
+    ///
+    /// A TOGGLE, like every other command here — their correction, and the reason there is no
+    /// /untest. Toggling off returns the topic to Normal, which is what /mute does and what "the
+    /// same as mute" has to mean if the word is to be trusted.
+    ///
+    /// Topic-scoped only: there is no app-wide variant, because "everything is awaiting a test" is
+    /// not a state a person is ever in — the flag exists to distinguish one endeavour from another.
+    /// </summary>
+    async Task Toggle_AwaitingTest_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/test works inside an orchestration's own topic — there is nothing here to mark.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var turningOn = !session.AwaitingTest;
+
+            // The MODE really is Silenced underneath — /test IS mute, so its behaviour is not
+            // re-derived here, it is the same setting written by the same store call.
+            _store.Set_AwaitingTest(session.OrchId, turningOn);
+            _store.Set_TelegramMode(session.OrchId, turningOn ? TelegramDeliveryModes.Silenced : TelegramDeliveryModes.Normal);
+
+            _log.Log_Info(session.OrchId, turningOn
+                ? "/test — marked finished-but-untested, and muted"
+                : "/test — the awaiting-test mark was cleared, back to Normal");
+
+            Raise_OrchestrationActivity(session.OrchId);
+
+            // BEFORE the new mode takes hold on the next tick, so the confirmation itself gets through.
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                turningOn
+                    ? "🧪 marked for testing — muted like /mute, and the topic keeps 🧪 so you know not to close it yet."
+                    : "🧪 cleared — this topic is back to normal.",
+                cancellationToken);
+
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "/test failed", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/test failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+    }
+
     async Task Request_Close_FromCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
@@ -5894,7 +5961,8 @@ internal sealed class BridgeEngineModel(
 
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence);
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
+                session.AwaitingTest);
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -6679,7 +6747,8 @@ internal sealed class BridgeEngineModel(
         {
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence);
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
+                session.AwaitingTest);
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
