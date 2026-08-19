@@ -6,7 +6,8 @@ namespace AIOrchestratorCoreLib.Planning;
 /// <summary>
 /// Parses a PLAN.md task ledger (maintained by the orchestration's supervisor) into progress
 /// counts. Line convention, one task per line:
-///   - [ ] open      - [>] in progress      - [x] done      - [!] blocked      - [-] not doing
+///   - [ ] open   - [>] in progress   - [x] done   - [!] blocked   - [?] blocked on the owner
+///   - [-] not doing
 /// Anything that is not a task line (headers, notes) is ignored. Returns null when the text has
 /// no task lines at all — the card then simply shows no progress bar.
 ///
@@ -23,7 +24,7 @@ namespace AIOrchestratorCoreLib.Planning;
 /// </summary>
 public static partial class PlanLedger_Parser
 {
-    [GeneratedRegex(@"^\s*-\s*\[(x|X| |>|!|-)\]\s*(.*)$", RegexOptions.Compiled)]
+    [GeneratedRegex(@"^\s*-\s*\[(x|X| |>|!|\?|-)\]\s*(.*)$", RegexOptions.Compiled)]
     private static partial Regex TaskLine_Regex();
 
     public static IPlanProgress? Parse_OrNull(string planText)
@@ -36,6 +37,9 @@ public static partial class PlanLedger_Parser
         List<string> doneTasks = [];
         List<string> inProgressTasks = [];
         List<string> blockedTasks = [];
+
+        // A SUBSET of blockedTasks, counted separately — `[?]` lines are in both.
+        var blockedOnOwner = 0;
         List<string> openTasks = [];
 
         // THE LEDGER AS WRITTEN, alongside the buckets — /progress prints one line per ledger line in
@@ -77,6 +81,16 @@ public static partial class PlanLedger_Parser
                 case "!":
                 {
                     blockedTasks.Add(taskText);
+                    break;
+                }
+                case "?":
+                {
+                    // BLOCKED, and blocked specifically ON THE OWNER. It joins blockedTasks as well
+                    // as its own count: it is blocked by every measure that already existed, and a
+                    // reader asking "how many lines cannot move" must not get a smaller number
+                    // because the supervisor was more specific about why.
+                    blockedTasks.Add(taskText);
+                    blockedOnOwner++;
                     break;
                 }
                 case " ":
@@ -122,6 +136,7 @@ public static partial class PlanLedger_Parser
             blockedTasks,
             openTasks,
             doneTasks,
-            lines);
+            lines,
+            blockedOnOwner);
     }
 }

@@ -67,5 +67,5 @@ PLAN_FILE="$HOME/.claude/supervision/$AIORCH_ID/PLAN.md"
 # THE REASON NAMES BOTH DEBTS, because the hook cannot tell them apart and guessing would send a
 # solo — which posts no verdicts — hunting for an implementer channel it does not have.
 cat <<JSON
-{"decision":"block","reason":"TASK LEDGER BEHIND. Work happened or the owner asked for something, and $PLAN_FILE was not touched — so the owner's progress bar is now wrong. Update it (one task per line: - [ ] open, - [>] in progress, - [x] done, - [!] blocked, - [-] not doing), and if this was an owner request, add its row to the OWNER REQUESTS table as well. An owner message that needs no new task still needs that row — writing it is what clears this. Then end your turn; the block clears automatically once the file is written."}
+{"decision":"block","reason":"TASK LEDGER BEHIND. Work happened or the owner asked for something, and $PLAN_FILE was not touched — so the owner's progress bar is now wrong. Update it (one task per line: - [ ] open, - [>] in progress, - [x] done, - [!] blocked, - [?] blocked on the owner, - [-] not doing), and if this was an owner request, add its row to the OWNER REQUESTS table as well. An owner message that needs no new task still needs that row — writing it is what clears this. Then end your turn; the block clears automatically once the file is written."}
 JSON

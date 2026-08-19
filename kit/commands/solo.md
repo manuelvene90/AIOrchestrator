@@ -150,7 +150,11 @@ seed text says "maintained by the SUPERVISOR"; read that as "maintained by whoev
 owner", which here is you.
 
 One task per line: `- [ ] open` · `- [>] in progress` · `- [x] done` · `- [!] blocked` ·
-`- [-] not doing`. One line = one deliverable that can be FINISHED — "fix the staleness bug" is a
+`- [?] blocked on the owner` · `- [-] not doing`. **`- [?]` is the one that tells them a block is
+THEIRS to clear** (owner's call, 2026-08-19): the app counts it and says so on the status they
+already read — "needs you — the rest continues", or "nothing else can move" when every remaining
+line sits behind it. Nothing infers it and nothing chases them, so a block you file as `[!]` is one
+they will never be asked about; and a `[?]` that was really waiting on a build cries wolf. One line = one deliverable that can be FINISHED — "fix the staleness bug" is a
 line, "audited the tailer, 9 findings" is a diary entry that can never be marked done and so sits in
 the denominator forever. Update it at every real boundary; a stale ledger is worse than none,
 because the owner is being shown it without you in between.

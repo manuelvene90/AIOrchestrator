@@ -96,13 +96,18 @@ public class PlanLedgerRowsBuilderTests
     }
 
     /// <summary>
-    /// A SIXTH MARKER STOPS LOUDLY rather than rendering blank. A marker the parser accepts and this
-    /// switch does not would otherwise draw an empty row — the same silent omission, arriving from
-    /// the other side.
+    /// A MARKER THIS SWITCH DOES NOT KNOW STOPS LOUDLY rather than rendering blank. One the parser
+    /// accepts and this switch does not would otherwise draw an empty row — the same silent omission,
+    /// arriving from the other side.
+    ///
+    /// The stand-in is `@`, deliberately not a plausible ledger marker. It used to be `?`, which
+    /// stopped being unmapped the moment `- [?]` was added on 2026-08-19 — so this test failed for
+    /// the right reason and was corrected rather than deleted. Picking a character that could
+    /// credibly BECOME a marker just schedules the same edit again.
     /// </summary>
     [Fact]
     public void AnUnmappedMarkerThrows()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => PlanLedgerRows_Builder.Build_Row(new PlanLedgerLine("?", "t")));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PlanLedgerRows_Builder.Build_Row(new PlanLedgerLine("@", "t")));
     }
 }

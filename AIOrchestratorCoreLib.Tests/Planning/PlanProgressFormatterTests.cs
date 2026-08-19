@@ -242,9 +242,68 @@ public class PlanProgressFormatterTests
     /// A ledger built from counts alone, for the wording tests. Its task LISTS are empty, which is
     /// why it is not used for the rendering ones.
     /// </summary>
-    static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0, int notDoing = 0)
+    /// <summary>
+    /// THE OWNER IS TOLD A BLOCK IS THEIRS, and how much it is holding up — their request, 2026-08-19:
+    /// *"so I know there's something blocking on my end, and also how much it's blocking"*.
+    ///
+    /// It rides this existing count and adds no send path, which was their hard condition: *"I don't
+    /// want it to continue spontaneously prompting or to have another annoying loop pop up."*
+    /// </summary>
+    [Fact]
+    public void Describe_Counts_SaysWhenABlockNeedsTheOwnerAndWhetherAnythingElseCanMove()
     {
-        return PlanProgress_Factory.Create(done, inProgress, blocked, notDoing, total, null, [], [], []);
+        // Something else can still move: 10 of 20 done, 1 blocked, so 9 are neither.
+        Assert.Equal(
+            "10/20 done (50%) · 1 task blocked, needs you — the rest continues",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 10, total: 20, blocked: 1, blockedOnOwner: 1)));
+
+        // Everything left is blocked behind them — done + blocked accounts for the whole total.
+        Assert.Equal(
+            "8/10 done (80%) · 2 tasks blocked, needs you — nothing else can move",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 8, total: 10, blocked: 2, blockedOnOwner: 2)));
+    }
+
+    /// <summary>
+    /// MIXED: three lines blocked, only one of them theirs. Collapsing to "3 tasks blocked, needs you"
+    /// would send them after two blocks that were never theirs — the B9 mistake this marker exists to
+    /// stop, reintroduced by the renderer instead of the marker.
+    /// </summary>
+    [Fact]
+    public void Describe_Counts_DistinguishesTheirBlocksFromTheRest()
+    {
+        Assert.Equal(
+            "10/20 done (50%) · 3 tasks blocked · 1 needs you — the rest continues",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 10, total: 20, blocked: 3, blockedOnOwner: 1)));
+    }
+
+    /// <summary>A block that is nobody's business but the crew's says nothing about the owner.</summary>
+    [Fact]
+    public void Describe_Counts_SaysNothingAboutTheOwnerWhenNoBlockIsTheirs()
+    {
+        Assert.Equal(
+            "10/20 done (50%) · 2 tasks blocked",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 10, total: 20, blocked: 2)));
+    }
+
+    /// <summary>
+    /// `- [?]` is blocked BY EVERY MEASURE THAT ALREADY EXISTED, and additionally the owner's. A
+    /// reader asking "how many lines cannot move" must not get a smaller number because the
+    /// supervisor was more specific about why.
+    /// </summary>
+    [Fact]
+    public void AnOwnerBlockedLineCountsAsBlockedToo()
+    {
+        var progress = Parse("- [?] decide the schema — blocked on: you", "- [>] build the parser")!;
+
+        Assert.Equal(2, progress.Total);
+        Assert.Equal(1, progress.Blocked);
+        Assert.Equal(1, progress.BlockedOnOwner);
+        Assert.Equal(1, progress.InProgress);
+    }
+
+    static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0, int notDoing = 0, int blockedOnOwner = 0)
+    {
+        return PlanProgress_Factory.Create(done, inProgress, blocked, notDoing, total, null, [], [], [], null, null, blockedOnOwner);
     }
 
     /// <summary>A ledger of N lines per kind, named so each one is identifiable in an assertion.</summary>

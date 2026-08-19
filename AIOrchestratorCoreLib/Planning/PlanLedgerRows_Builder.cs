@@ -24,6 +24,13 @@ public static class PlanLedgerRows_Builder
     public const string DONE_GLYPH = "✔";
     public const string IN_PROGRESS_GLYPH = "▶";
     public const string BLOCKED_GLYPH = "■";
+
+    /// <summary>
+    /// Blocked ON THE OWNER. Deliberately a near neighbour of <see cref="BLOCKED_GLYPH"/> — both are
+    /// blocked and neither can move — but distinct, because this one is the only row on the screen
+    /// that the person reading it can personally unblock.
+    /// </summary>
+    public const string BLOCKED_ON_OWNER_GLYPH = "◆";
     public const string OPEN_GLYPH = "○";
 
     /// <summary>Distinct from every other glyph on purpose: a dropped line must not read as a done one.</summary>
@@ -47,6 +54,11 @@ public static class PlanLedgerRows_Builder
             "x" => new PlanLedgerRow(DONE_GLYPH, "AccentCommunicator", line.Text, DONE_OPACITY, IsBold: false),
             ">" => new PlanLedgerRow(IN_PROGRESS_GLYPH, "StateWorking", line.Text, 1.0, IsBold: true),
             "!" => new PlanLedgerRow(BLOCKED_GLYPH, "StateBlocked", line.Text, 1.0, IsBold: true),
+
+            // SHARES StateBlocked, and that is deliberate rather than lazy: it IS blocked, the colour
+            // says so, and the glyph carries the one thing that differs. Inventing a style key here
+            // would mean a brush the XAML has never defined, which fails at render rather than build.
+            "?" => new PlanLedgerRow(BLOCKED_ON_OWNER_GLYPH, "StateBlocked", line.Text, 1.0, IsBold: true),
             " " => new PlanLedgerRow(OPEN_GLYPH, "StateNew", line.Text, 1.0, IsBold: false),
 
             // NOT DOING — drawn, and drawn as dropped rather than as done. It is here at all because a

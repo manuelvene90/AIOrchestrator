@@ -36,6 +36,18 @@ public interface IPlanProgress
 
     IReadOnlyList<string> BlockedTasks { get; }
 
+    /// <summary>
+    /// How many of <see cref="Blocked"/> are waiting on the OWNER — the `[?]` marker, a SUBSET of
+    /// Blocked rather than a sibling of it, so every existing reader of Blocked stays correct.
+    ///
+    /// It exists because `[!]` was carrying two different things. `arb portfolio UX` showed a blocked
+    /// line that was waiting on a REVIEWER while the owner read the count as something waiting on
+    /// them, asked what had got stuck, and nothing had (2026-08-19). Only the supervisor knows which
+    /// kind a block is, so the owner's ruling was that the supervisor SAYS which — rather than the
+    /// app inferring it from the line's wording.
+    /// </summary>
+    int BlockedOnOwner { get; }
+
     IReadOnlyList<string> OpenTasks { get; }
 
     /// <summary>
