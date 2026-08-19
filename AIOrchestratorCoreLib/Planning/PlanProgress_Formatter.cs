@@ -3,7 +3,7 @@ using AIOrchestratorCoreLib.Planning.PlanProgress;
 namespace AIOrchestratorCoreLib.Planning;
 
 /// <summary>
-/// The one wording for "how far along is this" — "57/76 done (75%) · 2 running · 1 BLOCKED".
+/// The one wording for "how far along is this" — "57/76 done (75%) · 2 running · 1 task blocked".
 /// Shared by /progress, /status and the periodic push so the three can never quote different
 /// figures for the same ledger.
 /// </summary>
@@ -11,7 +11,12 @@ public static class PlanProgress_Formatter
 {
     public static string Describe_Counts(IPlanProgress progress)
     {
-        var blockedPart = progress.Blocked > 0 ? $" · {progress.Blocked} BLOCKED" : "";
+        // "task blocked", never a bare "BLOCKED" (owner's call, 2026-08-19). The member roster is
+        // printed directly UNDER this count and says BLOCKED ON OWNER for a SESSION, so one word
+        // carried two meanings in a single message: the owner read a blocked ledger LINE as a stuck
+        // session and asked what had got stuck when nothing had. The NOUN is what separates them —
+        // this one counts deliverables, the roster describes sessions — so do not shorten it back.
+        var blockedPart = progress.Blocked > 0 ? $" · {progress.Blocked} task{(progress.Blocked == 1 ? "" : "s")} blocked" : "";
         var runningPart = progress.InProgress > 0 ? $" · {progress.InProgress} running" : "";
 
         // The dropped count travels WITH the percentage, always. A marker that removes weight from

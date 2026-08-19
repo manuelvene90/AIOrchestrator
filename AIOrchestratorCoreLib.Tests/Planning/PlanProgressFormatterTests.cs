@@ -20,10 +20,28 @@ public class PlanProgressFormatterTests
     public void Describe_Counts_AppendsRunningAndBlockedOnlyWhenThereAreSome()
     {
         Assert.Equal(
-            "10/20 done (50%) · 2 running · 1 BLOCKED",
+            "10/20 done (50%) · 2 running · 1 task blocked",
             PlanProgress_Formatter.Describe_Counts(Build(done: 10, total: 20, inProgress: 2, blocked: 1)));
 
         Assert.Equal("10/20 done (50%)", PlanProgress_Formatter.Describe_Counts(Build(done: 10, total: 20)));
+    }
+
+    /// <summary>
+    /// THE NOUN IS THE POINT, and it is why this says "task" rather than shouting. The member roster
+    /// printed directly under this count says BLOCKED ON OWNER for a SESSION; when this count said a
+    /// bare "1 BLOCKED", one word meant two things in one message and the owner read a blocked ledger
+    /// LINE as a stuck session — they asked what had got stuck while nothing was (2026-08-19).
+    /// </summary>
+    [Fact]
+    public void Describe_Counts_SaysBlockedTasksRatherThanABareBlocked()
+    {
+        Assert.Equal(
+            "10/20 done (50%) · 1 task blocked",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 10, total: 20, blocked: 1)));
+
+        Assert.Equal(
+            "10/20 done (50%) · 3 tasks blocked",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 10, total: 20, blocked: 3)));
     }
 
     /// <summary>

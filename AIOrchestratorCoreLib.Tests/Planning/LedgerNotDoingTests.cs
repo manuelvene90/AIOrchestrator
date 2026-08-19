@@ -56,7 +56,7 @@ public class LedgerNotDoingTests
         Assert.NotNull(progress);
         Assert.Equal(2, progress.Total);
         Assert.Equal(1, progress.Blocked);
-        Assert.Contains("1 BLOCKED", PlanProgress_Formatter.Describe_Counts(progress));
+        Assert.Contains("1 task blocked", PlanProgress_Formatter.Describe_Counts(progress));
     }
 
     /// <summary>Additive: every ledger written before this marker existed parses exactly as it did.</summary>
@@ -68,7 +68,7 @@ public class LedgerNotDoingTests
         Assert.NotNull(progress);
         Assert.Equal(4, progress.Total);
         Assert.Equal(0, progress.NotDoing);
-        Assert.Equal("1/4 done (25%) · 1 running · 1 BLOCKED", PlanProgress_Formatter.Describe_Counts(progress));
+        Assert.Equal("1/4 done (25%) · 1 running · 1 task blocked", PlanProgress_Formatter.Describe_Counts(progress));
     }
 
     /// <summary>
