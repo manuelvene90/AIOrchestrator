@@ -4858,6 +4858,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "merge")
+                    {
+                        await Ask_SessionToMerge_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "test")
                     {
                         await Toggle_AwaitingTest_Async(client, message.MessageThreadId, cancellationToken);
@@ -4992,6 +4996,7 @@ internal sealed class BridgeEngineModel(
                     ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
+                    ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
                     ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
                     ("close", "End THIS orchestration — you confirm with a tap"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
@@ -5556,6 +5561,45 @@ internal sealed class BridgeEngineModel(
     /// Topic-scoped only: there is no app-wide variant, because "everything is awaiting a test" is
     /// not a state a person is ever in — the flag exists to distinguish one endeavour from another.
     /// </summary>
+    /// <summary>
+    /// Hands the SESSION the landing ritual. It is an agent-tagged entry, so it wakes whoever is
+    /// driving this orchestration without putting a wall of git instructions on the owner's phone —
+    /// they asked for the operation, not for the recipe.
+    /// </summary>
+    async Task Ask_SessionToMerge_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/merge works inside an orchestration's own topic — there is no work here to land.",
+                cancellationToken);
+
+            return;
+        }
+
+        if (!Append_OrchestrationAppEntry(session.OrchId, AppEntryAudiences.Agent, MergeRitual_Wording.SUBJECT, MergeRitual_Wording.Build()))
+        {
+            // Told rather than swallowed: the session's own report is the only other feedback this
+            // command has, and if the entry never landed that report is never coming.
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, "/merge could not reach the session — nothing was asked. Try again.", cancellationToken);
+
+            return;
+        }
+
+        _log.Log_Info(session.OrchId, "/merge — the session was asked to run the landing ritual");
+
+        Raise_OrchestrationActivity(session.OrchId);
+
+        await Send_DirectReply_BestEffort_Async(
+            client, messageThreadId,
+            "Asked. It merges, runs the full suite on the merged tree, and pushes only if that is green — then cleans up and reports.",
+            cancellationToken);
+    }
+
     async Task Toggle_AwaitingTest_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
