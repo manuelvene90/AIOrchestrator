@@ -376,6 +376,30 @@ public static class MemberState_Resolver
         return null;
     }
 
+    /// <summary>
+    /// The last entry THIS ORCHESTRATION said — sessions only, so neither the app nor the owner.
+    ///
+    /// DELIBERATELY NOT the same scan as <see cref="Find_LastConversationEntry_OrNull"/>, which
+    /// excludes the app alone. That one answers "who spoke last in this conversation", and state
+    /// resolution needs the owner IN: an owner message landing after a member's declaration is
+    /// exactly what should stop that declaration being the last word. This one answers "what did
+    /// the orchestration last say", where the owner's own words are the one thing that cannot be
+    /// the answer.
+    ///
+    /// Two predicates rather than a flag on one, because a caller passing the wrong boolean reads
+    /// as correct at the call site; two names cannot be mixed up silently.
+    /// </summary>
+    public static IChannelEntry? Find_LastSessionEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
+    {
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            if (ChannelAuthor_Kinds.Is_Session(entries[index].Author))
+                return entries[index];
+        }
+
+        return null;
+    }
+
     public static IChannelEntry? Find_LastConversationEntry_OrNull(IReadOnlyList<IChannelEntry> entries)
     {
         for (var index = entries.Count - 1; index >= 0; index--)

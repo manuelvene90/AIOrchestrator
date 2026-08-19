@@ -43,6 +43,30 @@ public static class ChannelAuthor_Kinds
     }
 
     /// <summary>
+    /// Every author that is a SESSION of this orchestration — everyone except the owner, the app,
+    /// and an author word we do not recognise.
+    ///
+    /// Distinct from <see cref="Is_Member"/> on purpose: a supervisor is not a member (it owns no
+    /// spoke) but it is very much a session, and a surface asking "what did this orchestration last
+    /// SAY" wants both. Used by the topic status line's `last ·` field, which showed the owner their
+    /// OWN messages back — every one of which carries the subject "via Telegram", because that is
+    /// what the bridge stamps on inbound traffic (owner's call, 2026-08-19: "only the session's own
+    /// entries, never yours").
+    ///
+    /// A POSITIVE LIST, so <see cref="ChannelAuthors.Unknown"/> is excluded: a malformed or
+    /// future author word is not something we can claim is a session. The cost is soft and stated —
+    /// a genuinely new session kind shows an older entry in that field until it is added here —
+    /// which is the safe direction, since the alternative is putting an unidentified author's words
+    /// in front of the owner labelled as their orchestration speaking.
+    /// </summary>
+    public static bool Is_Session(ChannelAuthors author)
+    {
+        return author == ChannelAuthors.Supervisor
+            || author == ChannelAuthors.Communicator
+            || Is_Member(author);
+    }
+
+    /// <summary>
     /// Authors whose messages the OWNER is expected to answer. Used by the quiet/away detector: in a
     /// basic orchestration the solo session is the only voice, so silence after it must count the
     /// same way a supervisor's does.

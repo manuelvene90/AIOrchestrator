@@ -138,7 +138,11 @@ public static class TopicStatusLine_Planner
             if (member.IsClosed)
                 continue;
 
-            var candidate = MemberState_Resolver.Find_LastConversationEntry_OrNull(member.Entries);
+            // SESSIONS ONLY. A solo's "member channel" IS the owner channel, so this scan used to
+            // reach the owner's own messages — and the bridge stamps every inbound one with the
+            // subject "via Telegram", which is what the owner then read back as their orchestration's
+            // last word (their call, 2026-08-19).
+            var candidate = MemberState_Resolver.Find_LastSessionEntry_OrNull(member.Entries);
 
             if (candidate != null && (latest == null || Is_LaterStamp(candidate, latest, now)))
                 latest = candidate;

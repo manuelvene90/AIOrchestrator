@@ -516,6 +516,69 @@ public class TopicStatusLinePlannerTests
             repostIsImpossible);
     }
 
+    /// <summary>
+    /// THE OWNER'S OWN WORDS ARE NOT THE ORCHESTRATION'S LAST WORD (their call, 2026-08-19).
+    ///
+    /// A solo's "member channel" IS the owner channel, so this scan reaches the owner's inbound
+    /// messages — and the bridge stamps every one of them with the subject "via Telegram". The owner
+    /// read that back on their own topic as what the session last said.
+    /// </summary>
+    [Fact]
+    public void TheOwnersOwnEntryIsNeverTheLastLine()
+    {
+        var solo = TopicStatusMember_Factory.Create(
+            "solo-1",
+            [
+                Entry(1, ChannelAuthors.Solo, "2026-08-12 14:50", "fix landed — 1316 green"),
+                Entry(2, ChannelAuthors.Owner, "2026-08-12 14:55", "via Telegram"),
+            ],
+            isClosed: false);
+
+        Assert.Equal(
+            "fix landed — 1316 green",
+            TopicStatusLine_Planner.Pick_LastSubject_OrNull([solo], NOW));
+    }
+
+    /// <summary>The app was already excluded, and still is — this pins that the new filter kept it out.</summary>
+    [Fact]
+    public void TheAppsOwnEntryIsNeverTheLastLine()
+    {
+        var solo = TopicStatusMember_Factory.Create(
+            "solo-1",
+            [
+                Entry(1, ChannelAuthors.Solo, "2026-08-12 14:50", "fix landed"),
+                Entry(2, ChannelAuthors.App, "2026-08-12 14:55", "STATUS"),
+            ],
+            isClosed: false);
+
+        Assert.Equal("fix landed", TopicStatusLine_Planner.Pick_LastSubject_OrNull([solo], NOW));
+    }
+
+    /// <summary>
+    /// A SUPERVISOR IS NOT A MEMBER BUT IT IS A SESSION, and on a spoke channel its brief is very
+    /// often the newest thing said. Filtering to Is_Member instead of Is_Session would have emptied
+    /// this field for every orchestration between a brief and the implementer's first report.
+    /// </summary>
+    [Fact]
+    public void ASupervisorsEntryStillCounts()
+    {
+        var imp = TopicStatusMember_Factory.Create(
+            "imp-1",
+            [
+                Entry(1, ChannelAuthors.Implementer, "2026-08-12 14:50", "TASK 1 landed"),
+                Entry(2, ChannelAuthors.Supervisor, "2026-08-12 14:55", "brief — TASK 2"),
+            ],
+            isClosed: false);
+
+        Assert.Equal("brief — TASK 2", TopicStatusLine_Planner.Pick_LastSubject_OrNull([imp], NOW));
+    }
+
+    static IChannelEntry Entry(int index, ChannelAuthors author, string stamp, string subject)
+    {
+        return ChannelEntry_Factory.Create(
+            index, author, stamp, subject, "body", $"## [{index}] FROM x — {stamp} — {subject}");
+    }
+
     static ITopicStatusMember Member(string memberId, string briefSubject, string stamp)
     {
         return TopicStatusMember_Factory.Create(
