@@ -49,6 +49,37 @@ public class TopicStatusLineBuilderTests
     }
 
     /// <summary>
+    /// The owner asked for this line to say how long the figures have STOOD STILL, rather than carry
+    /// a delta: it refreshes constantly, so a difference "would go back to 0" (2026-08-19).
+    /// </summary>
+    [Fact]
+    public void TheTitleSaysHowLongTheFiguresHaveNotMoved()
+    {
+        Assert.Equal(
+            "CRM invoice crash · 3/4 · 75% · unchanged 25 min",
+            TopicStatusLine_Builder.Build(
+                "CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+                figuresUnchangedFor: TimeSpan.FromMinutes(27)));
+    }
+
+    /// <summary>Figures that JUST moved say nothing — and neither does an unknown span.</summary>
+    [Fact]
+    public void TheTitleSaysNothingWhileTheFiguresAreStillMoving()
+    {
+        Assert.Equal(
+            "CRM invoice crash · 3/4 · 75%",
+            TopicStatusLine_Builder.Build(
+                "CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+                figuresUnchangedFor: TimeSpan.FromMinutes(2)));
+
+        Assert.Equal(
+            "CRM invoice crash · 3/4 · 75%",
+            TopicStatusLine_Builder.Build(
+                "CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+                figuresUnchangedFor: null));
+    }
+
+    /// <summary>
     /// A closed member does not resurrect the line either — the contract says it falls off, and one
     /// message must not disagree with itself about whether a member exists.
     /// </summary>

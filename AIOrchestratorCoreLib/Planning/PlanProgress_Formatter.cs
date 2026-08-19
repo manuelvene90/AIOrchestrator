@@ -9,7 +9,66 @@ namespace AIOrchestratorCoreLib.Planning;
 /// </summary>
 public static class PlanProgress_Formatter
 {
+    /// <summary>
+    /// With <paramref name="previous"/> the head carries the change since the owner was last told:
+    /// "17(+1)/30(+3) (56% -4%)". Their request, 2026-08-19, and the case that prompted it is the
+    /// one where the numbers alone mislead — a review that finds defects grows the DENOMINATOR, so a
+    /// half hour of real work reads as a falling percentage. The delta is what makes that legible
+    /// instead of alarming.
+    ///
+    /// Deltas are shown only where they are NON-ZERO: "(+0)" three times is noise on a phone, and
+    /// the absence of a delta already says nothing moved.
+    ///
+    /// ONE FUNCTION, not a second renderer. The trailing segments — running, blocked, not doing —
+    /// are the same code either way, so /status and the periodic push cannot drift into quoting the
+    /// same ledger differently; only the HEAD differs, and only when a baseline is passed.
+    /// </summary>
+    public static string Describe_Counts(IPlanProgress progress, PlanProgressSnapshot? previous)
+    {
+        return $"{Describe_Head(progress, previous)}{Describe_Tail(progress)}";
+    }
+
     public static string Describe_Counts(IPlanProgress progress)
+    {
+        return $"{progress.Done}/{progress.Total} done{Describe_Percent(progress)}{Describe_Tail(progress)}";
+    }
+
+    static string Describe_Head(IPlanProgress progress, PlanProgressSnapshot? previous)
+    {
+        if (previous == null)
+            return $"{progress.Done}/{progress.Total} done{Describe_Percent(progress)}";
+
+        var percent = Percent(progress);
+
+        // The BASELINE's percentage, recomputed from its own two numbers rather than stored: one
+        // arithmetic for this figure everywhere (item 10), and a stored percentage would be a third
+        // copy of a division this class already owns.
+        var previousPercent = previous.Total > 0 ? previous.Done * 100 / previous.Total : 0;
+
+        var percentPart = Describe_Signed_OrEmpty(percent - previousPercent, "%");
+
+        // THE WORD "done" SURVIVES THE DELTA FORM. The owner's sketch omitted it —
+        // "17(+1)/30(+3) (30% -4%)" — but every other surface quoting this ledger says it, and the
+        // periodic push being the one place a fraction has no noun is a worse inconsistency than a
+        // slightly longer line. The brackets are what they actually asked for.
+        return $"{progress.Done}{Describe_Bracketed_OrEmpty(progress.Done - previous.Done)}"
+            + $"/{progress.Total}{Describe_Bracketed_OrEmpty(progress.Total - previous.Total)}"
+            + $" done ({percent}%{percentPart})";
+    }
+
+    /// <summary>"(+3)" or "(-2)", and nothing at all when it did not move.</summary>
+    static string Describe_Bracketed_OrEmpty(int change)
+    {
+        return change == 0 ? "" : $"({change:+#;-#})";
+    }
+
+    /// <summary>" +3%" or " -4%", and nothing at all when it did not move.</summary>
+    static string Describe_Signed_OrEmpty(int change, string suffix)
+    {
+        return change == 0 ? "" : $" {change:+#;-#}{suffix}";
+    }
+
+    static string Describe_Tail(IPlanProgress progress)
     {
         var blockedPart = Describe_Blocked(progress);
         var runningPart = progress.InProgress > 0 ? $" · {progress.InProgress} running" : "";
@@ -20,7 +79,7 @@ public static class PlanProgress_Formatter
         // fixes — the owner distrusts the low one, which is the safe direction to be wrong in.
         var notDoingPart = progress.NotDoing > 0 ? $" · {progress.NotDoing} not doing" : "";
 
-        return $"{progress.Done}/{progress.Total} done{Describe_Percent(progress)}{runningPart}{blockedPart}{notDoingPart}";
+        return $"{runningPart}{blockedPart}{notDoingPart}";
     }
 
     /// <summary>
