@@ -4858,6 +4858,14 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "test")
+                    {
+                        await Toggle_AwaitingTest_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "close")
+                    {
+                        await Request_Close_FromCommand_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "diff")
                     {
                         await Send_GitReport_Async(client, message.MessageThreadId, cancellationToken);
@@ -4979,11 +4987,13 @@ internal sealed class BridgeEngineModel(
                     // IS an answer to what is left. A correction has to be checked in every scope the
                     // thing it corrects runs in, or it is the same defect with a newer date.
                     ("progress", "This topic's task ledger, every row — in General, one line per orchestration"),
-                    ("left", "Same as /progress"),
+                    ("left", "Only what is still open — no done or dropped rows"),
                     ("tasks", "The FULL ledger of this orchestration, done lines included"),
                     ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
+                    ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
+                    ("close", "End THIS orchestration — you confirm with a tap"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
                     ("summary", "What is going on across all orchestrations"),
@@ -5049,7 +5059,8 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, string command, CancellationToken cancellationToken)
     {
-        var text = await Translate_LedgerText_Async(Build_ProgressReportText(messageThreadId), command, messageThreadId, cancellationToken);
+        var text = await Translate_LedgerText_Async(
+            Build_ProgressReportText(messageThreadId, unfinishedOnly: command == "left"), command, messageThreadId, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -5156,7 +5167,7 @@ internal sealed class BridgeEngineModel(
         return $"{counts}\n\n{Planning.PlanProgress_Formatter.Describe_EveryLine(progress)}";
     }
 
-    string Build_ProgressReportText(long? messageThreadId)
+    string Build_ProgressReportText(long? messageThreadId, bool unfinishedOnly = false)
     {
         if (messageThreadId != null)
         {
@@ -5165,7 +5176,7 @@ internal sealed class BridgeEngineModel(
             if (session == null)
                 return "no orchestration is bound to this topic";
 
-            return Build_OrchestrationLedgerText(session.OrchId, session.DisplayName ?? session.OrchId);
+            return Build_OrchestrationLedgerText(session.OrchId, session.DisplayName ?? session.OrchId, unfinishedOnly);
         }
 
         List<string> blocks = [];
@@ -5194,7 +5205,7 @@ internal sealed class BridgeEngineModel(
     /// truncated" — because hiding them hides the ledger author's failure to group into 7-8 macro
     /// tasks. Short message, short LEDGER: the length is the supervisor's problem, upstream of here.
     /// </summary>
-    string Build_OrchestrationLedgerText(string orchId, string displayName)
+    string Build_OrchestrationLedgerText(string orchId, string displayName, bool unfinishedOnly = false)
     {
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
 
@@ -5205,7 +5216,13 @@ internal sealed class BridgeEngineModel(
         // by the owner's own directive, so a header announcing what is left contradicts its own
         // content — and they would read that as a bug in the same breath as the fix they asked for.
         // The counts line above already says how much is left, in numbers.
-        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{Planning.PlanProgress_Formatter.Describe_Ledger(progress)}";
+        // /left renders the SAME parse through a different filter — never a second read of the
+        // file, which is the drift the alias comment was guarding against and still is.
+        var ledger = unfinishedOnly
+            ? Planning.PlanProgress_Formatter.Describe_Unfinished(progress)
+            : Planning.PlanProgress_Formatter.Describe_Ledger(progress);
+
+        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{ledger}";
     }
 
     /// <summary>
@@ -5511,6 +5528,124 @@ internal sealed class BridgeEngineModel(
     /// them. Data comes from the status-line probe files; every session writes what its Claude
     /// Code version exposes, and the WORST (highest) percent per window is what matters.
     /// </summary>
+    /// <summary>
+    /// The owner's own close, from their phone — the gap that produced this: a solo asked to "close
+    /// this session" had the mechanism available and no instruction for it, so it told them to use
+    /// the desktop app, which is no help to someone on a phone (2026-08-19).
+    ///
+    /// IT WRITES THE SAME REQUEST A SESSION WOULD, deliberately, rather than calling
+    /// <see cref="Close_Orchestration_ByOwner"/> straight away. Every close-orchestration request
+    /// PARKS and is confirmed with a tap, whoever asked — so a mistyped /close cannot end an
+    /// orchestration, and the confirmation the owner sees is the one they already know.
+    ///
+    /// That also keeps the invariant Process_CloseOrchestrationRequests documents intact: nothing in
+    /// the JSON can claim a confirmation that did not happen, because no field can wave a request
+    /// through. This adds a way to ASK, not a way to skip the asking.
+    /// </summary>
+    /// <summary>
+    /// Marks an endeavour FINISHED BUT UNTESTED: muted exactly as /mute mutes, and flagged so the
+    /// topic carries 🧪 instead of 🔕.
+    ///
+    /// Their workflow, made visible (2026-08-19): they were muting a completed endeavour and then
+    /// remembering unaided which of the muted ones still needed testing before being closed.
+    ///
+    /// A TOGGLE, like every other command here — their correction, and the reason there is no
+    /// /untest. Toggling off returns the topic to Normal, which is what /mute does and what "the
+    /// same as mute" has to mean if the word is to be trusted.
+    ///
+    /// Topic-scoped only: there is no app-wide variant, because "everything is awaiting a test" is
+    /// not a state a person is ever in — the flag exists to distinguish one endeavour from another.
+    /// </summary>
+    async Task Toggle_AwaitingTest_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/test works inside an orchestration's own topic — there is nothing here to mark.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var turningOn = !session.AwaitingTest;
+
+            // The MODE really is Silenced underneath — /test IS mute, so its behaviour is not
+            // re-derived here, it is the same setting written by the same store call.
+            _store.Set_AwaitingTest(session.OrchId, turningOn);
+            _store.Set_TelegramMode(session.OrchId, turningOn ? TelegramDeliveryModes.Silenced : TelegramDeliveryModes.Normal);
+
+            _log.Log_Info(session.OrchId, turningOn
+                ? "/test — marked finished-but-untested, and muted"
+                : "/test — the awaiting-test mark was cleared, back to Normal");
+
+            Raise_OrchestrationActivity(session.OrchId);
+
+            // BEFORE the new mode takes hold on the next tick, so the confirmation itself gets through.
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                turningOn
+                    ? "🧪 marked for testing — muted like /mute, and the topic keeps 🧪 so you know not to close it yet."
+                    : "🧪 cleared — this topic is back to normal.",
+                cancellationToken);
+
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "/test failed", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/test failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+    }
+
+    async Task Request_Close_FromCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            // General has no orchestration of its own, and a closed one has nothing left to end.
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/close works inside an orchestration's own topic — there is nothing here to close.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(_paths.RequestsFolder, $"close-{session.OrchId}-{Guid.NewGuid():N}.json");
+
+            File.WriteAllText(
+                path,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    action = "close-orchestration",
+                    orchId = session.OrchId,
+                    requester = "owner",
+                    reason = "/close from Telegram",
+                }));
+
+            _log.Log_Info(session.OrchId, "/close — a close-orchestration request was written on the owner's behalf; they will be asked to confirm");
+        }
+        catch (Exception ex)
+        {
+            // Told, rather than swallowed: the confirmation prompt is the only feedback this command
+            // has, so a failure that said nothing would read as the app ignoring them.
+            _log.Log_Error(session.OrchId, "/close could not write the close request", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/close failed — nothing was closed: {ex.Message}", cancellationToken);
+        }
+    }
+
     async Task Send_LimitsReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var text = Build_LimitsReportText();
@@ -5833,7 +5968,8 @@ internal sealed class BridgeEngineModel(
 
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence);
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
+                session.AwaitingTest, Last_OwnerReplyState(session.OrchId));
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -6077,10 +6213,17 @@ internal sealed class BridgeEngineModel(
             // never showed would restart the clock on a line that did not move.
             var ledger = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
 
+            var members = Build_TopicStatusMembers(session);
+
+            // Filled HERE because these entries are already read for the status line — the topic-name
+            // sync then spends nothing to draw the glyph.
+            lock (_ownerStateLock)
+                _ownerReplyStateByOrchId[session.OrchId] = Resolve_OwnerReplyState(session, members);
+
             var plan = Telegram.TopicStatusLine_Planner.Plan(
                 session.DisplayName ?? session.OrchId,
                 ledger,
-                Build_TopicStatusMembers(session),
+                members,
                 DateTime.Now,
                 session.StatusLineMessageId,
                 lastText,
@@ -6618,7 +6761,8 @@ internal sealed class BridgeEngineModel(
         {
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence);
+                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
+                session.AwaitingTest, Last_OwnerReplyState(session.OrchId));
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
@@ -8177,6 +8321,50 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>Per orchestration: the ledger figures currently on the status line, and since when.</summary>
     readonly Dictionary<string, FiguresStamp> _figuresSinceByOrchId = [];
+
+    /// <summary>
+    /// Per orchestration: whether this topic is waiting on the OWNER, and whether that has stopped
+    /// the work — the glyph the topic list carries.
+    ///
+    /// CACHED RATHER THAN COMPUTED WHERE IT IS USED, and that is the whole reason it exists as a
+    /// field. Sync_TopicNames_BestEffort_Async runs EVERY tick; resolving this there would read
+    /// every member channel of every orchestration every two seconds, which is the per-tick channel
+    /// cost this file has already been trimmed for once. It is filled in on the status-line pass,
+    /// which has those entries in hand anyway, so the glyph costs no extra read at all.
+    ///
+    /// Absent means None: a topic the status-line pass has not reached yet shows no glyph rather
+    /// than a guessed one.
+    /// </summary>
+    readonly Dictionary<string, Telegram.OwnerReplyStates> _ownerReplyStateByOrchId = [];
+
+    /// <summary>
+    /// BLOCKING WINS over merely wanted: a member that has declared BLOCKED ON OWNER cannot proceed,
+    /// and "someone is waiting" understates that. Read from the entries the caller already has.
+    /// </summary>
+    Telegram.OwnerReplyStates Resolve_OwnerReplyState(IOrchestrationSession session, IReadOnlyList<Telegram.TopicStatusMember.ITopicStatusMember> members)
+    {
+        foreach (var member in members)
+        {
+            if (member.IsClosed)
+                continue;
+
+            if (Status.MemberState_Resolver.Resolve(member.Entries) == Status.MemberStates.BlockedOnOwner)
+                return Telegram.OwnerReplyStates.Blocking;
+        }
+
+        var ownerEntries = ChannelEntry_Parser.Parse_All(
+            UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId)));
+
+        return Status.OwnerOwesReply_Decider.Decide(ownerEntries)
+            ? Telegram.OwnerReplyStates.Wanted
+            : Telegram.OwnerReplyStates.None;
+    }
+
+    Telegram.OwnerReplyStates Last_OwnerReplyState(string orchId)
+    {
+        lock (_ownerStateLock)
+            return _ownerReplyStateByOrchId.TryGetValue(orchId, out var state) ? state : Telegram.OwnerReplyStates.None;
+    }
 
     /// <summary>
     /// Records the figures this tick and answers how long they have stood still — null when they

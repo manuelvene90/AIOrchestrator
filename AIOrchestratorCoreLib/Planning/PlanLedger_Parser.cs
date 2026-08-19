@@ -24,7 +24,9 @@ namespace AIOrchestratorCoreLib.Planning;
 /// </summary>
 public static partial class PlanLedger_Parser
 {
-    [GeneratedRegex(@"^\s*-\s*\[(x|X| |>|!|\?|-)\]\s*(.*)$", RegexOptions.Compiled)]
+    // NAMED GROUPS since the indent capture was added: with positional ones, adding a group at the
+    // front silently shifts every index below and the marker becomes the whitespace.
+    [GeneratedRegex(@"^(?<indent>[ 	]*)-\s*\[(?<marker>x|X| |>|!|\?|-)\]\s*(?<text>.*)$", RegexOptions.Compiled)]
     private static partial Regex TaskLine_Regex();
 
     public static IPlanProgress? Parse_OrNull(string planText)
@@ -62,8 +64,12 @@ public static partial class PlanLedger_Parser
             if (!match.Success || inNonLedgerSection)
                 continue;
 
-            var marker = match.Groups[1].Value;
-            var taskText = match.Groups[2].Value.Trim();
+            var marker = match.Groups["marker"].Value;
+            var taskText = match.Groups["text"].Value.Trim();
+
+            // ANY indentation makes it a sub-task. Not a depth count: the ledgers use one level of
+            // nesting and a number nobody reads is a number that goes wrong quietly.
+            var isSubTask = match.Groups["indent"].Value.Length > 0;
 
             switch (marker)
             {
@@ -116,7 +122,7 @@ public static partial class PlanLedger_Parser
             // NORMALISED ONCE, HERE: `[X]` and `[x]` are one state written by two hands, and the
             // switch above already folds them. Printing the raw capture would put both spellings in
             // front of the owner inside a single message.
-            lines.Add(new PlanLedgerLine(marker == "X" ? "x" : marker, taskText));
+            lines.Add(new PlanLedgerLine(marker == "X" ? "x" : marker, taskText, isSubTask));
         }
 
         var total = doneTasks.Count + inProgressTasks.Count + blockedTasks.Count + openTasks.Count;

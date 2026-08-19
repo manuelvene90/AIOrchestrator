@@ -119,6 +119,22 @@ As soon as the goal is clear from the owner's first instruction, drop
 `~/.claude/supervision/.requests/` — it renames the app card and the Telegram topic (e.g.
 "CRM invoice crash").
 
+**EVERY TOPIC NAME STARTS WITH THE PLATFORM CODE** (owner's rule, 2026-08-19), so they can read the
+topic list at a glance and speak to the general supervisor in shorthand: `AI-Orch · away mode loop`,
+`SL · capital injection`, `IS · portfolio picker`.
+
+`SL` Strategy Lab · `AS` Arb Studio · `OL` Option Lab · `SK-C` Skeleton Client · `SK-M` Skeleton Master · `AI-Orch` AI Orchestrator · `SS` Seasonal Studio · `ODP` Option Database Preprocessor · `UPD` Updater · `CRM` CRM · `TKT` Tickets · `SB` Strategy Builder (in SL) · `NO` Noise Adder (in SL) · `DA` Data Analyzer (in SL) · `PB` Portfolio Builder (in SL) · `IS` Invest Studio (in SL) · `TKL` Tracker (in SL) · `API` Trading System Bridge (in SL)
+
+A SUB-PRODUCT KEEPS ITS OWN CODE. `IS` work happens in Strategy Lab's repo, and the topic still says
+`IS`, not `SL` — the code names what you are working ON, not which folder it lives in.
+
+**RE-NAME WHEN THE ENDEAVOUR CHANGES.** The owner often starts a new piece of work in the same
+session rather than paying for a fresh one, and the topic name must follow: drop another
+`set-orchestration-name` the moment the subject genuinely changes. It should be rare — this is not
+for every task, only when the endeavour is a different one. Their complaint that produced this rule:
+*"right now this topic is still called 'away mode loop' but we finished that thing a long time
+ago."* A stale name is worse than an id, because an id at least does not claim to be current.
+
 ## Channel protocol (append-only, non-negotiable)
 
 - Every entry starts with EXACTLY this header, in every channel, every time:

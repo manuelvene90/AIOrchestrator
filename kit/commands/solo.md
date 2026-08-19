@@ -46,6 +46,22 @@ orchestrations were never named at all: the owner watched their topics stop bein
 reported it as a regression, because from the phone a basic orchestration looks like any other.
 `$ARGUMENTS` in a topic full of unnamed ids tells them nothing about which is which.
 
+**EVERY TOPIC NAME STARTS WITH THE PLATFORM CODE** (owner's rule, 2026-08-19), so they can read the
+topic list at a glance and speak to the general supervisor in shorthand: `AI-Orch · away mode loop`,
+`SL · capital injection`, `IS · portfolio picker`.
+
+`SL` Strategy Lab · `AS` Arb Studio · `OL` Option Lab · `SK-C` Skeleton Client · `SK-M` Skeleton Master · `AI-Orch` AI Orchestrator · `SS` Seasonal Studio · `ODP` Option Database Preprocessor · `UPD` Updater · `CRM` CRM · `TKT` Tickets · `SB` Strategy Builder (in SL) · `NO` Noise Adder (in SL) · `DA` Data Analyzer (in SL) · `PB` Portfolio Builder (in SL) · `IS` Invest Studio (in SL) · `TKL` Tracker (in SL) · `API` Trading System Bridge (in SL)
+
+A SUB-PRODUCT KEEPS ITS OWN CODE. `IS` work happens in Strategy Lab's repo, and the topic still says
+`IS`, not `SL` — the code names what you are working ON, not which folder it lives in.
+
+**RE-NAME WHEN THE ENDEAVOUR CHANGES.** The owner often starts a new piece of work in the same
+session rather than paying for a fresh one, and the topic name must follow: drop another
+`set-orchestration-name` the moment the subject genuinely changes. It should be rare — this is not
+for every task, only when the endeavour is a different one. Their complaint that produced this rule:
+*"right now this topic is still called 'away mode loop' but we finished that thing a long time
+ago."* A stale name is worse than an id, because an id at least does not claim to be current.
+
 ## Channel protocol
 
 - Entries start EXACTLY: `## [n] FROM solo — YYYY-MM-DD HH:mm — subject`. `n` increments per
@@ -112,12 +128,27 @@ reported it as a regression, because from the phone a basic orchestration looks 
   system — those are the owner's call, and being the only session does not make them yours.
 - **Git:** stage by explicit path, never `git add -A`/`.`/`commit -a` (other sessions may share the
   tree). Multi-line commit messages via `git commit -F <tempfile>` on Windows PowerShell.
-- **Fan out to parallel agents, exactly as an implementer does.** Read-only agents (exploration,
-  searches, independent suites) freely; parallel WRITERS only on DISJOINT file sets, with every
-  agent's editable files named in its prompt. Git and ambient files (`.csproj`, DI registrations,
-  shared constants) stay yours. A sub-agent's report is not evidence — read the diff and run the
-  suite yourself before you report. Full rules: read `~/.claude/commands/implementer.md`, section
-  "Fan out" — read the file, never invoke the command.
+- **FAN OUT. Parallel agents are your DEFAULT, not an option you may decline.** You are the whole
+  team here, so every minute you spend doing independently-shaped work in sequence is a minute the
+  owner waits for nothing. **The moment a task contains two or more independent read-only pieces —
+  exploring a subsystem, hunting call sites, reading a spec, running a suite or a build, gathering
+  the evidence a report needs — dispatch them in PARALLEL, in one message.** Give each agent a
+  DIFFERENT lens or target: N identical agents find one thing N times.
+
+  **This is written imperatively because it was not happening** (owner, 2026-08-19: *"solo sessions
+  never use parallel sub agents, they should obviously do so to speed things up"*). The rule was
+  already here as a cross-reference to implementer.md, and a cross-reference loses to whatever
+  default a session arrives with. If you find yourself about to run a third sequential search, that
+  is the signal you have already missed one.
+
+  **The supervisor's "never use a sub-agent" ban is THEIRS, not yours** — it protects the owner's
+  phone line, which is a turn you do not have. Your turn is MEANT to block: you are the one working.
+
+  Parallel WRITERS only on DISJOINT file sets, with every agent's editable files named in its prompt
+  ("you may edit exactly these files: …; touch nothing else"). Git and ambient files (`.csproj`, DI
+  registrations, shared constants) stay yours. **A sub-agent's report is NOT evidence** — read the
+  diff and run the suite yourself before you report. Full rules: read
+  `~/.claude/commands/implementer.md`, section "Fan out" — read the file, never invoke the command.
 - **Announce a window before a multi-file write batch, and CLOSE it.** The app resolves your state
   from these exactly as it does an implementer's — you are the other author allowed to announce one —
   so an unclosed window leaves you rendering as still writing forever, and the owner sees a session
@@ -228,6 +259,30 @@ discovery made while working became work.
 - **"It is two lines" is the sentence to distrust**, and in this mode nobody else is there to hear
   it. The cost of a discovery is never the fix; it is the horizon it opens.
 - **Say the numbers when you report**: *"3 asked, 2 done, 6 parked."*
+
+## Closing this orchestration — YOU can do it, so do not send them to the app
+
+When the owner says "close this session", or the work is finished and they agree it is done, **you
+end it yourself**. Post any last one-liner, then drop
+`~/.claude/supervision/.requests/close-$ARGUMENTS-<timestamp>.json` containing:
+
+```json
+{"action":"close-orchestration","orchId":"$ARGUMENTS","reason":"<why, one line>","requester":"solo of $ARGUMENTS"}
+```
+
+**Put your orchestration id and a timestamp in the FILENAME** — every session writes into the same
+folder, and two picking the same name is a close recorded against the wrong orchestration.
+**`requester` is required** and the request is rejected without it.
+
+**Dropping it does not kill you.** The app HOLDS it and asks the owner to confirm with a tap;
+nothing closes until they do, and you get a `FROM app` entry either way — held, then closed,
+declined, or lapsed unanswered. While it is held, carry on working normally and do NOT re-drop it.
+
+**Never answer a close request by telling them to do it from the app.** They are almost always on
+their phone, where the app is not in front of them — on 2026-08-19 a solo replied "close the
+orchestration from the app when you're ready" and the endeavour simply stayed open. They also have
+`/close` in the topic now, but that is their shortcut, not your excuse: being asked is the point at
+which YOU file the request.
 
 ## When a basic orchestration outgrows itself — asking for a crew
 

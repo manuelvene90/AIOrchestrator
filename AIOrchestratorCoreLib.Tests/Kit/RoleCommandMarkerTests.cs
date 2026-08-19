@@ -27,7 +27,17 @@ public class RoleCommandMarkerTests
     /// Listed rather than pattern-matched away, so inventing a new one is a decision somebody makes
     /// on purpose instead of a typo that slips through as vocabulary.
     /// </summary>
-    static readonly string[] NOT_MARKERS = ["PARALLEL UNITS", "UNPROVEN", "HOLD", "FROM", "AWAY MODE ON"];
+    /// <summary>
+    /// Backticked capitals that are NOT protocol markers. The PLATFORM CODES join it derived from
+    /// their own table rather than typed out here: they are backticked and capitalised, so this
+    /// guard flags every one of them, and a hand-copied list of eighteen codes would be the second
+    /// copy the whole Platform_Abbreviations class exists to avoid.
+    /// </summary>
+    static readonly IReadOnlyList<string> NOT_MARKERS =
+    [
+        "PARALLEL UNITS", "UNPROVEN", "HOLD", "FROM", "AWAY MODE ON",
+        .. AIOrchestratorCoreLib.Sessions.Platform_Abbreviations.ALL.Select(entry => entry.Code),
+    ];
 
     /// <summary>
     /// EVERY protocol marker, which since 2026-08-13 is more than the state resolver's own.
@@ -50,6 +60,13 @@ public class RoleCommandMarkerTests
     [
         .. MemberState_Resolver.ALL_MARKERS,
         AIOrchestratorCoreLib.GeneralSupervision.HandoverEntry_Detector.HANDOVER_MARKER,
+
+        // STATUS, matched by MirrorText_Formatter rather than by the state resolver — the same shape
+        // as HANDOVER above, and found the same way: the guard fired the moment communicator.md
+        // entered the repo on 2026-08-19. That file had taught `STATUS` for as long as it existed,
+        // and this test could not see it, because it was the one role command that was never
+        // version-controlled. The union was not wrong; it was reading five of the six roles.
+        AIOrchestratorCoreLib.Mirroring.MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
     ];
 
     /// <summary>

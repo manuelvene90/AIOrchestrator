@@ -34,6 +34,9 @@ public interface IOrchestrationSessionStore
     /// <summary>Per-topic delivery mode (Normal / Deferred = queued / Silenced = dropped).</summary>
     void Set_TelegramMode(string orchId, Telegram.TelegramDeliveryModes mode);
 
+    /// <summary>Finished but untested — the owner's reminder not to close it yet.</summary>
+    void Set_AwaitingTest(string orchId, bool awaitingTest);
+
     /// <summary>Where the owner is for this orchestration — see IOrchestrationSession.OwnerPresence.</summary>
     void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence);
     void Set_MemberPid(string orchId, string memberId, int? pid);

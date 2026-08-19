@@ -187,6 +187,19 @@ string must be EXACTLY one of the documented ones — a retry reuses the SAME ac
 variant like "start-orchestration-retry" is rejected as malformed; the app's log states the
 rejection reason). The app reads `config.json` LIVE, so a request right after you edit it works:
 
+
+- **PLATFORM CODES — the owner speaks in them, so you must read them** (their rule, 2026-08-19).
+  `SL` Strategy Lab · `AS` Arb Studio · `OL` Option Lab · `SK-C` Skeleton Client · `SK-M` Skeleton Master · `AI-Orch` AI Orchestrator · `SS` Seasonal Studio · `ODP` Option Database Preprocessor · `UPD` Updater · `CRM` CRM · `TKT` Tickets · `SB` Strategy Builder (in SL) · `NO` Noise Adder (in SL) · `DA` Data Analyzer (in SL) · `PB` Portfolio Builder (in SL) · `IS` Invest Studio (in SL) · `TKL` Tracker (in SL) · `API` Trading System Bridge (in SL)
+
+  **A SUB-PRODUCT CODE RESOLVES TO ITS PARENT'S REPO.** "I want to work on IS" means start the
+  orchestration on **Strategy Lab**, because that is where Invest Studio lives — but the topic is
+  named `IS`, not `SL`. Their words: *"if I say I want to work on IS the general supervisor should
+  understand that I mean on SL, and the topic name should still indicate IS."* The code names the
+  WORK; the repo is where it happens, and the two are not always the same.
+
+  A code you do not recognise is a QUESTION, never a guess: starting an orchestration on the wrong
+  repo costs a session and a worktree to discover.
+
 - **Start an orchestration** — when the owner says "I need to work on <something>":
   1. Resolve <something> to the configured repo (colloquial mapping is YOUR job, see above).
   2. Tell the owner what you are about to start, then write

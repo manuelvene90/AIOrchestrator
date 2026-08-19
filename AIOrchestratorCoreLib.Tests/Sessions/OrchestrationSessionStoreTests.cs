@@ -294,4 +294,49 @@ eposrb");
         Assert.Contains("imp-9", ex.Message);
         Assert.Contains("imp-1", ex.Message);
     }
+
+    /// <summary>
+    /// THE MARK IS A REMINDER, so it must survive a restart — the owner mutes a finished endeavour
+    /// and later needs to know which of the muted ones still owe them a test (2026-08-19). A flag
+    /// that lived only in memory would be gone by the time it was needed.
+    /// </summary>
+    [Fact]
+    public void Set_AwaitingTest_SurvivesAReload_AndDoesNotDisturbItsNeighbours()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
+        _store.Set_DisplayName("arb-fix", "drift guard");
+        _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Silenced);
+
+        Assert.False(_store.Get_Session("arb-fix").AwaitingTest);
+
+        _store.Set_AwaitingTest("arb-fix", true);
+
+        var marked = _store.Get_Session("arb-fix");
+
+        Assert.True(marked.AwaitingTest);
+
+        // The copy-with-overrides path must not drop neighbouring fields — the defect that shape
+        // exists to prevent, and the reason a plain bool here carries an explicit wasSet flag.
+        Assert.Equal("drift guard", marked.DisplayName);
+        Assert.Equal(TelegramDeliveryModes.Silenced, marked.TelegramMode);
+
+        _store.Set_AwaitingTest("arb-fix", false);
+
+        Assert.False(_store.Get_Session("arb-fix").AwaitingTest);
+        Assert.Equal(TelegramDeliveryModes.Silenced, _store.Get_Session("arb-fix").TelegramMode);
+    }
+
+    /// <summary>
+    /// Every session written before 2026-08-19 has no such field, and absence must read as false —
+    /// an orchestration nobody ever marked is not awaiting a test.
+    /// </summary>
+    [Fact]
+    public void ASessionWrittenBeforeTheFlagExistedIsNotAwaitingATest()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
+
+        Assert.False(_store.Get_Session("arb-fix").AwaitingTest);
+    }
 }

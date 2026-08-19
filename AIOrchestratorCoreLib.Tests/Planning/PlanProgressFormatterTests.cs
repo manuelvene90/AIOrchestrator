@@ -358,6 +358,113 @@ public class PlanProgressFormatterTests
         Assert.EndsWith(tail, PlanProgress_Formatter.Describe_Counts(progress, new PlanProgressSnapshot(16, 27)));
     }
 
+    /// <summary>
+    /// /left FINALLY MEANS WHAT IT SAYS. It was a literal alias of /progress, and that alias was
+    /// defended in code — two commands reading one ledger drift apart. The owner's objection
+    /// outranks it (2026-08-19): a command called "left" that lists finished work answers a question
+    /// nobody asked. It stays ONE parse and becomes a second FILTER of it.
+    /// </summary>
+    [Fact]
+    public void Describe_Unfinished_DropsDoneAndDroppedAndKeepsTheRest()
+    {
+        var progress = Parse(
+            "- [x] shipped the parser",
+            "- [>] build stage B",
+            "- [ ] write the docs",
+            "- [!] blocked on the build",
+            "- [?] waiting on you",
+            "- [-] superseded by the tap guard")!;
+
+        var text = PlanProgress_Formatter.Describe_Unfinished(progress);
+
+        Assert.DoesNotContain("shipped the parser", text);
+        Assert.DoesNotContain("superseded by the tap guard", text);
+
+        // Blocked is not finished, and a line waiting on the owner is the most "left" thing there is.
+        Assert.Contains("[>] build stage B", text);
+        Assert.Contains("[ ] write the docs", text);
+        Assert.Contains("[!] blocked on the build", text);
+        Assert.Contains("[?] waiting on you", text);
+    }
+
+    /// <summary>Nothing left says so, rather than rendering an empty message that reads as broken.</summary>
+    [Fact]
+    public void Describe_Unfinished_SaysSoWhenEverythingIsDone()
+    {
+        Assert.Equal(
+            "nothing left — every line is done or dropped",
+            PlanProgress_Formatter.Describe_Unfinished(Parse("- [x] shipped", "- [-] dropped")!));
+    }
+
+    /// <summary>
+    /// THE TWO ALTITUDES (owner, 2026-08-19). The ledgers already carried the hierarchy — a stage at
+    /// column 0 with its pieces indented under it — and the parser threw the indentation away, so
+    /// every command printed one flat list. "Progress should be high-level, showing like 4 or 5
+    /// lines like bird's eye view... Tasks instead should go into individual small sub-tasks."
+    /// </summary>
+    [Fact]
+    public void Describe_Ledger_ShowsTheMacroLinesOnly()
+    {
+        var text = PlanProgress_Formatter.Describe_Ledger(Nested()!);
+
+        Assert.Contains("[>] build stage B", text);
+        Assert.Contains("[x] ship the parser", text);
+        Assert.DoesNotContain("B5a", text);
+        Assert.DoesNotContain("B5b", text);
+    }
+
+    /// <summary>
+    /// AND /tasks KEEPS EVERYTHING. This is the half that makes the change safe: the 2026-08-13
+    /// directive was "the done rows must not be hidden", and it is still honoured — by a command of
+    /// its own rather than by every command carrying the full list.
+    /// </summary>
+    [Fact]
+    public void Describe_EveryLine_StillShowsTheSubTasks()
+    {
+        var text = PlanProgress_Formatter.Describe_EveryLine(Nested()!);
+
+        Assert.Contains("build stage B", text);
+        Assert.Contains("B5a", text);
+        Assert.Contains("B5b", text);
+        Assert.Contains("ship the parser", text);
+    }
+
+    /// <summary>
+    /// /left is /progress minus the finished rows, so it must share the altitude. If it did not, the
+    /// SHORTER list would somehow be the longer one.
+    /// </summary>
+    [Fact]
+    public void Describe_Unfinished_IsAlsoBirdsEye()
+    {
+        var text = PlanProgress_Formatter.Describe_Unfinished(Nested()!);
+
+        Assert.Contains("[>] build stage B", text);
+        Assert.DoesNotContain("B5a", text);
+        Assert.DoesNotContain("ship the parser", text);
+    }
+
+    /// <summary>The parser is where the hierarchy is read, and it reads it from the indentation.</summary>
+    [Fact]
+    public void TheParserMarksIndentedLinesAsSubTasks()
+    {
+        var lines = Nested()!.Lines;
+
+        Assert.False(lines[0].IsSubTask);
+        Assert.True(lines[1].IsSubTask);
+        Assert.True(lines[2].IsSubTask);
+        Assert.False(lines[3].IsSubTask);
+    }
+
+    /// <summary>A stage with its pieces indented beneath it — the shape the real ledgers use.</summary>
+    static IPlanProgress? Nested()
+    {
+        return Parse(
+            "- [>] build stage B",
+            "  - [>] B5a the refusal is its own outcome",
+            "  - [x] B5b the run total stops being derived",
+            "- [x] ship the parser");
+    }
+
     static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0, int notDoing = 0, int blockedOnOwner = 0)
     {
         return PlanProgress_Factory.Create(done, inProgress, blocked, notDoing, total, null, [], [], [], null, null, blockedOnOwner);
