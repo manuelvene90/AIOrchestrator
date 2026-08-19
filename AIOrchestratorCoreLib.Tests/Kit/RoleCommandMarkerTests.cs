@@ -27,7 +27,17 @@ public class RoleCommandMarkerTests
     /// Listed rather than pattern-matched away, so inventing a new one is a decision somebody makes
     /// on purpose instead of a typo that slips through as vocabulary.
     /// </summary>
-    static readonly string[] NOT_MARKERS = ["PARALLEL UNITS", "UNPROVEN", "HOLD", "FROM", "AWAY MODE ON"];
+    /// <summary>
+    /// Backticked capitals that are NOT protocol markers. The PLATFORM CODES join it derived from
+    /// their own table rather than typed out here: they are backticked and capitalised, so this
+    /// guard flags every one of them, and a hand-copied list of eighteen codes would be the second
+    /// copy the whole Platform_Abbreviations class exists to avoid.
+    /// </summary>
+    static readonly IReadOnlyList<string> NOT_MARKERS =
+    [
+        "PARALLEL UNITS", "UNPROVEN", "HOLD", "FROM", "AWAY MODE ON",
+        .. AIOrchestratorCoreLib.Sessions.Platform_Abbreviations.ALL.Select(entry => entry.Code),
+    ];
 
     /// <summary>
     /// EVERY protocol marker, which since 2026-08-13 is more than the state resolver's own.
