@@ -303,7 +303,8 @@ eposrb");
     [Fact]
     public void Set_AwaitingTest_SurvivesAReload_AndDoesNotDisturbItsNeighbours()
     {
-        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:eposrb");
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
         _store.Set_DisplayName("arb-fix", "drift guard");
         _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Silenced);
 
@@ -333,7 +334,8 @@ eposrb");
     [Fact]
     public void ASessionWrittenBeforeTheFlagExistedIsNotAwaitingATest()
     {
-        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:eposrb");
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
 
         Assert.False(_store.Get_Session("arb-fix").AwaitingTest);
     }
