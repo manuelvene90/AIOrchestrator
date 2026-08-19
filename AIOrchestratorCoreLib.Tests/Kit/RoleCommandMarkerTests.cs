@@ -50,6 +50,13 @@ public class RoleCommandMarkerTests
     [
         .. MemberState_Resolver.ALL_MARKERS,
         AIOrchestratorCoreLib.GeneralSupervision.HandoverEntry_Detector.HANDOVER_MARKER,
+
+        // STATUS, matched by MirrorText_Formatter rather than by the state resolver — the same shape
+        // as HANDOVER above, and found the same way: the guard fired the moment communicator.md
+        // entered the repo on 2026-08-19. That file had taught `STATUS` for as long as it existed,
+        // and this test could not see it, because it was the one role command that was never
+        // version-controlled. The union was not wrong; it was reading five of the six roles.
+        AIOrchestratorCoreLib.Mirroring.MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
     ];
 
     /// <summary>
