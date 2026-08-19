@@ -75,7 +75,8 @@ public static class TopicStatusLine_Builder
         IReadOnlyList<ITopicStatusMember> members,
         string? lastSubject,
         DateTime now,
-        bool aMessageIsAlreadyPosted)
+        bool aMessageIsAlreadyPosted,
+        TimeSpan? figuresUnchangedFor = null)
     {
         List<string> lines = [];
 
@@ -99,7 +100,7 @@ public static class TopicStatusLine_Builder
         if (!hasSubstance)
             return aMessageIsAlreadyPosted ? title : "";
 
-        lines.Insert(0, Build_TitleLine(title, progress));
+        lines.Insert(0, Build_TitleLine(title, progress, figuresUnchangedFor));
 
         // NO BULLET on this one, deliberately: it is not a member, and a `• last · …` row reads like
         // one more session called "last". Not having the bullet is what separates it now that the
@@ -120,12 +121,24 @@ public static class TopicStatusLine_Builder
     /// It TRUNCATES, so 72/113 reads 63% and not 64%. That is deliberate everywhere in this repo —
     /// 75 of 76 must never read as 100% — and it is worth more than matching a mock.
     /// </summary>
-    static string Build_TitleLine(string title, IPlanProgress? progress)
+    /// <summary>
+    /// <paramref name="figuresUnchangedFor"/> is this line's answer to the half-hourly message's
+    /// delta. The owner asked for it here INSTEAD of a difference, because this surface refreshes
+    /// constantly: *"the difference doesn't make sense because at best, after updating every
+    /// 10 seconds it would go back to 0."*
+    /// </summary>
+    static string Build_TitleLine(string title, IPlanProgress? progress, TimeSpan? figuresUnchangedFor)
     {
         if (progress == null || progress.Total <= 0)
             return title;
 
-        return $"{title}{FIELD_SEPARATOR}{progress.Done}/{progress.Total}{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)}%";
+        var unchanged = figuresUnchangedFor == null
+            ? null
+            : Formatting.UnchangedFor_Formatter.Describe_OrNull(figuresUnchangedFor.Value);
+
+        var unchangedPart = unchanged == null ? "" : $"{FIELD_SEPARATOR}{unchanged}";
+
+        return $"{title}{FIELD_SEPARATOR}{progress.Done}/{progress.Total}{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)}%{unchangedPart}";
     }
 
     /// <summary>

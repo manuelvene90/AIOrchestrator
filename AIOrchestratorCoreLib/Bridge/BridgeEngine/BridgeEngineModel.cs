@@ -543,6 +543,16 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<string, string> _lastAwayDigestByOrchId = [];
 
+    /// <summary>
+    /// Per orchestration: the ledger figures as of the last periodic status the owner ACTUALLY
+    /// received — the baseline its successor's deltas are measured against.
+    ///
+    /// Recorded only after a confirmed post, for the reason the away digest documents: a baseline
+    /// taken from a message that was never delivered makes the NEXT message understate the change,
+    /// and understating it is the very failure deltas were added to fix.
+    /// </summary>
+    readonly Dictionary<string, Planning.PlanProgressSnapshot> _lastPostedProgressByOrchId = [];
+
     /// <summary>The owner's last message in ANY topic — presence anywhere counts everywhere.</summary>
     DateTime _lastOwnerMessageUtc = DateTime.UtcNow;
 
@@ -5179,14 +5189,19 @@ internal sealed class BridgeEngineModel(
         return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{Planning.PlanProgress_Formatter.Describe_Ledger(progress)}";
     }
 
-    string Build_OrchestrationCountsLine(string orchId, string displayName)
+    /// <summary>
+    /// <paramref name="previous"/> is passed by the PERIODIC push alone. `/status` is on demand and
+    /// answers "where is this now", so a delta against a message the owner may not have been looking
+    /// at would be a number with no visible baseline.
+    /// </summary>
+    string Build_OrchestrationCountsLine(string orchId, string displayName, Planning.PlanProgressSnapshot? previous = null)
     {
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
 
         if (progress == null)
             return $"{displayName}: no task ledger yet";
 
-        return $"{displayName}: {Planning.PlanProgress_Formatter.Describe_Counts(progress)}";
+        return $"{displayName}: {Planning.PlanProgress_Formatter.Describe_Counts(progress, previous)}";
     }
 
     /// <summary>
@@ -6038,9 +6053,14 @@ internal sealed class BridgeEngineModel(
             // This method is left with execution only. Three gates lived here and a reviewer deleted
             // all three at once without reddening a single test — the engine is internal sealed with
             // no InternalsVisibleTo, so nothing decided inside it can be checked.
+            // Read ONCE and shared with the unchanged-for tracker below: two reads of the same file
+            // in one tick can disagree, and the tracker deciding "changed" against figures the line
+            // never showed would restart the clock on a line that did not move.
+            var ledger = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId)));
+
             var plan = Telegram.TopicStatusLine_Planner.Plan(
                 session.DisplayName ?? session.OrchId,
-                Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(session.OrchId))),
+                ledger,
                 Build_TopicStatusMembers(session),
                 DateTime.Now,
                 session.StatusLineMessageId,
@@ -6049,7 +6069,8 @@ internal sealed class BridgeEngineModel(
                 _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
                 MIRROR_RETRY_BACKOFF_SECONDS,
                 Find_NewestTopicMessage_OrNull(session.TelegramTopicId),
-                _repostImpossibleOrchIds.Contains(session.OrchId));
+                _repostImpossibleOrchIds.Contains(session.OrchId),
+                Note_FiguresAndDescribe_UnchangedFor(session.OrchId, ledger));
 
             var action = plan.Action;
             var text = plan.Text;
@@ -6458,7 +6479,7 @@ internal sealed class BridgeEngineModel(
     }
 
 
-    string Build_MemberStatusText_ForSession(IOrchestrationSession session)
+    string Build_MemberStatusText_ForSession(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous = null)
     {
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
         var supervisorUsage = Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE);
@@ -6507,7 +6528,7 @@ internal sealed class BridgeEngineModel(
         // arrive in one answer — the owner asked for both without having to send /progress too.
         // Same builder /progress uses, so the two can never quote different figures.
         return Status.StatusRoster_Builder.Build(
-            Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId),
+            Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId, previous),
             Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc),
             supervisorLine,
             memberLines);
@@ -8083,7 +8104,10 @@ internal sealed class BridgeEngineModel(
             if (!Has_WorkInFlight(session))
                 continue;
 
-            Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session), session.OwnerPresence);
+            var baseline = Last_PostedProgress_OrNull(session.OrchId);
+
+            if (Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session, baseline), session.OwnerPresence))
+                Remember_PostedProgress(session.OrchId);
         }
 
         await Task.CompletedTask;
@@ -8093,6 +8117,73 @@ internal sealed class BridgeEngineModel(
     DateTime? Last_PeriodicStatusSlot_OrNull(string orchId)
     {
         return _lastPeriodicStatusSlot.TryGetValue(orchId, out var slot) ? slot : null;
+    }
+
+    sealed class FiguresStamp
+    {
+        public int Done;
+        public int Total;
+        public DateTime SinceUtc;
+    }
+
+    /// <summary>Per orchestration: the ledger figures currently on the status line, and since when.</summary>
+    readonly Dictionary<string, FiguresStamp> _figuresSinceByOrchId = [];
+
+    /// <summary>
+    /// Records the figures this tick and answers how long they have stood still — null when they
+    /// just moved, and null on FIRST SIGHT, which is the honest answer rather than zero: the app
+    /// has no idea how long they had been that way before it started looking.
+    ///
+    /// Note-and-answer in ONE call on purpose. Split into "note" and "ask", the two would be one
+    /// missed call apart from a clock that never restarts — a line frozen at "unchanged 3 h" while
+    /// the numbers underneath it moved every few minutes, which is worse than saying nothing.
+    /// </summary>
+    TimeSpan? Note_FiguresAndDescribe_UnchangedFor(string orchId, Planning.PlanProgress.IPlanProgress? progress)
+    {
+        if (progress == null || progress.Total <= 0)
+            return null;
+
+        lock (_ownerStateLock)
+        {
+            if (!_figuresSinceByOrchId.TryGetValue(orchId, out var stamp)
+                || stamp.Done != progress.Done
+                || stamp.Total != progress.Total)
+            {
+                _figuresSinceByOrchId[orchId] = new FiguresStamp
+                {
+                    Done = progress.Done,
+                    Total = progress.Total,
+                    SinceUtc = DateTime.UtcNow,
+                };
+
+                return null;
+            }
+
+            return DateTime.UtcNow - stamp.SinceUtc;
+        }
+    }
+
+    /// <summary>The figures the owner was last told, or null when they have not been told yet.</summary>
+    Planning.PlanProgressSnapshot? Last_PostedProgress_OrNull(string orchId)
+    {
+        lock (_ownerStateLock)
+            return _lastPostedProgressByOrchId.TryGetValue(orchId, out var snapshot) ? snapshot : null;
+    }
+
+    /// <summary>
+    /// Re-READ rather than handed in: the baseline must be what the message that just went out
+    /// actually said, and the ledger is read inside the builder. Storing the caller's own earlier
+    /// read would record a number nobody was shown if the file changed in between.
+    /// </summary>
+    void Remember_PostedProgress(string orchId)
+    {
+        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
+
+        if (progress == null)
+            return;
+
+        lock (_ownerStateLock)
+            _lastPostedProgressByOrchId[orchId] = new Planning.PlanProgressSnapshot(progress.Done, progress.Total);
     }
 
     /// <summary>The away digest last sent for this orchestration, or null in a fresh away spell.</summary>
@@ -8632,7 +8723,7 @@ internal sealed class BridgeEngineModel(
         return $"idle{task}";
     }
 
-    string Build_PeriodicStatusText(IOrchestrationSession session)
+    string Build_PeriodicStatusText(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous)
     {
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(
             UsageTotals_Reader.Read_Text_Safe(_paths.Get_PlanFile(session.OrchId)));
@@ -8644,8 +8735,8 @@ internal sealed class BridgeEngineModel(
         var current = progress?.CurrentTaskText;
 
         var body = current == null
-            ? Build_MemberStatusText_ForSession(session)
-            : $"{Build_MemberStatusText_ForSession(session)}\n- now: {TextSummary_Formatter.Summarize_Task(current, TextSummary_Formatter.CARD_TASK_WORDS)}";
+            ? Build_MemberStatusText_ForSession(session, previous)
+            : $"{Build_MemberStatusText_ForSession(session, previous)}\n- now: {TextSummary_Formatter.Summarize_Task(current, TextSummary_Formatter.CARD_TASK_WORDS)}";
 
         return $"{header}\n{body}";
     }

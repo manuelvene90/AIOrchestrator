@@ -301,6 +301,63 @@ public class PlanProgressFormatterTests
         Assert.Equal(1, progress.InProgress);
     }
 
+    /// <summary>
+    /// THE CASE THE OWNER ASKED THIS FOR (2026-08-19). A review that finds defects grows the
+    /// DENOMINATOR, so half an hour of real work can read as a FALLING percentage — which is exactly
+    /// what they were looking at when they asked. The delta is what makes that legible rather than
+    /// alarming: three tasks added, one finished, percentage down four points, all visible at once.
+    /// </summary>
+    [Fact]
+    public void Describe_Counts_ShowsWhatChangedSinceTheOwnerWasLastTold()
+    {
+        Assert.Equal(
+            // 16/27 truncates to 59%, 17/30 to 56% — a three-point DROP across half an hour in which
+            // a task was finished. That inversion is the whole reason this was asked for.
+            "17(+1)/30(+3) done (56% -3%)",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 17, total: 30), new PlanProgressSnapshot(16, 27)));
+    }
+
+    /// <summary>
+    /// A delta of zero is not printed. "(+0)" three times is noise on a phone, and the ABSENCE of a
+    /// bracket already says the thing did not move.
+    /// </summary>
+    [Fact]
+    public void Describe_Counts_PrintsOnlyTheDeltasThatAreNotZero()
+    {
+        Assert.Equal(
+            "17(+1)/30 done (56% +3%)",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 17, total: 30), new PlanProgressSnapshot(16, 30)));
+
+        Assert.Equal(
+            "17/30 done (56%)",
+            PlanProgress_Formatter.Describe_Counts(Build(done: 17, total: 30), new PlanProgressSnapshot(17, 30)));
+    }
+
+    /// <summary>No baseline — the first message of a run — reads exactly as it always did.</summary>
+    [Fact]
+    public void Describe_Counts_WithNoBaselineIsUnchanged()
+    {
+        Assert.Equal(
+            PlanProgress_Formatter.Describe_Counts(Build(done: 17, total: 30)),
+            PlanProgress_Formatter.Describe_Counts(Build(done: 17, total: 30), null));
+    }
+
+    /// <summary>
+    /// THE TAIL IS THE SAME CODE EITHER WAY. /status and the periodic push quote one ledger, and the
+    /// delta form adding a second copy of "running / blocked / not doing" is how those two surfaces
+    /// would start disagreeing — the failure item 10 exists to prevent.
+    /// </summary>
+    [Fact]
+    public void Describe_Counts_CarriesTheSameTailWithOrWithoutABaseline()
+    {
+        var progress = Build(done: 17, total: 30, inProgress: 2, blocked: 1, blockedOnOwner: 1);
+
+        const string tail = " · 2 running · 1 task blocked, needs you — the rest continues";
+
+        Assert.EndsWith(tail, PlanProgress_Formatter.Describe_Counts(progress));
+        Assert.EndsWith(tail, PlanProgress_Formatter.Describe_Counts(progress, new PlanProgressSnapshot(16, 27)));
+    }
+
     static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0, int notDoing = 0, int blockedOnOwner = 0)
     {
         return PlanProgress_Factory.Create(done, inProgress, blocked, notDoing, total, null, [], [], [], null, null, blockedOnOwner);
