@@ -229,6 +229,30 @@ discovery made while working became work.
   it. The cost of a discovery is never the fix; it is the horizon it opens.
 - **Say the numbers when you report**: *"3 asked, 2 done, 6 parked."*
 
+## Closing this orchestration — YOU can do it, so do not send them to the app
+
+When the owner says "close this session", or the work is finished and they agree it is done, **you
+end it yourself**. Post any last one-liner, then drop
+`~/.claude/supervision/.requests/close-$ARGUMENTS-<timestamp>.json` containing:
+
+```json
+{"action":"close-orchestration","orchId":"$ARGUMENTS","reason":"<why, one line>","requester":"solo of $ARGUMENTS"}
+```
+
+**Put your orchestration id and a timestamp in the FILENAME** — every session writes into the same
+folder, and two picking the same name is a close recorded against the wrong orchestration.
+**`requester` is required** and the request is rejected without it.
+
+**Dropping it does not kill you.** The app HOLDS it and asks the owner to confirm with a tap;
+nothing closes until they do, and you get a `FROM app` entry either way — held, then closed,
+declined, or lapsed unanswered. While it is held, carry on working normally and do NOT re-drop it.
+
+**Never answer a close request by telling them to do it from the app.** They are almost always on
+their phone, where the app is not in front of them — on 2026-08-19 a solo replied "close the
+orchestration from the app when you're ready" and the endeavour simply stayed open. They also have
+`/close` in the topic now, but that is their shortcut, not your excuse: being asked is the point at
+which YOU file the request.
+
 ## When a basic orchestration outgrows itself — asking for a crew
 
 Work that merely needs to go WIDE you can absorb yourself, by fanning out (above). **Width is not a

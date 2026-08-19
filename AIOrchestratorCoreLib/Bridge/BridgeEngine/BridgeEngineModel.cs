@@ -4858,6 +4858,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "close")
+                    {
+                        await Request_Close_FromCommand_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "diff")
                     {
                         await Send_GitReport_Async(client, message.MessageThreadId, cancellationToken);
@@ -4984,6 +4988,7 @@ internal sealed class BridgeEngineModel(
                     ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
+                    ("close", "End THIS orchestration — you confirm with a tap"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
                     ("summary", "What is going on across all orchestrations"),
@@ -5511,6 +5516,62 @@ internal sealed class BridgeEngineModel(
     /// them. Data comes from the status-line probe files; every session writes what its Claude
     /// Code version exposes, and the WORST (highest) percent per window is what matters.
     /// </summary>
+    /// <summary>
+    /// The owner's own close, from their phone — the gap that produced this: a solo asked to "close
+    /// this session" had the mechanism available and no instruction for it, so it told them to use
+    /// the desktop app, which is no help to someone on a phone (2026-08-19).
+    ///
+    /// IT WRITES THE SAME REQUEST A SESSION WOULD, deliberately, rather than calling
+    /// <see cref="Close_Orchestration_ByOwner"/> straight away. Every close-orchestration request
+    /// PARKS and is confirmed with a tap, whoever asked — so a mistyped /close cannot end an
+    /// orchestration, and the confirmation the owner sees is the one they already know.
+    ///
+    /// That also keeps the invariant Process_CloseOrchestrationRequests documents intact: nothing in
+    /// the JSON can claim a confirmation that did not happen, because no field can wave a request
+    /// through. This adds a way to ASK, not a way to skip the asking.
+    /// </summary>
+    async Task Request_Close_FromCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            // General has no orchestration of its own, and a closed one has nothing left to end.
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/close works inside an orchestration's own topic — there is nothing here to close.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(_paths.RequestsFolder, $"close-{session.OrchId}-{Guid.NewGuid():N}.json");
+
+            File.WriteAllText(
+                path,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    action = "close-orchestration",
+                    orchId = session.OrchId,
+                    requester = "owner",
+                    reason = "/close from Telegram",
+                }));
+
+            _log.Log_Info(session.OrchId, "/close — a close-orchestration request was written on the owner's behalf; they will be asked to confirm");
+        }
+        catch (Exception ex)
+        {
+            // Told, rather than swallowed: the confirmation prompt is the only feedback this command
+            // has, so a failure that said nothing would read as the app ignoring them.
+            _log.Log_Error(session.OrchId, "/close could not write the close request", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/close failed — nothing was closed: {ex.Message}", cancellationToken);
+        }
+    }
+
     async Task Send_LimitsReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var text = Build_LimitsReportText();
