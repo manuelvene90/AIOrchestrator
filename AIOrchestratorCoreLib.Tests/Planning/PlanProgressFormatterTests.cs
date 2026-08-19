@@ -358,6 +358,44 @@ public class PlanProgressFormatterTests
         Assert.EndsWith(tail, PlanProgress_Formatter.Describe_Counts(progress, new PlanProgressSnapshot(16, 27)));
     }
 
+    /// <summary>
+    /// /left FINALLY MEANS WHAT IT SAYS. It was a literal alias of /progress, and that alias was
+    /// defended in code — two commands reading one ledger drift apart. The owner's objection
+    /// outranks it (2026-08-19): a command called "left" that lists finished work answers a question
+    /// nobody asked. It stays ONE parse and becomes a second FILTER of it.
+    /// </summary>
+    [Fact]
+    public void Describe_Unfinished_DropsDoneAndDroppedAndKeepsTheRest()
+    {
+        var progress = Parse(
+            "- [x] shipped the parser",
+            "- [>] build stage B",
+            "- [ ] write the docs",
+            "- [!] blocked on the build",
+            "- [?] waiting on you",
+            "- [-] superseded by the tap guard")!;
+
+        var text = PlanProgress_Formatter.Describe_Unfinished(progress);
+
+        Assert.DoesNotContain("shipped the parser", text);
+        Assert.DoesNotContain("superseded by the tap guard", text);
+
+        // Blocked is not finished, and a line waiting on the owner is the most "left" thing there is.
+        Assert.Contains("[>] build stage B", text);
+        Assert.Contains("[ ] write the docs", text);
+        Assert.Contains("[!] blocked on the build", text);
+        Assert.Contains("[?] waiting on you", text);
+    }
+
+    /// <summary>Nothing left says so, rather than rendering an empty message that reads as broken.</summary>
+    [Fact]
+    public void Describe_Unfinished_SaysSoWhenEverythingIsDone()
+    {
+        Assert.Equal(
+            "nothing left — every line is done or dropped",
+            PlanProgress_Formatter.Describe_Unfinished(Parse("- [x] shipped", "- [-] dropped")!));
+    }
+
     static IPlanProgress Build(int done, int total, int inProgress = 0, int blocked = 0, int notDoing = 0, int blockedOnOwner = 0)
     {
         return PlanProgress_Factory.Create(done, inProgress, blocked, notDoing, total, null, [], [], [], null, null, blockedOnOwner);

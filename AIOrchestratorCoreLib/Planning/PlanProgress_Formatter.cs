@@ -162,6 +162,31 @@ public static class PlanProgress_Formatter
     }
 
     /// <summary>
+    /// ONLY WHAT IS STILL OWED — done and dropped rows removed. What `/left` finally means.
+    ///
+    /// IT WAS AN ALIAS OF /progress UNTIL 2026-08-19, and the comment on that alias was right for
+    /// its time: two commands reading one ledger would drift apart. The owner's objection is the
+    /// one thing that outranks it — a command called "left" that lists finished work answers a
+    /// question nobody asked. So it stays ONE parse and becomes a second FILTER of it, exactly as
+    /// Describe_EveryLine is a second rendering; what was refused then, and is still refused, is a
+    /// second READING of the file.
+    ///
+    /// `[!]` and `[?]` are kept: blocked is not finished, and a line waiting on the owner is the
+    /// most "left" thing in the ledger.
+    /// </summary>
+    public static string Describe_Unfinished(IPlanProgress progress)
+    {
+        var unfinished = progress.Lines
+            .Where(line => line.Marker != "x" && line.Marker != "-")
+            .ToList();
+
+        if (unfinished.Count == 0)
+            return progress.Lines.Count == 0 ? "the ledger is empty" : "nothing left — every line is done or dropped";
+
+        return string.Join('\n', unfinished.Select(line => $"[{line.Marker}] {line.Text}"));
+    }
+
+    /// <summary>
     /// THE WHOLE LEDGER, line by line, done included — what /progress printed before it was made to
     /// fit a phone. The owner asked to KEEP this level of detail, not to lose it: "keep the current
     /// level of detail in a NEW command."

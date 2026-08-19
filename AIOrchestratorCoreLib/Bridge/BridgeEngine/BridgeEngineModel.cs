@@ -4987,7 +4987,7 @@ internal sealed class BridgeEngineModel(
                     // IS an answer to what is left. A correction has to be checked in every scope the
                     // thing it corrects runs in, or it is the same defect with a newer date.
                     ("progress", "This topic's task ledger, every row — in General, one line per orchestration"),
-                    ("left", "Same as /progress"),
+                    ("left", "Only what is still open — no done or dropped rows"),
                     ("tasks", "The FULL ledger of this orchestration, done lines included"),
                     ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
@@ -5059,7 +5059,8 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, string command, CancellationToken cancellationToken)
     {
-        var text = await Translate_LedgerText_Async(Build_ProgressReportText(messageThreadId), command, messageThreadId, cancellationToken);
+        var text = await Translate_LedgerText_Async(
+            Build_ProgressReportText(messageThreadId, unfinishedOnly: command == "left"), command, messageThreadId, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -5166,7 +5167,7 @@ internal sealed class BridgeEngineModel(
         return $"{counts}\n\n{Planning.PlanProgress_Formatter.Describe_EveryLine(progress)}";
     }
 
-    string Build_ProgressReportText(long? messageThreadId)
+    string Build_ProgressReportText(long? messageThreadId, bool unfinishedOnly = false)
     {
         if (messageThreadId != null)
         {
@@ -5175,7 +5176,7 @@ internal sealed class BridgeEngineModel(
             if (session == null)
                 return "no orchestration is bound to this topic";
 
-            return Build_OrchestrationLedgerText(session.OrchId, session.DisplayName ?? session.OrchId);
+            return Build_OrchestrationLedgerText(session.OrchId, session.DisplayName ?? session.OrchId, unfinishedOnly);
         }
 
         List<string> blocks = [];
@@ -5204,7 +5205,7 @@ internal sealed class BridgeEngineModel(
     /// truncated" — because hiding them hides the ledger author's failure to group into 7-8 macro
     /// tasks. Short message, short LEDGER: the length is the supervisor's problem, upstream of here.
     /// </summary>
-    string Build_OrchestrationLedgerText(string orchId, string displayName)
+    string Build_OrchestrationLedgerText(string orchId, string displayName, bool unfinishedOnly = false)
     {
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
 
@@ -5215,7 +5216,13 @@ internal sealed class BridgeEngineModel(
         // by the owner's own directive, so a header announcing what is left contradicts its own
         // content — and they would read that as a bug in the same breath as the fix they asked for.
         // The counts line above already says how much is left, in numbers.
-        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{Planning.PlanProgress_Formatter.Describe_Ledger(progress)}";
+        // /left renders the SAME parse through a different filter — never a second read of the
+        // file, which is the drift the alias comment was guarding against and still is.
+        var ledger = unfinishedOnly
+            ? Planning.PlanProgress_Formatter.Describe_Unfinished(progress)
+            : Planning.PlanProgress_Formatter.Describe_Ledger(progress);
+
+        return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{ledger}";
     }
 
     /// <summary>
