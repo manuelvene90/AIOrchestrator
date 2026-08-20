@@ -194,7 +194,7 @@ public static class TerminalWindow_Focuser
             if (GetWindowText(hWnd, buffer, buffer.Capacity) <= 0)
                 return true;
 
-            if (!buffer.ToString().Contains(titleFragment, StringComparison.OrdinalIgnoreCase))
+            if (!SessionWindowTitle_Matcher.Matches(buffer.ToString(), titleFragment))
                 return true;
 
             foundHandle = hWnd;

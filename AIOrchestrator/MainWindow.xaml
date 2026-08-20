@@ -25,10 +25,8 @@
                     <TextBlock DockPanel.Dock="Top" Text="REPOSITORIES" Style="{StaticResource SectionHeader}"/>
 
                     <StackPanel DockPanel.Dock="Bottom" Margin="12,8,12,12">
-                        <Button x:Name="StartSupervisorButton" Content="▶  Start Orchestration on selected repo" Click="StartSupervisorButton_Click" Margin="0,0,0,4"
-                                ToolTip="Supervisor + implementer + reviewer, with the owner-approval and merge gates — for real endeavours"/>
-                        <Button x:Name="StartBasicButton" Content="▷  Start Basic session on selected repo" Click="StartBasicButton_Click" Margin="0,0,0,8"
-                                ToolTip="ONE session you talk to directly — no supervisor, no reviewer, no gates. For small endeavours"/>
+                        <Button x:Name="StartSupervisorButton" Content="▶  Start Orchestration on selected repo" Click="StartSupervisorButton_Click" Margin="0,0,0,4"/>
+                        <Button x:Name="StartBasicButton" Content="▷  Start Basic session on selected repo" Click="StartBasicButton_Click" Margin="0,0,0,8"/>
                         <Button x:Name="SettingsButton" Content="⚙  Settings" Click="SettingsButton_Click"/>
                     </StackPanel>
 
@@ -41,8 +39,7 @@
                                 <StackPanel Margin="6,4">
                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
                                     <TextBlock Text="{Binding Path, Converter={x:Static views:LastTwoFoldersConverter.INSTANCE}}"
-                                               Foreground="{StaticResource TextSecondary}" FontSize="10" TextTrimming="CharacterEllipsis"
-                                               ToolTip="{Binding Path}"/>
+                                               Foreground="{StaticResource TextSecondary}" FontSize="10" TextTrimming="CharacterEllipsis"/>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -59,8 +56,7 @@
                             <DataTemplate DataType="{x:Type views:OrchestrationCardView}">
                                 <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1"
                                         CornerRadius="6" Margin="4,4,4,8" Padding="12,10" Opacity="{Binding CardOpacity}"
-                                        Tag="{Binding}" MouseLeftButtonUp="OrchestrationCard_Click" Cursor="Hand"
-                                        ToolTip="Click for the full detail view">
+                                        Tag="{Binding}" MouseLeftButtonUp="OrchestrationCard_Click" Cursor="Hand">
                                     <StackPanel>
                                         <DockPanel Margin="0,0,0,6">
                                             <StackPanel Orientation="Horizontal">
@@ -74,21 +70,16 @@
                                                         Visibility="{Binding AddMemberButtonVisibility}"
                                                         IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"/>
                                                 <Button Content="{Binding SilenceGlyph}" Tag="{Binding}" Click="SilenceButton_Click" Margin="0,0,6,0"
-                                                        Visibility="{Binding OrchestrationButtonsVisibility}"
-                                                        ToolTip="{Binding SilenceTooltip}"/>
+                                                        Visibility="{Binding OrchestrationButtonsVisibility}"/>
                                                 <Button Content="🪟 Organize" Tag="{Binding}" Click="OrganizeButton_Click" Margin="0,0,6,0"
-                                                        Visibility="{Binding OrchestrationButtonsVisibility}"
-                                                        ToolTip="Tile this orchestration's working terminals (supervisor + implementers) across the screen"/>
+                                                        Visibility="{Binding OrchestrationButtonsVisibility}"/>
                                                 <Button Content="🪟 Organize supervisors" Tag="{Binding}" Click="OrganizeSupervisorsButton_Click" Margin="0,0,6,0"
-                                                        Visibility="{Binding GeneralButtonsVisibility}"
-                                                        ToolTip="Tile the SUPERVISOR terminal of every open orchestration across the screen — one glance at all of them working. This card's own general-supervisor terminal is left where it is."/>
-                                                <Button Content="📊 Details" Tag="{Binding}" Click="DetailsButton_Click" Margin="0,0,6,0"
-                                                        ToolTip="Task ledger, live activity feed and every session's state"/>
-                                                <Button Content="📂" Tag="{Binding}" Click="OpenFolderButton_Click" ToolTip="Open orchestration folder" Margin="0,0,6,0"/>
+                                                        Visibility="{Binding GeneralButtonsVisibility}"/>
+                                                <Button Content="📊 Details" Tag="{Binding}" Click="DetailsButton_Click" Margin="0,0,6,0"/>
+                                                <Button Content="📂" Tag="{Binding}" Click="OpenFolderButton_Click" Margin="0,0,6,0"/>
                                                 <Button Content="✕ Close" Tag="{Binding}" Click="CloseOrchestrationButton_Click"
                                                         Visibility="{Binding OrchestrationButtonsVisibility}"
-                                                        IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"
-                                                        ToolTip="Close this orchestration: its sessions end, its topic closes, its folder stays as audit trail"/>
+                                                        IsEnabled="{Binding IsClosed, Converter={x:Static views:InverseBoolConverter.INSTANCE}}"/>
                                             </StackPanel>
                                         </DockPanel>
 
@@ -128,8 +119,7 @@
                                                             <StackPanel Grid.Column="2" Orientation="Horizontal">
                                                                 <TextBlock Text="{Binding LastActivityText}" Foreground="{StaticResource TextSecondary}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                                                 <Button Content="🖥 Show" FontSize="10" Padding="6,2" Tag="{Binding}" Click="ShowSessionButton_Click"
-                                                                        Visibility="{Binding ShowButtonVisibility}"
-                                                                        ToolTip="Bring this session's terminal to the foreground"/>
+                                                                        Visibility="{Binding ShowButtonVisibility}"/>
                                                             </StackPanel>
                                                         </Grid>
                                                         <TextBlock Text="{Binding DetailText}" Foreground="{StaticResource TextSecondary}" FontSize="10"
@@ -180,19 +170,15 @@
                 <TextBlock x:Name="TelegramStatusText" Text="Telegram: …" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
                 <CheckBox x:Name="MuteTelegramCheckBox" Content="🌙 DND everywhere" FontSize="11"
                           Foreground="{StaticResource TextSecondary}" Margin="18,0,0,0" VerticalAlignment="Center"
-                          ToolTip="Do-Not-Disturb, app-wide: messages are HELD and all arrive when you switch it off. Nothing is lost. (= /dnd_all)"
                           Checked="MuteTelegramCheckBox_Changed" Unchecked="MuteTelegramCheckBox_Changed"/>
                 <CheckBox x:Name="SilenceAllCheckBox" Content="🔕 Silence everywhere" FontSize="11"
                           Foreground="{StaticResource TextSecondary}" Margin="14,0,0,0" VerticalAlignment="Center"
-                          ToolTip="Silence, app-wide: messages are DROPPED while this is on — for working at the PC, where you read the same thing in the terminals. (= /mute_all)"
                           Checked="SilenceAllCheckBox_Changed" Unchecked="SilenceAllCheckBox_Changed"/>
                 <CheckBox x:Name="ItalianLayerCheckBox" Content="🇮🇹 Italian" FontSize="11"
                           Foreground="{StaticResource TextSecondary}" Margin="14,0,0,0" VerticalAlignment="Center"
-                          ToolTip="Translation layer: everything the bot sends you is translated to Italian on the way out. The sessions themselves keep working in English. (= /italian)"
                           Checked="ItalianLayerCheckBox_Changed" Unchecked="ItalianLayerCheckBox_Changed"/>
                 <TextBlock x:Name="BuildStampText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}"
-                           Margin="18,0,0,0" VerticalAlignment="Center"
-                           ToolTip="Which binary is actually running, and when it was built. The folder name is the half that exposes a stale copy."/>
+                           Margin="18,0,0,0" VerticalAlignment="Center"/>
                 <TextBlock x:Name="RootPathText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>

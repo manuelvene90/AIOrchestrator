@@ -138,12 +138,12 @@ public class OwnerMessageSurvivesALockedChannelTests : IDisposable
     {
         var now = new DateTime(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
 
-        var withoutRelease = OwnerDeliveryBuffer_Factory.Create(aggregationSeconds: 4, holdCapSeconds: 60);
+        var withoutRelease = OwnerDeliveryBuffer_Factory.Create(aggregationSeconds: 4);
         withoutRelease.Add_Segment("channel.md", OWNER_TEXT, now);
 
         Assert.Empty(withoutRelease.Take_ReadyDeliveries(now));
 
-        var withRelease = OwnerDeliveryBuffer_Factory.Create(aggregationSeconds: 4, holdCapSeconds: 60);
+        var withRelease = OwnerDeliveryBuffer_Factory.Create(aggregationSeconds: 4);
         withRelease.Add_Segment("channel.md", OWNER_TEXT, now);
         withRelease.Release("channel.md");
 

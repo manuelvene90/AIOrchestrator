@@ -611,15 +611,16 @@ public partial class MainWindow : Window
             if (session == null)
                 return;
 
-            List<string> titleFragments = [AIOrchestratorCoreLib.Spawning.SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId)];
+            // THE SAME CODE THE /organize COMMAND RUNS. It used to build the list here, which put a
+            // SUP window in it for basic orchestrations that have none — a phantom in the count — and
+            // meant the button and the phone could drift apart the moment either was touched.
+            var placed = AIOrchestratorCoreLib.WindowFocus.SessionWindows_Organizer.Organize(session);
 
-            foreach (var member in session.Members)
-            {
-                if (member.ClosedUtc == null)
-                    titleFragments.Add(AIOrchestratorCoreLib.Spawning.SessionWindowTitle_Builder.Build_ForMember(member.MemberId, session.OrchId));
-            }
-
-            Tile_Terminals(titleFragments, card.OrchId);
+            Add_LogRow(
+                placed == 0 ? LogLevels.Warning : LogLevels.Info,
+                placed == 0
+                    ? $"[{card.OrchId}] Organize: no terminal windows found"
+                    : $"[{card.OrchId}] Organize: tiled {placed} terminal(s)");
         }
         catch (Exception ex)
         {
