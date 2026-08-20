@@ -163,17 +163,19 @@
         </Style>
 
         <!--
-            THE TOOLTIP THE OWNER SAW AS AN EMPTY WHITE BOX (2026-08-20, with a screenshot: "it
-            appears everywhere, it's incredibly annoying").
+            THERE ARE NO TOOLTIPS IN THIS APP. The owner had them all removed on 2026-08-20 after a
+            screenshot of what looked like an empty white box following the cursor: "it appears
+            everywhere, it's incredibly annoying".
 
-            It was never empty. No ToolTip style existed at all, so tooltips kept WPF's default LIGHT
-            background while inheriting this theme's LIGHT foreground from the window — light text on
-            a light box, which reads as blank. The Close button's tooltip, the one in their
-            screenshot, is a full sentence about ending an orchestration; they had simply never been
-            able to read a single one.
+            It was never empty. No ToolTip style existed, so tooltips kept WPF's default LIGHT
+            background while inheriting this theme's LIGHT foreground — light text on a light box,
+            which reads as blank. Eighteen of them were written and not one had ever been readable;
+            told that, the owner chose removal over legibility.
 
-            Styled here rather than at fifteen call sites: a control-wide default cannot be forgotten
-            by the sixteenth tooltip somebody adds.
+            THIS STYLE STAYS ON PURPOSE, with nothing currently using it. It is the guard, not the
+            feature: the moment anyone adds a tooltip back, it renders dark-on-light and readable
+            instead of silently reproducing the invisible box that cost an evening to explain. Delete
+            the style and the next tooltip is invisible again, with no sign that it ever was.
         -->
         <Style TargetType="ToolTip">
             <Setter Property="Background" Value="{StaticResource BgPanel}"/>
