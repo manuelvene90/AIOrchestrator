@@ -162,5 +162,43 @@
             </Style.Triggers>
         </Style>
 
+        <!--
+            THE TOOLTIP THE OWNER SAW AS AN EMPTY WHITE BOX (2026-08-20, with a screenshot: "it
+            appears everywhere, it's incredibly annoying").
+
+            It was never empty. No ToolTip style existed at all, so tooltips kept WPF's default LIGHT
+            background while inheriting this theme's LIGHT foreground from the window — light text on
+            a light box, which reads as blank. The Close button's tooltip, the one in their
+            screenshot, is a full sentence about ending an orchestration; they had simply never been
+            able to read a single one.
+
+            Styled here rather than at fifteen call sites: a control-wide default cannot be forgotten
+            by the sixteenth tooltip somebody adds.
+        -->
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="{StaticResource BgPanel}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderSubtle}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="MaxWidth" Value="420"/>
+            <Setter Property="HasDropShadow" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="4">
+                            <!-- TextWrapping is why MaxWidth is useful: without it a long tooltip
+                                 becomes one line wider than the screen. -->
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Application.Resources>
 </Application>
