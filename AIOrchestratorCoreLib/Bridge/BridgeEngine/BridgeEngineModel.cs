@@ -142,9 +142,6 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     const int OWNER_AGGREGATION_SECONDS = 6;
 
-    /// <summary>A forgotten WAIT must not swallow the owner's messages forever.</summary>
-    const int OWNER_HOLD_CAP_SECONDS = 60;
-
     const string GLOBAL_ORCH_ID = "";
 
     readonly ISupervisionPaths _paths = paths;
@@ -320,7 +317,7 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _reportedStaleInProgress = [];
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
-    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS, OWNER_HOLD_CAP_SECONDS);
+    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
 
     /// <summary>
     /// Announcements whose channel was locked. These are the one class of write a return check

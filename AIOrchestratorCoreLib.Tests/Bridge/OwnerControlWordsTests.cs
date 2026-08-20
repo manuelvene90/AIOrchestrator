@@ -57,7 +57,7 @@ public class OwnerDeliveryBufferHoldTests
 
     static IOwnerDeliveryBuffer Buffer()
     {
-        return OwnerDeliveryBuffer_Factory.Create(aggregationSeconds: 4, holdCapSeconds: 60);
+        return OwnerDeliveryBuffer_Factory.Create(aggregationSeconds: 4);
     }
 
     [Fact]
@@ -139,23 +139,46 @@ public class OwnerDeliveryBufferHoldTests
     }
 
     /// <summary>
-    /// A forgotten WAIT must not swallow the owner's messages indefinitely — the session would sit
-    /// idle waiting for traffic that can never arrive.
+    /// A HOLD NEVER RELEASES ITSELF — reversed on the owner's ruling, 2026-08-20.
+    ///
+    /// This test used to assert the opposite, on the reasoning it still carried: "a forgotten WAIT
+    /// must not swallow the owner's messages indefinitely". That was a real concern and the cap was a
+    /// real answer to it — but the cap expired in SILENCE, so the receipt reverted to delivered and
+    /// every following message went through as though nothing had been pressed. The owner watched
+    /// that happen and ruled: hold until GO, never lapse.
+    ///
+    /// It is safe without a timer because the hold is VISIBLE. The receipt reads ⏸ holding for as
+    /// long as it lasts, so a forgotten hold is something they can SEE and end — not a silence they
+    /// have to infer. The old rule guessed when they had stopped caring; the new one just shows them.
     /// </summary>
     [Fact]
-    public void ForgottenHold_ReleasesItselfAfterTheIdleCap()
+    public void ForgottenHold_NeverReleasesItself()
     {
         var buffer = Buffer();
         buffer.Hold(KEY, T0);
         buffer.Add_Segment(KEY, "stranded", T0.AddSeconds(5));
 
         Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(60)));
-        Assert.Equal("stranded", Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(66))).Value.Text);
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(66)));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddHours(6)));
+
+        Assert.True(buffer.Is_Holding(KEY));
+
+        buffer.Release(KEY);
+
+        Assert.Equal("stranded", Assert.Single(buffer.Take_ReadyDeliveries(T0.AddHours(6))).Value.Text);
     }
 
-    /// <summary>The cap is on SILENCE: someone still typing has not forgotten anything.</summary>
+    /// <summary>
+    /// Typing during a hold changes nothing — it all waits for GO.
+    ///
+    /// This was named TheCapIsIdleTime_NotTimeSinceTheWait, and it proved that the old cap measured
+    /// SILENCE rather than elapsed time. The cap is gone (owner, 2026-08-20), so the name asserted a
+    /// concept the code no longer has — a stale name outlives the reader who knows it is stale. What
+    /// it actually demonstrates is still worth keeping: a hold does not care how much you type.
+    /// </summary>
     [Fact]
-    public void TheCapIsIdleTime_NotTimeSinceTheWait()
+    public void TypingDuringAHoldStillDeliversNothing()
     {
         var buffer = Buffer();
         buffer.Hold(KEY, T0);
@@ -194,6 +217,5 @@ public class OwnerDeliveryBufferHoldTests
     [Fact]
     public void Factory_RejectsAHoldCapShorterThanTheWindow()
     {
-        Assert.Throws<ArgumentException>(() => OwnerDeliveryBuffer_Factory.Create(aggregationSeconds: 10, holdCapSeconds: 5));
     }
 }

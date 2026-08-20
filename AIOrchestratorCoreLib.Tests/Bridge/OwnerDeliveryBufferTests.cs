@@ -10,7 +10,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void Take_ReadyDeliveries_BeforeQuietWindow_ReturnsNothing()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
         buffer.Add_Segment("chan-a", "first", T0);
 
         Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(10)));
@@ -20,7 +20,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void Take_ReadyDeliveries_RapidBurst_AggregatesIntoOneText()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
         buffer.Add_Segment("chan-a", "increase the throughput", T0);
         buffer.Add_Segment("chan-a", "I meant the CSV extraction", T0.AddSeconds(8));
 
@@ -33,7 +33,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void Take_ReadyDeliveries_NewMessageResetsTheQuietWindow()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
         buffer.Add_Segment("chan-a", "first", T0);
         buffer.Add_Segment("chan-a", "second", T0.AddSeconds(14));
 
@@ -45,7 +45,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void Take_ReadyDeliveries_IndependentTargets_FlushIndependently()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
         buffer.Add_Segment("chan-a", "for the crm", T0);
         buffer.Add_Segment("chan-b", "for the general", T0.AddSeconds(10));
 
@@ -70,7 +70,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void APutBackLandsAHEADOfAMessageThatArrivedWhileItWasOut()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
 
         buffer.Add_Segment("chan-a", "stop what you are doing", T0);
         buffer.Release("chan-a");
@@ -118,7 +118,7 @@ public class OwnerDeliveryBufferTests
     {
         foreach (var newerFirst in new[] { false, true })
         {
-            var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
+            var buffer = OwnerDeliveryBuffer_Factory.Create(15);
 
             buffer.Add_Segment("chan-a", "first", T0);
             buffer.Release("chan-a");
@@ -164,7 +164,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void TakingADeliveryREMOVESTheKeyAtomically()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(15, holdCapSeconds: 60);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
 
         buffer.Add_Segment("chan-a", "the only message", T0);
         buffer.Release("chan-a");
@@ -191,7 +191,7 @@ public class OwnerDeliveryBufferTests
     [Fact]
     public void ASegmentPutBackIntoAHeldDelivery_StaysUntilGo()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(4, holdCapSeconds: 60);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(4);
         buffer.Add_Segment("chan-a", "launch it yourself", T0);
 
         var taken = buffer.Take_ReadyDeliveries(T0.AddSeconds(5));
@@ -211,13 +211,17 @@ public class OwnerDeliveryBufferTests
     }
 
     /// <summary>
-    /// And the cap still applies to it, or a forgotten WAIT would swallow a message that had already
-    /// been on its way out — the failure the cap exists to prevent, reached through the put-back.
+    /// A RESTORED SEGMENT STAYS HELD TOO — reversed with the cap, 2026-08-20.
+    ///
+    /// This asserted the opposite while a cap existed: a put-back had to escape eventually, or a
+    /// forgotten WAIT would swallow a message that was already on its way out. With the cap gone
+    /// there is nothing to escape on, and the message waits for GO like everything else — which is
+    /// what the owner asked for, and what the ⏸ receipt tells them is happening.
     /// </summary>
     [Fact]
-    public void ARestoredHeldSegment_StillEscapesOnTheIdleCap()
+    public void ARestoredHeldSegment_WaitsForGoLikeTheRest()
     {
-        var buffer = OwnerDeliveryBuffer_Factory.Create(4, holdCapSeconds: 60);
+        var buffer = OwnerDeliveryBuffer_Factory.Create(4);
         buffer.Add_Segment("chan-a", "launch it yourself", T0);
 
         var taken = buffer.Take_ReadyDeliveries(T0.AddSeconds(5));
@@ -225,8 +229,131 @@ public class OwnerDeliveryBufferTests
         buffer.Hold("chan-a", T0.AddSeconds(6));
         buffer.Restore_Segment("chan-a", taken["chan-a"].Text, taken["chan-a"].FirstOrdinal);
 
-        var afterCap = buffer.Take_ReadyDeliveries(T0.AddSeconds(6 + 61));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(6 + 61)));
+        Assert.True(buffer.Is_Holding("chan-a"));
 
-        Assert.Equal("launch it yourself", afterCap["chan-a"].Text);
+        buffer.Release("chan-a");
+
+        var released = buffer.Take_ReadyDeliveries(T0.AddSeconds(6 + 62));
+
+        Assert.Equal("launch it yourself", released["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// THE HOLD SURVIVES THE BUFFER DRAINING — a property, not a regression.
+    ///
+    /// It was written believing the old code lost the hold when a delivery was taken. A mutation test
+    /// refuted that: `Hold` creates the entry, so one always existed while a hold did. The property is
+    /// still worth pinning — the hold now lives outside the entries, and this is what says it must —
+    /// but it is NOT the bug the owner reported. That one was the silent cap.
+    /// </summary>
+    [Fact]
+    public void AHoldOutlivesTheDeliveryItStartedOn()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
+        var start = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+
+        buffer.Add_Segment("crm", "first", start);
+        buffer.Hold("crm", start);
+
+        // GO drains it, and the owner has NOT pressed hold again.
+        buffer.Release("crm");
+        buffer.Take_ReadyDeliveries(start.AddSeconds(1));
+
+        Assert.False(buffer.Is_Holding("crm"));
+
+        // Now they hold again with nothing buffered at all — the case that used to evaporate.
+        buffer.Hold("crm", start.AddSeconds(2));
+
+        Assert.True(buffer.Is_Holding("crm"), "a hold taken with an empty buffer did not stick");
+
+        buffer.Add_Segment("crm", "second", start.AddSeconds(3));
+
+        // Well past the aggregation window, nowhere near the cap: still held.
+        Assert.Empty(buffer.Take_ReadyDeliveries(start.AddSeconds(40)));
+        Assert.True(buffer.Is_Holding("crm"));
+    }
+
+    /// <summary>A GO ends the hold even when nothing is buffered — the old early return dropped it.</summary>
+    [Fact]
+    public void GoEndsAHoldWithNothingBuffered()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
+        var start = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+
+        buffer.Hold("crm", start);
+        buffer.Release("crm");
+
+        Assert.False(buffer.Is_Holding("crm"));
+    }
+
+    /// <summary>
+    /// A HOLD LASTS UNTIL GO, however long that is (owner's ruling, 2026-08-20).
+    ///
+    /// It used to lapse after sixty idle seconds, and lapse SILENTLY — the receipt reverted to
+    /// delivered and every following message went through as though nothing had been pressed. Their
+    /// own earlier comment defended that cap ("a forgotten WAIT must not swallow the owner's messages
+    /// forever"); they overruled it once they saw what it actually did.
+    ///
+    /// It is safe to have no timer because the hold is VISIBLE: the receipt says ⏸ holding for as
+    /// long as it lasts, so a forgotten hold is something they can see and end — not a silence they
+    /// have to deduce.
+    /// </summary>
+    [Fact]
+    public void AHoldNeverLapsesOnItsOwn()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
+        var start = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+
+        buffer.Add_Segment("crm", "something", start);
+        buffer.Hold("crm", start);
+
+        // An hour of complete silence: still held, still nothing delivered.
+        Assert.Empty(buffer.Take_ReadyDeliveries(start.AddHours(1)));
+        Assert.True(buffer.Is_Holding("crm"), "a hold ended by itself — the owner ruled it must not");
+
+        // A day.
+        Assert.Empty(buffer.Take_ReadyDeliveries(start.AddDays(1)));
+        Assert.True(buffer.Is_Holding("crm"));
+
+        // Only GO releases it, and then everything held arrives at once.
+        buffer.Release("crm");
+
+        var delivered = buffer.Take_ReadyDeliveries(start.AddDays(1).AddSeconds(1));
+
+        Assert.Single(delivered);
+        Assert.Contains("something", delivered["crm"].Text);
+        Assert.False(buffer.Is_Holding("crm"));
+    }
+
+    /// <summary>
+    /// A PUT-BACK MUST NOT UN-HOLD THE TARGET.
+    ///
+    /// Written expecting this to be where the old design diverged — Restore_Segment creates a fresh
+    /// entry, and a fresh entry would carry Held=false. Mutating the code back showed it does not
+    /// diverge, because a hold in force means Hold() already created that entry. Kept as a property
+    /// worth holding, and labelled for what it is rather than left claiming a bug it does not catch.
+    /// </summary>
+    [Fact]
+    public void ARestoredSegmentDoesNotCancelTheHold()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(15);
+        var start = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+
+        buffer.Add_Segment("crm", "first", start);
+        buffer.Hold("crm", start);
+
+        // GO, drained, and the send FAILED — so the text comes back.
+        buffer.Release("crm");
+        var taken = buffer.Take_ReadyDeliveries(start.AddSeconds(1));
+        Assert.Single(taken);
+
+        buffer.Hold("crm", start.AddSeconds(2));
+        buffer.Restore_Segment("crm", "first", taken["crm"].FirstOrdinal);
+
+        Assert.True(buffer.Is_Holding("crm"), "a put-back cancelled a hold that was in force");
+
+        // And it must not go out on the aggregation window either.
+        Assert.Empty(buffer.Take_ReadyDeliveries(start.AddSeconds(40)));
     }
 }
