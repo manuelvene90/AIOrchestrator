@@ -148,7 +148,34 @@ public static class TelegramUpdates_Parser
             threadId,
             text ?? string.Empty,
             photoFileId,
-            voiceFileId);
+            voiceFileId,
+            Get_ReplyToText_OrNull(message, threadId));
+    }
+
+    /// <summary>
+    /// The text of the message this one replies to, or null when it is not a real reply.
+    ///
+    /// THE THREAD-ROOT TEST IS THE WHOLE FUNCTION. In a forum supergroup Telegram attaches a
+    /// `reply_to_message` to EVERY message in a topic, pointing at the topic's root — so reading the
+    /// field at face value would tag every message the owner ever sends with the same phantom quote.
+    /// The root's message_id IS the thread id, so a target equal to the thread id is Telegram's
+    /// bookkeeping and a target different from it is the owner actually pointing at something.
+    ///
+    /// Falls back to the caption, so replying to a photo carries what the photo said.
+    /// </summary>
+    static string? Get_ReplyToText_OrNull(JsonObject message, long? threadId)
+    {
+        if (message["reply_to_message"] is not JsonObject repliedTo)
+            return null;
+
+        var repliedToIdNode = repliedTo["message_id"];
+
+        if (repliedToIdNode != null && threadId != null && repliedToIdNode.GetValue<long>() == threadId.Value)
+            return null;
+
+        var text = Get_TextOrCaption_OrNull(repliedTo);
+
+        return string.IsNullOrWhiteSpace(text) ? null : text;
     }
 
     static string? Get_TextOrCaption_OrNull(JsonObject message)
