@@ -4858,6 +4858,14 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "show")
+                    {
+                        await Show_SessionWindow_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "organize")
+                    {
+                        await Organize_SessionWindows_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "merge")
                     {
                         await Ask_SessionToMerge_Async(client, message.MessageThreadId, cancellationToken);
@@ -4996,6 +5004,8 @@ internal sealed class BridgeEngineModel(
                     ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
+                    ("show", "Bring this orchestration's session window to the front"),
+                    ("organize", "Tile this orchestration's terminals across the screen"),
                     ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
                     ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
                     ("close", "End THIS orchestration — you confirm with a tap"),
@@ -5566,6 +5576,68 @@ internal sealed class BridgeEngineModel(
     /// driving this orchestration without putting a wall of git instructions on the owner's phone —
     /// they asked for the operation, not for the recipe.
     /// </summary>
+    /// <summary>
+    /// Puts the session the owner talks to in front of them — the solo in a basic orchestration, the
+    /// supervisor otherwise. Their ask, 2026-08-20: "/Show should bring the solo or sup in front of
+    /// the screen."
+    /// </summary>
+    async Task Show_SessionWindow_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "/show works inside an orchestration's own topic.", cancellationToken);
+            return;
+        }
+
+        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+
+        if (window == null)
+        {
+            // SAID, NOT SWALLOWED: the owner is looking at a screen that did not change, and "no
+            // window" is a fact they can act on — the session may have been closed or never spawned.
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "No terminal window for this orchestration is on screen.", cancellationToken);
+            return;
+        }
+
+        if (WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(window))
+        {
+            _log.Log_Info(session.OrchId, $"/show — brought '{window}' to the front");
+            return;
+        }
+
+        // Windows refuses SetForegroundWindow in ordinary situations, so a real window can fail to
+        // raise. Telling them beats a silent no-op in front of an unchanged screen.
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, "Found the window but Windows would not raise it — click its taskbar icon.", cancellationToken);
+    }
+
+    /// <summary>
+    /// Tiles this orchestration's terminals, exactly as the app's Organize button does — the same
+    /// code, so the phone and the button cannot drift apart.
+    /// </summary>
+    async Task Organize_SessionWindows_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "/organize works inside an orchestration's own topic.", cancellationToken);
+            return;
+        }
+
+        var placed = WindowFocus.SessionWindows_Organizer.Organize(session);
+
+        _log.Log_Info(session.OrchId, $"/organize — tiled {placed} terminal(s)");
+
+        await Send_DirectReply_BestEffort_Async(
+            client, messageThreadId,
+            placed == 0
+                ? "No terminal windows for this orchestration are on screen."
+                : $"🪟 tiled {placed} terminal{(placed == 1 ? "" : "s")}.",
+            cancellationToken);
+    }
+
     async Task Ask_SessionToMerge_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
