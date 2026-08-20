@@ -58,13 +58,27 @@ public static class TranscriptActivity_Reader
     /// but a positive determination may kill anything.
     /// </para>
     /// </summary>
+    /// <param name="HasOpenToolCall">
+    /// The session issued a tool call and its result has not come back — it is INSIDE a command
+    /// right now.
+    ///
+    /// THIS IS THE ONE STATE THE REST OF THIS CLASS CANNOT SEE. Everything else here dates the last
+    /// record; a session running one long command writes no records at all while it runs, so a
+    /// six-minute build and a dead monitor produce identical silence. On 2026-08-20 the owner
+    /// watched a session running a test get declared ORPHANED and respawned — "I was seeing it, it
+    /// was not unresponsive, I'm pretty sure it was still working" — and it was: its context was
+    /// destroyed for failing to answer during a command it had not finished.
+    ///
+    /// An unanswered tool_use is positive evidence of work, not an absence to be interpreted.
+    /// </param>
     public readonly record struct TranscriptActivity(
         DateTime? LastActivityUtc,
         DateTime? OldestUnansweredWakeUtc,
-        bool SawActivity)
+        bool SawActivity,
+        bool HasOpenToolCall = false)
     {
         /// <summary>Nothing read, nothing known — the shape every failure path returns.</summary>
-        public static TranscriptActivity Unknown => new(null, null, false);
+        public static TranscriptActivity Unknown => new(null, null, false, false);
     }
 
     /// <summary>
@@ -114,6 +128,9 @@ public static class TranscriptActivity_Reader
         DateTime? lastActivityUtc = null;
         DateTime? oldestWakeSinceActivityUtc = null;
 
+        // Flipped by whichever came LAST — a call opens it, its result closes it.
+        var hasOpenToolCall = false;
+
         var lines = tailText.Split('\n');
 
         for (var index = startedMidFile ? 1 : 0; index < lines.Length; index++)
@@ -123,7 +140,7 @@ public static class TranscriptActivity_Reader
             if (line.Length == 0)
                 continue;
 
-            if (!Try_ReadRecord(line, out var stampedUtc, out var isEnqueue))
+            if (!Try_ReadRecord(line, out var stampedUtc, out var isEnqueue, out var isToolUse, out var isToolResult))
                 continue;
 
             if (isEnqueue)
@@ -136,13 +153,18 @@ public static class TranscriptActivity_Reader
                 continue;
             }
 
+            if (isToolUse)
+                hasOpenToolCall = true;
+            else if (isToolResult)
+                hasOpenToolCall = false;
+
             // Any non-enqueue record is the SESSION acting: a dequeue, a removal, a tool call, a
             // reply. It clears every wake before it — those were answered by definition.
             lastActivityUtc = stampedUtc;
             oldestWakeSinceActivityUtc = null;
         }
 
-        return new TranscriptActivity(lastActivityUtc, oldestWakeSinceActivityUtc, lastActivityUtc != null);
+        return new TranscriptActivity(lastActivityUtc, oldestWakeSinceActivityUtc, lastActivityUtc != null, hasOpenToolCall);
     }
 
     /// <summary>
@@ -173,10 +195,12 @@ public static class TranscriptActivity_Reader
         return (nowUtc - activity.OldestUnansweredWakeUtc.Value).TotalMinutes >= thresholdMinutes;
     }
 
-    static bool Try_ReadRecord(string line, out DateTime stampedUtc, out bool isEnqueue)
+    static bool Try_ReadRecord(string line, out DateTime stampedUtc, out bool isEnqueue, out bool isToolUse, out bool isToolResult)
     {
         stampedUtc = default;
         isEnqueue = false;
+        isToolUse = false;
+        isToolResult = false;
 
         try
         {
@@ -203,6 +227,22 @@ public static class TranscriptActivity_Reader
 
             isEnqueue = string.Equals(record["type"]?.GetValue<string>(), QUEUE_OPERATION_TYPE, StringComparison.Ordinal)
                 && string.Equals(record["operation"]?.GetValue<string>(), ENQUEUE_OPERATION, StringComparison.Ordinal);
+
+            // A tool call and its result are both ordinary stamped records; what matters is which
+            // came last. Read from the message content rather than the record type, because both
+            // arrive as plain assistant/user records.
+            if (record["message"] is JsonObject message && message["content"] is JsonArray blocks)
+            {
+                foreach (var block in blocks)
+                {
+                    var kind = (block as JsonObject)?["type"]?.GetValue<string>();
+
+                    if (string.Equals(kind, "tool_use", StringComparison.Ordinal))
+                        isToolUse = true;
+                    else if (string.Equals(kind, "tool_result", StringComparison.Ordinal))
+                        isToolResult = true;
+                }
+            }
 
             return true;
         }

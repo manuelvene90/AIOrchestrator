@@ -295,4 +295,83 @@ public class TranscriptActivityReaderTests
             try { File.Delete(path); } catch { /* best effort */ }
         }
     }
+
+    /// <summary>
+    /// A SESSION INSIDE A LONG COMMAND IS WORKING, and nothing else in this reader can see it.
+    ///
+    /// Everything else here dates the last record, and a session running one long build or test
+    /// writes no records at all while it runs — so a six-minute test and a dead monitor produce
+    /// IDENTICAL silence. On 2026-08-20 the owner watched a session running a test get declared
+    /// ORPHANED and respawned: "I was seeing it, it was not unresponsive, I'm pretty sure it was
+    /// still working." It was. Its context was destroyed for not answering during a command it had
+    /// not finished.
+    /// </summary>
+    [Fact]
+    public void AToolCallWithNoResultYetIsAnOpenCall()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(Activity("2026-08-20T12:00:00.000Z"), ToolUse("2026-08-20T12:00:01.000Z")),
+            startedMidFile: false);
+
+        Assert.True(activity.HasOpenToolCall, "a tool call whose result has not come back was not read as work in progress");
+    }
+
+    /// <summary>The result closing it means the session is between calls, not inside one.</summary>
+    [Fact]
+    public void AToolResultClosesTheCall()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(ToolUse("2026-08-20T12:00:01.000Z"), ToolResult("2026-08-20T12:00:09.000Z")),
+            startedMidFile: false);
+
+        Assert.False(activity.HasOpenToolCall);
+    }
+
+    /// <summary>
+    /// WHICHEVER CAME LAST WINS. A session that finishes one command and starts another is inside
+    /// the second — reading only "was there ever a tool_use" would leave it open forever, and
+    /// reading only the last pair would miss it.
+    /// </summary>
+    [Fact]
+    public void TheLastOfTheTwoDecidesIt()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(
+                ToolUse("2026-08-20T12:00:01.000Z"),
+                ToolResult("2026-08-20T12:00:09.000Z"),
+                ToolUse("2026-08-20T12:00:10.000Z")),
+            startedMidFile: false);
+
+        Assert.True(activity.HasOpenToolCall);
+    }
+
+    /// <summary>A transcript with no tool calls at all opens nothing.</summary>
+    [Fact]
+    public void PlainRecordsLeaveNoCallOpen()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(Activity("2026-08-20T12:00:00.000Z"), Activity("2026-08-20T12:00:05.000Z")),
+            startedMidFile: false);
+
+        Assert.False(activity.HasOpenToolCall);
+    }
+
+    /// <summary>An unreadable transcript opens nothing — not-knowing is never a verdict here either.</summary>
+    [Fact]
+    public void UnknownOpensNothing()
+    {
+        Assert.False(TranscriptActivity_Reader.TranscriptActivity.Unknown.HasOpenToolCall);
+    }
+
+    /// <summary>
+    /// Built by concatenation rather than a raw interpolated string: this JSON ends in a run of
+    /// consecutive closing braces, which a `$$"""..."""` literal reads as its own delimiters.
+    /// </summary>
+    static string ToolUse(string stamp)
+        => "{\"type\":\"assistant\",\"timestamp\":\"" + stamp
+         + "\",\"uuid\":\"u\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\"}]}}";
+
+    static string ToolResult(string stamp)
+        => "{\"type\":\"user\",\"timestamp\":\"" + stamp
+         + "\",\"uuid\":\"u\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\"}]}}";
 }

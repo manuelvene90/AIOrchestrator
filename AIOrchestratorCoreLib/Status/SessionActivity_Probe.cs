@@ -68,7 +68,18 @@ public static class SessionActivity_Probe
     /// </summary>
     public static bool Is_MidTurn(string usageFilePath)
     {
-        var lastActivityUtc = Read_Activity(usageFilePath).LastActivityUtc;
+        var activity = Read_Activity(usageFilePath);
+
+        // INSIDE A COMMAND IS MID-TURN, however long the command takes, and this clause is the
+        // whole point of the flag. A session running one long build or test writes NOTHING to its
+        // transcript while it runs, so the freshness test below cannot tell it from a dead one —
+        // and the orphan detector, reading that silence, respawned a working session and destroyed
+        // its context (owner, 2026-08-20: "I was seeing it, it was not unresponsive, I'm pretty
+        // sure it was still working"). An unanswered tool call is positive evidence of work.
+        if (activity.HasOpenToolCall)
+            return true;
+
+        var lastActivityUtc = activity.LastActivityUtc;
 
         if (lastActivityUtc == null)
             return false;

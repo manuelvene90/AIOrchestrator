@@ -162,4 +162,57 @@ public class SessionActivityProbeTests : IDisposable
         Assert.False(SessionActivity_Probe.Is_DeafToWakes(usagePath, DateTime.UtcNow, 14));
         Assert.NotNull(SessionActivity_Probe.Get_LastActivityUtc_OrNull(usagePath));
     }
+
+    /// <summary>
+    /// THE INCIDENT THIS EXISTS FOR (owner, 2026-08-20): a session running a test was declared
+    /// ORPHANED and respawned, losing its context — "I was seeing it, it was not unresponsive, I'm
+    /// pretty sure it was still working."
+    ///
+    /// It was working. A session inside one long command writes NOTHING to its transcript while the
+    /// command runs, so the freshness test cannot tell a six-minute build from a dead monitor. The
+    /// last record here is three hours old — stale by every other measure — and the session is
+    /// nonetheless mid-turn, because its tool call has no result yet.
+    ///
+    /// Written after a mutation test: removing the open-call clause from Is_MidTurn left the whole
+    /// suite green, because the reader was covered and the CALLER was not.
+    /// </summary>
+    [Fact]
+    public void ASessionInsideALongCommandIsMidTurn_HoweverStaleItsLastRecordIs()
+    {
+        var now = DateTime.UtcNow;
+
+        var usageFile = Write_Session(
+            "mid-command",
+            Activity(now.AddHours(-3)),
+            ToolUse(now.AddHours(-3).AddSeconds(1)));
+
+        Assert.True(
+            SessionActivity_Probe.Is_MidTurn(usageFile),
+            "a session waiting on its own tool call was read as not working — that is what got one respawned");
+    }
+
+    /// <summary>
+    /// And the other side: once the result comes back, a stale session IS stale. Without this the
+    /// fix above would exempt every session that had ever made a tool call, which is all of them.
+    /// </summary>
+    [Fact]
+    public void AFinishedCommandLeavesAStaleSessionStale()
+    {
+        var now = DateTime.UtcNow;
+
+        var usageFile = Write_Session(
+            "command-finished",
+            ToolUse(now.AddHours(-3)),
+            ToolResult(now.AddHours(-3).AddSeconds(9)));
+
+        Assert.False(SessionActivity_Probe.Is_MidTurn(usageFile));
+    }
+
+    static string ToolUse(DateTime utc)
+        => "{\"type\":\"assistant\",\"timestamp\":\"" + Stamp(utc)
+         + "\",\"uuid\":\"u\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\"}]}}";
+
+    static string ToolResult(DateTime utc)
+        => "{\"type\":\"user\",\"timestamp\":\"" + Stamp(utc)
+         + "\",\"uuid\":\"u\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\"}]}}";
 }
