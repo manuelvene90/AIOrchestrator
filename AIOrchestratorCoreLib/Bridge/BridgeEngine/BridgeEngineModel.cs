@@ -7791,6 +7791,10 @@ internal sealed class BridgeEngineModel(
             segmentText = message.Text;
         }
 
+        // AFTER the three paths, not inside one: the owner can reply with text, a voice note or a
+        // photo, and the quote is what they were pointing at in every case.
+        segmentText = OwnerReplyContext_Formatter.Prepend_OrSame(segmentText, message.ReplyToText);
+
         lock (_deliveryLock)
         {
             _deliveryTargets[channelFile] = (orchId, message.MessageThreadId);
