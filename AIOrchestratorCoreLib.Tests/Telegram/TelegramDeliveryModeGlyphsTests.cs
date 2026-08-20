@@ -176,4 +176,34 @@ public class TelegramDeliveryModeGlyphsTests
                 "crm bug", TelegramDeliveryModes.Normal, isAway: false, isQuiet: false,
                 OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None));
     }
+
+    /// <summary>
+    /// THE OWNER'S OWN CASE, 2026-08-20: they muted a topic and no bell appeared. That one turned out
+    /// to be Telegram's own mute, which the app cannot see — but the reply glyphs had just been put
+    /// IN FRONT of the mode glyph, and a prefix that swallowed the bell would produce the identical
+    /// symptom the moment it went live. This pins that it does not.
+    /// </summary>
+    [Fact]
+    public void AMutedTopicKeepsItsBell_EvenWhenSomeoneIsWaitingOnTheOwner()
+    {
+        Assert.Equal(
+            "❓ 🔕 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Wanted));
+
+        // And with nobody waiting, the bell is the whole decoration — the plain /mute case.
+        Assert.Equal(
+            "🔕 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None));
+
+        // Do-Not-Disturb keeps its moon on the same terms.
+        Assert.Equal(
+            "❓ 🌙 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Deferred, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Wanted));
+    }
 }

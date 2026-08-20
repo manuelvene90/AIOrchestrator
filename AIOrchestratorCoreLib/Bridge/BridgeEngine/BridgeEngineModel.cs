@@ -6264,6 +6264,10 @@ internal sealed class BridgeEngineModel(
             lock (_ownerStateLock)
                 _ownerReplyStateByOrchId[session.OrchId] = Resolve_OwnerReplyState(session, members);
 
+            // Rides the SAME ledger read the status line just did — a movement notice that cost its
+            // own parse would be a third reading of one file per tick.
+            await Tell_LedgerMovement_Async(session, ledger, cancellationToken);
+
             var plan = Telegram.TopicStatusLine_Planner.Plan(
                 session.DisplayName ?? session.OrchId,
                 ledger,
@@ -8382,6 +8386,19 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, Telegram.OwnerReplyStates> _ownerReplyStateByOrchId = [];
 
     /// <summary>
+    /// Per orchestration: the ledger as it read on the previous tick, so a MOVEMENT can be spotted.
+    ///
+    /// The owner asked to hear when a line finishes and the next one starts (2026-08-20) — following
+    /// a session otherwise meant asking it. A transition happens once and is therefore told once:
+    /// there is no timer here and no cadence, only a comparison, which is what keeps this from
+    /// becoming the waterfall this file spent a day removing.
+    /// </summary>
+    readonly Dictionary<string, Planning.PlanProgress.IPlanProgress> _lastLedgerReadingByOrchId = [];
+
+    /// <summary>Orchestrations already told they were finished — so the recap lands exactly once.</summary>
+    readonly HashSet<string> _recappedOrchIds = [];
+
+    /// <summary>
     /// BLOCKING WINS over merely wanted: a member that has declared BLOCKED ON OWNER cannot proceed,
     /// and "someone is waiting" understates that. Read from the entries the caller already has.
     /// </summary>
@@ -8442,6 +8459,58 @@ internal sealed class BridgeEngineModel(
 
             return DateTime.UtcNow - stamp.SinceUtc;
         }
+    }
+
+    /// <summary>
+    /// Tells the owner that a line finished, that the next one started, and — once — that the whole
+    /// endeavour is done.
+    ///
+    /// SENT STRAIGHT TO TELEGRAM, NEVER THROUGH THE CHANNEL, and that is the load-bearing choice. A
+    /// channel append wakes the session, and the whole point of this message is to save the owner
+    /// asking — waking a working session to announce its own progress would cost a turn to tell it
+    /// what it just did. That is the away-digest loop exactly, and it is the reason this file exists
+    /// in its current shape.
+    /// </summary>
+    async Task Tell_LedgerMovement_Async(IOrchestrationSession session, Planning.PlanProgress.IPlanProgress? ledger, CancellationToken cancellationToken)
+    {
+        if (ledger == null)
+            return;
+
+        Planning.PlanProgress.IPlanProgress? previous;
+
+        lock (_ownerStateLock)
+        {
+            _lastLedgerReadingByOrchId.TryGetValue(session.OrchId, out previous);
+            _lastLedgerReadingByOrchId[session.OrchId] = ledger;
+
+            // Work reappearing un-arms the recap, so a reopened endeavour can announce its end again.
+            if (!Planning.LedgerTransition_Detector.Is_EndOfEndeavour(ledger))
+                _recappedOrchIds.Remove(session.OrchId);
+        }
+
+        // FIRST SIGHT SAYS NOTHING. With no previous reading every line looks new, so an app restart
+        // would announce an entire ledger at once — the loudest possible way to say nothing happened.
+        if (previous == null)
+            return;
+
+        var transition = Planning.LedgerTransition_Detector.Compare(previous, ledger);
+
+        if (transition.IsWorthTelling)
+            await Send_AwayNotice_Async(session, Planning.LedgerTransition_Wording.Describe(transition), cancellationToken);
+
+        if (!Planning.LedgerTransition_Detector.Is_EndOfEndeavour(ledger))
+            return;
+
+        lock (_ownerStateLock)
+        {
+            if (!_recappedOrchIds.Add(session.OrchId))
+                return;
+        }
+
+        await Send_AwayNotice_Async(
+            session,
+            Planning.LedgerTransition_Wording.Describe_Recap(session.DisplayName ?? session.OrchId, ledger),
+            cancellationToken);
     }
 
     /// <summary>The figures the owner was last told, or null when they have not been told yet.</summary>
@@ -9026,6 +9095,24 @@ internal sealed class BridgeEngineModel(
     /// "Work in flight" without asking anyone: a member is mid-turn, or the ledger says a task is
     /// in progress. Both are facts on disk; neither costs a turn to establish.
     /// </summary>
+    /// <summary>
+    /// Whether this orchestration is ALIVE, for the periodic status's "do not report no-change
+    /// forever" rule.
+    ///
+    /// IT NO LONGER DEPENDS ON THE LEDGER BEING MAINTAINED, and that was a real silence. On
+    /// 2026-08-20 `Tear-off tabs` went five hours without a status while its solo worked the whole
+    /// time: its ledger read 8 done, 3 open and NOTHING `[>]`, so the first test below said no, and
+    /// the second — mid-turn AT THIS INSTANT — was asked once every thirty minutes, which a session
+    /// between turns fails almost every time. Two "no"s, and the owner's status feed simply stopped.
+    ///
+    /// The app already knew better: <see cref="Has_AnySessionWorkedWithin"/> answers "has anyone
+    /// worked LATELY", which is the question this was reaching for. A ledger nobody has updated is a
+    /// reason to nudge the session — <see cref="Report_StaleInProgress"/> does exactly that — never a
+    /// reason to stop telling the owner what is happening.
+    ///
+    /// The window is the status cadence itself: worked at any point since the last slot IS work in
+    /// flight for that slot.
+    /// </summary>
     bool Has_WorkInFlight(IOrchestrationSession session)
     {
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(
@@ -9034,19 +9121,9 @@ internal sealed class BridgeEngineModel(
         if (progress != null && progress.InProgress > 0)
             return true;
 
-        foreach (var member in session.Members)
-        {
-            if (member.ClosedUtc != null)
-                continue;
-
-            var usageFile = Path.Combine(
-                _paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
-
-            if (SessionActivity_Probe.Is_MidTurn(usageFile))
-                return true;
-        }
-
-        return false;
+        // RECENTLY, not right now. Kept below the ledger check because that one is a file read and
+        // this walks every member's usage artefact.
+        return Has_AnySessionWorkedWithin(session, PeriodicStatusSlot_Planner.SLOT_MINUTES);
     }
 
     /// <summary>

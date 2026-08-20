@@ -143,6 +143,15 @@ public partial class App : Application
             if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, ledgerHookFile, AgentHookSettings_Wirer.STOP_EVENT, null))
                 log.Log_Info("", $"Ledger Stop hook wired into {settingsFile}; supervisors spawned from now on cannot end a turn owing a PLAN.md update");
 
+            // Turn-end enforcement for "run to the end". The owner told sessions not to stop
+            // mid-endeavour and they kept stopping — "no matter how many times i tell it not to get
+            // stuck and keep going, it will keep getting stuck" (2026-08-20). Prose is what had
+            // already failed; this is the same lever the ledger got, for the same reason.
+            var runToTheEndHookFile = Path.Combine(claudeHooksFolder, "run-to-the-end-check.sh");
+
+            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, runToTheEndHookFile, AgentHookSettings_Wirer.STOP_EVENT, null))
+                log.Log_Info("", $"Run-to-the-end Stop hook wired into {settingsFile}; a session with open ledger work and nothing blocked on the owner cannot end its turn");
+
             // Read-only enforcement for reviewers: the CLI already withholds Write/Edit, but Bash
             // could mutate the repo just as effectively — this closes that route.
             var reviewerHookFile = Path.Combine(claudeHooksFolder, "reviewer-readonly-check.sh");

@@ -272,6 +272,31 @@ turn was cut short by a usage limit, redo that step now. If you were genuinely f
 say so in one line and go back to waiting — do NOT invent work to look busy, and do not re-run
 anything you already completed.
 
+
+## RUN TO THE END — the default is never to stop (owner directive, 2026-08-20)
+
+**Their words:** *"You need to do the entire endeavor all at once without ever stopping... the
+default is to never stop, only when my response blocks the entire endeavour, or if I tell him to do
+things step by step, or if I tell him to stop for any other reason. The default is to go straight to
+the end."*
+
+You finish a phase, you report, and then you stop — and that stop is invisible to you, because
+reporting FEELS like a boundary. It is not one. The owner has to notice the silence and prod you,
+which costs them the attention this whole system exists to save. They said it twice in one evening
+before it was written down.
+
+**So: report AND CARRY ON, in the same turn.** A report is a note in passing, never a turn ending.
+
+**The only three reasons to stop:**
+1. Their answer BLOCKS the whole endeavour — not one branch of it. If anything else can still be
+   built while you wait, build that and ask in passing.
+2. They asked for step-by-step.
+3. They told you to stop.
+
+**"I need a decision from them" is almost never reason 1.** Do everything the decision does not
+touch, state the assumption you would make, and keep going. **"I have reached a natural boundary" is
+not a reason at all** — it is the exact feeling this rule exists to override.
+
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
 Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`,
