@@ -6264,6 +6264,10 @@ internal sealed class BridgeEngineModel(
             lock (_ownerStateLock)
                 _ownerReplyStateByOrchId[session.OrchId] = Resolve_OwnerReplyState(session, members);
 
+            // Rides the SAME ledger read the status line just did — a movement notice that cost its
+            // own parse would be a third reading of one file per tick.
+            await Tell_LedgerMovement_Async(session, ledger, cancellationToken);
+
             var plan = Telegram.TopicStatusLine_Planner.Plan(
                 session.DisplayName ?? session.OrchId,
                 ledger,
@@ -8382,6 +8386,19 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, Telegram.OwnerReplyStates> _ownerReplyStateByOrchId = [];
 
     /// <summary>
+    /// Per orchestration: the ledger as it read on the previous tick, so a MOVEMENT can be spotted.
+    ///
+    /// The owner asked to hear when a line finishes and the next one starts (2026-08-20) — following
+    /// a session otherwise meant asking it. A transition happens once and is therefore told once:
+    /// there is no timer here and no cadence, only a comparison, which is what keeps this from
+    /// becoming the waterfall this file spent a day removing.
+    /// </summary>
+    readonly Dictionary<string, Planning.PlanProgress.IPlanProgress> _lastLedgerReadingByOrchId = [];
+
+    /// <summary>Orchestrations already told they were finished — so the recap lands exactly once.</summary>
+    readonly HashSet<string> _recappedOrchIds = [];
+
+    /// <summary>
     /// BLOCKING WINS over merely wanted: a member that has declared BLOCKED ON OWNER cannot proceed,
     /// and "someone is waiting" understates that. Read from the entries the caller already has.
     /// </summary>
@@ -8442,6 +8459,58 @@ internal sealed class BridgeEngineModel(
 
             return DateTime.UtcNow - stamp.SinceUtc;
         }
+    }
+
+    /// <summary>
+    /// Tells the owner that a line finished, that the next one started, and — once — that the whole
+    /// endeavour is done.
+    ///
+    /// SENT STRAIGHT TO TELEGRAM, NEVER THROUGH THE CHANNEL, and that is the load-bearing choice. A
+    /// channel append wakes the session, and the whole point of this message is to save the owner
+    /// asking — waking a working session to announce its own progress would cost a turn to tell it
+    /// what it just did. That is the away-digest loop exactly, and it is the reason this file exists
+    /// in its current shape.
+    /// </summary>
+    async Task Tell_LedgerMovement_Async(IOrchestrationSession session, Planning.PlanProgress.IPlanProgress? ledger, CancellationToken cancellationToken)
+    {
+        if (ledger == null)
+            return;
+
+        Planning.PlanProgress.IPlanProgress? previous;
+
+        lock (_ownerStateLock)
+        {
+            _lastLedgerReadingByOrchId.TryGetValue(session.OrchId, out previous);
+            _lastLedgerReadingByOrchId[session.OrchId] = ledger;
+
+            // Work reappearing un-arms the recap, so a reopened endeavour can announce its end again.
+            if (!Planning.LedgerTransition_Detector.Is_EndOfEndeavour(ledger))
+                _recappedOrchIds.Remove(session.OrchId);
+        }
+
+        // FIRST SIGHT SAYS NOTHING. With no previous reading every line looks new, so an app restart
+        // would announce an entire ledger at once — the loudest possible way to say nothing happened.
+        if (previous == null)
+            return;
+
+        var transition = Planning.LedgerTransition_Detector.Compare(previous, ledger);
+
+        if (transition.IsWorthTelling)
+            await Send_AwayNotice_Async(session, Planning.LedgerTransition_Wording.Describe(transition), cancellationToken);
+
+        if (!Planning.LedgerTransition_Detector.Is_EndOfEndeavour(ledger))
+            return;
+
+        lock (_ownerStateLock)
+        {
+            if (!_recappedOrchIds.Add(session.OrchId))
+                return;
+        }
+
+        await Send_AwayNotice_Async(
+            session,
+            Planning.LedgerTransition_Wording.Describe_Recap(session.DisplayName ?? session.OrchId, ledger),
+            cancellationToken);
     }
 
     /// <summary>The figures the owner was last told, or null when they have not been told yet.</summary>
