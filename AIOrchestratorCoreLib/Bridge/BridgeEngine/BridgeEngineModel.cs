@@ -9026,6 +9026,24 @@ internal sealed class BridgeEngineModel(
     /// "Work in flight" without asking anyone: a member is mid-turn, or the ledger says a task is
     /// in progress. Both are facts on disk; neither costs a turn to establish.
     /// </summary>
+    /// <summary>
+    /// Whether this orchestration is ALIVE, for the periodic status's "do not report no-change
+    /// forever" rule.
+    ///
+    /// IT NO LONGER DEPENDS ON THE LEDGER BEING MAINTAINED, and that was a real silence. On
+    /// 2026-08-20 `Tear-off tabs` went five hours without a status while its solo worked the whole
+    /// time: its ledger read 8 done, 3 open and NOTHING `[>]`, so the first test below said no, and
+    /// the second — mid-turn AT THIS INSTANT — was asked once every thirty minutes, which a session
+    /// between turns fails almost every time. Two "no"s, and the owner's status feed simply stopped.
+    ///
+    /// The app already knew better: <see cref="Has_AnySessionWorkedWithin"/> answers "has anyone
+    /// worked LATELY", which is the question this was reaching for. A ledger nobody has updated is a
+    /// reason to nudge the session — <see cref="Report_StaleInProgress"/> does exactly that — never a
+    /// reason to stop telling the owner what is happening.
+    ///
+    /// The window is the status cadence itself: worked at any point since the last slot IS work in
+    /// flight for that slot.
+    /// </summary>
     bool Has_WorkInFlight(IOrchestrationSession session)
     {
         var progress = Planning.PlanLedger_Parser.Parse_OrNull(
@@ -9034,19 +9052,9 @@ internal sealed class BridgeEngineModel(
         if (progress != null && progress.InProgress > 0)
             return true;
 
-        foreach (var member in session.Members)
-        {
-            if (member.ClosedUtc != null)
-                continue;
-
-            var usageFile = Path.Combine(
-                _paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
-
-            if (SessionActivity_Probe.Is_MidTurn(usageFile))
-                return true;
-        }
-
-        return false;
+        // RECENTLY, not right now. Kept below the ledger check because that one is a file read and
+        // this walks every member's usage artefact.
+        return Has_AnySessionWorkedWithin(session, PeriodicStatusSlot_Planner.SLOT_MINUTES);
     }
 
     /// <summary>
