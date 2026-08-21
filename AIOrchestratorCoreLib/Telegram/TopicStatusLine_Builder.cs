@@ -193,40 +193,39 @@ public static class TopicStatusLine_Builder
     static string Build_MemberLine(ITopicStatusMember member, DateTime now)
     {
         var state = MemberState_Resolver.Resolve(member.Entries);
-        var contextField = Build_ContextField_OrNull(member);
 
-        if (Is_Idle(state))
-        {
-            return contextField == null
-                ? Build_Row(member.MemberId, NOTHING_DECLARED)
-                : Build_Row(member.MemberId, NOTHING_DECLARED, contextField);
-        }
+        // ONE PATH, BUILDING A FIELD LIST, rather than a branch per combination of optional fields.
+        // With a task, a duration and now a context reading all able to be absent independently,
+        // the ternary shape needed eight spellings of the same row — and the doc on Build_Row below
+        // records what happens when one row is spelled more than once: the copies drift, and a
+        // separator ends up different in one branch from another.
+        var brief = Is_Idle(state) ? null : MemberState_Resolver.Find_LastBrief_OrNull(member.Entries);
 
-        var brief = MemberState_Resolver.Find_LastBrief_OrNull(member.Entries);
+        List<string> fields = [];
 
         if (brief == null)
         {
-            return contextField == null
-                ? Build_Row(member.MemberId, NOTHING_DECLARED)
-                : Build_Row(member.MemberId, NOTHING_DECLARED, contextField);
+            fields.Add(NOTHING_DECLARED);
         }
-
-        var task = TextSummary_Formatter.Summarize_Task(brief.Subject, MEMBER_TASK_WORDS);
-        var onTaskFor = SessionDuration_Formatter.Describe_SinceStamp_OrNull(brief.DateText, now);
-
-        // A missing duration DROPS ITS FIELD rather than leaving the separator standing: a row ending
-        // in a dangling `· ` reads as a value that failed to load, when the truth is that the stamp
-        // was not trustworthy enough to date.
-        if (onTaskFor == null)
+        else
         {
-            return contextField == null
-                ? Build_Row(member.MemberId, task)
-                : Build_Row(member.MemberId, task, contextField);
+            fields.Add(TextSummary_Formatter.Summarize_Task(brief.Subject, MEMBER_TASK_WORDS));
+
+            var onTaskFor = SessionDuration_Formatter.Describe_SinceStamp_OrNull(brief.DateText, now);
+
+            // A missing duration DROPS ITS FIELD rather than leaving the separator standing: a row
+            // ending in a dangling `· ` reads as a value that failed to load, when the truth is that
+            // the stamp was not trustworthy enough to date.
+            if (onTaskFor != null)
+                fields.Add(onTaskFor);
         }
 
-        return contextField == null
-            ? Build_Row(member.MemberId, task, onTaskFor)
-            : Build_Row(member.MemberId, task, onTaskFor, contextField);
+        var contextField = Build_ContextField_OrNull(member);
+
+        if (contextField != null)
+            fields.Add(contextField);
+
+        return Build_Row(member.MemberId, [.. fields]);
     }
 
     /// <summary>
