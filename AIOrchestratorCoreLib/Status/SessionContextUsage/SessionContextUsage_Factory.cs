@@ -15,6 +15,17 @@ namespace AIOrchestratorCoreLib.Status.SessionContextUsage;
 public static class SessionContextUsage_Factory
 {
     /// <summary>
+    /// A reading from figures already in hand. The file-reading overload below is how the app gets
+    /// one; this exists so a caller that already knows the numbers — a test, or any future source
+    /// that is not a probe file — does not have to write a file to express one, and so that
+    /// `new SessionContextUsageModel` stays inside this factory where the pattern requires it.
+    /// </summary>
+    public static ISessionContextUsage Create(double usedPercent, DateTime probeTimeUtc)
+    {
+        return new SessionContextUsageModel(usedPercent, probeTimeUtc);
+    }
+
+    /// <summary>
     /// The reading, or null when there is none: no probe file yet, an unreadable one, or a Claude
     /// Code version whose status line carries no `context_window` at all. Null means UNKNOWN and
     /// every surface drops the field for it — never 0%, which would read as an empty window.
@@ -36,7 +47,7 @@ public static class SessionContextUsage_Factory
             if (usedPercent == null)
                 return null;
 
-            return new SessionContextUsageModel(usedPercent.Value, File.GetLastWriteTimeUtc(usageFilePath));
+            return Create(usedPercent.Value, File.GetLastWriteTimeUtc(usageFilePath));
         }
         catch
         {
