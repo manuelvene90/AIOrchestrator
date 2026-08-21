@@ -42,4 +42,32 @@ public static class SessionWindowTitle_Builder
             ? $"{SOLO_LABEL}{SEPARATOR}{orchId}"
             : $"{memberId.ToUpperInvariant()}{SEPARATOR}{orchId}";
     }
+
+    /// <summary>
+    /// THE FULL WINDOW TITLE: the match fragment, plus the orchestration's display name when it has
+    /// one. Everything above builds the FRAGMENT — what the focuser, the organizer and the terminator
+    /// search for — and this is the only place the display-name suffix is spelled.
+    ///
+    /// <para>
+    /// It exists because that suffix was about to be written twice. `Rename_SessionWindows_BestEffort`
+    /// already composed it inline, and threading the name through spawn would have added a second
+    /// copy — the duplicate-formatter mistake this repo has paid for before (CLAUDE.md decision 12:
+    /// two copies of a duration formatter, one missing its guard). One copy, both callers.
+    /// </para>
+    /// <para>
+    /// THE SUFFIX IS APPENDED AFTER THE SEPARATOR AND THAT IS LOAD-BEARING, not decoration.
+    /// <see cref="AIOrchestratorCoreLib.WindowFocus.SessionWindowTitle_Matcher"/> accepts a fragment
+    /// that is followed by end-of-title or by exactly this separator, so a titled window is still
+    /// found by the bare fragment every consumer builds from ids alone — including the terminator,
+    /// which has only a pid-file path and cannot know the display name. Glue the name on with
+    /// anything else (a dash, brackets, a bare space) and every one of them stops finding the window:
+    /// Show reports nothing, Organize skips it, and app exit leaves the terminal open.
+    /// </para>
+    /// </summary>
+    public static string Build_Title(string titleFragment, string? displayName)
+    {
+        return string.IsNullOrWhiteSpace(displayName)
+            ? titleFragment
+            : $"{titleFragment}{SEPARATOR}{displayName.Trim()}";
+    }
 }

@@ -10,7 +10,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForSupervisor_CarriesTitleColorDirectoryPidFileAndScript()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", PID_FILE);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", PID_FILE, null);
 
         Assert.Equal("wt.exe", command.Executable);
         Assert.Contains("SUP · arb-fix", command.Arguments);
@@ -27,8 +27,8 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_EverySession_SkipsPermissionPrompts_UnattendedByDesign()
     {
-        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE);
-        var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", null, PID_FILE);
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE, null);
+        var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", null, PID_FILE, null);
         var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", null, PID_FILE);
 
         Assert.Contains(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS, SpawnCommand_Builder.Decode_SessionScript(supervisor));
@@ -48,7 +48,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForSupervisor_SpawnsInItsOwnTerminalWindow()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE, null);
 
         // '-w new' → own window, whose title the app's "Show session" focuser matches on.
         Assert.Equal("-w", command.Arguments[0]);
@@ -58,7 +58,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForImplementer_CarriesMemberIdentityAndSlashCommand()
     {
-        var command = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-2", @"C:\repos\arb", null, PID_FILE);
+        var command = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-2", @"C:\repos\arb", null, PID_FILE, null);
 
         Assert.Contains("IMP-2 · arb-fix", command.Arguments);
         Assert.Contains(SpawnCommand_Builder.IMPLEMENTER_TAB_COLOR, command.Arguments);
@@ -90,7 +90,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_AnyCommand_SuppressesApplicationTitle_SoShowSessionFocusingWorks()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE, null);
 
         Assert.Contains("--suppressApplicationTitle", command.Arguments);
     }
@@ -98,13 +98,13 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForSupervisor_OrchIdWithShellHostileCharacters_Throws()
     {
-        Assert.Throws<ArgumentException>(() => SpawnCommand_Builder.Build_ForSupervisor("arb fix'; rm -rf", @"C:\repos\arb", null, PID_FILE));
+        Assert.Throws<ArgumentException>(() => SpawnCommand_Builder.Build_ForSupervisor("arb fix'; rm -rf", @"C:\repos\arb", null, PID_FILE, null));
     }
 
     [Fact]
     public void Build_PowershellFallback_KeepsScriptDropsWindowsTerminalArguments()
     {
-        var wtCommand = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE);
+        var wtCommand = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, PID_FILE, null);
 
         var fallback = SpawnCommand_Builder.Build_PowershellFallback(wtCommand);
 

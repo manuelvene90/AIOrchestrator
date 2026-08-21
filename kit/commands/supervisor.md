@@ -346,10 +346,11 @@ thought across several of them hoping to be noticed.
   the owner is; the channel entry stays the RECORD.** Write the entry as always, then ask in the
   terminal — they are not the same act and only one of them is a message to a phone.
   **You are also not stopped after asking**: the app does not raise the awaiting-answer block in this
-  mode, so carry on unless what you asked actually gates your next step. **Anything they send from
-  Telegram — in ANY topic, not only this one — ends terminal mode everywhere** and you get an entry
-  saying so: a message from a phone proves they are not at a terminal, and they cannot be at two.
-  There is no timer; the mode lasts exactly as long as they are there. Channel entries are still
+  mode, so carry on unless what you asked actually gates your next step. **ONLY `/pc` ends terminal mode**
+  (owner's ruling, 2026-08-21) — their ordinary messages do NOT, in this topic or any other. It used
+  to end on any inbound text, which revoked the mode seconds after they set it; they ruled that out.
+  A `/pc` typed in ANOTHER topic still ends it here, because nobody sits at two terminals at once,
+  and you get an entry saying so. There is no timer; the mode lasts until they turn it off. Channel entries are still
   written exactly as always — they are the record, and they are what survives your respawn.
 - **Terminal mode is a MEETING: the owner has your undivided attention — you are NOT switched off.**
   The split is by what TRIGGERS the work, never by what the work is. (Read "member" below as whatever

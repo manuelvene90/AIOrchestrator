@@ -95,7 +95,7 @@ public class ReviewerMemberKindTests : IDisposable
     [Fact]
     public void Reviewer_Spawn_WithholdsTheEditingTools_AndRunsTheReviewerCommand()
     {
-        var command = SpawnCommand_Builder.Build_ForReviewer("orch-1", "rev-1", _tempRepo, null, "pid.txt");
+        var command = SpawnCommand_Builder.Build_ForReviewer("orch-1", "rev-1", _tempRepo, null, "pid.txt", null);
         var script = SpawnCommand_Builder.Decode_SessionScript(command);
 
         Assert.Contains("--disallowedTools \"Write\" \"Edit\" \"NotebookEdit\"", script);
@@ -113,7 +113,7 @@ public class ReviewerMemberKindTests : IDisposable
     [Fact]
     public void Implementer_Spawn_KeepsTheEditingTools()
     {
-        var command = SpawnCommand_Builder.Build_ForImplementer("orch-1", "imp-1", _tempRepo, null, "pid.txt");
+        var command = SpawnCommand_Builder.Build_ForImplementer("orch-1", "imp-1", _tempRepo, null, "pid.txt", null);
         var script = SpawnCommand_Builder.Decode_SessionScript(command);
 
         Assert.DoesNotContain("--disallowedTools", script);

@@ -211,7 +211,8 @@ internal sealed class OrchestrationLauncherModel(
             orchId,
             session.RepoPath,
             session.SupervisorModelOverride ?? _configProvider.Get_Current().SupervisorModel,
-            pidFile);
+            pidFile,
+            session.DisplayName);
 
         // Stamp the spawn (watchdog grace) BEFORE deleting the stale pid file, so no tick can see
         // "no pid file + no grace" and double-spawn. The stale file must go: the sync below must
@@ -234,7 +235,8 @@ internal sealed class OrchestrationLauncherModel(
             orchId,
             session.RepoPath,
             _configProvider.Get_Current().CommunicatorModel,
-            pidFile);
+            pidFile,
+            session.DisplayName);
 
         // No pid lands in session.json for the communicator — the pid file is the liveness
         // source and nothing else needs it. Only the spawn-grace stamp is stored.
@@ -274,9 +276,9 @@ internal sealed class OrchestrationLauncherModel(
 
         var command = kind switch
         {
-            MemberKinds.Reviewer => SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, pidFile),
-            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, pidFile),
-            MemberKinds.Implementer => SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, pidFile),
+            MemberKinds.Reviewer => SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
+            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
+            MemberKinds.Implementer => SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
             _ => throw new Exception($"Unhandled MemberKinds '{kind}' respawning '{memberId}' of '{orchId}'"),
         };
 
