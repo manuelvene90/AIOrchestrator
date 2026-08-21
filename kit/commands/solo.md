@@ -190,6 +190,21 @@ line, "audited the tailer, 9 findings" is a diary entry that can never be marked
 the denominator forever. Update it at every real boundary; a stale ledger is worse than none,
 because the owner is being shown it without you in between.
 
+**WAITING ON SOMETHING ALREADY RUNNING IS A REASON TO END THE TURN, NOT TO HOLD IT OPEN**
+(owner, 2026-08-21). A build, a suite, a sub-agent you dispatched: put `WAITING ON <what>` in your
+entry's SUBJECT, or at the START of a body line, and stop. The turn-end hook accepts that and lets
+you go.
+
+**DO NOT POLL IT IN THE FOREGROUND.** A session sitting inside one long tool call cannot read the
+owner's messages, and ending the turn is how they reach you — the job wakes you, and so does your
+monitor. This is written imperatively because it went wrong exactly once and cost them an answer: a
+session was refused a stop while waiting on a suite, obeyed by opening a NINE-MINUTE bounded poll,
+and their question sat unanswered for over ten minutes until they interrupted it by hand.
+
+**And `- [!]` is the marker for blocked on a MACHINE**, as opposed to `- [?]` for blocked on THEM.
+It has always cleared the hook; nothing ever said so, which is why sessions invented the poll. Never
+reach for `- [?]` because a build is slow — that puts it on the owner's plate and cries wolf.
+
 **DONE MEANS READY TO MERGE, and here is what that means READY TO MERGE WITHOUT A REVIEWER**
 (owner directive, 2026-08-13): `- [x]` is built, tested, diff read, evidence stated — finished to the
 point where the only thing left is the owner merging it. *"The merge doesn't count, it's not work,

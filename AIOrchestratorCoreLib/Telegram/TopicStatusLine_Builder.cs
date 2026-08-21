@@ -18,7 +18,7 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// "Working now" elsewhere in the app is FILE MTIME, which stays true for ~2 minutes after a turn
 /// ends; pinned, that wrong state would sit in front of them permanently. So this line contains NO
 /// MTIME ANYWHERE. Every word of it comes from parsed channel state and the PLAN.md ledger — things
-/// an agent actually wrote — and a member with nothing to report reads "idle" rather than being
+/// an agent actually wrote — and a member with nothing to report reads "standing by" rather than being
 /// described by how recently its file was touched.
 ///
 /// Being an EDIT rather than a message is what makes it safe to keep CURRENT: a repeat that is a
@@ -142,6 +142,24 @@ public static class TopicStatusLine_Builder
     }
 
     /// <summary>
+    /// "IDLE" WAS THE WORD, AND IT READ AS A CONTRADICTION. The owner, 2026-08-21, after a topic
+    /// showed them "Solo: busy — running a command" and "solo-1 · idle" within seconds of each
+    /// other: one session, two opposite states.
+    ///
+    /// Both were true of what they measure. The receipt reads SessionActivity_Probe (live transcript,
+    /// so it sees a command start instantly); this line reads MemberState_Resolver (what an agent has
+    /// DECLARED in the channel), and it excludes the mtime signal on purpose — see
+    /// ITopicStatusMember, where the owner refused a pinned line that would show a stale
+    /// "working now" for the two minutes after a turn ends. Reconciling them would reverse that
+    /// ruling, so the WORD changed instead, which is what they chose when asked.
+    ///
+    /// It is also the second time this exact word has been wrong at them. On 2026-08-15, of the card:
+    /// *"I know you're not idle because we're talking"* — "idle" reads as ABSENT when the truth is
+    /// merely that nothing has been declared since. MemberState_Descriptor carries that history.
+    /// </summary>
+    const string NOTHING_DECLARED = "standing by";
+
+    /// <summary>
     /// A member row is "who · what · how long", and every part of it is agent-written. The duration
     /// comes from the SUPERVISOR's last brief stamp through the one formatter this repo has
     /// (item 12), which returns null for a stamp in the future rather than a confident wrong number.
@@ -151,12 +169,12 @@ public static class TopicStatusLine_Builder
         var state = MemberState_Resolver.Resolve(member.Entries);
 
         if (Is_Idle(state))
-            return Build_Row(member.MemberId, "idle");
+            return Build_Row(member.MemberId, NOTHING_DECLARED);
 
         var brief = MemberState_Resolver.Find_LastBrief_OrNull(member.Entries);
 
         if (brief == null)
-            return Build_Row(member.MemberId, "idle");
+            return Build_Row(member.MemberId, NOTHING_DECLARED);
 
         var task = TextSummary_Formatter.Summarize_Task(brief.Subject, MEMBER_TASK_WORDS);
         var onTaskFor = SessionDuration_Formatter.Describe_SinceStamp_OrNull(brief.DateText, now);

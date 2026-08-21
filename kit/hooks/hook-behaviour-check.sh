@@ -1122,6 +1122,83 @@ printf '%s
 ' '## [1] FROM solo - d - s' 'QUESTION: merge or hold?' '' '## [2] FROM solo - d - s' 'carried on regardless' > "$RUNEND_CHANNEL"
 check "an OLDER question does not exempt" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
 
+# WAITING ON SOMETHING ALREADY RUNNING. The owner, 2026-08-21: the hook "keeps intervening
+# constantly, essentially preventing solo from responding to me". The session it happened to had one
+# open line, was waiting on a full suite it had already started, and correctly refused to mark `[?]`
+# because nothing owner-side blocked it -- so, obeying, it turned a free wait into a NINE-MINUTE
+# foreground poll and could not read the owner's question for over ten minutes.
+#
+# The marker is read the way every marker in this kit is: in the SUBJECT anywhere, or at the START of
+# a body line. The negative cases are the substance -- an escape that any sentence about waiting can
+# trigger is not an escape, it is an off switch, and the control immediately above each one is the
+# SAME channel with the SAME ledger.
+printf '%s
+' '- [>] land on master: full suite then push' > "$RUNEND_PLAN"
+
+printf '%s
+' '## [1] FROM solo - d - suite running, WAITING ON the full suite' 'body text' > "$RUNEND_CHANNEL"
+check "the marker in the subject" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+printf '%s
+' '## [1] FROM solo - d - suite running' 'WAITING ON the full suite (52 projects)' > "$RUNEND_CHANNEL"
+check "the marker starting a body line" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+printf '%s
+' '## [1] FROM solo - d - suite running' 'I am waiting on the full suite' > "$RUNEND_CHANNEL"
+check "lowercase prose is not a declaration" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+printf '%s
+' '## [1] FROM solo - d - suite running' 'Right now I am WAITING ON the suite' > "$RUNEND_CHANNEL"
+check "mid-line is discussion, not a marker" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# SELF-CLEARING, and this is what makes the escape safe to hand out: it lasts exactly as long as it
+# is the newest entry. The moment the session says anything else, the wait is over by its own account.
+printf '%s
+' '## [1] FROM solo - d - WAITING ON the suite' '' '## [2] FROM solo - d - suite done' 'all green' > "$RUNEND_CHANNEL"
+check "a superseded wait does not exempt" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+printf '%s
+' '## [1] FROM solo - d - suite done' 'all green' '' '## [2] FROM solo - d - WAITING ON the deploy' '' > "$RUNEND_CHANNEL"
+check "the newest entry declares the wait" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# "WAITING ONLY" CONTAINS "WAITING ON", and an escape that a near-miss can take is not an escape.
+# Exactly the shape of "MUTATION WINDOW CLOSED" containing "WINDOW CLOSED" -- the collision this kit
+# has already paid for once. The two ALLOW cases beside it are the control: the boundary must admit
+# a colon and a dash, or the marker becomes fussy in a way nobody will remember.
+printf '%s
+' '## [1] FROM solo - d - s' 'WAITING ONLY for the reviewer to come back' > "$RUNEND_CHANNEL"
+check "WAITING ONLY is a near miss, not the marker" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+printf '%s
+' '## [1] FROM solo - d - s' 'WAITING ON: the full suite' > "$RUNEND_CHANNEL"
+check "a colon after the marker still counts" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+printf '%s
+' '## [1] FROM solo - d - WAITING ON - the full suite' 'body' > "$RUNEND_CHANNEL"
+check "a dash after the marker still counts" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+printf '%s
+' '## [1] FROM solo - d - s' 'a plain report' > "$RUNEND_CHANNEL"
+
+# BLOCKED ON A MACHINE. `- [!]` already cleared this hook and the block message never said so, which
+# is why sessions invented foreground polls instead: the escape existed and nobody was told. Pinned
+# now so a future tightening of the open-line regex cannot silently take it away again.
+printf '%s
+' '## [1] FROM solo - d - s' 'a plain report' > "$RUNEND_CHANNEL"
+printf '%s
+' '- [!] land on master - blocked on the suite' > "$RUNEND_PLAN"
+check "a line blocked on a machine" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# THE BLOCK MESSAGE HAS TO TEACH THEM, or the escapes above are dead on arrival -- which is exactly
+# how `- [!]` sat unused. Asserted on the emitted text, not on the file, so a reworded message that
+# drops one is caught.
+printf '%s
+' '- [>] land on master: full suite then push' > "$RUNEND_PLAN"
+BLOCK_TEXT="$(run_hook "$RUNEND_HOOK" '{}')"
+for taught in 'WAITING ON' '\- \[!\]' '\- \[\?\]' 'QUESTION:' '\- \[-\]'; do
+  check "the block message offers $taught" TAUGHT "$(printf '%s' "$BLOCK_TEXT" | grep -qE "$taught" && printf 'TAUGHT' || printf 'MISSING')"
+done
+
 # NOTHING LEFT TO DO. This is the exit that makes the rule livable, and it is the one a `grep -c`
 # quirk silently broke once already -- `grep -c` prints 0 AND exits 1 when it matches nothing, so an
 # `|| echo 0` appended a SECOND zero and the comparison failed on the one input that matters.
