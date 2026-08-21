@@ -34,7 +34,8 @@ public static class OrchestrationSession_Factory
         DateTime? closedUtc,
         long? statusLineMessageId = null,
         OwnerPresenceModes ownerPresence = OwnerPresenceModes.Remote,
-        bool awaitingTest = false)
+        bool awaitingTest = false,
+        bool done = false)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -42,7 +43,7 @@ public static class OrchestrationSession_Factory
         return new OrchestrationSessionModel(
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
-            telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest);
+            telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done);
     }
 
     /// <summary>
@@ -122,6 +123,16 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, awaitingTest: awaitingTest, awaitingTestWasSet: true);
     }
 
+    /// <summary>
+    /// FINISHED AND LEFT OPEN. Like the awaiting-test flag beside it, /done also sets the delivery
+    /// mode to Silenced — but as a separate statement, so that un-muting a done topic does not
+    /// silently declare it unfinished, and finishing a topic does not lose what the owner had set.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithDone(IOrchestrationSession existing, bool done)
+    {
+        return CreateFrom_Existing(existing, done: done, doneWasSet: true);
+    }
+
     /// <summary>Where the owner IS — orthogonal to the delivery mode, which stays as they set it.</summary>
     public static IOrchestrationSession CreateFrom_Existing_WithOwnerPresence(IOrchestrationSession existing, OwnerPresenceModes presence)
     {
@@ -161,7 +172,12 @@ public static class OrchestrationSession_Factory
 
         // A bool cannot say "unchanged" on its own, so it carries the same wasSet flag the nullable
         // overrides above use — without it, every unrelated copy would silently clear this.
-        bool awaitingTestWasSet = false)
+        bool awaitingTestWasSet = false,
+        bool done = false,
+
+        // Same wasSet dance as awaitingTest, and for the same reason: a bare bool cannot say
+        // "leave this alone", so without it every unrelated copy would quietly un-finish the topic.
+        bool doneWasSet = false)
     {
         return Create(
             existing.OrchId,
@@ -180,6 +196,7 @@ public static class OrchestrationSession_Factory
             closedUtc ?? existing.ClosedUtc,
             statusLineMessageIdWasSet ? statusLineMessageId : existing.StatusLineMessageId,
             ownerPresence ?? existing.OwnerPresence,
-            awaitingTestWasSet ? awaitingTest : existing.AwaitingTest);
+            awaitingTestWasSet ? awaitingTest : existing.AwaitingTest,
+            doneWasSet ? done : existing.Done);
     }
 }

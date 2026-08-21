@@ -296,6 +296,62 @@ eposrb");
     }
 
     /// <summary>
+    /// FINISHED IS A STATEMENT ABOUT THE ENDEAVOUR, so it has to reach session.json — the owner
+    /// keeps a done topic open *"in case I have something else to do later"*, and later is on the
+    /// other side of an app restart. Asserted through Reload() for that reason: the in-memory copy
+    /// would pass while proving nothing about what was written.
+    /// </summary>
+    [Fact]
+    public void Set_Done_SurvivesAReload_AndDoesNotDisturbItsNeighbours()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:eposrb");
+        _store.Set_DisplayName("arb-fix", "drift guard");
+        _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Silenced);
+        _store.Set_AwaitingTest("arb-fix", true);
+
+        Assert.False(Reload().Get_Session("arb-fix").Done);
+
+        _store.Set_Done("arb-fix", true);
+
+        var marked = Reload().Get_Session("arb-fix");
+
+        Assert.True(marked.Done);
+
+        // The copy-with-overrides path must not drop its neighbours — the defect the wasSet flag
+        // exists to prevent, and the one a plain bool reintroduces silently.
+        Assert.Equal("drift guard", marked.DisplayName);
+        Assert.Equal(TelegramDeliveryModes.Silenced, marked.TelegramMode);
+        Assert.True(marked.AwaitingTest);
+
+        _store.Set_Done("arb-fix", false);
+
+        var cleared = Reload().Get_Session("arb-fix");
+
+        Assert.False(cleared.Done);
+        Assert.True(cleared.AwaitingTest);
+        Assert.Equal(TelegramDeliveryModes.Silenced, cleared.TelegramMode);
+    }
+
+    /// <summary>
+    /// Absent means NOT finished. Every session.json written before 2026-08-21 lacks the key, and
+    /// reading absence as "done" would mark the owner's live work finished on the first restart.
+    /// </summary>
+    [Fact]
+    public void ASessionWrittenBeforeTheDoneFlagExistedIsNotDone()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:eposrb");
+
+        var path = Path.Combine(_tempRoot, "arb-fix", "session.json");
+        var json = File.ReadAllText(path);
+
+        Assert.Contains("\"done\"", json);
+
+        File.WriteAllText(path, json.Replace("\"done\": true", "\"REMOVED\": true").Replace("\"done\": false", "\"REMOVED\": false"));
+
+        Assert.False(Reload().Get_Session("arb-fix").Done);
+    }
+
+    /// <summary>
     /// THE MARK IS A REMINDER, so it must survive a restart — the owner mutes a finished endeavour
     /// and later needs to know which of the muted ones still owe them a test (2026-08-19). A flag
     /// that lived only in memory would be gone by the time it was needed.

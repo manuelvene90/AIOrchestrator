@@ -19,7 +19,8 @@ internal sealed class OrchestrationSessionModel(
     Telegram.OwnerPresenceModes ownerPresence,
     DateTime? closedUtc,
     long? statusLineMessageId,
-    bool awaitingTest) : IOrchestrationSession
+    bool awaitingTest,
+    bool done) : IOrchestrationSession
 {
     public string OrchId { get; } = orchId;
     public string RepoName { get; } = repoName;
@@ -37,6 +38,7 @@ internal sealed class OrchestrationSessionModel(
     public IReadOnlyList<IOrchestrationMember> Members { get; } = members;
     public Telegram.TelegramDeliveryModes TelegramMode { get; } = telegramMode;
     public bool AwaitingTest { get; } = awaitingTest;
+    public bool Done { get; } = done;
 
     public Telegram.OwnerPresenceModes OwnerPresence { get; } = ownerPresence;
     public DateTime? ClosedUtc { get; } = closedUtc;

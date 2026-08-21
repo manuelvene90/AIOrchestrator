@@ -108,6 +108,81 @@ public class TelegramDeliveryModeGlyphsTests
                 OwnerPresenceModes.Terminal, isAwaitingTest: true));
     }
 
+    /// <summary>
+    /// ✅ REPLACES the mode glyph, for the same reason 🧪 does — /done is mute underneath, so the
+    /// delivery mode really is Silenced and drawing 🔕 ✅ would state one fact twice.
+    /// </summary>
+    [Fact]
+    public void Done_ReplacesTheModeGlyph()
+    {
+        Assert.Equal(
+            "✅ crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None, isDone: true));
+    }
+
+    /// <summary>
+    /// DONE OUTRANKS AWAITING-TEST. 🧪 asks the owner to go and test something; ✅ records that the
+    /// asking is over. Showing the request on a topic they have already signed off would be telling
+    /// them to do a job they have done.
+    /// </summary>
+    [Fact]
+    public void Done_OutranksAwaitingTest()
+    {
+        Assert.Equal(
+            "✅ crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: true, ownerReply: OwnerReplyStates.None, isDone: true));
+    }
+
+    /// <summary>
+    /// It survives terminal presence exactly as 🧪 does, and away still shows beside it: away is
+    /// app-wide and about their phone, which is a different fact from this topic being finished.
+    /// </summary>
+    [Fact]
+    public void Done_SurvivesTerminalPresence_AndKeepsAway()
+    {
+        Assert.Equal(
+            "✅ crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Terminal, isAwaitingTest: false, ownerReply: OwnerReplyStates.None, isDone: true));
+
+        Assert.Equal(
+            "✈ ✅ crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: true, isQuiet: false,
+                OwnerPresenceModes.Terminal, isAwaitingTest: false, ownerReply: OwnerReplyStates.None, isDone: true));
+    }
+
+    /// <summary>
+    /// The reply glyph still leads. A finished topic should not swallow a question that is somehow
+    /// still outstanding on it — that glyph is the only one here that asks something OF the owner.
+    /// </summary>
+    [Fact]
+    public void TheReplyGlyphStillLeadsADoneTopic()
+    {
+        Assert.Equal(
+            "❓ ✅ crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Wanted, isDone: true));
+    }
+
+    /// <summary>
+    /// WITHOUT THIS, EVERY RENAME STACKS ANOTHER ✅. Strip must know each glyph's UTF-16 length too
+    /// — the fallback in Leading_GlyphLength silently removes two units of whatever it is given.
+    /// </summary>
+    [Fact]
+    public void Strip_RemovesTheDoneGlyph()
+    {
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("✅ crm bug"));
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("✈ ✅ crm bug"));
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("❓ ✅ crm bug"));
+    }
+
     /// <summary>Without the strip, every rename would stack another 🧪 onto the name.</summary>
     [Fact]
     public void Strip_RemovesTheAwaitingTestGlyph()

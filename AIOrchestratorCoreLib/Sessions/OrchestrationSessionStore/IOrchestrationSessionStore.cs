@@ -37,6 +37,9 @@ public interface IOrchestrationSessionStore
     /// <summary>Finished but untested — the owner's reminder not to close it yet.</summary>
     void Set_AwaitingTest(string orchId, bool awaitingTest);
 
+    /// <summary>Finished, and kept open on purpose — see IOrchestrationSession.Done.</summary>
+    void Set_Done(string orchId, bool done);
+
     /// <summary>Where the owner is for this orchestration — see IOrchestrationSession.OwnerPresence.</summary>
     void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence);
     void Set_MemberPid(string orchId, string memberId, int? pid);
