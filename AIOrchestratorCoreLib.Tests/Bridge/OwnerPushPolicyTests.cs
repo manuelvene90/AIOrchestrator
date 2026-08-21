@@ -68,6 +68,43 @@ public class OwnerPushPolicyTests
         Assert.Equal(entry.Contains('?'), pushed);
     }
 
+    /// <summary>
+    /// A QUERY MARK THAT DOES NOT END A LINE IS NOT AN ASK, and this is the case that broke.
+    ///
+    /// 2026-08-21, the owner: *"after I put it in pc mode a ? icon appeared in the name for no
+    /// reason"*, and minutes later, of a second topic, *"you just put ? in the topic name"*. Both
+    /// entries were reports. What they had in common is a query mark used as a NOUN or inside a
+    /// LEDGER MARKER — "the ? glyph", "sits at [?] until they answer" — and a bare Contains
+    /// cannot tell those from a question. Sessions write about the `- [?]` marker constantly, so
+    /// this was not a rare shape: it lit the topic glyph and pushed the phone on plain narration.
+    ///
+    /// The replacement is deliberately blunt rather than clever: a prose question ENDS its line
+    /// with the mark. Anything else uses the explicit markers, which every role command already
+    /// tells sessions to use when they actually need a decision.
+    /// </summary>
+    [Theory]
+    [InlineData("## [3] FROM solo — d — s\nInvestigating the ? glyph, the rename and the hook now.")]
+    [InlineData("## [5] FROM solo — d — s\nSTANDING BY.\nLedger line sits at [?] until they answer.")]
+    [InlineData("## [9] FROM solo — d — s\nMarked it - [?] blocked on you, the rest continues.")]
+    public void AQueryMarkThatDoesNotEndALine_IsNotAnAsk(string entry)
+    {
+        Assert.False(OwnerPush_Policy.Asks_InProse(entry));
+        Assert.False(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false));
+    }
+
+    /// <summary>
+    /// The other half of the boundary: ending the line is all it takes, on ANY line of the entry,
+    /// so a question followed by more prose still counts and trailing spaces do not hide it.
+    /// </summary>
+    [Theory]
+    [InlineData("## [4] FROM solo — d — s\nShould I merge this or hold it?")]
+    [InlineData("## [4] FROM solo — d — s\nMerge or hold?\nEither is cheap from here.")]
+    [InlineData("## [4] FROM solo — d — s\ntrailing spaces do not hide it?   ")]
+    public void AQueryMarkEndingAnyLine_IsAnAsk(string entry)
+    {
+        Assert.True(OwnerPush_Policy.Asks_InProse(entry));
+    }
+
     /// <summary>A '?' inside an ASCII mockup or snippet is not the supervisor asking anything.</summary>
     [Fact]
     public void AQuestionMarkInsideAFencedBlock_DoesNotCount()

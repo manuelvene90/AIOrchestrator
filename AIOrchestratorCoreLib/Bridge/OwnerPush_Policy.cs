@@ -43,13 +43,30 @@ public static class OwnerPush_Policy
     /// <summary>
     /// A question asked WITHOUT the markers still has to reach the owner. Relying on the markers
     /// alone made this filter capable of swallowing a real question in prose — the supervisor asks,
-    /// the owner never sees it, and both wait forever. That is the worst failure this component
-    /// could have, and it outweighs the cost of the opposite mistake by a wide margin.
+    /// the owner never sees it, and both wait forever. So the rule is ASK-SHAPED MEANS PUSH, and
+    /// the mark is read outside fenced blocks so a mockup or a snippet is not mistaken for an ask.
     ///
-    /// So the rule is ASK-SHAPED MEANS PUSH, and the bias is deliberate: a false positive costs the
-    /// owner one extra message they can ignore, a false negative costs them a deadlock they cannot
-    /// see. The question mark is checked outside fenced blocks so a mockup or a snippet containing
-    /// one is not mistaken for a question.
+    /// ASK-SHAPED MEANS ENDING A LINE, NOT MERELY CONTAINING THE MARK. `Contains('?')` was the
+    /// original rule and it was too loose in a way that only showed once the ❓ topic glyph was
+    /// built on this same reader (2026-08-21). The owner, of one topic: *"after I put it in pc mode
+    /// a ? icon appeared in the name for no reason"*, and minutes later, of another: *"you just put
+    /// ? in the topic name"*. Neither entry asked anything. One said "sits at [?] until they
+    /// answer", the other "Investigating the ? glyph" — the mark as a LEDGER MARKER and as a NOUN.
+    ///
+    /// That shape is not rare: every role command in this kit teaches the `- [ ]`/`- [>]`/`- [?]`
+    /// ledger vocabulary, so sessions write `[?]` in ordinary prose constantly. Under the old rule
+    /// each such entry pushed the phone AND pinned ❓ on the topic until the owner typed something —
+    /// the glyph scan stops only at an OWNER entry, so a single stray mark stuck indefinitely.
+    ///
+    /// A prose question ends its line with the mark. Anything else has the explicit markers, which
+    /// every role command already tells sessions to use when they actually need a decision.
+    ///
+    /// THE BIAS IS STILL TOWARDS PUSHING, and tightening it does not risk the deadlock the loose
+    /// rule was protecting against: an entry this filter suppresses is REMEMBERED, and the engine
+    /// releases it once the session and every member have been idle for minutes
+    /// (Break_SilentDeadlock_Async). That net is not theoretical — strategy-lab-6's own log carries
+    /// it firing on 2026-08-21: *"Everything went idle with an unsent supervisor entry — releasing
+    /// it in case it was a question"*. This filter is the fast path; that is the guarantee.
     /// </summary>
     public static bool Asks_InProse(string rawEntryText)
     {
@@ -58,7 +75,14 @@ public static class OwnerPush_Policy
 
         var withoutBlocks = Strip_FencedBlocks(rawEntryText);
 
-        return withoutBlocks.Contains('?');
+        foreach (var line in withoutBlocks.Split('\n'))
+        {
+            // TrimEnd also takes the '\r' of a CRLF channel, and any trailing spaces.
+            if (line.TrimEnd().EndsWith('?'))
+                return true;
+        }
+
+        return false;
     }
 
     static string Strip_FencedBlocks(string text)
