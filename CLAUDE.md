@@ -138,6 +138,22 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     cannot inflate the bar even written with a `- [ ]` marker. Reviewers separate findings from
     `OUT OF SCOPE` by PROVENANCE, not severity; implementers report `NOTICED (not fixed)`.
 
+23. **THE RUNNING APP IS A FOURTH COPY — check `Get-Process AIOrchestrator | Select Path` BEFORE
+    believing anything you built is live.** Decision 18 names three copies (branch source, build
+    output, installed). There is a fourth and it is the only one whose behaviour the owner is
+    describing when they report a bug: on 2026-08-21 the app was running from
+    `AIOrchestrator\bin\Debug - Copia\net10.0-windows\AIOrchestrator.exe` — a manual copy, so the
+    owner can rebuild while it runs — while every `dotnet build` that session wrote to `bin\Debug\`.
+    Three fixes were merged, pushed, and reported as delivered; none of them were running, and the
+    live DLL still contained `Rename_TelegramTopic_FireAndForget`, which the merge had deleted. A
+    green build and a clean `git log` say NOTHING about what the owner is using.
+    **This also feeds the kit:** `KitAssets_Installer` installs `~/.claude/commands` from the
+    RUNNING app's output folder, so a stale copy keeps reinstalling stale role commands at every
+    startup — which is why the installed `supervisor.md` can stay old through any number of correct
+    builds. **To read a running binary** (metadata names are UTF-8, string literals are UTF-16LE —
+    an ASCII `grep` returns confident false negatives): search the DLL for
+    `"Some_Method_Name".encode('utf-8')` and `"a literal".encode('utf-16-le')`.
+
 ## Resolved Decisions (2026-08-06, owner)
 
 - **UI framework: WPF** ("keep it simple") — `net10.0-windows`. The suite's `LoggingLib` ships a WPF `ListBoxLoggerSimple` control, which the app uses as its live log panel.
