@@ -3387,9 +3387,28 @@ internal sealed class BridgeEngineModel(
                 // the tick and Sync_TopicNames_BestEffort_Async near the end of the SAME tick, so the
                 // new name still reaches Telegram this tick — fully decorated, through the one gated
                 // path, with no second writer to race it. Do not add a direct rename back here.
-                Rename_SessionWindows_BestEffort(session, request.Name);
+                // NO TERMINAL RENAME HERE EITHER, and for a different reason than the topic above.
+                // A live rename was attempted from 2026-08-06 until the owner reported on 2026-08-21
+                // that "the terminal renaming is not working": it called SetWindowText, which changes
+                // the OS caption of the wt.exe window and nothing Windows Terminal actually draws. It
+                // returned true every time. The name is carried at SPAWN instead, so a running window
+                // takes it at its next respawn — the trade the owner chose, knowing the cost.
+                //
+                // The log says that plainly rather than claiming a rename, because the old line
+                // ("Named 'X'") read as though the terminals had been renamed too.
+                // SUPERVISOR TOO, not just members. Members excludes it (it has its own pid field),
+                // so keying the note off Members alone would stay silent for a crew whose implementers
+                // have all been closed — while the supervisor's own terminal sits there, still titled
+                // with the old name, which is exactly the window the note is about.
+                var hasLiveWindow = session.SupervisorPid != null
+                    || session.CommunicatorSpawnedUtc != null
+                    || session.Members.Any(member => member.ClosedUtc == null);
 
-                _log.Log_Info(request.OrchId, $"Named '{request.Name}'");
+                var windowNote = hasLiveWindow
+                    ? " — open terminals keep their current title until their next respawn"
+                    : string.Empty;
+
+                _log.Log_Info(request.OrchId, $"Named '{request.Name}'{windowNote}");
                 Raise_OrchestrationActivity(request.OrchId);
             }
             catch (Exception ex)
@@ -3419,62 +3438,6 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Warning(orchId, $"Topic pin removal failed for topic {topicId}: {ex.Message}");
             }
         });
-    }
-
-    /// <summary>
-    /// Renames the session terminal windows to carry the goal name. The original fragment stays
-    /// as a prefix ("SUP · crm-2 · CRM invoice crash") so focusing/closing keep matching.
-    ///
-    /// <para>
-    /// THIS IS THE LIVE UPDATE, NOT THE DURABLE ONE. The name is also composed at spawn time
-    /// (<see cref="Spawning.SpawnCommand_Builder"/>), because a window title lives only in the
-    /// window: the watchdog respawns sessions freely, and every respawn used to bring the terminal
-    /// back as a bare "SUP · crm-2". A named orchestration therefore lost its name at the first
-    /// respawn and never got it back — which is why the owner still could not tell the terminals
-    /// apart despite this method existing (2026-08-21).
-    /// </para>
-    /// </summary>
-    void Rename_SessionWindows_BestEffort(Sessions.OrchestrationSession.IOrchestrationSession session, string name)
-    {
-        try
-        {
-            // THROUGH THE BUILDER, never spelled here. These lines were the last copies of the
-            // window-title rule, and they drifted the same way every other copy did: a solo's window
-            // is titled "SOLO · <orch>" while this built "SOLO-1 · <orch>" from the member id, so a
-            // basic orchestration's only terminal was the one window a rename could never find.
-            Rename_OneWindow_BestEffort(session.OrchId, Spawning.SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId), name);
-
-            // THE COMMUNICATOR WAS MISSING, and it is an owner-facing window like any other. The
-            // whole point of the name is telling terminals apart while sitting at the machine, so
-            // one left bare defeats it for that orchestration.
-            Rename_OneWindow_BestEffort(session.OrchId, Spawning.SessionWindowTitle_Builder.Build_ForCommunicator(session.OrchId), name);
-
-            foreach (var member in session.Members)
-            {
-                if (member.ClosedUtc != null)
-                    continue;
-
-                Rename_OneWindow_BestEffort(session.OrchId, Spawning.SessionWindowTitle_Builder.Build_ForMember(member.MemberId, session.OrchId), name);
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Warning(session.OrchId, $"Terminal window rename failed: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// One window, and its failure is RECORDED rather than discarded. `Try_Rename_ByTitleFragment`
-    /// returns false when no window carries the fragment, and that bool used to go nowhere: a window
-    /// that was never renamed looked exactly like one that was. Not every false is a fault — a
-    /// communicator that was never spawned has no window and never will — so this is a debug-level
-    /// note for reading the log after the fact, not an alert (decision 15: alerts the owner cannot
-    /// act on do not go to Telegram, and this one is not even for them).
-    /// </summary>
-    void Rename_OneWindow_BestEffort(string orchId, string titleFragment, string name)
-    {
-        if (!TerminalWindow_Focuser.Try_Rename_ByTitleFragment(titleFragment, Spawning.SessionWindowTitle_Builder.Build_Title(titleFragment, name)))
-            _log.Log_Info(orchId, $"No terminal window titled '{titleFragment}' to rename — not spawned, already closed, or retitled by Windows Terminal");
     }
 
     void Process_SetTelegramMutedRequests(IPendingRequests pending)
