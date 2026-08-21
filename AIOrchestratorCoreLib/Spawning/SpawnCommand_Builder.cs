@@ -43,20 +43,20 @@ public static class SpawnCommand_Builder
     /// </summary>
     public const string CLAUDE_LAUNCH_FLAGS = "--dangerously-skip-permissions";
 
-    public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string pidFilePath)
+    public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
         var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model)} '/supervisor {orchId}'", pidFilePath);
 
-        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForSupervisor(orchId), SUPERVISOR_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForSupervisor(orchId), displayName), SUPERVISOR_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>
     /// A reviewer session: adversarial review by default, no worktree (it reads the repo and the
     /// implementers' branches), and no ability to edit or commit.
     /// </summary>
-    public static ISpawnCommand Build_ForReviewer(string orchId, string memberId, string repoPath, string? model, string pidFilePath)
+    public static ISpawnCommand Build_ForReviewer(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
@@ -69,7 +69,7 @@ public static class SpawnCommand_Builder
         var claudeCommand = $"{Build_ClaudeInvocation(model)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
         var script = Build_SessionScript("reviewer", orchId, memberId, claudeCommand, pidFilePath);
 
-        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), REVIEWER_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), REVIEWER_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>Basic orchestrations: one session, orange, talking straight to the owner.</summary>
@@ -80,32 +80,32 @@ public static class SpawnCommand_Builder
     /// same file a supervisor would own — so the owner's Telegram topic reaches it with no routing
     /// changes anywhere. No supervisor, no reviewer, no worktree assignment.
     /// </summary>
-    public static ISpawnCommand Build_ForSolo(string orchId, string memberId, string repoPath, string? model, string pidFilePath)
+    public static ISpawnCommand Build_ForSolo(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
         var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/solo {orchId}'", pidFilePath);
 
-        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), SOLO_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), SOLO_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>The orchestration's green press-secretary voice: narrates, never works (see communicator.md).</summary>
-    public static ISpawnCommand Build_ForCommunicator(string orchId, string repoPath, string? model, string pidFilePath)
+    public static ISpawnCommand Build_ForCommunicator(string orchId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
         var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(model)} '/communicator {orchId}'", pidFilePath);
 
-        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForCommunicator(orchId), COMMUNICATOR_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForCommunicator(orchId), displayName), COMMUNICATOR_TAB_COLOR, repoPath, script);
     }
 
-    public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string pidFilePath)
+    public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
         var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/implementer {orchId}/{memberId}'", pidFilePath);
 
-        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), IMPLEMENTER_TAB_COLOR, repoPath, script);
+        return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), IMPLEMENTER_TAB_COLOR, repoPath, script);
     }
 
     /// <summary>

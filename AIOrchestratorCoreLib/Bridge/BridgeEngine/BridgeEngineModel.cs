@@ -3424,31 +3424,57 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// Renames the session terminal windows to carry the goal name. The original fragment stays
     /// as a prefix ("SUP · crm-2 · CRM invoice crash") so focusing/closing keep matching.
+    ///
+    /// <para>
+    /// THIS IS THE LIVE UPDATE, NOT THE DURABLE ONE. The name is also composed at spawn time
+    /// (<see cref="Spawning.SpawnCommand_Builder"/>), because a window title lives only in the
+    /// window: the watchdog respawns sessions freely, and every respawn used to bring the terminal
+    /// back as a bare "SUP · crm-2". A named orchestration therefore lost its name at the first
+    /// respawn and never got it back — which is why the owner still could not tell the terminals
+    /// apart despite this method existing (2026-08-21).
+    /// </para>
     /// </summary>
     void Rename_SessionWindows_BestEffort(Sessions.OrchestrationSession.IOrchestrationSession session, string name)
     {
         try
         {
-            // THROUGH THE BUILDER, never spelled here. These two lines were the last copies of the
+            // THROUGH THE BUILDER, never spelled here. These lines were the last copies of the
             // window-title rule, and they drifted the same way every other copy did: a solo's window
             // is titled "SOLO · <orch>" while this built "SOLO-1 · <orch>" from the member id, so a
             // basic orchestration's only terminal was the one window a rename could never find.
-            var supervisorFragment = Spawning.SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId);
-            TerminalWindow_Focuser.Try_Rename_ByTitleFragment(supervisorFragment, $"{supervisorFragment} · {name}");
+            Rename_OneWindow_BestEffort(session.OrchId, Spawning.SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId), name);
+
+            // THE COMMUNICATOR WAS MISSING, and it is an owner-facing window like any other. The
+            // whole point of the name is telling terminals apart while sitting at the machine, so
+            // one left bare defeats it for that orchestration.
+            Rename_OneWindow_BestEffort(session.OrchId, Spawning.SessionWindowTitle_Builder.Build_ForCommunicator(session.OrchId), name);
 
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc != null)
                     continue;
 
-                var memberFragment = Spawning.SessionWindowTitle_Builder.Build_ForMember(member.MemberId, session.OrchId);
-                TerminalWindow_Focuser.Try_Rename_ByTitleFragment(memberFragment, $"{memberFragment} · {name}");
+                Rename_OneWindow_BestEffort(session.OrchId, Spawning.SessionWindowTitle_Builder.Build_ForMember(member.MemberId, session.OrchId), name);
             }
         }
         catch (Exception ex)
         {
             _log.Log_Warning(session.OrchId, $"Terminal window rename failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// One window, and its failure is RECORDED rather than discarded. `Try_Rename_ByTitleFragment`
+    /// returns false when no window carries the fragment, and that bool used to go nowhere: a window
+    /// that was never renamed looked exactly like one that was. Not every false is a fault — a
+    /// communicator that was never spawned has no window and never will — so this is a debug-level
+    /// note for reading the log after the fact, not an alert (decision 15: alerts the owner cannot
+    /// act on do not go to Telegram, and this one is not even for them).
+    /// </summary>
+    void Rename_OneWindow_BestEffort(string orchId, string titleFragment, string name)
+    {
+        if (!TerminalWindow_Focuser.Try_Rename_ByTitleFragment(titleFragment, Spawning.SessionWindowTitle_Builder.Build_Title(titleFragment, name)))
+            _log.Log_Info(orchId, $"No terminal window titled '{titleFragment}' to rename — not spawned, already closed, or retitled by Windows Terminal");
     }
 
     void Process_SetTelegramMutedRequests(IPendingRequests pending)
