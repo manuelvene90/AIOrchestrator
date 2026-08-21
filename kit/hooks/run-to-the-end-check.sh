@@ -56,6 +56,32 @@ if [ -f "$ORCH_FOLDER/.awaiting-answer" ]; then
   exit 0
 fi
 
+# THE OWNER IS SITTING AT THIS TERMINAL, so there is no silence for them to notice.
+#
+# Terminal mode ("/pc") deliberately turns the awaiting-answer block OFF and tells the session to ask
+# in its own prompt, in prose, rather than with QUESTION:/OPTION: lines — nothing is being texted and
+# there are no buttons to tap. That makes BOTH escapes above unavailable BY DESIGN. So a session that
+# asked them something face to face and is waiting for the answer got blocked for doing exactly what
+# it was told, and its only way out was to backdate a `- [?]` onto a line that is not really blocked —
+# which then exempts the WHOLE file from this hook, because that check is file-wide.
+#
+# The owner, 2026-08-21, having watched it happen repeatedly: *"I also keep getting this in sessions
+# ... Not sure if that is right but happens quite often."* It was not right, and this was the case.
+#
+# THIS IS NOT A NEW POLICY, it is the one the app already made. The same flag already silences this
+# orchestration's watcher and already lifts the awaiting-answer block; this hook simply did not know
+# about it, because it and terminal mode were built days apart. And the premise of the rule does not
+# hold here: a stop costs the owner their ATTENTION, because they have to notice the silence and prod
+# a session that went quiet. When they are in the chair they watch the turn end, and answering costs
+# them a keystroke.
+#
+# DERIVED, NEVER AUTHORED (MeetingFlag_Marker): the app re-syncs this file on every presence change,
+# on close, and for every session at startup, so a flag left behind by a crash is cleared the moment
+# the app returns. It cannot quietly grant one session a permanent exemption.
+if [ -f "$ORCH_FOLDER/.meeting" ]; then
+  exit 0
+fi
+
 # NOTHING LEFT TO DO — the endeavour really is finished, so the turn may end. This is the exit that
 # makes the rule livable: it is not "never stop", it is "never stop with work still open".
 # `grep -c` PRINTS 0 AND EXITS 1 when it matches nothing, so an `|| echo 0` here appends a SECOND

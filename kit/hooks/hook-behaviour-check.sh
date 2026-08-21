@@ -39,6 +39,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 LEDGER_HOOK="$SCRIPT_DIR/supervisor-ledger-check.sh"
 AWAIT_HOOK="$SCRIPT_DIR/supervisor-awaiting-answer-check.sh"
 REVIEWER_HOOK="$SCRIPT_DIR/reviewer-readonly-check.sh"
+RUNEND_HOOK="$SCRIPT_DIR/run-to-the-end-check.sh"
 
 # REFUSE TO RUN RATHER THAN CERTIFY. The hooks are resolved relative to THIS file, so a copy taken
 # somewhere else — `git show <sha>:… > /tmp/x.sh && bash /tmp/x.sh` is how it actually happened —
@@ -1055,6 +1056,88 @@ check "a detached copy REFUSES to run" REFUSED "$(bash "$TEMP_HOME/detached-copy
 # by a reducer that never started, so denials stand on their own. Allowances cannot, and there is no
 # way from here to say which of them were evaluated — so the whole run is declared worthless rather
 # than half-reported.
+
+# -- Stop hook -- run to the end -----------------------------------------------------------------
+#
+# THIS HOOK SHIPPED WITH NO COVERAGE HERE AT ALL (8fab25f, 2026-08-20), and the gap is what let a
+# false block survive a week of green runs: it and terminal mode were built days apart, and nothing
+# in this file asked whether they agreed.
+#
+# EVERY ESCAPE IS A SEPARATE ROUTE TO ALLOW, so each case clears the other routes and ASSERTS it has
+# cleared them. An ALLOW that could be produced by two reasons pins neither -- the rule this file
+# already learned the hard way -- and this hook has five of them, which makes it the worst offender
+# in the kit for that mistake.
+printf '
+Stop hook -- run to the end
+'
+
+RUNEND_PLAN="$SUPERVISION/PLAN.md"
+RUNEND_CHANNEL="$SUPERVISION/owner-channel.md"
+
+# The PreToolUse block above deliberately LEAVES .awaiting-answer up. Inheriting it here would give
+# every case below a second route to ALLOW, so it is cleared and the clearing is checked.
+rm -f "$SUPERVISION/.ledger-behind" "$SUPERVISION/.awaiting-answer" "$SUPERVISION/.meeting"
+check "starts with no ledger debt" ABSENT "$(flag_state "$SUPERVISION/.ledger-behind")"
+check "starts with no open question" ABSENT "$(flag_state "$SUPERVISION/.awaiting-answer")"
+check "starts with no meeting" ABSENT "$(flag_state "$SUPERVISION/.meeting")"
+
+printf '%s
+' '- [ ] a line nobody is blocked on' > "$RUNEND_PLAN"
+printf '%s
+' '## [1] FROM solo - d - s' 'a plain report, no question in it' > "$RUNEND_CHANNEL"
+
+# THE RULE ITSELF. If this stops denying, every ALLOW case below is satisfied by a hook that does
+# nothing, and the section certifies nothing.
+check "open work, nothing pending" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# A member's turn ending IS its report to the supervisor.
+check "a member is exempt" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' implementer)")"
+
+# THE FALSE BLOCK THE OWNER REPORTED, 2026-08-21: *"I also keep getting this in sessions ... Not sure
+# if that is right but happens quite often."*
+#
+# In terminal mode the app turns the awaiting-answer block OFF and the role commands tell the session
+# to ask in prose rather than with QUESTION:/OPTION: lines -- so both of the escapes this hook knew
+# about are unavailable BY DESIGN, and a session waiting on an answer it asked for face to face was
+# blocked for obeying. The control case above it is the point: the SAME ledger, the SAME channel,
+# one flag apart.
+touch "$SUPERVISION/.meeting"
+check "the owner is at this terminal" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+rm -f "$SUPERVISION/.meeting"
+check "and the block returns when they leave" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# A line that genuinely waits on the owner.
+printf '%s
+' '- [ ] a line nobody is blocked on' '- [?] this one waits on them' > "$RUNEND_PLAN"
+check "a line is blocked on the owner" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# The session has just asked, and only the LAST entry counts.
+printf '%s
+' '- [ ] a line nobody is blocked on' > "$RUNEND_PLAN"
+printf '%s
+' '## [1] FROM solo - d - s' 'QUESTION: merge or hold?' > "$RUNEND_CHANNEL"
+check "the last entry is a question" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+printf '%s
+' '## [1] FROM solo - d - s' 'QUESTION: merge or hold?' '' '## [2] FROM solo - d - s' 'carried on regardless' > "$RUNEND_CHANNEL"
+check "an OLDER question does not exempt" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# NOTHING LEFT TO DO. This is the exit that makes the rule livable, and it is the one a `grep -c`
+# quirk silently broke once already -- `grep -c` prints 0 AND exits 1 when it matches nothing, so an
+# `|| echo 0` appended a SECOND zero and the comparison failed on the one input that matters.
+printf '%s
+' '- [x] all done' > "$RUNEND_PLAN"
+printf '%s
+' '## [1] FROM solo - d - s' 'a plain report' > "$RUNEND_CHANNEL"
+check "a finished ledger may stop" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# The ledger hook speaks first: one demand at a time.
+printf '%s
+' '- [ ] a line nobody is blocked on' > "$RUNEND_PLAN"
+touch "$SUPERVISION/.ledger-behind"
+check "the ledger hook has the floor" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+rm -f "$SUPERVISION/.ledger-behind" "$RUNEND_PLAN" "$RUNEND_CHANNEL"
+
 assert_environment_can_evaluate "after every case"
 
 printf '\n'
