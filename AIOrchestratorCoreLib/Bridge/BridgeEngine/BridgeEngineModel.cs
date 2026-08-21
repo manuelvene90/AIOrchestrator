@@ -81,17 +81,6 @@ internal sealed class BridgeEngineModel(
     const int MIRROR_TICK_MILLISECONDS = 2000;
 
     /// <summary>
-    /// How old a context reading has to be before /context dates it. A probe file is rewritten on
-    /// every status-line render, so an ACTIVE session's figure is seconds old and stamping every row
-    /// with an age would be noise; past this, the session has not rendered in a while and the number
-    /// is history rather than news.
-    ///
-    /// Two minutes matches what the rest of the app already treats as "recently alive" — the same
-    /// window after which a finished turn stops counting as working now.
-    /// </summary>
-    const int CONTEXT_READING_STALE_AFTER_MINUTES = 2;
-
-    /// <summary>
     /// Pause before re-sending a channel whose mirror send failed. The tailer re-emits an
     /// unconfirmed append on EVERY poll — that is what makes the retry possible — so without this
     /// the retry would be a 2-second hammer against an endpoint that is already failing, which is
@@ -5963,6 +5952,11 @@ internal sealed class BridgeEngineModel(
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
     }
 
+    /// <summary>
+    /// GATHERS, and composes nothing: every judgement - closed sessions, unknown readings, which
+    /// session is fullest, when a figure is old enough to date - is Status.ContextReport_Composer's,
+    /// where the suite can reach it.
+    /// </summary>
     string Build_ContextReportText(long? messageThreadId)
     {
         if (messageThreadId != null)
@@ -5972,28 +5966,10 @@ internal sealed class BridgeEngineModel(
             if (session == null)
                 return "no orchestration is bound to this topic";
 
-            List<string> lines = [];
-
-            // EVERY session is listed here, whatever its percentage. The thresholds in
-            // ContextVisibility_Policy exist to keep unasked-for surfaces quiet; /context IS the ask,
-            // so filtering it would answer a direct question with a partial roster.
-            foreach (var source in UsageTotals_Reader.Build_ProbeSources(_paths, session))
-            {
-                var reading = UsageTotals_Reader.Read_ContextUsage_OrNull(source.File);
-                var field = Formatting.ContextUsage_Formatter.Describe_OrNull(reading);
-
-                if (field == null || reading == null)
-                    continue;
-
-                lines.Add($"- {source.Label}: {field}{Describe_ProbeAge_Suffix(reading)}");
-            }
-
-            if (lines.Count == 0)
-                return $"{session.DisplayName ?? session.OrchId}: no session has reported its context yet";
-
-            lines.Insert(0, $"CONTEXT — {session.DisplayName ?? session.OrchId}");
-
-            return string.Join('\n', lines);
+            return Status.ContextReport_Composer.Build_ForOrchestration(
+                session.DisplayName ?? session.OrchId,
+                Read_ContextRows(session),
+                DateTime.UtcNow);
         }
 
         List<string> blocks = [];
@@ -6003,51 +5979,56 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null)
                 continue;
 
-            // THE WORST SESSION, NAMED. A bare percentage per orchestration would tell the owner
-            // something is nearly full without saying which window it is, and in General that is the
-            // only thing they can act on.
-            string? worstLabel = null;
-            double worstPercent = 0;
+            var fullest = Status.ContextReport_Composer.Pick_Fullest_OrNull(Read_ContextRows(session));
 
-            foreach (var source in UsageTotals_Reader.Build_ProbeSources(_paths, session))
-            {
-                var reading = UsageTotals_Reader.Read_ContextUsage_OrNull(source.File);
-
-                if (reading == null || (worstLabel != null && reading.UsedPercent <= worstPercent))
-                    continue;
-
-                worstLabel = source.Label;
-                worstPercent = reading.UsedPercent;
-            }
-
-            if (worstLabel == null)
+            if (fullest == null)
                 continue;
 
-            blocks.Add($"{session.DisplayName ?? session.OrchId}: {worstLabel} ctx {(int)worstPercent}%");
+            blocks.Add($"{session.DisplayName ?? session.OrchId}: {fullest.Value.Label} ctx {(int)fullest.Value.Percent}%");
         }
 
         if (blocks.Count == 0)
             return "no open orchestration has reported its context yet";
 
-        blocks.Insert(0, "CONTEXT — fullest session of each orchestration");
+        blocks.Insert(0, "CONTEXT - fullest session of each orchestration");
 
         return string.Join('\n', blocks);
     }
 
     /// <summary>
-    /// How old the reading is, and ONLY when that is worth saying. A probe file is rewritten on every
-    /// status-line render, so a working session's figure is seconds old and dating it would be noise
-    /// on every row; a session that ended its turn is quoting state from whenever it last rendered,
-    /// and THAT the owner needs told rather than left to assume the number is live.
+    /// Every probe source of one orchestration, read once, carrying whether its session is closed.
+    /// The source list is UsageTotals_Reader's, so /context, /cost and /tokens can never disagree
+    /// about which sessions exist or where each one writes.
     /// </summary>
-    static string Describe_ProbeAge_Suffix(Status.SessionContextUsage.ISessionContextUsage reading)
+    IReadOnlyList<Status.ContextReport_Composer.ContextRow> Read_ContextRows(IOrchestrationSession session)
     {
-        var age = DateTime.UtcNow - reading.ProbeTimeUtc;
+        List<Status.ContextReport_Composer.ContextRow> rows = [];
 
-        if (age < TimeSpan.FromMinutes(CONTEXT_READING_STALE_AFTER_MINUTES))
-            return "";
+        foreach (var source in UsageTotals_Reader.Build_ProbeSources(_paths, session))
+        {
+            rows.Add(new Status.ContextReport_Composer.ContextRow(
+                source.Label,
+                Is_ClosedMember(session, source.Label),
+                UsageTotals_Reader.Read_ContextUsage_OrNull(source.File)));
+        }
 
-        return $" · {SessionDuration_Formatter.Describe(age)} old";
+        return rows;
+    }
+
+    /// <summary>
+    /// Whether a probe source's label names a member that has been closed. The supervisor and
+    /// communicator labels are not members and are never closed by this test - their absence is
+    /// already expressed by having no probe file to read.
+    /// </summary>
+    static bool Is_ClosedMember(IOrchestrationSession session, string label)
+    {
+        foreach (var member in session.Members)
+        {
+            if (member.MemberId == label)
+                return member.ClosedUtc != null;
+        }
+
+        return false;
     }
 
     // THERE IS NO /compact HERE, DELIBERATELY, and it is not an omission to be filled in.
