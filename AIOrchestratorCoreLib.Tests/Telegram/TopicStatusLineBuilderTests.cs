@@ -151,7 +151,7 @@ public class TopicStatusLineBuilderTests
     /// nothing running.
     /// </summary>
     [Fact]
-    public void ADeclaredIdleMemberReadsIdle()
+    public void ADeclaredIdleMemberReadsStandingBy()
     {
         var entries = new[]
         {
@@ -161,7 +161,7 @@ public class TopicStatusLineBuilderTests
 
         var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Contains("• rev-3 · idle", line);
+        Assert.Contains("• rev-3 · standing by", line);
         Assert.DoesNotContain("hold — nothing queued", line);
     }
 
@@ -199,7 +199,7 @@ public class TopicStatusLineBuilderTests
     /// idle would hide the one queue the owner can actually unblock.
     /// </summary>
     [Fact]
-    public void AMemberAwaitingAVerdictIsNotShownAsIdle()
+    public void AMemberAwaitingAVerdictIsNotShownAsStandingBy()
     {
         var entries = new[]
         {
@@ -209,13 +209,13 @@ public class TopicStatusLineBuilderTests
 
         var line = TopicStatusLine_Builder.Build("orch", null, [Member("imp-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.DoesNotContain("idle", line);
+        Assert.DoesNotContain("standing by", line);
         Assert.Contains("fix the ledger", line);
     }
 
     /// <summary>A member that has never been briefed has nothing to show, and says so.</summary>
     [Fact]
-    public void ANeverBriefedMemberReadsIdle()
+    public void ANeverBriefedMemberReadsStandingBy()
     {
         var line = TopicStatusLine_Builder.Build(
             "orch",
@@ -224,7 +224,7 @@ public class TopicStatusLineBuilderTests
             null,
             NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Contains("• rev-1 · idle", line);
+        Assert.Contains("• rev-1 · standing by", line);
     }
 
     /// <summary>Contract item 4: a closed member drops off rather than lingering as a stale row.</summary>
@@ -305,7 +305,7 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("Telegram UX + limits · 72/113 · 63%", lines[0]);
         Assert.Equal("• imp-1 · committing the marker fix · 4 min", lines[1]);
         Assert.Equal("• rev-2 · reviewing the hooks branch · 12 min", lines[2]);
-        Assert.Equal("• rev-3 · idle", lines[3]);
+        Assert.Equal("• rev-3 · standing by", lines[3]);
         Assert.Equal("last · gate cleared on 34e5515", lines[4]);
     }
 
