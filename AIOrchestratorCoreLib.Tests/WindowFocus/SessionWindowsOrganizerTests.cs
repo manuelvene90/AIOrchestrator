@@ -58,6 +58,61 @@ public class SessionWindowsOrganizerTests
             fragment => fragment.StartsWith("COM", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// WHICH WINDOW IS AN ORCHESTRATION'S MAIN ONE — the choice behind both /show and
+    /// /organize_mains, and the reason the two cannot disagree about it.
+    ///
+    /// The owner asked for /organize_mains on 2026-08-21: *"does the terminal organization but for
+    /// all sups and solos (no general sup)"*. The app already had an Organize-supervisors button
+    /// that built `SUP · <orch>` for EVERY open orchestration — so a basic one, which has no
+    /// supervisor at all, contributed a fragment that matched nothing and was silently dropped. Its
+    /// solo, the very window the owner talks to, never appeared. These pin the rule that replaces it.
+    /// </summary>
+    [Fact]
+    public void ACrewsMainWindowIsItsSupervisor()
+    {
+        Assert.Equal(["SUP · crm-2"], SessionWindows_Organizer.Build_MainWindowCandidates(Crew_WithMembers()));
+    }
+
+    /// <summary>The window is titled "SOLO · <orch>", never "SOLO-1" — there is only ever one.</summary>
+    [Fact]
+    public void ABasicOrchestrationsMainWindowIsItsSolo()
+    {
+        Assert.Equal(["SOLO · crm-2"], SessionWindows_Organizer.Build_MainWindowCandidates(Basic_WithSolo()));
+    }
+
+    /// <summary>
+    /// NOT THE MEMBERS, NOT THE COMMUNICATOR. A crew's implementers and reviewers have windows and
+    /// /organize tiles them; this is the OTHER question — one window per orchestration, the one the
+    /// owner is talking to — so an implementer appearing here would tile a session they never
+    /// address. The crew fixture has a live imp-1, and it must not be offered.
+    /// </summary>
+    [Fact]
+    public void MembersAndCommunicatorsAreNeverMainWindows()
+    {
+        var candidates = SessionWindows_Organizer.Build_MainWindowCandidates(Crew_WithMembers());
+
+        Assert.DoesNotContain(candidates, candidate => candidate.StartsWith("IMP", StringComparison.Ordinal));
+        Assert.DoesNotContain(candidates, candidate => candidate.StartsWith("REV", StringComparison.Ordinal));
+        Assert.DoesNotContain(candidates, candidate => candidate.StartsWith("COM", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A closed solo leaves nothing to organize. Returning its fragment would be the phantom-tile
+    /// defect again, one orchestration wide: a tile reserved for a terminal that is gone.
+    /// </summary>
+    [Fact]
+    public void AClosedSoloLeavesNoMainWindow()
+    {
+        var closed = OrchestrationSession_Factory.Create(
+            "crm-2", "CRM", @"C:\repos\crm", DateTime.UtcNow, 799, null,
+            null, null, null, null, null,
+            [OrchestrationMember_Factory.Create("solo-1", null, DateTime.UtcNow, DateTime.UtcNow)],
+            AIOrchestratorCoreLib.Telegram.TelegramDeliveryModes.Normal, null);
+
+        Assert.Empty(SessionWindows_Organizer.Build_MainWindowCandidates(closed));
+    }
+
     static IOrchestrationSession Basic_WithSolo()
     {
         return OrchestrationSession_Factory.Create(
