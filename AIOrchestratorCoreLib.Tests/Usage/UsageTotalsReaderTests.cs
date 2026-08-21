@@ -46,6 +46,64 @@ public class UsageTotalsReaderTests : IDisposable
         Assert.Equal(1.25, UsageTotals_Reader.Read_Cost_OrNull(file));
     }
 
+    /// <summary>
+    /// THE REAL PAYLOAD, AND THE DEFECT IT HID. Claude Code reports the totals AND itemises the same
+    /// tokens under current_usage; the old recursive sum added both and reported exactly 2.00x on
+    /// every live probe file. These are the actual numbers from a 2.1.238 session on 2026-08-21:
+    /// 342,655 + 3 in the pair, and 2 + 3 + 444 + 342,209 = 342,658 in the breakdown - the same
+    /// tokens, twice.
+    ///
+    /// The test above this one is why it survived so long: its fixture is a top-level "usage" object
+    /// that no Claude Code payload has ever contained, so the suite never saw a real shape.
+    /// </summary>
+    [Fact]
+    public void Read_Tokens_CountsTheWindowOnce_NotItsOwnBreakdownAsWell()
+    {
+        var file = Write_UsageFile("""
+            {
+              "model": { "display_name": "Opus 5" },
+              "cost": { "total_cost_usd": 3.73 },
+              "context_window": {
+                "total_input_tokens": 342655,
+                "total_output_tokens": 3,
+                "context_window_size": 1000000,
+                "current_usage": {
+                  "input_tokens": 2,
+                  "output_tokens": 3,
+                  "cache_creation_input_tokens": 444,
+                  "cache_read_input_tokens": 342209
+                },
+                "used_percentage": 34
+              }
+            }
+            """);
+
+        Assert.Equal(342658, UsageTotals_Reader.Read_Tokens_OrNull(file));
+    }
+
+    /// <summary>
+    /// A window carrying ONLY the itemisation is read from the itemisation - it is an alternative
+    /// spelling of the same figure, never something to add to a pair that is not there.
+    /// </summary>
+    [Fact]
+    public void Read_Tokens_FallsBackToTheBreakdownWhenThereIsNoTotalsPair()
+    {
+        var file = Write_UsageFile("""
+            {
+              "context_window": {
+                "current_usage": {
+                  "input_tokens": 10,
+                  "output_tokens": 20,
+                  "cache_creation_input_tokens": 30,
+                  "cache_read_input_tokens": 40
+                }
+              }
+            }
+            """);
+
+        Assert.Equal(100, UsageTotals_Reader.Read_Tokens_OrNull(file));
+    }
+
     [Fact]
     public void Read_MissingOrGarbageFile_ReturnsNull_NeverThrows()
     {

@@ -123,7 +123,21 @@ public static partial class UsageTotals_Reader
         return $"{tokens / 1_000_000.0:F1}M tok";
     }
 
-    /// <summary>Tolerant token extraction — the statusline schema varies by Claude Code version.</summary>
+    /// <summary>
+    /// Tolerant token extraction - the statusline schema varies by Claude Code version.
+    ///
+    /// IT COUNTED EVERY TOKEN TWICE UNTIL 2026-08-21, and the payload is why. Claude Code reports
+    /// `context_window.total_input_tokens` + `total_output_tokens`, and then ITEMISES those same
+    /// tokens under `current_usage` as input + output + cache_creation + cache_read. A recursive
+    /// walk that added every field matching the token-name pattern therefore added the totals and
+    /// their own breakdown: 685,316 reported against 342,658 real, exactly 2.00x, on every live
+    /// probe file checked. /tokens, /cost's token figure and the budget alarm all read this.
+    ///
+    /// So the totals pair is now read DIRECTLY and the walk is only a fallback for payloads that do
+    /// not carry one. The recursive walk stays because tolerance was the point of it - an older or
+    /// newer Claude Code that keeps its token counts somewhere else is still read - but it can no
+    /// longer see one number through two names.
+    /// </summary>
     public static long? Read_Tokens_OrNull(string usageFilePath)
     {
         try
@@ -132,6 +146,11 @@ public static partial class UsageTotals_Reader
 
             if (root == null)
                 return null;
+
+            var fromWindow = Read_ContextWindowTokens_OrNull(root);
+
+            if (fromWindow != null)
+                return fromWindow;
 
             long total = 0;
             Sum_TokenFields(root, ref total);
@@ -142,6 +161,45 @@ public static partial class UsageTotals_Reader
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The authoritative pair, or the itemised breakdown when a payload carries only that - NEVER
+    /// both, which is the whole point. Null when there is no context_window at all, which is what
+    /// sends the caller to the tolerant walk.
+    /// </summary>
+    static long? Read_ContextWindowTokens_OrNull(JsonNode root)
+    {
+        var window = root["context_window"];
+
+        if (window == null)
+            return null;
+
+        long total = 0;
+        var sawTotal = false;
+
+        foreach (var fieldName in new[] { "total_input_tokens", "total_output_tokens" })
+        {
+            if (window[fieldName] is JsonValue value && value.TryGetValue<long>(out var count))
+            {
+                total += count;
+                sawTotal = true;
+            }
+        }
+
+        // A window with no totals pair but an itemised current_usage: sum the itemisation instead.
+        // It describes the same tokens, so it is an ALTERNATIVE to the pair and never an addition.
+        if (!sawTotal)
+        {
+            var current = window["current_usage"];
+
+            if (current == null)
+                return null;
+
+            Sum_TokenFields(current, ref total);
+        }
+
+        return total > 0 ? total : null;
     }
 
     public static double? Read_Cost_OrNull(string usageFilePath)
