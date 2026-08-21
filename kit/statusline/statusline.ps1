@@ -119,9 +119,35 @@ if ($role -and $raw) {
     } catch { }
 }
 
+# --- How full THIS session's context window is ---
+# Every role gets it, because the owner asked to see it on every terminal (2026-08-21) and the
+# session sitting in front of you is the one whose window you are about to fill.
+#
+# THE NUMBER IS CLAUDE CODE'S OWN and is never recomputed from the token fields beside it. The app
+# reads the very same `used_percentage` out of the .usage.json this script has just written, so the
+# terminal and the owner's phone quote one number. Deriving it here from input+cache tokens would be
+# a second arithmetic that drifts the moment the payload gains a field.
+#
+# GREY AND UNCONDITIONAL, with no colour ramp at 80/90. Those two thresholds are
+# ContextVisibility_Policy's, they decide who APPEARS on the Telegram surfaces, and copying them
+# into a second language to tint a number is how two surfaces start disagreeing about what "high"
+# means. The figure is the signal here; the surfaces that filter do the filtering.
+#
+# EVERY failure path leaves it '' and the caller draws exactly the line it drew before this existed:
+# an older Claude Code with no context_window, a half-read payload, anything.
+$contextSuffix = ''
+if ($null -ne $json) {
+    try {
+        $contextPercent = $json.context_window.used_percentage
+        if ($null -ne $contextPercent) {
+            $contextSuffix = " $esc[90mctx $([int]$contextPercent)%$esc[0m"
+        }
+    } catch { }
+}
+
 # --- Render ---
 if ($role -eq 'supervisor') {
-    Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -eq 'solo') {
     # THE SOLO CARRIES THE PROGRESS TOO, and it was the one role that did not. The suffix was wired
@@ -138,21 +164,22 @@ elseif ($role -eq 'solo') {
     # 208 is the orange that matches the 🟠 this session already speaks with in the Telegram mirror,
     # so the two surfaces name the same voice the same way.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'SOLO' }
-    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -in @('implementer','reviewer')) {
     # NOT the members: an implementer's terminal showing the orchestration's overall percentage would
     # invite it to reason about work that is not its own. The ledger belongs to whoever talks to the
     # owner.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'IMPLEMENTER' }
-    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model"
+    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$contextSuffix"
 }
 elseif ($role -eq 'communicator') {
-    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model"
+    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$contextSuffix"
 }
 elseif ($role -eq 'general') {
-    Write-Output "$esc[1;93m GENERAL SUPERVISOR $esc[0m $model"
+    Write-Output "$esc[1;93m GENERAL SUPERVISOR $esc[0m $model$contextSuffix"
 }
 else {
-    Write-Output "$model · $cwd"
+    # A session the app did not spawn still has a context window, and the owner reads these too.
+    Write-Output "$model · $cwd$contextSuffix"
 }

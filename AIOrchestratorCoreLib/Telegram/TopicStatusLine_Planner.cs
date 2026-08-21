@@ -3,6 +3,7 @@ using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
+using AIOrchestratorCoreLib.Status.SessionContextUsage;
 
 namespace AIOrchestratorCoreLib.Telegram;
 
@@ -62,14 +63,15 @@ public static class TopicStatusLine_Planner
         int backoffSeconds,
         TopicNewestMessage? newestTopicMessage,
         bool repostIsImpossible,
-        TimeSpan? figuresUnchangedFor = null)
+        TimeSpan? figuresUnchangedFor = null,
+        ISessionContextUsage? supervisorContext = null)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
         // The `last` line is chosen HERE, not handed in. Gate C — the trusted reading of an
         // agent-written stamp — was the one gate that never left the engine, so it could be reverted
         // to a raw parse with 630 tests staying green.
-        var text = TopicStatusLine_Builder.Build(title, progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null, figuresUnchangedFor);
+        var text = TopicStatusLine_Builder.Build(title, progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null, figuresUnchangedFor, supervisorContext);
 
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 
