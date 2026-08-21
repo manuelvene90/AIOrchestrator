@@ -9,6 +9,26 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- THE ONLY CRASH THIS APP HAS EVER HAD, and no line of ours was on the stack.
+         2026-08-21 10:45:56 — InvalidOperationException, "COM SxS registration of PenIMC_cor3.dll
+         failed", thrown on MS.Win32.Penimc.UnsafeNativeMethods.EnsurePenImcClassesActivated() from
+         System.Windows.Input.PenThreadWorker.ThreadProc(). That is WPF's stylus/pen input thread: a
+         raw Thread the framework owns, so it is not a Dispatcher exception and not a Task. Neither
+         DispatcherUnhandledException nor UnobservedTaskException can see it, and
+         AppDomain.UnhandledException (App.xaml.cs) only got to log it on the way down — the process
+         was already terminating. The app died and the owner stopped receiving Telegram.
+         The trigger sits outside the app: TabletInputService was flipped Automatic->Manual in the
+         same second (231 such toggles in the preceding 10 days), which is what invalidates PenIMC's
+         activation context.
+         So the fix is to not have the thread. This app is mouse and keyboard only — it has never
+         handled a stylus or touch event — and the switch stops WPF creating the pen input thread at
+         all, removing the crash site rather than trying to catch an exception that cannot be caught.
+         Verified present in the WPF this app runs on: the literal is in PresentationCore.dll of
+         Microsoft.WindowsDesktop.App 10.0.11. -->
+    <RuntimeHostConfigurationOption Include="Switch.System.Windows.Input.Stylus.DisableStylusAndTouchSupport" Value="true" Trim="true" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\AIOrchestratorCoreLib\AIOrchestratorCoreLib.csproj" />
     <!-- Suite LoggingLib was referenced in v1 for its ListBoxLoggerSimple log panel, then retired:
          the control is hard-designed for light theme (white root, pastel per-tag rows) and cannot
