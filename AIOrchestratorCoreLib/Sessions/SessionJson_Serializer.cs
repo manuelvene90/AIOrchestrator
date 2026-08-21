@@ -41,6 +41,7 @@ public static class SessionJson_Serializer
             ["telegramMode"] = session.TelegramMode.ToString(),
             ["ownerPresence"] = session.OwnerPresence.ToString(),
             ["awaitingTest"] = session.AwaitingTest,
+            ["done"] = session.Done,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
         };
 
@@ -97,7 +98,11 @@ public static class SessionJson_Serializer
 
             // Absent in every session written before 2026-08-19, and false is the right reading of
             // absence: an orchestration nobody ever marked is not awaiting a test.
-            root["awaitingTest"]?.GetValue<bool>() ?? false);
+            root["awaitingTest"]?.GetValue<bool>() ?? false,
+
+            // Absent in every session written before 2026-08-21. False is the right reading: an
+            // orchestration nobody ever marked finished is not finished.
+            root["done"]?.GetValue<bool>() ?? false);
     }
 
     /// <summary>

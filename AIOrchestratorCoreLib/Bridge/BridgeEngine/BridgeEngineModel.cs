@@ -4871,6 +4871,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Toggle_AwaitingTest_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "done")
+                    {
+                        await Toggle_Done_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "close")
                     {
                         await Request_Close_FromCommand_Async(client, message.MessageThreadId, cancellationToken);
@@ -5005,6 +5009,7 @@ internal sealed class BridgeEngineModel(
                     ("organize", "Tile this orchestration's terminals across the screen"),
                     ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
                     ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
+                    ("done", "Toggle ✅ — finished, muted, and kept open in case you come back"),
                     ("close", "End THIS orchestration — you confirm with a tap"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
@@ -5717,6 +5722,101 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// FINISHED, AND KEPT OPEN ON PURPOSE. The owner asked for this on 2026-08-21: they wanted the
+    /// last step of their own workflow to have a mark, without paying /close for it — *"I still
+    /// don't want to close the topic in case I have something else to do later"*.
+    ///
+    /// Built as a sibling of /test rather than as a new delivery mode, because it is the same shape:
+    /// a persisted statement about the ENDEAVOUR that happens to mute the topic. /test says "I have
+    /// not checked this yet", /done says "I have, and it is finished".
+    /// </summary>
+    async Task Toggle_Done_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/done works inside an orchestration's own topic — there is nothing here to mark.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var turningOn = !session.Done;
+
+            _store.Set_Done(session.OrchId, turningOn);
+
+            // FINISHING SUPERSEDES "still to be tested". Leaving 🧪 set behind the scenes would mean
+            // clearing /done later silently restores a reminder the owner has already discharged.
+            if (turningOn && session.AwaitingTest)
+                _store.Set_AwaitingTest(session.OrchId, false);
+
+            // Muted underneath, exactly as /test is — a finished endeavour should stop texting them.
+            // Un-muting is a separate statement from un-finishing, which is why the two are two
+            // store calls and not one derived state.
+            _store.Set_TelegramMode(session.OrchId, turningOn ? TelegramDeliveryModes.Silenced : TelegramDeliveryModes.Normal);
+
+            _log.Log_Info(session.OrchId, turningOn
+                ? "/done — marked finished and muted, topic kept open"
+                : "/done — the finished mark was cleared, back to Normal");
+
+            Raise_OrchestrationActivity(session.OrchId);
+
+            // BEFORE the new mode takes hold on the next tick, so the confirmation itself gets through.
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                turningOn
+                    ? "✅ marked finished — muted, and the topic stays open. Text here whenever you want it back; that alone wakes it up."
+                    : "✅ cleared — this topic is back to normal.",
+                cancellationToken);
+
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "/done failed", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/done failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// A FINISHED TOPIC WAKES UP THE MOMENT THE OWNER USES IT AGAIN, because /done is the one state
+    /// in this app deliberately designed to OUTLIVE the work it describes. They kept the topic open
+    /// *"in case I have something else to do later"*, so later is the case that has to work.
+    ///
+    /// Without this it does not. /done mutes, nothing else in the app ever clears a per-topic mute,
+    /// and Silenced DROPS rather than defers — so the owner would come back, type, get the ✓ tick
+    /// (acks are ungated), watch the session genuinely start work, and never hear another word from
+    /// it. One-way and silent, with no self-healing.
+    ///
+    /// The app has been caught by exactly this shape before, and wrote the rule down: *"a mode they
+    /// must remember to turn off is one they get trapped by"* — terminal mode, which for the same
+    /// reason now exits itself when they text from Telegram.
+    ///
+    /// ONLY REAL MESSAGES REACH HERE. Recognised commands are dispatched before routing, so reading
+    /// a finished topic with /progress or /tasks inspects it without declaring it unfinished; it
+    /// takes actual new work to bring it back.
+    /// </summary>
+    void Wake_DoneTopic_IfNeeded(IOrchestrationSession session)
+    {
+        if (!session.Done)
+            return;
+
+        // Both halves, because /done set both: the flag is what the glyph reads, and the mode is
+        // what actually decides whether they hear anything back.
+        _store.Set_Done(session.OrchId, false);
+        _store.Set_TelegramMode(session.OrchId, TelegramDeliveryModes.Normal);
+
+        _log.Log_Info(session.OrchId, "the owner wrote to a finished topic — ✅ cleared and unmuted so their reply can reach them");
+    }
+
     async Task Request_Close_FromCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
@@ -6082,7 +6182,7 @@ internal sealed class BridgeEngineModel(
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
                 baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-                session.AwaitingTest, Last_OwnerReplyState(session.OrchId));
+                session.AwaitingTest, Last_OwnerReplyState(session.OrchId), session.Done);
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -6879,7 +6979,7 @@ internal sealed class BridgeEngineModel(
             var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
             var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
                 baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-                session.AwaitingTest, Last_OwnerReplyState(session.OrchId));
+                session.AwaitingTest, Last_OwnerReplyState(session.OrchId), session.Done);
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
@@ -7837,6 +7937,8 @@ internal sealed class BridgeEngineModel(
 
             orchId = session.OrchId;
             channelFile = _paths.Get_OwnerChannelFile(orchId);
+
+            Wake_DoneTopic_IfNeeded(session);
         }
 
         string segmentText;

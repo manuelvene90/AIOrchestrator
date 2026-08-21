@@ -35,6 +35,28 @@ public static class TelegramDeliveryMode_Glyphs
     public const string AWAITING_TEST = "🧪";
 
     /// <summary>
+    /// FINISHED, AND DELIBERATELY NOT CLOSED. The last step of the owner's own workflow, asked for
+    /// on 2026-08-21: *"a new /done command that works like test and mute, but with a different icon
+    /// that lets me remember the topic is finished, but I still don't want to close the topic in
+    /// case I have something else to do later."*
+    ///
+    /// 🧪 says "I have not checked this yet"; this says "I have, and it is done" — the topic stays
+    /// open only as somewhere to come back to. Closing is the other thing, and it is destructive by
+    /// comparison: it stops the tailers, kills the terminals and closes the Telegram topic.
+    ///
+    /// ✅ IS THE OWNER'S CHOICE over the 📦 first proposed, and their reason is the one that counts:
+    /// *"for now it's used only in conversations, not in topic titles, so I won't get confused"*.
+    /// The app does write ✅ in message BODIES — an answered question, a passed check — but the
+    /// topic-list vocabulary is a separate namespace, and inside it this character is unused.
+    /// Not 🏁, which already means a LEDGER LINE finished (`LedgerTransition_Wording.RECAP_GLYPH`)
+    /// and would put two different finished-somethings in one thread.
+    ///
+    /// It REPLACES the mode glyph for the same reason 🧪 does: /done is mute underneath, so drawing
+    /// 🔕 ✅ together would state one fact twice.
+    /// </summary>
+    public const string DONE = "✅";
+
+    /// <summary>
     /// SOMEBODY IS WAITING ON THE OWNER, and the endeavour is still moving meanwhile.
     /// </summary>
     public const string REPLY_WANTED = "❓";
@@ -103,7 +125,8 @@ public static class TelegramDeliveryMode_Glyphs
         bool isQuiet,
         OwnerPresenceModes presence,
         bool isAwaitingTest = false,
-        OwnerReplyStates ownerReply = OwnerReplyStates.None)
+        OwnerReplyStates ownerReply = OwnerReplyStates.None,
+        bool isDone = false)
     {
         // OUTERMOST, ahead of every other glyph — the owner asked for it "at the beginning of the
         // topic name, to concatenate with other possible icons". It is also the only glyph here that
@@ -115,6 +138,18 @@ public static class TelegramDeliveryMode_Glyphs
             OwnerReplyStates.None => "",
             _ => throw new Exception($"Unhandled OwnerReplyStates: {ownerReply}"),
         };
+
+        // DONE OUTRANKS AWAITING-TEST, and everything below it. 🧪 asks the owner for something —
+        // go and test this — while 📦 records that the asking is over; showing the request on a
+        // topic they have already signed off would be telling them to do a job they have done. The
+        // command clears the other flag when it sets this one, so both should never be true at
+        // once; if they somehow are, the later statement is the one worth showing.
+        if (isDone)
+        {
+            var withDone = $"{DONE} {baseName}";
+
+            return replyPrefix + (isAway ? $"{AWAY} {withDone}" : withDone);
+        }
 
         // AWAITING-TEST OUTRANKS BOTH the mode glyph and terminal presence, and that ordering is the
         // point of the state. The other two describe how messages are being delivered right now;
@@ -165,6 +200,7 @@ public static class TelegramDeliveryMode_Glyphs
     static bool Starts_WithAnyGlyph(string topicName)
     {
         return topicName.StartsWith(DEFERRED, StringComparison.Ordinal)
+            || topicName.StartsWith(DONE, StringComparison.Ordinal)
             || topicName.StartsWith(REPLY_WANTED, StringComparison.Ordinal)
             || topicName.StartsWith(REPLY_BLOCKING, StringComparison.Ordinal)
             || topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal)
@@ -185,6 +221,9 @@ public static class TelegramDeliveryMode_Glyphs
 
         if (topicName.StartsWith(TERMINAL, StringComparison.Ordinal))
             return TERMINAL.Length;
+
+        if (topicName.StartsWith(DONE, StringComparison.Ordinal))
+            return DONE.Length;
 
         if (topicName.StartsWith(REPLY_WANTED, StringComparison.Ordinal))
             return REPLY_WANTED.Length;

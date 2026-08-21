@@ -67,6 +67,24 @@ public interface IOrchestrationSession
     bool AwaitingTest { get; }
 
     /// <summary>
+    /// FINISHED, AND DELIBERATELY LEFT OPEN. The owner asked for it on 2026-08-21: *"a new /done
+    /// command that works like test and mute, but with a different icon that lets me remember the
+    /// topic is finished, but I still don't want to close the topic in case I have something else
+    /// to do later."*
+    ///
+    /// A FLAG, NOT A DELIVERY MODE, for the same reason AwaitingTest is one: it says something about
+    /// the ENDEAVOUR, not about how messages travel, and the two have to be able to disagree — a
+    /// done topic they then text is un-done while staying exactly as audible as they left it.
+    ///
+    /// PERSISTED, because it is a memory aid and one that vanished on restart would be worse than
+    /// none: they would be shown a finished endeavour as though it were live work.
+    ///
+    /// NOT ClosedUtc. Closing stops the tailers, kills the terminals and closes the Telegram topic;
+    /// this changes a glyph and mutes the topic, and every part of it is reversible.
+    /// </summary>
+    bool Done { get; }
+
+    /// <summary>
     /// WHERE THE OWNER IS for this orchestration. TERMINAL means they are in its terminal: nothing
     /// is pushed to Telegram and — the half that matters — no question raises the awaiting-answer
     /// flag, so the supervisor never freezes waiting for a tap that is being typed at it instead.
