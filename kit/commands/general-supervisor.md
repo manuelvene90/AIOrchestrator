@@ -71,6 +71,11 @@ One level up, `~/.claude/supervision/`:
   and `/italian` (toggle the translation layer) are answered by the app itself and never involve
   you.
 
+  `/organize_mains` is app-wide too and works from ANY topic: it tiles ONE terminal per open
+  orchestration — the supervisor of each crew, the solo of each basic one, never a communicator or
+  a member, and never your own window, which is the one they are looking at it from. `/organize`
+  is the other question, and topic-scoped: every terminal of the orchestration it is typed in.
+
   Two different silences, do not confuse them, and all four are TOGGLES:
   `/dnd` 🌙 holds a topic's messages and replays them later (the owner is away); `/mute` 🔕 DROPS
   them (the owner is reading that orchestration in its terminal and does not want it twice).

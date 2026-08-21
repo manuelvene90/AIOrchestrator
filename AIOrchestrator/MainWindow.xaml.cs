@@ -638,15 +638,29 @@ public partial class MainWindow : Window
     {
         try
         {
-            List<string> titleFragments = [];
+            // THE SAME CODE THE /organize_mains COMMAND RUNS, for the same reason the per-topic
+            // Organize button shares its own: one implementation, or the phone and the button drift.
+            //
+            // AND IT WAS ALREADY DRIFTING. This built Build_ForSupervisor for EVERY open
+            // orchestration — including basic ones, which have no supervisor at all. Their fragment
+            // matched no window, was silently dropped by the existence filter, and their solo — the
+            // very terminal the owner talks to — never appeared. The owner asked for "all sups and
+            // solos" (2026-08-21) and this button was half of that, quietly.
+            List<AIOrchestratorCoreLib.Sessions.OrchestrationSession.IOrchestrationSession> open = [];
 
             foreach (var session in _store.Load_All())
             {
                 if (session.ClosedUtc == null)
-                    titleFragments.Add(AIOrchestratorCoreLib.Spawning.SessionWindowTitle_Builder.Build_ForSupervisor(session.OrchId));
+                    open.Add(session);
             }
 
-            Tile_Terminals(titleFragments, ChannelDiscovery.GENERAL_ORCH_ID);
+            var placed = AIOrchestratorCoreLib.WindowFocus.SessionWindows_Organizer.Organize_MainWindows(open);
+
+            Add_LogRow(
+                placed == 0 ? LogLevels.Warning : LogLevels.Info,
+                placed == 0
+                    ? $"[{ChannelDiscovery.GENERAL_ORCH_ID}] Organize: no main terminal windows found"
+                    : $"[{ChannelDiscovery.GENERAL_ORCH_ID}] Organize: tiled {placed} main terminal(s)");
         }
         catch (Exception ex)
         {
@@ -654,39 +668,13 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Shared by both Organize buttons, so a fix to the tiling can never apply to only one.</summary>
-    void Tile_Terminals(IReadOnlyList<string> titleFragments, string logContext)
-    {
-        // Only windows that actually EXIST get a tile, so the layout is computed for exactly the
-        // set about to be shown. This used to test focusability instead: Windows refuses
-        // SetForegroundWindow in several ordinary situations, so a perfectly real terminal could
-        // fail the test, still be sitting on screen, and be left out of the arrangement.
-        var living = titleFragments
-            .Where(AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Exists_ByTitleFragment)
-            .ToList();
-
-        if (living.Count == 0)
-        {
-            Add_LogRow(LogLevels.Warning, $"[{logContext}] Organize: no terminal windows found");
-            return;
-        }
-
-        var area = SystemParameters.WorkArea;
-
-        var tiles = AIOrchestratorCoreLib.Layout.TileLayout_Calculator.Build_Tiles(
-            living.Count, (int)area.Left, (int)area.Top, (int)area.Width, (int)area.Height);
-
-        for (var i = 0; i < living.Count && i < tiles.Count; i++)
-        {
-            AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_PlaceWindow_ByTitleFragment(living[i], tiles[i].X, tiles[i].Y, tiles[i].Width, tiles[i].Height);
-
-            // Raise it AFTER placing. The old code raised windows while deciding which existed,
-            // so removing that from the filter would otherwise have left them tiled but buried.
-            AIOrchestratorCoreLib.WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(living[i]);
-        }
-
-        Add_LogRow(LogLevels.Info, $"[{logContext}] Organize: tiled {living.Count} terminal(s)");
-    }
+    // Tile_Terminals lived here and is GONE, deliberately. It was the app's own copy of the tiling —
+    // existence filter, work area, Build_Tiles, place-then-raise — and its doc claimed it was
+    // "shared by both Organize buttons" long after the per-topic button had moved to
+    // SessionWindows_Organizer.Organize. One caller was left, and on 2026-08-21 that one moved to
+    // Organize_MainWindows too, which is where the tiling belongs: in the library both the button
+    // and the Telegram command can reach. A dead second implementation of a layout is how the two
+    // surfaces drift apart while a comment insists they cannot.
 
     void DetailsButton_Click(object sender, RoutedEventArgs e)
     {

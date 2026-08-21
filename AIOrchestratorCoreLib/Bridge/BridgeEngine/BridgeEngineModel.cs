@@ -4847,6 +4847,14 @@ internal sealed class BridgeEngineModel(
                     {
                         await Organize_SessionWindows_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "organize_mains" || command == "organize-mains")
+                    {
+                        // The hyphen is accepted for the same reason mute-all is (see above): the
+                        // Telegram menu only offers the underscore, and an owner typing the shape
+                        // they remember should not be answered with silence — an unmatched command
+                        // falls through to the catch-all and is delivered to the session as chat.
+                        await Organize_MainWindows_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "merge")
                     {
                         await Ask_SessionToMerge_Async(client, message.MessageThreadId, cancellationToken);
@@ -4991,6 +4999,7 @@ internal sealed class BridgeEngineModel(
                     ("limits", "5-hour and weekly usage limits"),
                     ("show", "Bring this orchestration's session window to the front"),
                     ("organize", "Tile this orchestration's terminals across the screen"),
+                    ("organize_mains", "Tile EVERY orchestration's main terminal — each sup and solo, once"),
                     ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
                     ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
                     ("done", "Toggle ✅ — finished, muted, and kept open in case you come back"),
@@ -5621,6 +5630,44 @@ internal sealed class BridgeEngineModel(
             placed == 0
                 ? "No terminal windows for this orchestration are on screen."
                 : $"🪟 tiled {placed} terminal{(placed == 1 ? "" : "s")}.",
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// /organize_mains — ONE TILE PER ORCHESTRATION, showing the session the owner actually talks to.
+    /// Their words, 2026-08-21: *"a new command: /organize_mains which does the terminal organization
+    /// but for all sups and solos (no general sup)"*.
+    ///
+    /// /organize answers "show me everything in THIS orchestration". This answers the other question
+    /// — "show me every orchestration at once" — so it takes the supervisor of each crew and the solo
+    /// of each basic one, and never a communicator, an implementer or a reviewer.
+    ///
+    /// APP-WIDE, so it works from any topic and only uses the thread id to reply where they typed —
+    /// the same shape as /resume. Requiring General would be a rule they would have to remember.
+    ///
+    /// GENERAL IS EXCLUDED STRUCTURALLY, not by a check: it has no session.json, so Load_All never
+    /// yields it. That is worth stating because the exclusion is invisible in this code — and it is
+    /// the right kind of invisible, since it is also the window they would be organizing FROM.
+    /// </summary>
+    async Task Organize_MainWindows_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        List<Sessions.OrchestrationSession.IOrchestrationSession> open = [];
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc == null)
+                open.Add(session);
+        }
+
+        var placed = WindowFocus.SessionWindows_Organizer.Organize_MainWindows(open);
+
+        _log.Log_Info(GLOBAL_ORCH_ID, $"/organize_mains — tiled {placed} main terminal(s) across {open.Count} open orchestration(s)");
+
+        await Send_DirectReply_BestEffort_Async(
+            client, messageThreadId,
+            placed == 0
+                ? "No supervisor or solo terminals are on screen."
+                : $"🪟 tiled {placed} main terminal{(placed == 1 ? "" : "s")}.",
             cancellationToken);
     }
 

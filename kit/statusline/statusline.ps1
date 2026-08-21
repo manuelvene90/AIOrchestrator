@@ -75,6 +75,36 @@ function Get-ProgressSuffix($root, $id) {
     }
 }
 
+# THE ORCHESTRATION'S NAME, ON EVERY ORCHESTRATED TERMINAL. The owner, 2026-08-21: *"since it's hard
+# to change the terminal name, we should add the topic name to the custom claude status line which
+# should be simpler I think"*. They are right, and it is strictly better than the window title this
+# replaces in practice: a title is written once at spawn and a running window keeps the old one until
+# it respawns, while this is re-rendered every turn, so a rename shows up on the very next line.
+#
+# It is the same string they read in their topic list, which is the whole point - the terminal and
+# the phone name the session identically, so "the one called AI-Orch - away mode loop" means one
+# thing in both places.
+#
+# Same discipline as the progress suffix below: EVERY failure path returns '' and the caller draws
+# exactly the line it drew before this existed. An unnamed orchestration, a missing session.json, a
+# half-written one - all of them mean "no name to show", never a broken status line.
+function Get-DisplayNameSuffix($root, $id) {
+    try {
+        if (-not $id) { return '' }
+
+        $file = Join-Path $root "$id\session.json"
+        if (-not (Test-Path -LiteralPath $file)) { return '' }
+
+        $session = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+
+        if (-not $session.displayName) { return '' }
+
+        return " $esc[97m$($session.displayName)$esc[0m"
+    } catch {
+        return ''
+    }
+}
+
 # --- Telemetry probe (best effort, never breaks the status line) ---
 if ($role -and $raw) {
     try {
@@ -91,7 +121,7 @@ if ($role -and $raw) {
 
 # --- Render ---
 if ($role -eq 'supervisor') {
-    Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $orchId $esc[0m $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -eq 'solo') {
     # THE SOLO CARRIES THE PROGRESS TOO, and it was the one role that did not. The suffix was wired
@@ -108,17 +138,17 @@ elseif ($role -eq 'solo') {
     # 208 is the orange that matches the 🟠 this session already speaks with in the Telegram mirror,
     # so the two surfaces name the same voice the same way.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'SOLO' }
-    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $orchId $esc[0m $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -in @('implementer','reviewer')) {
     # NOT the members: an implementer's terminal showing the orchestration's overall percentage would
     # invite it to reason about work that is not its own. The ledger belongs to whoever talks to the
     # owner.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'IMPLEMENTER' }
-    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m $model"
+    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model"
 }
 elseif ($role -eq 'communicator') {
-    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $orchId $esc[0m $model"
+    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model"
 }
 elseif ($role -eq 'general') {
     Write-Output "$esc[1;93m GENERAL SUPERVISOR $esc[0m $model"
