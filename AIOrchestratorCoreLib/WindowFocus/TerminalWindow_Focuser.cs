@@ -35,9 +35,6 @@ public static class TerminalWindow_Focuser
     [DllImport("user32.dll")]
     static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    static extern bool SetWindowText(IntPtr hWnd, string text);
-
     [DllImport("user32.dll")]
     static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
@@ -162,23 +159,24 @@ public static class TerminalWindow_Focuser
         return PostMessage(foundHandle, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
     }
 
-    /// <summary>
-    /// Renames a session's terminal window (used when the orchestration gets its goal name).
-    /// The new title must KEEP the original fragment as a prefix so title-based focusing and
-    /// closing keep working.
-    /// </summary>
-    public static bool Try_Rename_ByTitleFragment(string titleFragment, string newTitle)
-    {
-        if (!newTitle.Contains(titleFragment, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException($"New title '{newTitle}' must contain the fragment '{titleFragment}' — focusing/closing match on it");
-
-        var foundHandle = Find_WindowHandle_ByTitleFragment(titleFragment);
-
-        if (foundHandle == IntPtr.Zero)
-            return false;
-
-        return SetWindowText(foundHandle, newTitle);
-    }
+    // THERE IS NO LIVE RENAME HERE, DELIBERATELY, and it is not an omission to be filled in.
+    //
+    // Try_Rename_ByTitleFragment lived here from 2026-08-06 to 2026-08-21 and called SetWindowText
+    // on the wt.exe host window. That call SUCCEEDS — the OS caption really does change, and
+    // GetWindowText reads it back — but Windows Terminal draws its titlebar from its own per-tab
+    // state and never looks at the caption, so nothing the owner could see ever changed. Verified by
+    // spawning a real window with the app's own invocation, renaming it, and screenshotting it: the
+    // titlebar still read the original. A "rename" that returns true and does nothing is worse than
+    // none, because the log then says it worked.
+    //
+    // There is no external verb to retitle a running WT tab. The only real route is a process INSIDE
+    // that session emitting ESC ]2;...BEL on its own stdout, which the app cannot do from outside and
+    // which --suppressApplicationTitle (set at spawn, on purpose) blocks anyway.
+    //
+    // So the name is carried by the DURABLE path instead: SpawnCommand_Builder composes it into
+    // --title at spawn, and a running window picks it up at its next respawn. The owner chose that
+    // trade deliberately on 2026-08-21, told what it costs: a terminal keeps its old title until the
+    // watchdog or an app restart brings it back.
 
     static IntPtr Find_WindowHandle_ByTitleFragment(string titleFragment)
     {

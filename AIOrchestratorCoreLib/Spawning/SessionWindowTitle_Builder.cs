@@ -49,10 +49,12 @@ public static class SessionWindowTitle_Builder
     /// search for — and this is the only place the display-name suffix is spelled.
     ///
     /// <para>
-    /// It exists because that suffix was about to be written twice. `Rename_SessionWindows_BestEffort`
-    /// already composed it inline, and threading the name through spawn would have added a second
-    /// copy — the duplicate-formatter mistake this repo has paid for before (CLAUDE.md decision 12:
-    /// two copies of a duration formatter, one missing its guard). One copy, both callers.
+    /// It exists because that suffix was about to be written twice: the live window rename composed
+    /// it inline while spawn was about to compose it again — the duplicate-formatter mistake this
+    /// repo has paid for before (CLAUDE.md decision 12: two copies of a duration formatter, one
+    /// missing its guard). The rename is gone since 2026-08-21 (see TerminalWindow_Focuser — it
+    /// could never change what Windows Terminal draws), so spawn is now the ONLY caller, and this
+    /// stays the one place the suffix is spelled.
     /// </para>
     /// <para>
     /// THE SUFFIX IS APPENDED AFTER THE SEPARATOR AND THAT IS LOAD-BEARING, not decoration.

@@ -125,6 +125,56 @@ public class OwnerQuestionPendingDeciderTests
         ]));
     }
 
+    /// <summary>
+    /// THE LEDGER MARKER, VERBATIM FROM strategy-lab-6. The owner, 2026-08-21: *"after I put it
+    /// in pc mode a ? icon appeared in the name for no reason"*. The only session entry on that
+    /// channel was a STANDING BY report, and the mark in it was `[?]` — the ledger's own
+    /// blocked-on-owner marker, which every role command in this kit teaches sessions to write.
+    ///
+    /// This is why the glyph looked like it followed /pc: /pc is what made the session report, and
+    /// any report mentioning the marker lit it. Nothing about presence was involved at all.
+    /// </summary>
+    [Fact]
+    public void ALedgerMarkerInProseDoesNotLightTheGlyph()
+    {
+        Assert.False(OwnerQuestionPending_Decider.Decide(
+        [
+            Entry(1, ChannelAuthors.Solo,
+                "STANDING BY.\n\nNo task yet. Owner is at the terminal (entry [3]) — I asked "
+                + "them there, in prose, what to work on. Ledger line sits at [?] until they answer."),
+        ]));
+    }
+
+    /// <summary>
+    /// THE SECOND REPORT, ALSO VERBATIM — this session's own entry, minutes later: *"you just
+    /// put ? in the topic name"*. Here the mark is a NOUN, the name of the glyph being looked at. A
+    /// reader that cannot tell a noun from an ask will keep finding new ways to be wrong, which is
+    /// why the test is the SHAPE of the mark rather than a list of words to exclude.
+    /// </summary>
+    [Fact]
+    public void TheMarkAsANounDoesNotLightTheGlyph()
+    {
+        Assert.False(OwnerQuestionPending_Decider.Decide(
+        [
+            Entry(1, ChannelAuthors.Solo,
+                "Investigating the ? glyph, the terminal rename and the hook in parallel now."),
+        ]));
+    }
+
+    /// <summary>
+    /// The boundary from the other side: the SAME entry with a real question appended still lights
+    /// the glyph, so tightening the reader did not cost the case it exists for.
+    /// </summary>
+    [Fact]
+    public void ARealQuestionAfterProseAboutTheMarkerStillLightsTheGlyph()
+    {
+        Assert.True(OwnerQuestionPending_Decider.Decide(
+        [
+            Entry(1, ChannelAuthors.Solo,
+                "Ledger line sits at [?] until they answer.\nShould I take it off your plate?"),
+        ]));
+    }
+
     /// <summary>An empty channel asks nothing — a brand-new orchestration shows no glyph.</summary>
     [Fact]
     public void AnEmptyChannelAsksNothing()
