@@ -7,10 +7,17 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// topic name I should be able to immediately understand if some topic needs me for a response,
 /// whether blocking or not"*.
 ///
-/// Both facts already existed and neither was visible: `OwnerOwesReply_Decider` answers whose move
-/// it is on the owner channel, and `MemberStates.BlockedOnOwner` is a member declaring it cannot
-/// continue. This enum is the pairing of the two, not a new signal — nothing here decides anything
-/// the app was not already deciding somewhere less visible.
+/// `MemberStates.BlockedOnOwner` is a member declaring it cannot continue, and that is what draws
+/// ⛔.
+///
+/// ❓ WAS ORIGINALLY WIRED TO THE WRONG DECIDER and is now `OwnerQuestionPending_Decider`. It was
+/// built on `OwnerOwesReply_Decider`, which answers "whose move is it on the owner channel" — true
+/// after every report a session writes, including its answer to the owner's own message. So the
+/// glyph was lit almost permanently, and the owner asked the obvious question on 2026-08-21: *"If
+/// there are no questions, why did they put the question mark in the topic name?"* `Wanted` now
+/// means an actual unanswered question, tested by the same reader that decides what reaches their
+/// phone. `OwnerOwesReply_Decider` is unchanged and still correct for its own callers — the stall
+/// alert and the app's session rows, which really do want "whose move is it".
 /// </summary>
 public enum OwnerReplyStates
 {

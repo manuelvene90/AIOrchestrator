@@ -8489,7 +8489,11 @@ internal sealed class BridgeEngineModel(
         var ownerEntries = ChannelEntry_Parser.Parse_All(
             UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId)));
 
-        return Status.OwnerOwesReply_Decider.Decide(ownerEntries)
+        // A QUESTION, not merely the last word. OwnerOwesReply_Decider answers "whose move is it",
+        // which is true after every report the session writes — including its answer to the owner —
+        // so driving the glyph from it left ❓ permanently lit on topics with nothing pending. The
+        // owner reads this glyph as "a non-blocking question is waiting", and now it is one.
+        return OwnerQuestionPending_Decider.Decide(ownerEntries)
             ? Telegram.OwnerReplyStates.Wanted
             : Telegram.OwnerReplyStates.None;
     }
