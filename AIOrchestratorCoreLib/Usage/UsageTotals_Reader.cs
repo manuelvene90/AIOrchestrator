@@ -1,7 +1,9 @@
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Status.SessionContextUsage;
 
 namespace AIOrchestratorCoreLib.Usage;
 
@@ -64,15 +66,7 @@ public static partial class UsageTotals_Reader
         IOrchestrationSession session)
     {
         var orchFolder = paths.Get_OrchestrationFolder(session.OrchId);
-
-        List<(string Label, string File)> sources =
-        [
-            ("supervisor", Path.Combine(orchFolder, SESSION_USAGE_FILE)),
-            ("communicator", Path.Combine(orchFolder, COMMUNICATOR_USAGE_FILE)),
-        ];
-
-        foreach (var member in session.Members)
-            sources.Add((member.MemberId, Path.Combine(paths.Get_ImplementerFolder(session.OrchId, member.MemberId), SESSION_USAGE_FILE)));
+        var sources = Build_ProbeSources(paths, session);
 
         List<(string Label, double Cost, long Tokens)> totals = [];
 
@@ -91,6 +85,32 @@ public static partial class UsageTotals_Reader
         }
 
         return totals;
+    }
+
+    /// <summary>
+    /// Every probe file this orchestration could have, labelled: supervisor, communicator, then each
+    /// member in roster order. Existence is NOT checked here — a caller that wants only the sessions
+    /// which have actually reported filters on its own read.
+    ///
+    /// ONE DEFINITION OF THE LIST, because the token totals, the cost breakdown and the /context
+    /// report must never disagree about which sessions exist or where each one writes. It was two
+    /// copies for about an hour on 2026-08-21 and the second one had already drifted: it composed
+    /// the member path by hand instead of going through ISupervisionPaths.
+    /// </summary>
+    public static IReadOnlyList<(string Label, string File)> Build_ProbeSources(ISupervisionPaths paths, IOrchestrationSession session)
+    {
+        var orchFolder = paths.Get_OrchestrationFolder(session.OrchId);
+
+        List<(string Label, string File)> sources =
+        [
+            ("supervisor", Path.Combine(orchFolder, SESSION_USAGE_FILE)),
+            ("communicator", Path.Combine(orchFolder, COMMUNICATOR_USAGE_FILE)),
+        ];
+
+        foreach (var member in session.Members)
+            sources.Add((member.MemberId, Path.Combine(paths.Get_ImplementerFolder(session.OrchId, member.MemberId), SESSION_USAGE_FILE)));
+
+        return sources;
     }
 
     public static string Format_Tokens(long tokens)
@@ -139,6 +159,11 @@ public static partial class UsageTotals_Reader
         {
             return null;
         }
+    }
+
+    public static ISessionContextUsage? Read_ContextUsage_OrNull(string usageFilePath)
+    {
+        return SessionContextUsage_Factory.Create_OrNull(usageFilePath);
     }
 
     static void Sum_TokenFields(JsonNode node, ref long total)

@@ -21,6 +21,7 @@ using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Status;
+using AIOrchestratorCoreLib.Status.SessionContextUsage;
 using AIOrchestratorCoreLib.Tailing;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Tailing.CompletedChannelAppend;
@@ -78,6 +79,17 @@ internal sealed class BridgeEngineModel(
     const int ORPHAN_CONFIRM_MINUTES = 6;
 
     const int MIRROR_TICK_MILLISECONDS = 2000;
+
+    /// <summary>
+    /// How old a context reading has to be before /context dates it. A probe file is rewritten on
+    /// every status-line render, so an ACTIVE session's figure is seconds old and stamping every row
+    /// with an age would be noise; past this, the session has not rendered in a while and the number
+    /// is history rather than news.
+    ///
+    /// Two minutes matches what the rest of the app already treats as "recently alive" — the same
+    /// window after which a finished turn stops counting as working now.
+    /// </summary>
+    const int CONTEXT_READING_STALE_AFTER_MINUTES = 2;
 
     /// <summary>
     /// Pause before re-sending a channel whose mirror send failed. The tailer re-emits an
@@ -4839,6 +4851,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "context")
+                    {
+                        await Send_ContextReport_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "show")
                     {
                         await Show_SessionWindow_Async(client, message.MessageThreadId, cancellationToken);
@@ -4997,6 +5013,9 @@ internal sealed class BridgeEngineModel(
                     ("cost", "What this topic has cost, per session — in General, per orchestration"),
                     ("tokens", "Token and usage totals"),
                     ("limits", "5-hour and weekly usage limits"),
+                    // Listed next to /limits because the owner reaches for them together: one is how
+                    // full the ACCOUNT is, the other how full each SESSION's window is.
+                    ("context", "How full each session's context window is"),
                     ("show", "Bring this orchestration's session window to the front"),
                     ("organize", "Tile this orchestration's terminals across the screen"),
                     ("organize_mains", "Tile EVERY orchestration's main terminal — each sup and solo, once"),
@@ -5930,6 +5949,127 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// /context — context-window usage per session. In a topic: that orchestration's sessions
+    /// broken down; in General: all active orchestrations and their worst context window.
+    /// </summary>
+    async Task Send_ContextReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Build_ContextReportText(messageThreadId);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_ContextReportText(long? messageThreadId)
+    {
+        if (messageThreadId != null)
+        {
+            var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+            if (session == null)
+                return "no orchestration is bound to this topic";
+
+            List<string> lines = [];
+
+            // EVERY session is listed here, whatever its percentage. The thresholds in
+            // ContextVisibility_Policy exist to keep unasked-for surfaces quiet; /context IS the ask,
+            // so filtering it would answer a direct question with a partial roster.
+            foreach (var source in UsageTotals_Reader.Build_ProbeSources(_paths, session))
+            {
+                var reading = UsageTotals_Reader.Read_ContextUsage_OrNull(source.File);
+                var field = Formatting.ContextUsage_Formatter.Describe_OrNull(reading);
+
+                if (field == null || reading == null)
+                    continue;
+
+                lines.Add($"- {source.Label}: {field}{Describe_ProbeAge_Suffix(reading)}");
+            }
+
+            if (lines.Count == 0)
+                return $"{session.DisplayName ?? session.OrchId}: no session has reported its context yet";
+
+            lines.Insert(0, $"CONTEXT — {session.DisplayName ?? session.OrchId}");
+
+            return string.Join('\n', lines);
+        }
+
+        List<string> blocks = [];
+
+        foreach (var session in _store.Load_All())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            // THE WORST SESSION, NAMED. A bare percentage per orchestration would tell the owner
+            // something is nearly full without saying which window it is, and in General that is the
+            // only thing they can act on.
+            string? worstLabel = null;
+            double worstPercent = 0;
+
+            foreach (var source in UsageTotals_Reader.Build_ProbeSources(_paths, session))
+            {
+                var reading = UsageTotals_Reader.Read_ContextUsage_OrNull(source.File);
+
+                if (reading == null || (worstLabel != null && reading.UsedPercent <= worstPercent))
+                    continue;
+
+                worstLabel = source.Label;
+                worstPercent = reading.UsedPercent;
+            }
+
+            if (worstLabel == null)
+                continue;
+
+            blocks.Add($"{session.DisplayName ?? session.OrchId}: {worstLabel} ctx {(int)worstPercent}%");
+        }
+
+        if (blocks.Count == 0)
+            return "no open orchestration has reported its context yet";
+
+        blocks.Insert(0, "CONTEXT — fullest session of each orchestration");
+
+        return string.Join('\n', blocks);
+    }
+
+    /// <summary>
+    /// How old the reading is, and ONLY when that is worth saying. A probe file is rewritten on every
+    /// status-line render, so a working session's figure is seconds old and dating it would be noise
+    /// on every row; a session that ended its turn is quoting state from whenever it last rendered,
+    /// and THAT the owner needs told rather than left to assume the number is live.
+    /// </summary>
+    static string Describe_ProbeAge_Suffix(Status.SessionContextUsage.ISessionContextUsage reading)
+    {
+        var age = DateTime.UtcNow - reading.ProbeTimeUtc;
+
+        if (age < TimeSpan.FromMinutes(CONTEXT_READING_STALE_AFTER_MINUTES))
+            return "";
+
+        return $" · {SessionDuration_Formatter.Describe(age)} old";
+    }
+
+    // THERE IS NO /compact HERE, DELIBERATELY, and it is not an omission to be filled in.
+    //
+    // A running Claude Code session cannot be made to compact from outside. That was established by
+    // measurement on 2026-08-21, not by reading: WriteConsoleInput into the session's console reaches
+    // cmd.exe but not claude.exe, and SendInput with the terminal forced to the foreground delivered
+    // 54 synthetic keystrokes to a live session which submitted none of them. Claude Code exposes no
+    // control file, socket, signal or CLI verb for it either — PreCompact can BLOCK a compaction that
+    // is already happening, never request one.
+    //
+    // A draft of this file did ship a /compact that appended "please compact if beneficial" to the
+    // channel and answered the owner with a ✓. That is the Try_Rename_ByTitleFragment failure again
+    // (see TerminalWindow_Focuser): a verb that reports success and changes nothing, with the log
+    // then agreeing it worked. The session it asks has no way to honour the request.
+    //
+    // The owner dropped the command on being told, 2026-08-21: sessions auto-compact on their own.
+    // If it is ever wanted again, the honest routes are `claude --autocompact <tokens>` at SPAWN
+    // (a real flag on this version) or a handover-and-respawn, which resets the window for real
+    // because the channel survives the restart.
+
+    /// <summary>
     /// /diff — GROUND TRUTH from git, not agent prose: branch, ahead/behind, dirty files and the
     /// latest commits for the repo and every worktree the orchestration uses.
     /// </summary>
@@ -6479,7 +6619,12 @@ internal sealed class BridgeEngineModel(
                 MIRROR_RETRY_BACKOFF_SECONDS,
                 Find_NewestTopicMessage_OrNull(session.TelegramTopicId),
                 _repostImpossibleOrchIds.Contains(session.OrchId),
-                Note_FiguresAndDescribe_UnchangedFor(session.OrchId, ledger));
+                Note_FiguresAndDescribe_UnchangedFor(session.OrchId, ledger),
+                // The supervisor has no member row on this line, so its context rides on the title.
+                // A basic orchestration has no supervisor file and this reads null, which is right:
+                // its solo carries the figure on its own row.
+                UsageTotals_Reader.Read_ContextUsage_OrNull(
+                    Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE)));
 
             var action = plan.Action;
             var text = plan.Text;
@@ -6881,7 +7026,10 @@ internal sealed class BridgeEngineModel(
             var entries = ChannelHistory_Counter.Read_AllEntries(
                 Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId));
 
-            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false));
+            var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
+            var contextUsage = UsageTotals_Reader.Read_ContextUsage_OrNull(usageFile);
+
+            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false, contextUsage));
         }
 
         return members;
@@ -6898,9 +7046,10 @@ internal sealed class BridgeEngineModel(
         var ownerOwesReply = Status.OwnerOwesReply_Decider.Decide(
             ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId))));
 
+        var supervisorContextSuffix = Build_ContextSuffix_ForSupervisor(supervisorUsage);
         var supervisorLine = SessionActivity_Probe.Is_MidTurn(supervisorUsage)
-            ? $"working now{Describe_Activity_Suffix(supervisorUsage)}"
-            : ownerOwesReply ? MemberState_Descriptor.WAITING_ON_OWNER : "idle — waiting";
+            ? $"working now{Describe_Activity_Suffix(supervisorUsage)}{supervisorContextSuffix}"
+            : ownerOwesReply ? $"{MemberState_Descriptor.WAITING_ON_OWNER}{supervisorContextSuffix}" : $"idle — waiting{supervisorContextSuffix}";
 
         // WHICH ROWS this carries is StatusRoster_Builder's — including the one that must NOT be
         // here for a basic orchestration. See that class for why the decision moved out.
@@ -6930,7 +7079,18 @@ internal sealed class BridgeEngineModel(
             var memberOwesTheOwner = ownerOwesReply
                 && Sessions.MemberKind_Ids.Resolve_Kind(member.MemberId) == Sessions.MemberKinds.Solo;
 
-            memberLines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow, memberOwesTheOwner)}{lastWrite}");
+            // The same field, the same threshold and the same wording as the away variant of this
+            // digest and as the status line — all three go through ContextVisibility_Policy and
+            // ContextUsage_Formatter, so the owner can never be shown a member on one surface and
+            // not on another at the same percentage.
+            var memberContext = UsageTotals_Reader.Read_ContextUsage_OrNull(
+                Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
+
+            var memberContextSuffix = Status.ContextVisibility_Policy.Show_Member_InPeriodicDigest(member.MemberId, memberContext)
+                ? $" · {Formatting.ContextUsage_Formatter.Describe_OrNull(memberContext)}"
+                : "";
+
+            memberLines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
         }
 
         // The header carries the ledger counts, so "who is doing what" and "how far along are we"
@@ -6949,6 +7109,22 @@ internal sealed class BridgeEngineModel(
         var activity = SupervisorActivity_Describer.Describe_OrNull(usageFilePath);
 
         return activity == null ? "" : $" — {activity}";
+    }
+
+    /// <summary>
+    /// The supervisor's context field for the half-hourly digest — always shown when there is a
+    /// reading, per <see cref="Status.ContextVisibility_Policy.Show_Supervisor"/>. Neither the
+    /// threshold nor the wording is decided here; both belong to one place each so this surface
+    /// cannot drift from the status line.
+    /// </summary>
+    static string Build_ContextSuffix_ForSupervisor(string usageFilePath)
+    {
+        var context = UsageTotals_Reader.Read_ContextUsage_OrNull(usageFilePath);
+
+        if (!Status.ContextVisibility_Policy.Show_Supervisor(context))
+            return "";
+
+        return $" · {Formatting.ContextUsage_Formatter.Describe_OrNull(context)}";
     }
 
     string Describe_SessionActivity(string usageFilePath, string idleText)
@@ -9247,7 +9423,7 @@ internal sealed class BridgeEngineModel(
             var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
-            memberLines.Add($"{member.MemberId}: {Describe_AwayMemberState(entries, usageFile)}");
+            memberLines.Add($"{member.MemberId}: {Describe_AwayMemberState(member.MemberId, entries, usageFile)}");
         }
 
         if (memberLines.Count == 0)
@@ -9265,7 +9441,7 @@ internal sealed class BridgeEngineModel(
         return $"🌙 {string.Join('\n', lines)}";
     }
 
-    static string Describe_AwayMemberState(IReadOnlyList<Channels.ChannelEntry.IChannelEntry> entries, string usageFilePath)
+    static string Describe_AwayMemberState(string memberId, IReadOnlyList<Channels.ChannelEntry.IChannelEntry> entries, string usageFilePath)
     {
         var state = MemberState_Resolver.Resolve(entries);
 
@@ -9279,13 +9455,22 @@ internal sealed class BridgeEngineModel(
             ? ""
             : $" — {TextSummary_Formatter.Summarize_Task(lastBrief.Subject, TextSummary_Formatter.CARD_TASK_WORDS)}";
 
+        // A member reaches the digest at the digest's own threshold, which is lower than the
+        // status line's — see ContextVisibility_Policy for why the two differ. A solo is always
+        // shown, and the policy knows that from the member id so this call site does not have to.
+        var context = UsageTotals_Reader.Read_ContextUsage_OrNull(usageFilePath);
+
+        var contextSuffix = Status.ContextVisibility_Policy.Show_Member_InPeriodicDigest(memberId, context)
+            ? $" · {Formatting.ContextUsage_Formatter.Describe_OrNull(context)}"
+            : "";
+
         if (working)
-            return $"working{task}";
+            return $"working{task}{contextSuffix}";
 
         if (state == MemberStates.AwaitingSupervisorReview)
-            return "report filed, awaiting review";
+            return $"report filed, awaiting review{contextSuffix}";
 
-        return $"idle{task}";
+        return $"idle{task}{contextSuffix}";
     }
 
     string Build_PeriodicStatusText(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous)

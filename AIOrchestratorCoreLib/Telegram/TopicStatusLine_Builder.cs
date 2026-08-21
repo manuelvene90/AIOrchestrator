@@ -3,7 +3,9 @@ using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Planning;
 using AIOrchestratorCoreLib.Planning.PlanProgress;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Status;
+using AIOrchestratorCoreLib.Status.SessionContextUsage;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 
 namespace AIOrchestratorCoreLib.Telegram;
@@ -76,7 +78,8 @@ public static class TopicStatusLine_Builder
         string? lastSubject,
         DateTime now,
         bool aMessageIsAlreadyPosted,
-        TimeSpan? figuresUnchangedFor = null)
+        TimeSpan? figuresUnchangedFor = null,
+        ISessionContextUsage? supervisorContext = null)
     {
         List<string> lines = [];
 
@@ -100,7 +103,7 @@ public static class TopicStatusLine_Builder
         if (!hasSubstance)
             return aMessageIsAlreadyPosted ? title : "";
 
-        lines.Insert(0, Build_TitleLine(title, progress, figuresUnchangedFor));
+        lines.Insert(0, Build_TitleLine(title, progress, figuresUnchangedFor, supervisorContext));
 
         // NO BULLET on this one, deliberately: it is not a member, and a `• last · …` row reads like
         // one more session called "last". Not having the bullet is what separates it now that the
@@ -127,8 +130,30 @@ public static class TopicStatusLine_Builder
     /// constantly: *"the difference doesn't make sense because at best, after updating every
     /// 10 seconds it would go back to 0."*
     /// </summary>
-    static string Build_TitleLine(string title, IPlanProgress? progress, TimeSpan? figuresUnchangedFor)
+    /// <summary>
+    /// THE SUPERVISOR'S CONTEXT RIDES ON THE TITLE, not on a row of its own, because it has no row
+    /// here — this line lists MEMBERS, and a crew's supervisor is not one. Giving it a row would
+    /// invent a session called "supervisor" that stands beside imp-1 with no task and no duration.
+    /// A basic orchestration has no supervisor at all, so nothing is added there and its solo
+    /// carries the figure on its own member row instead.
+    /// </summary>
+    static string Build_TitleLine(string title, IPlanProgress? progress, TimeSpan? figuresUnchangedFor, ISessionContextUsage? supervisorContext)
     {
+        // Describe_OrNull rather than the bang operator: the policy and the formatter each answer
+        // the null question for themselves, so neither this line nor the reader has to assert what
+        // the other already checked.
+        var supervisorContextField = ContextVisibility_Policy.Show_Supervisor(supervisorContext)
+            ? ContextUsage_Formatter.Describe_OrNull(supervisorContext)
+            : null;
+
+        var supervisorContextPart = supervisorContextField == null
+            ? ""
+            : $"{FIELD_SEPARATOR}sup {supervisorContextField}";
+
+        // THE TITLE STILL COMES BACK BARE WHEN THERE IS NO LEDGER, and the context part goes with
+        // it. This return is the "nothing to say" shape the whole class is built around: a topic
+        // with no ledger shows its own name and nothing else, and hanging a figure off it would be
+        // the say-nothing message the class doc refuses.
         if (progress == null || progress.Total <= 0)
             return title;
 
@@ -138,7 +163,7 @@ public static class TopicStatusLine_Builder
 
         var unchangedPart = unchanged == null ? "" : $"{FIELD_SEPARATOR}{unchanged}";
 
-        return $"{title}{FIELD_SEPARATOR}{progress.Done}/{progress.Total}{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)}%{unchangedPart}";
+        return $"{title}{FIELD_SEPARATOR}{progress.Done}/{progress.Total}{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)}%{unchangedPart}{supervisorContextPart}";
     }
 
     /// <summary>
@@ -163,18 +188,28 @@ public static class TopicStatusLine_Builder
     /// A member row is "who · what · how long", and every part of it is agent-written. The duration
     /// comes from the SUPERVISOR's last brief stamp through the one formatter this repo has
     /// (item 12), which returns null for a stamp in the future rather than a confident wrong number.
+    /// Context % is included for solo/supervisor always, and for other members only if > 90%.
     /// </summary>
     static string Build_MemberLine(ITopicStatusMember member, DateTime now)
     {
         var state = MemberState_Resolver.Resolve(member.Entries);
+        var contextField = Build_ContextField_OrNull(member);
 
         if (Is_Idle(state))
-            return Build_Row(member.MemberId, NOTHING_DECLARED);
+        {
+            return contextField == null
+                ? Build_Row(member.MemberId, NOTHING_DECLARED)
+                : Build_Row(member.MemberId, NOTHING_DECLARED, contextField);
+        }
 
         var brief = MemberState_Resolver.Find_LastBrief_OrNull(member.Entries);
 
         if (brief == null)
-            return Build_Row(member.MemberId, NOTHING_DECLARED);
+        {
+            return contextField == null
+                ? Build_Row(member.MemberId, NOTHING_DECLARED)
+                : Build_Row(member.MemberId, NOTHING_DECLARED, contextField);
+        }
 
         var task = TextSummary_Formatter.Summarize_Task(brief.Subject, MEMBER_TASK_WORDS);
         var onTaskFor = SessionDuration_Formatter.Describe_SinceStamp_OrNull(brief.DateText, now);
@@ -182,9 +217,16 @@ public static class TopicStatusLine_Builder
         // A missing duration DROPS ITS FIELD rather than leaving the separator standing: a row ending
         // in a dangling `· ` reads as a value that failed to load, when the truth is that the stamp
         // was not trustworthy enough to date.
-        return onTaskFor == null
-            ? Build_Row(member.MemberId, task)
-            : Build_Row(member.MemberId, task, onTaskFor);
+        if (onTaskFor == null)
+        {
+            return contextField == null
+                ? Build_Row(member.MemberId, task)
+                : Build_Row(member.MemberId, task, contextField);
+        }
+
+        return contextField == null
+            ? Build_Row(member.MemberId, task, onTaskFor)
+            : Build_Row(member.MemberId, task, onTaskFor, contextField);
     }
 
     /// <summary>
@@ -210,4 +252,17 @@ public static class TopicStatusLine_Builder
         return state == MemberStates.StandingBy || state == MemberStates.NewNoTraffic;
     }
 
+    /// <summary>
+    /// The member's context field, or null when it is not this member's turn to show one. WHO and
+    /// WHEN is <see cref="ContextVisibility_Policy"/>'s and the wording is
+    /// <see cref="ContextUsage_Formatter"/>'s — this method only joins them, so the status line
+    /// cannot drift from the digest about either.
+    /// </summary>
+    static string? Build_ContextField_OrNull(ITopicStatusMember member)
+    {
+        if (!ContextVisibility_Policy.Show_Member_OnStatusLine(member.MemberId, member.ContextUsage))
+            return null;
+
+        return ContextUsage_Formatter.Describe_OrNull(member.ContextUsage);
+    }
 }

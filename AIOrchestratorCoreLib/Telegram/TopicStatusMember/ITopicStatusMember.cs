@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Status.SessionContextUsage;
 
 namespace AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 
@@ -23,4 +24,7 @@ public interface ITopicStatusMember
 
     /// <summary>Closed members drop OFF the line rather than lingering as a stale row.</summary>
     bool IsClosed { get; }
+
+    /// <summary>Context window usage, if available. Null if the session has not reported context data.</summary>
+    ISessionContextUsage? ContextUsage { get; }
 }
