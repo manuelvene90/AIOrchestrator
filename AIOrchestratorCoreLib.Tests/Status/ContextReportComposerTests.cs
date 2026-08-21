@@ -153,6 +153,83 @@ public class ContextReportComposerTests
         Assert.Equal("solo-1", fullest.Value.Label);
     }
 
+    /// <summary>
+    /// THE GENERAL SUPERVISOR IS NOT AN ORCHESTRATION and belongs to no roster, so a report built
+    /// from session.json files alone leaves out the one session the owner talks to from every topic.
+    /// It is listed first because if ITS window fills, the concierge that answers "work on X" stops
+    /// and they would find that out by being ignored.
+    /// </summary>
+    [Fact]
+    public void TheGeneralSupervisorIsListedFirstAndIsNotAnOrchestration()
+    {
+        var text = ContextReport_Composer.Build_ForEveryOrchestration(
+            Reading(31, NOW),
+            [Orchestration("AI-Orch · context awareness", Row("solo-1", 32))]);
+
+        Assert.Equal(
+            "CONTEXT - fullest session per orchestration" + LF
+            + "general supervisor: ctx 31%" + LF
+            + "AI-Orch · context awareness: solo-1 ctx 32%",
+            text);
+    }
+
+    [Fact]
+    public void EachOrchestrationContributesItsFullestSessionByName()
+    {
+        var text = ContextReport_Composer.Build_ForEveryOrchestration(
+            null,
+            [
+                Orchestration("crew", Row("supervisor", 41), Row("imp-1", 93)),
+                Orchestration("basic", Row("solo-1", 12)),
+            ]);
+
+        Assert.Equal(
+            "CONTEXT - fullest session per orchestration" + LF
+            + "crew: imp-1 ctx 93%" + LF
+            + "basic: solo-1 ctx 12%",
+            text);
+    }
+
+    /// <summary>An orchestration whose sessions have all gone quiet contributes no line at all.</summary>
+    [Fact]
+    public void AnOrchestrationWithNothingToReportIsSkippedRatherThanShownEmpty()
+    {
+        var text = ContextReport_Composer.Build_ForEveryOrchestration(
+            Reading(31, NOW),
+            [Orchestration("silent", Unknown("supervisor")), Orchestration("live", Row("solo-1", 12))]);
+
+        Assert.DoesNotContain("silent", text);
+        Assert.Contains("live: solo-1 ctx 12%", text);
+    }
+
+    /// <summary>
+    /// The general supervisor ALONE is still an answer. It is the session the owner is most likely
+    /// asking about, and "no open orchestration has reported" would be false while it is sitting
+    /// there with a reading.
+    /// </summary>
+    [Fact]
+    public void TheGeneralSupervisorAloneIsStillAnAnswer()
+    {
+        Assert.Equal(
+            "CONTEXT - fullest session per orchestration" + LF + "general supervisor: ctx 31%",
+            ContextReport_Composer.Build_ForEveryOrchestration(Reading(31, NOW), []));
+    }
+
+    [Fact]
+    public void NothingAnywhereSaysSoPlainly()
+    {
+        Assert.Equal(
+            "no open orchestration has reported its context yet",
+            ContextReport_Composer.Build_ForEveryOrchestration(null, [Orchestration("silent", Unknown("supervisor"))]));
+    }
+
+    static ContextReport_Composer.OrchestrationRows Orchestration(string title, params ContextReport_Composer.ContextRow[] sessions)
+    {
+        return new ContextReport_Composer.OrchestrationRows(title, sessions);
+    }
+
+    
+
     const string LF = "\n";
 
     static ContextReport_Composer.ContextRow Row(string label, double percent)

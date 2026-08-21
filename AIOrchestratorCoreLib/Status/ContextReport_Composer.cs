@@ -101,4 +101,39 @@ public static class ContextReport_Composer
 
         return $" · {SessionDuration_Formatter.Describe(age)} old";
     }
+    /// <summary>One orchestration as the engine found it, for the General report.</summary>
+    public readonly record struct OrchestrationRows(string Title, IReadOnlyList<ContextRow> Sessions);
+
+    /// <summary>
+    /// /context asked from General: the whole machine at once.
+    ///
+    /// THE GENERAL SUPERVISOR IS LISTED FIRST AND IS NOT AN ORCHESTRATION. It belongs to no roster,
+    /// so a report built only from session.json files leaves it out entirely - and it is the one
+    /// session the owner talks to from every topic. If ITS window fills, the concierge that answers
+    /// "work on X" stops, which they would find out by being ignored.
+    /// </summary>
+    public static string Build_ForEveryOrchestration(ISessionContextUsage? generalSupervisor, IReadOnlyList<OrchestrationRows> orchestrations)
+    {
+        List<string> lines = [];
+
+        if (generalSupervisor != null)
+            lines.Add($"general supervisor: {ContextUsage_Formatter.Describe(generalSupervisor)}");
+
+        foreach (var orchestration in orchestrations)
+        {
+            var fullest = Pick_Fullest_OrNull(orchestration.Sessions);
+
+            if (fullest == null)
+                continue;
+
+            lines.Add($"{orchestration.Title}: {fullest.Value.Label} ctx {(int)fullest.Value.Percent}%");
+        }
+
+        if (lines.Count == 0)
+            return "no open orchestration has reported its context yet";
+
+        lines.Insert(0, "CONTEXT - fullest session per orchestration");
+
+        return string.Join('\n', lines);
+    }
 }

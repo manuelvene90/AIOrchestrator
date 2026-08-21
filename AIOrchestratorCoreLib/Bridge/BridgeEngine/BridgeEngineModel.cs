@@ -5972,27 +5972,22 @@ internal sealed class BridgeEngineModel(
                 DateTime.UtcNow);
         }
 
-        List<string> blocks = [];
+        List<Status.ContextReport_Composer.OrchestrationRows> orchestrations = [];
 
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
                 continue;
 
-            var fullest = Status.ContextReport_Composer.Pick_Fullest_OrNull(Read_ContextRows(session));
-
-            if (fullest == null)
-                continue;
-
-            blocks.Add($"{session.DisplayName ?? session.OrchId}: {fullest.Value.Label} ctx {(int)fullest.Value.Percent}%");
+            orchestrations.Add(new Status.ContextReport_Composer.OrchestrationRows(
+                session.DisplayName ?? session.OrchId,
+                Read_ContextRows(session)));
         }
 
-        if (blocks.Count == 0)
-            return "no open orchestration has reported its context yet";
-
-        blocks.Insert(0, "CONTEXT - fullest session of each orchestration");
-
-        return string.Join('\n', blocks);
+        return Status.ContextReport_Composer.Build_ForEveryOrchestration(
+            UsageTotals_Reader.Read_ContextUsage_OrNull(
+                Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE)),
+            orchestrations);
     }
 
     /// <summary>
