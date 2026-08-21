@@ -3370,9 +3370,23 @@ internal sealed class BridgeEngineModel(
                 var session = _store.Get_Session(request.OrchId);
                 _store.Set_DisplayName(request.OrchId, request.Name);
 
-                if (_telegramClient != null && session.TelegramTopicId != null)
-                    Rename_TelegramTopic_FireAndForget(request.OrchId, session.TelegramTopicId.Value, request.Name);
-
+                // THE TOPIC NAME IS NOT PUSHED HERE, AND THAT IS THE FIX. This used to hand
+                // `request.Name` straight to editForumTopic — the RAW display name, with no glyphs.
+                // Every decoration the owner reads their topic list by (💻 presence, 🔕/🌙 delivery,
+                // ❓/⛔ reply-wanted, 🧪 awaiting-test, ✅ done, ✈ away) was wiped by a rename that
+                // knew about none of them. The owner reported it as "the pc icon goes away by itself",
+                // and it needed no state change at all — naming an orchestration was enough.
+                //
+                // It was worse than cosmetic because it was fire-and-forget: it raced
+                // Sync_TopicNames_BestEffort_Async within this very tick and could land AFTER it, so
+                // Telegram kept the bare name while `_appliedTopicNames` had already recorded the
+                // decorated one as applied. That dictionary has no Remove, so its guard then
+                // suppressed every future correction for the life of the process.
+                //
+                // Set_DisplayName above is the whole job. Process_PendingRequests runs at the top of
+                // the tick and Sync_TopicNames_BestEffort_Async near the end of the SAME tick, so the
+                // new name still reaches Telegram this tick — fully decorated, through the one gated
+                // path, with no second writer to race it. Do not add a direct rename back here.
                 Rename_SessionWindows_BestEffort(session, request.Name);
 
                 _log.Log_Info(request.OrchId, $"Named '{request.Name}'");
@@ -3435,24 +3449,6 @@ internal sealed class BridgeEngineModel(
         {
             _log.Log_Warning(session.OrchId, $"Terminal window rename failed: {ex.Message}");
         }
-    }
-
-    void Rename_TelegramTopic_FireAndForget(string orchId, long topicId, string newName)
-    {
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var client = _telegramClient
-                    ?? throw new Exception($"Telegram client vanished while renaming topic {topicId} of '{orchId}'");
-
-                await client.Edit_ForumTopic_Async(topicId, newName, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                _log.Log_Error(orchId, $"Telegram editForumTopic({topicId} → '{newName}') failed", ex);
-            }
-        });
     }
 
     void Process_SetTelegramMutedRequests(IPendingRequests pending)
@@ -4794,12 +4790,11 @@ internal sealed class BridgeEngineModel(
 
                     var command = Get_BotCommand_OrNull(message.Text);
 
-                    // ARRIVING FROM TELEGRAM AT ALL proves the owner is not at this orchestration's
-                    // terminal, so terminal mode ends by itself — the same shape as the auto-unmute,
-                    // and for the same reason: a mode they must remember to turn off is one they get
-                    // trapped by. /pc excludes itself, or the command would be undone by its own
-                    // delivery.
-                    Flip_ToRemote_IfOwnerTextedFromTelegram(message.MessageThreadId, command == "pc");
+                    // ONLY `/pc` ENDS TERMINAL MODE (owner's ruling, 2026-08-21). An ordinary message
+                    // ends nothing: this used to revoke terminal mode on any inbound text, so the owner
+                    // set `/pc`, glanced at their phone, and lost the mode seconds later without a word.
+                    // A `/pc` still ends every OTHER topic's terminal mode — they cannot sit at two.
+                    Flip_OtherTerminals_IfPresenceCommand(message.MessageThreadId, command == "pc");
 
                     // Telegram's own command menu only allows [a-z0-9_], so the menu entries are
                     // mute_all/dnd_all while a hand-typed mute-all works just as well.
@@ -6051,7 +6046,7 @@ internal sealed class BridgeEngineModel(
     static string Describe_Presence(OwnerPresenceModes presence)
     {
         return presence == OwnerPresenceModes.Terminal
-            ? "💻 TERMINAL — I will not text this topic, and its supervisor will not stop to wait for a tap. Talk to it in its terminal; anything you send here puts it back to remote."
+            ? "💻 TERMINAL — I will not text this topic, and its supervisor will not stop to wait for a tap. Talk to it in its terminal. It stays on until you send /pc again — texting here will not end it."
             : "📱 REMOTE — texting resumes, and questions here will wait for your answer again.";
     }
 
@@ -6069,8 +6064,8 @@ internal sealed class BridgeEngineModel(
             ? "They are sitting in front of this session (💻). Ask them in the terminal, in plain prose: do NOT write "
                 + "QUESTION:/OPTION: lines, because nothing is being texted and there are no buttons to tap.\n\n"
                 + "You will also NOT be stopped after asking — the awaiting-answer block is off while they are here, "
-                + "so keep working unless what you asked actually gates the next step. Anything they send from "
-                + "Telegram puts this topic back to remote, and you get an entry here when it happens."
+                + "so keep working unless what you asked actually gates the next step. This stays on until they "
+                + "send /pc again — their ordinary messages do NOT end it — and you get an entry here when it does."
             : "They are on their phone again (📱). Questions are texted, the awaiting-answer block is back on, and "
                 + "the usual protocol applies: ask ONE question, with options, and stop.";
 
@@ -6083,13 +6078,12 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Any owner message ARRIVING FROM TELEGRAM proves they are holding a phone, so it ends EVERY
-    /// meeting rather than only the one whose topic they typed in — they cannot be at a terminal and
-    /// texting. This was topic-scoped, which left terminal mode with a single exit and an owner who
-    /// walked away without toggling leaving that orchestration silent indefinitely (rev-4 F6).
-    /// The decision is <see cref="OwnerPresenceFlip_Planner"/>'s; this does the moving.
+    /// `/pc` in one topic ends terminal mode in every OTHER topic — nobody sits at two terminals at
+    /// once. Nothing else ends it: an ordinary message used to revoke it everywhere, which is what the
+    /// owner reported on 2026-08-21 as the icon "going away by itself". The decision is
+    /// <see cref="OwnerPresenceFlip_Planner"/>'s, including the reversal's reasoning; this does the moving.
     /// </summary>
-    void Flip_ToRemote_IfOwnerTextedFromTelegram(long? messageThreadId, bool isPresenceCommandItself)
+    void Flip_OtherTerminals_IfPresenceCommand(long? messageThreadId, bool isPresenceCommandItself)
     {
         var textedOrchId = messageThreadId == null
             ? ChannelDiscovery.GENERAL_ORCH_ID
@@ -7173,7 +7167,13 @@ internal sealed class BridgeEngineModel(
             // Must always be answered or the button spinner hangs on the phone.
             await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, found ? "✓" : "expired — please type your choice", cancellationToken);
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES, as at the ~30 other sites in this file. An HttpClient timeout
+        // surfaces as TaskCanceledException with the token NOT cancelled, and rethrowing it here
+        // escaped the whole inbound batch. `_lastUpdateId` only advances at the END of that batch, so
+        // Telegram then re-served every message in it — including a `/pc`, which is a blind Toggle and
+        // therefore flipped terminal mode straight back OFF about five seconds later. That was the one
+        // remaining way `/pc` could end by itself, which the owner's ruling does not allow.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
