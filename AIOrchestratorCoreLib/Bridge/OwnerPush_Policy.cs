@@ -23,6 +23,9 @@ public static class OwnerPush_Policy
     /// <summary>Work has stopped and only the owner can restart it.</summary>
     public const string BLOCKED_MARKER = "BLOCKED ON OWNER";
 
+    /// <summary>A picture the session wants the owner to SEE — uploaded as a photo, never texted.</summary>
+    public const string IMAGE_MARKER = "IMAGE:";
+
     /// <summary>
     /// The one-line greeting a session writes as it boots — "supervisor online — …", "solo online
     /// — …". A FOURTH thing the phone gets, and the newest, because the owner cannot use this system
@@ -84,7 +87,32 @@ public static class OwnerPush_Policy
 
         return Carries_Question(rawEntryText)
             || Asks_InProse(rawEntryText)
+            || Carries_Image(rawEntryText)
             || rawEntryText.Contains(BLOCKED_MARKER, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A PICTURE IS NEVER NARRATION. The session went and rendered something for the owner to look
+    /// at, which is a deliberate act with a cost — nobody attaches a screenshot in passing.
+    ///
+    /// Suppressing one did not merely delay it, it DESTROYED it: the held entry is remembered as
+    /// already-formatted TEXT (_lastSuppressedEntry), and the two routes that release it later —
+    /// the silent-deadlock net and the turn-ended receipt — send that text through Send_Message_Async,
+    /// which has no notion of a photo. So the owner eventually received the literal `IMAGE: C:\…`
+    /// line and never the picture, however many times it was resent. On 2026-09-08 that happened all
+    /// day in one topic: *"Continui a inviarmi la directory dell'immagine invece dell'immagine
+    /// stessa"*, and the only pictures that ever arrived were the mock-ups, which carried OPTION:
+    /// lines and so were pushed for a completely unrelated reason.
+    ///
+    /// It cannot become the waterfall this policy exists to prevent — these entries already reached
+    /// the phone, just late and as a broken path.
+    /// </summary>
+    public static bool Carries_Image(string rawEntryText)
+    {
+        if (string.IsNullOrEmpty(rawEntryText))
+            return false;
+
+        return rawEntryText.Contains(IMAGE_MARKER, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -338,6 +338,7 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
     readonly object _lock = new();
     readonly List<string> _attemptedTexts = [];
     readonly List<string> _sentTexts = [];
+    readonly List<string> _sentPhotoPaths = [];
     string? _queuedUpdatesJson;
     string? _failFragment;
     string? _timeoutFragment;
@@ -567,9 +568,29 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// RECORDED, not swallowed. This was a bare `Task.CompletedTask` — the fake accepted photos and
+    /// remembered nothing — so no test in the suite could tell a picture that was uploaded from one
+    /// that was texted as a path, which is exactly the defect PicturesReachTheOwnerTests pins.
+    /// </summary>
     public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
     {
+        lock (_lock)
+            _sentPhotoPaths.Add(filePath);
+
         return Task.CompletedTask;
+    }
+
+    public bool Has_SentPhoto(string filePath)
+    {
+        lock (_lock)
+            return _sentPhotoPaths.Any(path => string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public IReadOnlyList<string> Sent_Texts()
+    {
+        lock (_lock)
+            return _sentTexts.ToList();
     }
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken)

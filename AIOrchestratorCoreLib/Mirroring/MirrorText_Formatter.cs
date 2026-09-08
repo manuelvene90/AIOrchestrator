@@ -48,10 +48,33 @@ public static class MirrorText_Formatter
 
     public static string Format(IDiscoveredChannel channel, IChannelEntry entry)
     {
+        var (prefix, content) = Format_Parts(channel, entry);
+
+        return prefix + content;
+    }
+
+    /// <summary>
+    /// The mirrored text SPLIT at the speaker prefix, so a caller can work on the entry's own words
+    /// without the glyph glued to their first line.
+    ///
+    /// WHY THIS EXISTS: the marker lines (`IMAGE:`, `OPTION:`, `QUESTION:`) are anchored at the
+    /// START of a line, and this formatter had already concatenated "🟠 " onto the first one by the
+    /// time they were read. An entry whose body BEGINS with its picture — the most natural way to
+    /// write "here is the screenshot", and what every role command's `Pictures: IMAGE: &lt;full path&gt;`
+    /// invites — therefore never matched, and the owner was texted the literal path instead of the
+    /// photo. Their words, 2026-09-08, four separate times across one day: *"You keel sending the
+    /// path, not the actual image"*.
+    ///
+    /// The prefix is RETURNED, never re-derived by the caller: reading it back off the formatted
+    /// string is what Split_SpeakerPrefix does for the Italian layer, and its `.{1,18}?: ` pattern
+    /// happily swallows "🟠 IMAGE: " as though the marker were the speaker.
+    /// </summary>
+    public static (string Prefix, string Content) Format_Parts(IDiscoveredChannel channel, IChannelEntry entry)
+    {
         // The spoke's own kind decides the colour — a reviewer must not read as an implementer,
         // since what it is licensed to do is completely different.
         if (!channel.IsOwnerChannel)
-            return $"{Glyph_ForSpoke(channel.SpokeName)} {channel.SpokeName}: online";
+            return (string.Empty, $"{Glyph_ForSpoke(channel.SpokeName)} {channel.SpokeName}: online");
 
         return entry.Author switch
         {
@@ -59,28 +82,28 @@ public static class MirrorText_Formatter
             // is agent-facing detail the owner explicitly does not want texted. The ONE exception
             // is the periodic STATUS, whose body is the report — it rides the channel precisely so
             // that Do-Not-Disturb queues it (and collapses it to the newest) instead of dropping it.
-            ChannelAuthors.App => Is_StatusEntry(entry) ? Pick_Content(entry) : $"⚙ App: {entry.Subject}",
+            ChannelAuthors.App => Is_StatusEntry(entry) ? (string.Empty, Pick_Content(entry)) : ("⚙ App: ", entry.Subject),
 
             // Supervisor entries: the body is the message; the subject is channel metadata.
             // The GENERAL supervisor speaks with its own color so the owner never confuses
             // the concierge with an orchestration's supervisor.
             ChannelAuthors.Supervisor => channel.OrchId == ChannelDiscovery.GENERAL_ORCH_ID
-                ? $"🟡 Gen-Sup: {Pick_Content(entry)}"
-                : $"🔴 Sup: {Pick_Content(entry)}",
+                ? ("🟡 Gen-Sup: ", Pick_Content(entry))
+                : ("🔴 Sup: ", Pick_Content(entry)),
 
             // Communicator entries: live narration of what the supervisor is doing — green voice.
-            ChannelAuthors.Communicator => $"🟢 Com: {Pick_Content(entry)}",
+            ChannelAuthors.Communicator => ("🟢 Com: ", Pick_Content(entry)),
 
             // A BASIC orchestration's single session speaks here by design — it IS the conversation,
             // there is no supervisor between it and the owner.
-            ChannelAuthors.Solo => $"🟠 {Pick_Content(entry)}",
+            ChannelAuthors.Solo => ("🟠 ", Pick_Content(entry)),
 
             // Members of an ORCHESTRATED session never write on the owner channel; if one does,
             // flag it rather than hide it.
-            ChannelAuthors.Implementer => $"⚠ Imp?: {Pick_Content(entry)}",
-            ChannelAuthors.Reviewer => $"⚠ Rev?: {Pick_Content(entry)}",
+            ChannelAuthors.Implementer => ("⚠ Imp?: ", Pick_Content(entry)),
+            ChannelAuthors.Reviewer => ("⚠ Rev?: ", Pick_Content(entry)),
             ChannelAuthors.Owner => throw new Exception($"Owner entries must be filtered by Should_Mirror (channel '{channel.FilePath}')"),
-            ChannelAuthors.Unknown => $"?: {Pick_Content(entry)}",
+            ChannelAuthors.Unknown => ("?: ", Pick_Content(entry)),
             _ => throw new Exception($"Unhandled ChannelAuthors: {entry.Author}"),
         };
     }
