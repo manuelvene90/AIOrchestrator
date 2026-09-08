@@ -2898,6 +2898,34 @@ internal sealed class BridgeEngineModel(
             // send below has succeeded. The wait is not consumed by an attempt.
             var answersTheOwnersWait = false;
 
+            // THE MARKERS ARE READ BEFORE THE SPEAKER GLYPH IS ATTACHED, and before the push
+            // decision below, because both used to corrupt them:
+            //
+            //   - Format() glues "🟠 " onto the first line, and every marker is anchored at the
+            //     START of one. An entry whose body BEGINS with `IMAGE:` — exactly what the role
+            //     commands invite with `Pictures: IMAGE: <full path>` — therefore never matched,
+            //     and the path was texted to the owner as words.
+            //   - The suppression branch remembered the RAW formatted text, markers intact, and the
+            //     routes that release it later send it as a plain message. The picture could not
+            //     survive that trip even in principle.
+            //
+            // Special lines in the entry become REAL Telegram artifacts, never raw text:
+            // IMAGE: <path> lines upload as photos; OPTION: <label> lines render as inline
+            // decision buttons the owner can tap instead of typing.
+            var (speakerPrefix, content) = MirrorText_Formatter.Format_Parts(append.Channel, entry);
+
+            var photoPaths = Extract_MarkerLines(ref content, "IMAGE");
+            var optionLabels = Extract_MarkerLines(ref content, "OPTION");
+            var questionLines = Extract_MarkerLines(ref content, "QUESTION");
+
+            // An entry whose whole body WAS the picture line has nothing left to say, and a bare
+            // "🟠 " is not a message. Its subject is the caption the owner should read under the
+            // photo — the same fallback Pick_Content already makes for an empty body.
+            if (content.Trim().Length == 0)
+                content = entry.Subject;
+
+            var text = speakerPrefix + content;
+
             // WHAT REACHES THE PHONE, owner's rule: "I answer the sup a question, and then the sup
             // doesn't disturb me anymore unless it has another question. A brief every 30 minutes
             // is fine, but not the waterfall." So a supervisor entry is pushed only when it asks
@@ -2926,9 +2954,13 @@ internal sealed class BridgeEngineModel(
                     // was the last thing said and it gets released — see Break_SilentDeadlock_Async.
                     lock (_ownerStateLock)
                     {
+                        // The STRIPPED text, not the raw format: whatever releases this later sends
+                        // it as an ordinary message, so a marker left in it reaches the owner as
+                        // literal words. A picture no longer takes this branch at all
+                        // (OwnerPush_Policy.Carries_Image), and this is the belt to that brace.
                         _lastSuppressedEntry[append.Channel.OrchId] = new SuppressedEntry
                         {
-                            Text = MirrorText_Formatter.Format(append.Channel, entry),
+                            Text = text,
                             SuppressedUtc = DateTime.UtcNow,
                         };
                     }
@@ -2950,15 +2982,6 @@ internal sealed class BridgeEngineModel(
                 answersTheOwnersWait = true;
             }
 
-            var text = MirrorText_Formatter.Format(append.Channel, entry);
-
-            // Special lines in the entry become REAL Telegram artifacts, never raw text:
-            // IMAGE: <path> lines upload as photos; OPTION: <label> lines render as inline
-            // decision buttons the owner can tap instead of typing.
-            var photoPaths = Extract_MarkerLines(ref text, "IMAGE");
-            var optionLabels = Extract_MarkerLines(ref text, "OPTION");
-            var questionLines = Extract_MarkerLines(ref text, "QUESTION");
-
             // Built from the ENGLISH text, before the Italian layer rewrites it: an explicit
             // QUESTION: line and a derived one then get translated the same way, together.
             var questionPrompt = optionLabels.Count > 0 ? QuestionPrompt_Builder.Build(questionLines, text) : null;
@@ -2971,11 +2994,15 @@ internal sealed class BridgeEngineModel(
             {
                 // Fenced blocks (ASCII mockups, snippets) are lifted out first: translating a
                 // drawing corrupts the very thing being shown.
-                var (withoutBlocks, blocks) = MonospaceBlocks_Formatter.Extract_Blocks(text);
-                var (speakerPrefix, content) = Split_SpeakerPrefix(withoutBlocks);
+                //
+                // The prefix comes from the FORMATTER, which is the thing that decided it. Reading
+                // it back off the finished string was a second copy of that decision, and a lossy
+                // one: `.{1,18}?: ` matches the first colon it can reach, so "🟠 Note: the build…"
+                // handed the translator a sentence with its own opening words torn off.
+                var (withoutBlocks, blocks) = MonospaceBlocks_Formatter.Extract_Blocks(content);
 
                 text = MonospaceBlocks_Formatter.Restore_Blocks(
-                    speakerPrefix + await _translator.Translate_ToItalian_Async(content, cancellationToken), blocks);
+                    speakerPrefix + await _translator.Translate_ToItalian_Async(withoutBlocks, cancellationToken), blocks);
             }
 
             var chunks = TelegramMessage_Chunker.Chunk(text);
@@ -3097,23 +3124,6 @@ internal sealed class BridgeEngineModel(
         }
 
         return await client.Send_Message_Async(threadId, chunk, cancellationToken);
-    }
-
-    /// <summary>
-    /// "🔴 Sup: body" → ("🔴 Sup: ", "body") — the prefix must NEVER pass through the translator.
-    /// The bound covers the longest prefix ("🟡 Gen-Sup: " is already 12 UTF-16 units, its emoji
-    /// being a surrogate pair) with room to spare; the LAZY quantifier still stops at the first
-    /// ": ", which is always the formatter's own prefix.
-    /// </summary>
-    static (string Prefix, string Content) Split_SpeakerPrefix(string text)
-    {
-        var match = System.Text.RegularExpressions.Regex.Match(
-            text, @"^(.{1,18}?: )(.*)$", System.Text.RegularExpressions.RegexOptions.Singleline);
-
-        if (!match.Success)
-            return (string.Empty, text);
-
-        return (match.Groups[1].Value, match.Groups[2].Value);
     }
 
     /// <summary>
