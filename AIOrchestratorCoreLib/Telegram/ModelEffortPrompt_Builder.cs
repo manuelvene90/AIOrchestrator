@@ -52,6 +52,24 @@ public static class ModelEffortPrompt_Builder
         return (BASIC_EFFORT_TEXT, Build_RoleRows(ModelEffortKinds.Effort, orchId, role, Effort_Choices(), EFFORT_ROW_SIZES));
     }
 
+    /// <summary>
+    /// A VALUE was typed in a crew topic with no role ("/model fable" where there is a supervisor
+    /// and implementers): two buttons settle who it is for, rather than guessing or respawning both.
+    /// </summary>
+    public static (string Text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Rows) Build_RolePickPrompt(ModelEffortKinds kind, string orchId, string value)
+    {
+        var label = kind switch
+        {
+            ModelEffortKinds.Model => ModelChoices.Describe(value),
+            ModelEffortKinds.Effort => value,
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
+
+        var text = $"{label} — for which role? That role's sessions respawn on the tap and pick up from the channel.";
+
+        return (text, Build_PairedRows(kind, orchId, [(value, label)]));
+    }
+
     static IReadOnlyList<(string Value, string Label)> Model_Choices()
     {
         List<(string Value, string Label)> choices = [];

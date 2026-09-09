@@ -94,6 +94,34 @@ public class ModelEffortPromptBuilderTests
         Assert.All(prompt.Rows.SelectMany(row => row), button => Assert.Equal("sup", ModelEffortButton_Data.Parse_OrNull(button.Data)?.Role));
     }
 
+    /// <summary>
+    /// A VALUE was typed in a crew topic with no role ("/model fable" where there is a supervisor
+    /// and implementers): two buttons settle who it is for, rather than guessing or respawning both.
+    /// </summary>
+    [Fact]
+    public void ATypedValueInACrew_AsksWhichRole_WithTwoButtons()
+    {
+        var prompt = ModelEffortPrompt_Builder.Build_RolePickPrompt(ModelEffortKinds.Model, "option-lab-2", "fable");
+
+        var row = Assert.Single(prompt.Rows);
+
+        Assert.Equal(["sup Fable 5.1", "imp Fable 5.1"], row.Select(button => button.Label).ToList());
+        Assert.Equal((ModelEffortKinds.Model, "option-lab-2", "sup", "fable"), ModelEffortButton_Data.Parse_OrNull(row[0].Data));
+        Assert.Equal((ModelEffortKinds.Model, "option-lab-2", "imp", "fable"), ModelEffortButton_Data.Parse_OrNull(row[1].Data));
+        Assert.Contains("Fable 5.1", prompt.Text);
+    }
+
+    [Fact]
+    public void ATypedEffortInACrew_AsksWhichRole_WithTwoButtons()
+    {
+        var prompt = ModelEffortPrompt_Builder.Build_RolePickPrompt(ModelEffortKinds.Effort, "option-lab-2", "xhigh");
+
+        var row = Assert.Single(prompt.Rows);
+
+        Assert.Equal(["sup xhigh", "imp xhigh"], row.Select(button => button.Label).ToList());
+        Assert.Equal((ModelEffortKinds.Effort, "option-lab-2", "imp", "xhigh"), ModelEffortButton_Data.Parse_OrNull(row[1].Data));
+    }
+
     /// <summary>Every label stays readable on a phone — the numbering fallback of the option layout is never needed here.</summary>
     [Fact]
     public void EveryLabel_IsShort()
