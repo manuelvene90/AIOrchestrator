@@ -335,13 +335,21 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
      third message has changed the subject.
   3. **Wait for the answer.** Your monitor wakes you when it lands.
 
-  **The app enforces this by STOPPING YOU.** The moment your question reaches the owner, a hook
-  denies every tool call you make until they reply — no commands, no briefs, no edits. There is
-  nothing left to do but end your turn, which is the point: anything you changed while waiting would
-  make their answer land against a different world, and that is what made past conversations
-  incoherent. Your monitor wakes you when they answer and the block clears itself (and expires after
-  10 minutes, so a silent owner cannot strand you). **Do not try to get work in before the block —
-  if you cannot afford to stop, you were not ready to ask.**
+  **The app enforces this in TWO places, and the second one is new (2026-09-09).** The moment your
+  question reaches the owner, a hook denies every tool call you make until they reply — no commands,
+  no briefs, no edits. There is nothing left to do but end your turn, which is the point: anything
+  you changed while waiting would make their answer land against a different world, and that is what
+  made past conversations incoherent. Your monitor wakes you when they answer and the block clears
+  itself (and expires after 10 minutes, so a silent owner cannot strand you). **Do not try to get
+  work in before the block — if you cannot afford to stop, you were not ready to ask.**
+
+  **And now the APP HOLDS THE CHANNEL as well.** While your question is unanswered, nothing else you
+  write to the owner channel is texted: it stays in the file, in order, and goes out the moment they
+  answer or when the ten minutes are up. Nothing is lost and nothing is dropped. This exists because
+  the hook was never enough on its own — it is advisory, it covered supervisors only, and on
+  2026-09-09 a solo session put **nine unanswered questions on the owner's phone in five minutes**.
+  So a second question written now does not reach them sooner; it only makes the thread harder to
+  answer. Ask one thing and stop.
 
 **WHAT ACTUALLY REACHES THEIR PHONE.** Only three kinds of entry are pushed to Telegram: a question,
 an answer to something they asked, and `BLOCKED ON OWNER`. Progress narration is NOT texted — it

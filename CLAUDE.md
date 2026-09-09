@@ -180,6 +180,23 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
   the owner decided. Writing in the topic lifts the pause (`Wake_PausedTopic_IfNeeded`), and a
   second `/pause` inside 60 s re-asserts rather than toggling — the `/done` evidence, where every
   toggle in this machine's history was undone by a repeat press 17-23 s later.
+- **ONE QUESTION AT A TIME IS ENFORCED BY THE APP NOW, not by prose (owner, 2026-09-09).** The rule
+  was written down twice and held by neither: `supervisor.md` called it a HARD RULE and claimed *"the
+  app enforces this by STOPPING YOU"*, while the thing stopping anyone was a PreToolUse hook that
+  covered the **supervisor role only** — so the SOLO session that put nine unanswered questions on
+  the owner's phone in five minutes was never covered at all — and which says of itself that it is
+  advisory. Meanwhile the app computed "a question is outstanding here" every 2 s and spent the
+  answer on a topic-name glyph: `AwaitingAnswerFlag_Marker.Is_Raised` had **no production callers**.
+  Now `QuestionHold_Policy.Should_Hold` reads it in the mirror loop: an owner channel whose
+  orchestration is awaiting an answer is HELD — skipped without `Settle_MirrorAttempt`, so the cursor
+  does not advance and the entry is re-emitted next poll. **Never the failure-retry path**, which
+  gives up after `MIRROR_RETRY_WINDOW_MINUTES` and DROPS with an error. Once a channel is held in a
+  tick the rest of its appends are held too, because the cursor is per FILE — confirming a later
+  entry would confirm the held question with it, losing the very thing being protected. It releases
+  when the owner writes (any inbound message clears the flag) or at `QUESTION_HOLD_CAP_MINUTES`, and
+  it never applies in terminal mode, where no flag is raised. Member channels are never held: that
+  would stop the WORK, which is the fair objection the engine's own comment raised against gating on
+  a pending question.
 - **The app has NEVER pinned a Telegram message.** Do not go looking for a pin to remove: the only
   pin-family call in the repo is `unpinAllForumTopicMessages`. What the owner sees is Telegram's own
   auto-pin of the `forum_topic_created` service message, and the unpin used to run ONCE, inside topic
