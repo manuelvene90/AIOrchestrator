@@ -154,6 +154,23 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     an ASCII `grep` returns confident false negatives): search the DLL for
     `"Some_Method_Name".encode('utf-8')` and `"a literal".encode('utf-16-le')`.
 
+24. **`/model` and `/effort` from the phone (owner request 2026-09-09) — never a guess, one apply path,
+    stateless buttons.** Bare `/model` or `/effort` answers with buttons; a typed value resolves through
+    `ModelChoices` / `EffortLevels` or gets the buttons instead (the owner typed "fabel" in the message
+    that asked for the command). A button carries a STATELESS payload — `model:<orch>:<sup|imp>:<value>`
+    (`ModelEffortButton_Data`) — and is handled by the app BEFORE the generic `opt-` path, because an
+    `opt-` tap becomes a synthetic owner message and lands in an agent's channel. `Apply_Dial` is the ONE
+    apply path (store the override → kill → respawn → owner-facing app entry) and the agents' `set-model`
+    request goes through it too. The effort override lives per role in session.json
+    (`supervisorEffortOverride` / `implementerEffortOverride`; a solo sits on the implementer slot, as it
+    does for the model) and reaches `claude --effort` ONLY when set — null means no flag, the CLI's own
+    default. This supersedes the unmerged `feat/fable-51-default-xhigh` (a hard-coded `--effort xhigh`).
+    The pulse and the prompt's "now:" line show what each session ACTUALLY reports (`model.display_name`
+    + `effort.level` from its `.usage.json`, one reader: `SessionModelReading_Factory`), never the
+    override — a session respawned before an override landed still runs the old one. The reply keyboard
+    is no longer `is_persistent`: that flag re-shows the bar whenever the phone keyboard hides (which is
+    what the back button does) and disables the icon that collapses it.
+
 ## Resolved Decisions (2026-08-06, owner)
 
 - **UI framework: WPF** ("keep it simple") — `net10.0-windows`. The suite's `LoggingLib` ships a WPF `ListBoxLoggerSimple` control, which the app uses as its live log panel.
