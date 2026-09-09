@@ -36,7 +36,9 @@ public static class OrchestrationSession_Factory
         OwnerPresenceModes ownerPresence = OwnerPresenceModes.Remote,
         bool awaitingTest = false,
         bool done = false,
-        bool paused = false)
+        bool paused = false,
+        string? supervisorEffortOverride = null,
+        string? implementerEffortOverride = null)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -44,7 +46,8 @@ public static class OrchestrationSession_Factory
         return new OrchestrationSessionModel(
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
-            telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done, paused);
+            telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done, paused,
+            supervisorEffortOverride, implementerEffortOverride);
     }
 
     /// <summary>
@@ -126,6 +129,17 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, implementerModelOverride: model, implementerModelWasSet: true);
     }
 
+    /// <summary>Null RESETS the override — the next spawn then carries no --effort flag at all.</summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithSupervisorEffortOverride(IOrchestrationSession existing, string? effort)
+    {
+        return CreateFrom_Existing(existing, supervisorEffortOverride: effort, supervisorEffortWasSet: true);
+    }
+
+    public static IOrchestrationSession CreateFrom_Existing_WithImplementerEffortOverride(IOrchestrationSession existing, string? effort)
+    {
+        return CreateFrom_Existing(existing, implementerEffortOverride: effort, implementerEffortWasSet: true);
+    }
+
     public static IOrchestrationSession CreateFrom_Existing_WithMembers(
         IOrchestrationSession existing,
         IReadOnlyList<IOrchestrationMember> members)
@@ -203,6 +217,13 @@ public static class OrchestrationSession_Factory
         bool supervisorModelWasSet = false,
         string? implementerModelOverride = null,
         bool implementerModelWasSet = false,
+
+        // Same wasSet dance as the two model overrides: null must be able to mean "cleared — spawn
+        // with no --effort flag" and not only "unchanged".
+        string? supervisorEffortOverride = null,
+        bool supervisorEffortWasSet = false,
+        string? implementerEffortOverride = null,
+        bool implementerEffortWasSet = false,
         IReadOnlyList<IOrchestrationMember>? members = null,
         TelegramDeliveryModes? telegramMode = null,
         OwnerPresenceModes? ownerPresence = null,
@@ -245,6 +266,8 @@ public static class OrchestrationSession_Factory
             ownerPresence ?? existing.OwnerPresence,
             awaitingTestWasSet ? awaitingTest : existing.AwaitingTest,
             doneWasSet ? done : existing.Done,
-            pausedWasSet ? paused : existing.Paused);
+            pausedWasSet ? paused : existing.Paused,
+            supervisorEffortWasSet ? supervisorEffortOverride : existing.SupervisorEffortOverride,
+            implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride);
     }
 }

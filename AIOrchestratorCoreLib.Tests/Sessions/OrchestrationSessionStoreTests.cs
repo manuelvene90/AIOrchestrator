@@ -74,6 +74,71 @@ public class OrchestrationSessionStoreTests : IDisposable
         Assert.Equal(TelegramDeliveryModes.Normal, _store.Get_Session("arb-fix").TelegramMode);
     }
 
+    /// <summary>
+    /// The effort override is the owner's per-orchestration choice and must reach session.json,
+    /// because the respawn that reads it is on the other side of an app restart. NULL MUST RESET
+    /// IT: "back to the CLI default" is a real request, and `?? existing` would silently make the
+    /// override permanent — the defect the wasSet flag on the model overrides exists to prevent.
+    /// </summary>
+    [Fact]
+    public void Set_EffortOverrides_SurviveAReload_AndNullResetsEachOneIndependently()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+        _store.Set_DisplayName("arb-fix", "drift guard");
+        _store.Set_SupervisorModelOverride("arb-fix", "fable");
+
+        var fresh = Reload().Get_Session("arb-fix");
+        Assert.Null(fresh.SupervisorEffortOverride);
+        Assert.Null(fresh.ImplementerEffortOverride);
+
+        _store.Set_SupervisorEffortOverride("arb-fix", "xhigh");
+        _store.Set_ImplementerEffortOverride("arb-fix", "low");
+
+        var set = Reload().Get_Session("arb-fix");
+        Assert.Equal("xhigh", set.SupervisorEffortOverride);
+        Assert.Equal("low", set.ImplementerEffortOverride);
+
+        // The copy-with-overrides path must not drop its neighbours — the model override beside it
+        // is the one most likely to be confused with it.
+        Assert.Equal("fable", set.SupervisorModelOverride);
+        Assert.Equal("drift guard", set.DisplayName);
+
+        _store.Set_SupervisorEffortOverride("arb-fix", null);
+
+        var supervisorReset = Reload().Get_Session("arb-fix");
+        Assert.Null(supervisorReset.SupervisorEffortOverride);
+        Assert.Equal("low", supervisorReset.ImplementerEffortOverride);
+        Assert.Equal("fable", supervisorReset.SupervisorModelOverride);
+
+        _store.Set_ImplementerEffortOverride("arb-fix", null);
+
+        var bothReset = Reload().Get_Session("arb-fix");
+        Assert.Null(bothReset.SupervisorEffortOverride);
+        Assert.Null(bothReset.ImplementerEffortOverride);
+    }
+
+    /// <summary>
+    /// Setting an UNRELATED field must not disturb it — the shape the copy-with-overrides docstring
+    /// was written about, where "a newly added field silently got dropped".
+    /// </summary>
+    [Fact]
+    public void AnUnrelatedMutationDoesNotDropTheEffortOverrides()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+        _store.Set_SupervisorEffortOverride("arb-fix", "xhigh");
+        _store.Set_ImplementerEffortOverride("arb-fix", "max");
+
+        _store.Set_TelegramTopicId("arb-fix", 77);
+        _store.Add_Implementer("arb-fix");
+        _store.Set_Paused("arb-fix", true);
+        _store.Set_ImplementerModelOverride("arb-fix", "sonnet");
+
+        var reloaded = Reload().Get_Session("arb-fix");
+        Assert.Equal("xhigh", reloaded.SupervisorEffortOverride);
+        Assert.Equal("max", reloaded.ImplementerEffortOverride);
+        Assert.Equal("sonnet", reloaded.ImplementerModelOverride);
+    }
+
     [Fact]
     public void Set_OwnerPresence_SurvivesAReload_AndDoesNotDisturbTheDeliveryMode()
     {

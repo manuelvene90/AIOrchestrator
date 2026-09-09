@@ -43,11 +43,11 @@ public static class SpawnCommand_Builder
     /// </summary>
     public const string CLAUDE_LAUNCH_FLAGS = "--dangerously-skip-permissions";
 
-    public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string pidFilePath, string? displayName)
+    public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string? effort, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model)} '/supervisor {orchId}'", pidFilePath);
+        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model, effort)} '/supervisor {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForSupervisor(orchId), displayName), SUPERVISOR_TAB_COLOR, repoPath, script);
     }
@@ -56,7 +56,7 @@ public static class SpawnCommand_Builder
     /// A reviewer session: adversarial review by default, no worktree (it reads the repo and the
     /// implementers' branches), and no ability to edit or commit.
     /// </summary>
-    public static ISpawnCommand Build_ForReviewer(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
+    public static ISpawnCommand Build_ForReviewer(string orchId, string memberId, string repoPath, string? model, string? effort, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
@@ -65,8 +65,9 @@ public static class SpawnCommand_Builder
         // as TOOL NAMES and started a session with no prompt at all. Every reviewer therefore came
         // up blank — never booted, never wrote to its channel, and was nudged then respawned on a
         // loop. Verified against the real CLI, which reports "Permission deny rule ... matches no
-        // known tool" for each swallowed word.
-        var claudeCommand = $"{Build_ClaudeInvocation(model)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
+        // known tool" for each swallowed word. The model and effort flags sit BEFORE it for the
+        // same reason — placed after, they would be eaten as tool names too.
+        var claudeCommand = $"{Build_ClaudeInvocation(model, effort)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
         var script = Build_SessionScript("reviewer", orchId, memberId, claudeCommand, pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), REVIEWER_TAB_COLOR, repoPath, script);
@@ -80,11 +81,11 @@ public static class SpawnCommand_Builder
     /// same file a supervisor would own — so the owner's Telegram topic reaches it with no routing
     /// changes anywhere. No supervisor, no reviewer, no worktree assignment.
     /// </summary>
-    public static ISpawnCommand Build_ForSolo(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
+    public static ISpawnCommand Build_ForSolo(string orchId, string memberId, string repoPath, string? model, string? effort, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/solo {orchId}'", pidFilePath);
+        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(model, effort)} '/solo {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), SOLO_TAB_COLOR, repoPath, script);
     }
@@ -94,16 +95,16 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(model)} '/communicator {orchId}'", pidFilePath);
+        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(model, null)} '/communicator {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForCommunicator(orchId), displayName), COMMUNICATOR_TAB_COLOR, repoPath, script);
     }
 
-    public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
+    public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string? effort, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/implementer {orchId}/{memberId}'", pidFilePath);
+        var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(model, effort)} '/implementer {orchId}/{memberId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), IMPLEMENTER_TAB_COLOR, repoPath, script);
     }
@@ -120,7 +121,7 @@ public static class SpawnCommand_Builder
     /// </summary>
     public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
     {
-        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(model)} '/general-supervisor'", pidFilePath);
+        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(model, null)} '/general-supervisor'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.GENERAL_TITLE, GENERAL_TAB_COLOR, generalHomeFolder, script);
     }
@@ -192,10 +193,16 @@ public static class SpawnCommand_Builder
             claudeCommand;
     }
 
-    static string Build_ClaudeInvocation(string? model)
+    /// <summary>
+    /// Both parts are OPTIONAL and independent. A null or blank effort emits NO --effort flag at
+    /// all, so the CLI applies its own default — there is no config fallback for it, unlike the
+    /// model. Order is model, then effort, then the launch flags, always ahead of the prompt.
+    /// </summary>
+    static string Build_ClaudeInvocation(string? model, string? effort)
     {
         var modelPart = string.IsNullOrWhiteSpace(model) ? string.Empty : $" --model {model}";
-        return $"claude{modelPart} {CLAUDE_LAUNCH_FLAGS}";
+        var effortPart = string.IsNullOrWhiteSpace(effort) ? string.Empty : $" --effort {effort}";
+        return $"claude{modelPart}{effortPart} {CLAUDE_LAUNCH_FLAGS}";
     }
 
     static void Validate_OrchId(string orchId)
