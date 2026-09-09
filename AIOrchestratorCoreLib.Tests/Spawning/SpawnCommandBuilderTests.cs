@@ -21,7 +21,45 @@ public class SpawnCommandBuilderTests
         Assert.Contains("$env:AIORCH_ROLE='supervisor'", script);
         Assert.Contains("$env:AIORCH_ID='arb-fix'", script);
         Assert.Contains($"Set-Content -LiteralPath '{PID_FILE}' -Value $PID", script);
-        Assert.Contains("claude --model opus --dangerously-skip-permissions '/supervisor arb-fix'", script);
+        Assert.Contains("claude --model opus --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'", script);
+    }
+
+    /// <summary>
+    /// The owner asked for xhigh in the two roles that talk to them and decide (2026-09-09). With
+    /// NO override set, that is the role default, and it sits before --dangerously-skip-permissions
+    /// and before the slash command, or the CLI reads it as part of the prompt.
+    /// </summary>
+    [Fact]
+    public void Build_SupervisorAndSolo_ThinkAtXHighEffort_ByDefault()
+    {
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "claude-fable-5-1", null, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "claude-fable-5-1", null, PID_FILE, null);
+
+        Assert.Contains(
+            "claude --model claude-fable-5-1 --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'",
+            SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.Contains(
+            "claude --model claude-fable-5-1 --effort xhigh --dangerously-skip-permissions '/solo arb-fix'",
+            SpawnCommand_Builder.Decode_SessionScript(solo));
+    }
+
+    /// <summary>
+    /// Effort is billed thinking, so the roles the owner did NOT name keep the CLI's own default.
+    /// The reviewer is the one that would break loudly: its --disallowedTools is variadic, so an
+    /// effort flag emitted after it would be eaten as a tool name.
+    /// </summary>
+    [Fact]
+    public void Build_RolesTheOwnerDidNotName_CarryNoEffortFlag()
+    {
+        var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", "claude-fable-5-1", null, PID_FILE, null);
+        var reviewer = SpawnCommand_Builder.Build_ForReviewer("arb-fix", "rev-1", @"C:\repos\arb", "claude-fable-5-1", null, PID_FILE, null);
+        var communicator = SpawnCommand_Builder.Build_ForCommunicator("arb-fix", @"C:\repos\arb", "sonnet", PID_FILE, null);
+        var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", PID_FILE);
+
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(implementer));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(reviewer));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(communicator));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(general));
     }
 
     /// <summary>
@@ -59,24 +97,38 @@ public class SpawnCommandBuilderTests
     }
 
     /// <summary>
-    /// Null means NO FLAG AT ALL — the CLI then applies its own default. A blank string is the same
-    /// as null: `--effort ` with nothing after it would make the CLI eat the next token.
+    /// With no override, the two roles the owner named get the ROLE DEFAULT and the others get NO
+    /// FLAG AT ALL, so the CLI applies its own. A blank override counts as unset: `--effort ` with
+    /// nothing after it would make the CLI eat the next token.
     /// </summary>
     [Fact]
-    public void Build_WithoutEffortOverride_CarriesNoEffortFlagAtAll()
+    public void Build_WithoutEffortOverride_TheRoleDefaultDecides()
     {
-        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", null, PID_FILE, null);
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "   ", PID_FILE, null);
         var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-2", @"C:\repos\arb", "opus", "   ", PID_FILE, null);
         var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, PID_FILE, null);
         var reviewer = SpawnCommand_Builder.Build_ForReviewer("arb-fix", "rev-1", @"C:\repos\arb", null, string.Empty, PID_FILE, null);
 
-        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.Contains("claude --model opus --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'", SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.Contains("claude --effort xhigh --dangerously-skip-permissions '/solo arb-fix'", SpawnCommand_Builder.Decode_SessionScript(solo));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(implementer));
-        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(solo));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(reviewer));
+    }
 
-        Assert.Contains("claude --model opus --dangerously-skip-permissions '/supervisor arb-fix'", SpawnCommand_Builder.Decode_SessionScript(supervisor));
-        Assert.Contains("claude --dangerously-skip-permissions '/solo arb-fix'", SpawnCommand_Builder.Decode_SessionScript(solo));
+    /// <summary>
+    /// The dial the owner turns from the phone (/effort) BEATS the role default — otherwise a solo
+    /// could never be told to think at anything but xhigh.
+    /// </summary>
+    [Fact]
+    public void Build_SupervisorAndSolo_AnOverrideBeatsTheRoleDefault()
+    {
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "medium", PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "opus", "low", PID_FILE, null);
+
+        Assert.Contains("claude --model opus --effort medium --dangerously-skip-permissions '/supervisor arb-fix'", SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.Contains("claude --model opus --effort low --dangerously-skip-permissions '/solo arb-fix'", SpawnCommand_Builder.Decode_SessionScript(solo));
+        Assert.DoesNotContain("xhigh", SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.DoesNotContain("xhigh", SpawnCommand_Builder.Decode_SessionScript(solo));
     }
 
     /// <summary>The two overrides are independent: an effort with no model override is a real case.</summary>

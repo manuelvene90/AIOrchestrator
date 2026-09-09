@@ -7,6 +7,21 @@ namespace AIOrchestratorCoreLib.Tests.Configuration;
 public class OrchestratorConfigFactoryTests
 {
     /// <summary>
+    /// The ladder the owner set on 2026-09-09: the roles that supervise and implement run on
+    /// Fable 5.1, routing and narration stay cheap. An absent key in config.json must land here.
+    /// </summary>
+    [Fact]
+    public void Create_Empty_UsesTheOwnersModelLadder()
+    {
+        var config = OrchestratorConfig_Factory.Create_Empty();
+
+        Assert.Equal("claude-fable-5-1", config.SupervisorModel);
+        Assert.Equal("claude-fable-5-1", config.ImplementerModel);
+        Assert.Equal("sonnet", config.GeneralSupervisorModel);
+        Assert.Equal("sonnet", config.CommunicatorModel);
+    }
+
+    /// <summary>
     /// The /italian command and the app's status-bar checkbox both flip ONE field of a config they
     /// did not build. If this copy dropped a neighbouring value, toggling the language from the
     /// phone would quietly erase the bot token or the model ladder on the way through.

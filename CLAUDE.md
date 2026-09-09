@@ -164,7 +164,8 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     request goes through it too. The effort override lives per role in session.json
     (`supervisorEffortOverride` / `implementerEffortOverride`; a solo sits on the implementer slot, as it
     does for the model) and reaches `claude --effort` ONLY when set — null means no flag, the CLI's own
-    default. This supersedes the unmerged `feat/fable-51-default-xhigh` (a hard-coded `--effort xhigh`).
+    default. Merged with `feat/fable-51-default-xhigh` the same evening: its xhigh for supervisor and solo is
+    the ROLE DEFAULT, applied only when no override is set.
     The pulse and the prompt's "now:" line show what each session ACTUALLY reports (`model.display_name`
     + `effort.level` from its `.usage.json`, one reader: `SessionModelReading_Factory`), never the
     override — a session respawned before an override landed still runs the old one. The reply keyboard
@@ -221,6 +222,16 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
   race, stayed pinned for ever. `Sweep_TopicCreationPins_FireAndForget` now re-runs it over every
   open topic at startup. **General is deliberately never swept**: the owner pinned their own channel
   message there, and `unpinAllChatMessages` / `unpinAllGeneralForumTopicMessages` would wipe it.
+- **Model ladder + effort (owner, 2026-09-09):** supervisor and implementer (so also solo and
+  reviewer, which resolve off `ImplementerModel`) default to `claude-fable-5-1` — pinned to the
+  full id, not the `fable` alias that follows the latest Fable. General supervisor and communicator
+  stay on `sonnet` (routing/narration = cheap). **Supervisor and solo sessions spawn with
+  `--effort xhigh` UNLESS the orchestration carries an effort override** (`/effort`, decision 24),
+  which wins; no other role carries a default. The role default sits at the role's own call site in
+  `SpawnCommand_Builder` (`SUPERVISION_EFFORT_LEVEL`), and every flag is emitted by the single
+  chokepoint `Build_ClaudeInvocation`. Note the two live in DIFFERENT places: the model is DATA
+  (`~/.claude/supervision/config.json`, read live — a change applies to the next spawn with no
+  restart), the effort is CODE (in the app binary — it needs a rebuilt app running, see decision 23).
 
 ## Design Spec
 
