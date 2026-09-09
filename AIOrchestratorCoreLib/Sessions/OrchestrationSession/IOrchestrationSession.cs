@@ -41,6 +41,14 @@ public interface IOrchestrationSession
     string? SupervisorModelOverride { get; }
     string? ImplementerModelOverride { get; }
 
+    /// <summary>
+    /// Per-orchestration EFFORT overrides (low / medium / high / xhigh / max), passed to
+    /// `claude --effort` at spawn. Null means NO FLAG AT ALL — the CLI then uses its own default —
+    /// so unlike the model there is no config default to fall back to.
+    /// </summary>
+    string? SupervisorEffortOverride { get; }
+    string? ImplementerEffortOverride { get; }
+
     IReadOnlyList<IOrchestrationMember> Members { get; }
 
     /// <summary>

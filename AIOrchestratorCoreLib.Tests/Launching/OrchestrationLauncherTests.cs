@@ -2,6 +2,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using AIOrchestratorCoreLib.Spawning;
 using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.Spawning.SpawnCommand;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -93,6 +94,46 @@ public class OrchestrationLauncherTests : IDisposable
 
         Assert.False(File.Exists(pidFile));
         Assert.Null(_store.Get_Session(session.OrchId).SupervisorPid);
+    }
+
+    /// <summary>
+    /// The stored effort override is the ONLY source of `--effort` — there is no config default,
+    /// so a fresh orchestration spawns without the flag and a respawn after the owner set one
+    /// carries it: the supervisor's own, and the implementer-side one for every member kind.
+    /// </summary>
+    [Fact]
+    public void Respawn_PassesTheStoredEffortOverride_ToTheSupervisorAndToEveryMemberKind()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var orchId = session.OrchId;
+
+        // Supervisor + imp-1 + rev-1, none with an override yet: no flag at all.
+        Assert.Equal(3, _spawner.SpawnedCommands.Count);
+        Assert.All(_spawner.SpawnedCommands, command => Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(command)));
+
+        _store.Set_SupervisorEffortOverride(orchId, "xhigh");
+        _store.Set_ImplementerEffortOverride(orchId, "low");
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Supervisor(orchId);
+        _launcher.Respawn_Implementer(orchId, "imp-1");
+        _launcher.Respawn_Implementer(orchId, "rev-1");
+
+        var supervisorScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
+        var implementerScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]);
+        var reviewerScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]);
+
+        Assert.Contains($"--effort xhigh {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", supervisorScript);
+        Assert.Contains($"--effort low {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/implementer {orchId}/imp-1'", implementerScript);
+        Assert.Contains($"--effort low {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} {SpawnCommand_Builder.REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/rev-1'", reviewerScript);
+
+        // And a reset takes the flag away again, rather than leaving the last value baked in.
+        _store.Set_SupervisorEffortOverride(orchId, null);
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Supervisor(orchId);
+
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
     }
 
     static bool Wait_Until(Func<bool> condition)
