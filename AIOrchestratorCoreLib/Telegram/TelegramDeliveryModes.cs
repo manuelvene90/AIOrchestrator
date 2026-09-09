@@ -92,6 +92,20 @@ public static class TelegramDeliveryMode_Glyphs
     /// </summary>
     public const string TERMINAL = "💻";
 
+    /// <summary>
+    /// PAUSED — the owner paused this orchestration: outbound is HELD and the session is dormant
+    /// until they lift it. Nothing is being delivered and nobody is working, which is why it wins
+    /// the title over every glyph that describes a live topic.
+    ///
+    /// 💤 AND NOT ⏸, for two reasons. ⏸ is already the hold BUTTON's label, and one symbol meaning
+    /// both "tap me" and "this is the state" is the conflation the topic-list vocabulary exists to
+    /// avoid. And ⏸ is a SINGLE UTF-16 unit — the exact shape that breaks the hand-written
+    /// <see cref="Leading_GlyphLength"/> table, where every emoji glyph here is TWO units: a glyph
+    /// whose length is guessed wrong chops the wrong number of units off the name, silently. 💤 is
+    /// a surrogate pair like the rest, so it measures like the rest.
+    /// </summary>
+    public const string PAUSED = "\U0001F4A4";
+
     /// <summary>Prefixes the topic name with the mode's glyph (Normal = the bare name).</summary>
     public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode)
     {
@@ -126,7 +140,12 @@ public static class TelegramDeliveryMode_Glyphs
         OwnerPresenceModes presence,
         bool isAwaitingTest = false,
         OwnerReplyStates ownerReply = OwnerReplyStates.None,
-        bool isDone = false)
+        bool isDone = false,
+        // LAST ON PURPOSE, even though it outranks isDone in the drawing order below. The existing
+        // callers pass all eight arguments POSITIONALLY, so slotting a bool in ahead of isDone would
+        // rebind their `session.Done` to this flag — bool to bool, no compiler error, every finished
+        // topic silently redrawn as asleep. Position is a wire, precedence is the code.
+        bool isPaused = false)
     {
         // OUTERMOST, ahead of every other glyph — the owner asked for it "at the beginning of the
         // topic name, to concatenate with other possible icons". It is also the only glyph here that
@@ -138,6 +157,17 @@ public static class TelegramDeliveryMode_Glyphs
             OwnerReplyStates.None => "",
             _ => throw new Exception($"Unhandled OwnerReplyStates: {ownerReply}"),
         };
+
+        // PAUSED OUTRANKS DONE, AWAITING-TEST, TERMINAL AND THE MODE GLYPH — everything except the
+        // reply prefix. A paused topic is ASLEEP: outbound is held and nobody is working, so every
+        // glyph below it would describe a live topic that this one is not. Which of them it would
+        // have drawn is not a fact the owner needs while it sleeps; that it is asleep is.
+        if (isPaused)
+        {
+            var withPaused = $"{PAUSED} {baseName}";
+
+            return replyPrefix + (isAway ? $"{AWAY} {withPaused}" : withPaused);
+        }
 
         // DONE OUTRANKS AWAITING-TEST, and everything below it. 🧪 asks the owner for something —
         // go and test this — while 📦 records that the asking is over; showing the request on a
@@ -207,6 +237,7 @@ public static class TelegramDeliveryMode_Glyphs
             || topicName.StartsWith(SILENCED, StringComparison.Ordinal)
             || topicName.StartsWith(AWAY, StringComparison.Ordinal)
             || topicName.StartsWith(QUIET, StringComparison.Ordinal)
+            || topicName.StartsWith(PAUSED, StringComparison.Ordinal)
             || topicName.StartsWith(TERMINAL, StringComparison.Ordinal);
     }
 
@@ -221,6 +252,12 @@ public static class TelegramDeliveryMode_Glyphs
 
         if (topicName.StartsWith(TERMINAL, StringComparison.Ordinal))
             return TERMINAL.Length;
+
+        // BOTH TABLES OR NEITHER. A glyph listed in Starts_WithAnyGlyph but missing here reaches the
+        // DEFERRED fallback, which removes two UTF-16 units of whatever it was handed — right by
+        // accident for a surrogate pair, wrong for anything else, and wrong silently in every case.
+        if (topicName.StartsWith(PAUSED, StringComparison.Ordinal))
+            return PAUSED.Length;
 
         if (topicName.StartsWith(DONE, StringComparison.Ordinal))
             return DONE.Length;

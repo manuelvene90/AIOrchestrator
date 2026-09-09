@@ -255,33 +255,13 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
 
     public async Task<long?> Send_MessageWithReplyKeyboard_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<string>> keyboardRows, CancellationToken cancellationToken)
     {
-        var rows = new JsonArray();
-
-        foreach (var row in keyboardRows)
-        {
-            var buttons = new JsonArray();
-
-            foreach (var label in row)
-                buttons.Add(new JsonObject { ["text"] = label });
-
-            rows.Add(buttons);
-        }
-
+        // The markup lives in ReplyKeyboard_Markup, where a test pins that the bar is collapsible —
+        // is_persistent used to be set here, and it is what made "back" on the phone re-show the bar.
         var payload = new JsonObject
         {
             ["chat_id"] = _supergroupChatId,
             ["text"] = text,
-            ["reply_markup"] = new JsonObject
-            {
-                ["keyboard"] = rows,
-                // is_persistent keeps the bar up instead of collapsing it behind the little keyboard
-                // icon after one use, which is the whole point of asking for a PERMANENT bar.
-                ["is_persistent"] = true,
-                // Without this the bar renders at full standard-keyboard height — four buttons in a
-                // half-screen slab, sitting on top of the conversation the owner is reading.
-                ["resize_keyboard"] = true,
-                ["selective"] = false,
-            },
+            ["reply_markup"] = ReplyKeyboard_Markup.Build(keyboardRows),
         };
 
         if (messageThreadId != null)

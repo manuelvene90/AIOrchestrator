@@ -93,9 +93,21 @@ public static class TopicCommandButtons
         // confirms.
         ("pc",     "💻 /pc"),
         ("close",  "🏁 /close"),
+        // /pause AND /progress are the fourth row, on the owner's call, 2026-09-09: *"we need to
+        // add a button pause ... it should also become a new button under the pulse button, and
+        // since we need two buttons per row, let's also add another command that you think is
+        // useful."*
+        //
+        // 💤 for /pause is the glyph the topic NAME carries while it is paused, the same rule 🧪
+        // and 💻 already follow. /progress is the partner because it is the question the owner
+        // asks most, it is READ-ONLY, and the command already existed — so the button costs a
+        // wiring line rather than a feature. It is deliberately not a second destructive button
+        // next to /close.
+        ("pause",    "💤 /pause"),
+        ("progress", "📊 /progress"),
     ];
 
-    /// <summary>The commands offered, in display order: "screen", "show", "merge", "test", "pc", "close".</summary>
+    /// <summary>The commands offered, in display order: "screen", "show", "merge", "test", "pc", "close", "pause", "progress".</summary>
     public static IReadOnlyList<string> Commands { get; } = BUTTONS.Select(button => button.Command).ToArray();
 
     /// <summary>

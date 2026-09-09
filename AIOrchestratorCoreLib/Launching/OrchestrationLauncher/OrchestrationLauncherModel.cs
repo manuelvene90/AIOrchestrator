@@ -290,10 +290,13 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_SupervisorPidFile(orchId);
 
+        // The effort has NO config default on purpose: null means no --effort flag, and the CLI
+        // decides. Only the per-orchestration override ever reaches the command line.
         var command = SpawnCommand_Builder.Build_ForSupervisor(
             orchId,
             session.RepoPath,
             session.SupervisorModelOverride ?? _configProvider.Get_Current().SupervisorModel,
+            session.SupervisorEffortOverride,
             pidFile,
             session.DisplayName);
 
@@ -357,11 +360,15 @@ internal sealed class OrchestrationLauncherModel(
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
         var model = session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel;
 
+        // One implementer-side effort override covers every member kind, exactly as the model
+        // override does; null means no --effort flag (the CLI's default), with no config fallback.
+        var effort = session.ImplementerEffortOverride;
+
         var command = kind switch
         {
-            MemberKinds.Reviewer => SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
-            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
-            MemberKinds.Implementer => SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
+            MemberKinds.Reviewer => SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, effort, pidFile, session.DisplayName),
+            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, effort, pidFile, session.DisplayName),
+            MemberKinds.Implementer => SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, effort, pidFile, session.DisplayName),
             _ => throw new Exception($"Unhandled MemberKinds '{kind}' respawning '{memberId}' of '{orchId}'"),
         };
 

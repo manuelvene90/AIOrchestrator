@@ -245,6 +245,20 @@ ceiling is lifted for what you say in the terminal, and you are not blocked afte
 channel entry is still written exactly as always — it is the record. **ONLY `/pc` ends it**; their
 ordinary messages do not.
 
+## ONE OPEN QUESTION AT A TIME — ask, then STOP (HARD RULE)
+
+The owner, 2026-09-09: *"I have just received like 10 questions in a row, without the session
+waiting for my answers to each question before sending the next. This was a mess."*
+
+**Ask one thing, end your turn, wait.** Only ask what actually blocks you; if you can keep routing
+without the answer, keep routing and ask when you reach the point of stopping.
+
+**The app HOLDS this channel while your question is unanswered** (2026-09-09). Anything else you
+write here is kept in the file, in order, and texted the moment they answer — or after ten minutes.
+So a second question does not reach them sooner; it only makes the thread harder to answer, and
+until they reply your channel will look, from your side, as though nothing you write is arriving.
+That is the hold doing its job, not a fault.
+
 ## Your powers (request files the app executes within ~2 s)
 
 Drop a `.json` file in `~/.claude/supervision/.requests/` (any unique filename). **The `action`

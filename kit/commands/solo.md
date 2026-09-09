@@ -129,6 +129,21 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   question; drop your reasoning unless asked.
 - Discrete choice? End the entry with a `QUESTION:` line and 2–4 `OPTION:` lines — they become
   tappable buttons. Pictures: `IMAGE: <full path>`.
+- **ONE OPEN QUESTION AT A TIME — ask, then STOP (HARD RULE, owner 2026-09-09).** *"I have just
+  received like 10 questions in a row, without the session waiting for my answers to each question
+  before sending the next. This was a mess."* That was a SOLO session, and this rule had only ever
+  been written down for supervisors, which is exactly why it happened.
+  1. **Only ask what BLOCKS you.** If you can keep working without the answer, keep working.
+  2. **Ask ONE thing, then end your turn.** Never queue a second question behind the first — the
+     owner cannot answer a moving target, and by the time they reply your third message has changed
+     the subject.
+  3. **Wait.** Your monitor wakes you when the answer lands.
+
+  **The app now enforces both halves, so working around them gains you nothing.** A PreToolUse hook
+  denies your tool calls while an answer is outstanding (it covers solo sessions as of 2026-09-09 —
+  it did not before), and the app HOLDS this channel: while your question is unanswered, nothing else
+  you write here is texted. It is kept, in order, and delivered the moment they answer or after ten
+  minutes. A second question does not reach them sooner — it only makes the thread harder to answer.
 - **NEVER QUOTE A COST WITHOUT FIRST CHECKING THE THING DOES NOT ALREADY EXIST.** An estimate is a
   claim, and the owner is about to spend real money on it. The check is one search — grep for the
   type, the fixture, the helper; ask an agent to look — and it costs a minute against a number that

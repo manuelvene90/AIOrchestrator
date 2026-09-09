@@ -124,6 +124,33 @@ public class RunToTheEndHookTests : IDisposable
 
     void Write_Channel(string body) => File.WriteAllText(Path.Combine(_orch, "owner-channel.md"), body);
 
+    /// <summary>
+    /// A PAUSED ORCHESTRATION MAY STOP. The owner is done with it for now and has not closed it, so
+    /// the work is not abandoned — it is asleep, and refusing the turn end would keep the one session
+    /// they told to stop working, working. The flag file is the only way the hook can know: it is
+    /// bash, and the state lives in session.json.
+    ///
+    /// Both directions are asserted, and the removal one is the load-bearing half — a flag that
+    /// could not be taken back would be a permanent exemption granted by one tap.
+    /// </summary>
+    [Fact]
+    public void APausedOrchestrationLetsTheTurnEnd_AndUnpausingTakesThatBack()
+    {
+        Write_Plan("- [ ] still to do\n");
+
+        Assert.True(Blocks("solo"), "the fixture is wrong: open work with no pause must block");
+
+        var flag = Path.Combine(_orch, ".paused");
+        File.WriteAllText(flag, "paused by the owner\n");
+
+        Assert.False(Blocks("solo"), "a paused orchestration was refused its turn end — dormancy is exactly what the pause promised");
+        Assert.False(Blocks("supervisor"));
+
+        File.Delete(flag);
+
+        Assert.True(Blocks("solo"), "the exemption outlived the flag — a pause that cannot be taken back is a session that never works again");
+    }
+
     bool Blocks(string role)
     {
         var startInfo = new ProcessStartInfo

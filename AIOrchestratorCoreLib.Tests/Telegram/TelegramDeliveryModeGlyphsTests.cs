@@ -281,4 +281,145 @@ public class TelegramDeliveryModeGlyphsTests
                 "crm bug", TelegramDeliveryModes.Deferred, isAway: false, isQuiet: false,
                 OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Wanted));
     }
+
+    /// <summary>
+    /// 💤 REPLACES the mode glyph. A paused topic holds its outbound, so the delivery mode below is
+    /// not describing anything the owner can observe — drawing 🔕 💤 would state the sleep twice.
+    /// </summary>
+    [Fact]
+    public void Paused_ReplacesTheModeGlyph()
+    {
+        Assert.Equal(
+            "💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None,
+                isDone: false, isPaused: true));
+
+        Assert.Equal(
+            "💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Deferred, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None,
+                isDone: false, isPaused: true));
+    }
+
+    /// <summary>
+    /// AND IT OUTRANKS DONE, AWAITING-TEST AND TERMINAL — the three that otherwise win the title.
+    /// Each of those describes a LIVE topic: one asks the owner to go and test, one records a
+    /// finish, one says where they are sitting while work happens. A paused topic is asleep, and
+    /// that is the one fact worth the title while it is.
+    /// </summary>
+    [Fact]
+    public void Paused_OutranksDoneAndAwaitingTestAndTerminal()
+    {
+        Assert.Equal(
+            "💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None,
+                isDone: true, isPaused: true));
+
+        Assert.Equal(
+            "💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: true, ownerReply: OwnerReplyStates.None,
+                isDone: false, isPaused: true));
+
+        Assert.Equal(
+            "💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Terminal, isAwaitingTest: false, ownerReply: OwnerReplyStates.None,
+                isDone: false, isPaused: true));
+
+        // All three at once, which the commands should never produce — the later statement wins.
+        Assert.Equal(
+            "💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Terminal, isAwaitingTest: true, ownerReply: OwnerReplyStates.None,
+                isDone: true, isPaused: true));
+    }
+
+    /// <summary>
+    /// The reply glyph still leads, as it does over ✅. Pausing holds what the app wants to SAY; a
+    /// question already asked is still owed an answer, and that glyph is the only one here that asks
+    /// something OF the owner.
+    /// </summary>
+    [Fact]
+    public void TheReplyGlyphStillLeadsAPausedTopic()
+    {
+        Assert.Equal(
+            "❓ 💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Wanted,
+                isDone: false, isPaused: true));
+
+        Assert.Equal(
+            "⛔ 💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.Blocking,
+                isDone: false, isPaused: true));
+    }
+
+    /// <summary>
+    /// Away still shows IN FRONT of the surviving glyph, exactly as it does for ✅, 🧪 and 💻. Away
+    /// is app-wide and about the owner's phone; paused is about this one orchestration. Neither
+    /// implies the other, so neither swallows the other.
+    /// </summary>
+    [Fact]
+    public void Paused_StillShowsAwayInFrontOfIt()
+    {
+        Assert.Equal(
+            "✈ 💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: true, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None,
+                isDone: false, isPaused: true));
+
+        Assert.Equal(
+            "⛔ ✈ 💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                "crm bug", TelegramDeliveryModes.Silenced, isAway: true, isQuiet: false,
+                OwnerPresenceModes.Terminal, isAwaitingTest: true, ownerReply: OwnerReplyStates.Blocking,
+                isDone: true, isPaused: true));
+    }
+
+    /// <summary>
+    /// WITHOUT BOTH GLYPH TABLES THIS FAILS SILENTLY. A glyph that Starts_WithAnyGlyph knows and
+    /// Leading_GlyphLength does not falls through to the DEFERRED fallback, which removes two UTF-16
+    /// units of whatever it is handed — the reason 💤 was chosen as a surrogate pair over ⏸, which
+    /// is a single unit and would have left a stray character at the head of every renamed topic.
+    /// </summary>
+    [Fact]
+    public void Strip_RemovesThePausedGlyph()
+    {
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("💤 crm bug"));
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("✈ 💤 crm bug"));
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("❓ ✈ 💤 crm bug"));
+    }
+
+    /// <summary>Without the strip, every rename while paused would stack another 💤 onto the name.</summary>
+    [Theory]
+    [InlineData("crm bug")]
+    [InlineData("💤 crm bug")]
+    [InlineData("✈ 💤 crm bug")]
+    [InlineData("❓ 💤 crm bug")]
+    public void Strip_ThenDecorate_NeverStacksThePausedGlyph(string currentName)
+    {
+        var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(currentName);
+
+        Assert.Equal("crm bug", baseName);
+
+        Assert.Equal(
+            "💤 crm bug",
+            TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+                baseName, TelegramDeliveryModes.Silenced, isAway: false, isQuiet: false,
+                OwnerPresenceModes.Remote, isAwaitingTest: false, ownerReply: OwnerReplyStates.None,
+                isDone: false, isPaused: true));
+    }
 }

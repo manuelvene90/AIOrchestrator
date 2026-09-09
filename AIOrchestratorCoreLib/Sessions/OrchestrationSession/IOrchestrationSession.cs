@@ -41,6 +41,14 @@ public interface IOrchestrationSession
     string? SupervisorModelOverride { get; }
     string? ImplementerModelOverride { get; }
 
+    /// <summary>
+    /// Per-orchestration EFFORT overrides (low / medium / high / xhigh / max), passed to
+    /// `claude --effort` at spawn. Null means NO FLAG AT ALL — the CLI then uses its own default —
+    /// so unlike the model there is no config default to fall back to.
+    /// </summary>
+    string? SupervisorEffortOverride { get; }
+    string? ImplementerEffortOverride { get; }
+
     IReadOnlyList<IOrchestrationMember> Members { get; }
 
     /// <summary>
@@ -83,6 +91,22 @@ public interface IOrchestrationSession
     /// this changes a glyph and mutes the topic, and every part of it is reversible.
     /// </summary>
     bool Done { get; }
+
+    /// <summary>
+    /// ASLEEP. The owner is done with this orchestration FOR NOW but does not want it closed:
+    /// outbound Telegram is held, the app stops pushing the session, and it goes dormant until the
+    /// pause is lifted.
+    ///
+    /// PERSISTED, because dormancy that ended at the next app restart would not be dormancy — the
+    /// orchestration the owner deliberately put to sleep would wake up pushing at them again, which
+    /// is the one thing pausing exists to stop.
+    ///
+    /// NOT ClosedUtc, which kills the terminals and deletes the Telegram topic — nothing here is
+    /// torn down and nothing is lost. NOT Done either, which is a statement that the endeavour is
+    /// FINISHED; a paused one is unfinished and expected back. Pause is reversible and means
+    /// "asleep", not "over".
+    /// </summary>
+    bool Paused { get; }
 
     /// <summary>
     /// WHERE THE OWNER IS for this orchestration. TERMINAL means they are in its terminal: nothing

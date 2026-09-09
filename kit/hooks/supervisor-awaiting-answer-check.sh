@@ -15,14 +15,21 @@
 # wait — which is precisely the terminal's behaviour. The app deletes the flag as soon as the owner
 # says anything, and expires it after 10 minutes so a silent owner cannot brick the orchestration.
 #
-# Only supervisor sessions are affected (AIORCH_ROLE is set by the spawner). Any unexpected
-# condition ALLOWS the call — an enforcement bug must never wedge a session.
+# Only the roles that TALK TO THE OWNER are affected — supervisor and solo (AIORCH_ROLE is set by
+# the spawner). Any unexpected condition ALLOWS the call: an enforcement bug must never wedge a
+# session.
 
 set -u
 
-if [ "${AIORCH_ROLE:-}" != "supervisor" ]; then
-  exit 0
-fi
+# SOLO IS COVERED TOO, and its absence is what let nine questions reach the owner in five minutes
+# (2026-09-09). A solo IS the orchestration — it talks to the owner exactly as a supervisor does and
+# asks with the same QUESTION:/OPTION: lines — so "the world must not change under an owner who is
+# deciding" applies to it word for word. The role check was written when only supervisors existed on
+# this path, and nothing revisited it when solo sessions started asking.
+case "${AIORCH_ROLE:-}" in
+  supervisor|solo) ;;
+  *) exit 0 ;;
+esac
 
 if [ -z "${AIORCH_ID:-}" ]; then
   exit 0

@@ -35,7 +35,10 @@ public static class OrchestrationSession_Factory
         long? statusLineMessageId = null,
         OwnerPresenceModes ownerPresence = OwnerPresenceModes.Remote,
         bool awaitingTest = false,
-        bool done = false)
+        bool done = false,
+        bool paused = false,
+        string? supervisorEffortOverride = null,
+        string? implementerEffortOverride = null)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -43,7 +46,8 @@ public static class OrchestrationSession_Factory
         return new OrchestrationSessionModel(
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
-            telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done);
+            telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done, paused,
+            supervisorEffortOverride, implementerEffortOverride);
     }
 
     /// <summary>
@@ -125,6 +129,17 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, implementerModelOverride: model, implementerModelWasSet: true);
     }
 
+    /// <summary>Null RESETS the override — the next spawn then carries no --effort flag at all.</summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithSupervisorEffortOverride(IOrchestrationSession existing, string? effort)
+    {
+        return CreateFrom_Existing(existing, supervisorEffortOverride: effort, supervisorEffortWasSet: true);
+    }
+
+    public static IOrchestrationSession CreateFrom_Existing_WithImplementerEffortOverride(IOrchestrationSession existing, string? effort)
+    {
+        return CreateFrom_Existing(existing, implementerEffortOverride: effort, implementerEffortWasSet: true);
+    }
+
     public static IOrchestrationSession CreateFrom_Existing_WithMembers(
         IOrchestrationSession existing,
         IReadOnlyList<IOrchestrationMember> members)
@@ -155,6 +170,17 @@ public static class OrchestrationSession_Factory
     public static IOrchestrationSession CreateFrom_Existing_WithDone(IOrchestrationSession existing, bool done)
     {
         return CreateFrom_Existing(existing, done: done, doneWasSet: true);
+    }
+
+    /// <summary>
+    /// ASLEEP FOR NOW, and reversibly so — see IOrchestrationSession.Paused. A flag beside the
+    /// delivery mode rather than a mode of its own, exactly like /test and /done: it says the owner
+    /// has stepped away from this endeavour, not how its messages travel, so lifting the pause
+    /// gives them back the audibility they had chosen rather than a guess at it.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithPaused(IOrchestrationSession existing, bool paused)
+    {
+        return CreateFrom_Existing(existing, paused: paused, pausedWasSet: true);
     }
 
     /// <summary>Where the owner IS — orthogonal to the delivery mode, which stays as they set it.</summary>
@@ -191,6 +217,13 @@ public static class OrchestrationSession_Factory
         bool supervisorModelWasSet = false,
         string? implementerModelOverride = null,
         bool implementerModelWasSet = false,
+
+        // Same wasSet dance as the two model overrides: null must be able to mean "cleared — spawn
+        // with no --effort flag" and not only "unchanged".
+        string? supervisorEffortOverride = null,
+        bool supervisorEffortWasSet = false,
+        string? implementerEffortOverride = null,
+        bool implementerEffortWasSet = false,
         IReadOnlyList<IOrchestrationMember>? members = null,
         TelegramDeliveryModes? telegramMode = null,
         OwnerPresenceModes? ownerPresence = null,
@@ -206,7 +239,13 @@ public static class OrchestrationSession_Factory
 
         // Same wasSet dance as awaitingTest, and for the same reason: a bare bool cannot say
         // "leave this alone", so without it every unrelated copy would quietly un-finish the topic.
-        bool doneWasSet = false)
+        bool doneWasSet = false,
+        bool paused = false,
+
+        // Mandatory for the same reason as the two bools above: a bare bool cannot say "leave this
+        // alone", so without the flag every unrelated copy would silently un-pause the topic and
+        // wake an orchestration the owner had deliberately put to sleep.
+        bool pausedWasSet = false)
     {
         return Create(
             existing.OrchId,
@@ -226,6 +265,9 @@ public static class OrchestrationSession_Factory
             statusLineMessageIdWasSet ? statusLineMessageId : existing.StatusLineMessageId,
             ownerPresence ?? existing.OwnerPresence,
             awaitingTestWasSet ? awaitingTest : existing.AwaitingTest,
-            doneWasSet ? done : existing.Done);
+            doneWasSet ? done : existing.Done,
+            pausedWasSet ? paused : existing.Paused,
+            supervisorEffortWasSet ? supervisorEffortOverride : existing.SupervisorEffortOverride,
+            implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride);
     }
 }

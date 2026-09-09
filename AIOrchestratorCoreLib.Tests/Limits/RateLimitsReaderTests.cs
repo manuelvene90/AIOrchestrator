@@ -228,6 +228,58 @@ public class RateLimitsReaderTests : IDisposable
         Assert.Empty(RateLimits_Reader.Read_WorstAcrossSessions([garbage, missing], NOW));
     }
 
+    /// <summary>
+    /// The effort dial, as Claude Code 2.1.266 reports it: `"effort":{"level":"xhigh"}`, a sibling of
+    /// the `model` block. The fixture is the live payload shape trimmed to its neighbours, not an
+    /// invented one — see SessionContextUsageFactoryTests for why that matters here.
+    /// </summary>
+    [Fact]
+    public void Read_EffortLevel_ReadsTheDialClaudeCodeReports()
+    {
+        Assert.Equal("xhigh", RateLimits_Reader.Read_EffortLevel_OrNull(PAYLOAD_WITH_EFFORT));
+    }
+
+    /// <summary>
+    /// The block is ABSENT on an older Claude Code and on a model without the dial. Absent is
+    /// unknown — never a default like "high" that the owner could mistake for a setting they chose.
+    /// </summary>
+    [Fact]
+    public void Read_EffortLevel_IsUnknownWhenThePayloadCarriesNoEffortBlock()
+    {
+        Assert.Null(RateLimits_Reader.Read_EffortLevel_OrNull("""{ "model": { "id": "claude-opus-5", "display_name": "Opus 5" } }"""));
+    }
+
+    /// <summary>Half a file, an empty one, or a level that is not a string: unknown, never a throw.</summary>
+    [Fact]
+    public void Read_EffortLevel_IsUnknownForMalformedPayloads_NeverThrows()
+    {
+        Assert.Null(RateLimits_Reader.Read_EffortLevel_OrNull("{ not json at all"));
+        Assert.Null(RateLimits_Reader.Read_EffortLevel_OrNull(""));
+        Assert.Null(RateLimits_Reader.Read_EffortLevel_OrNull("""{ "effort": { "lev"""));
+        Assert.Null(RateLimits_Reader.Read_EffortLevel_OrNull("""{ "effort": { "level": 3 } }"""));
+        Assert.Null(RateLimits_Reader.Read_EffortLevel_OrNull("""{ "effort": "xhigh" }"""));
+    }
+
+    /// <summary>
+    /// A BOM at the front of the TEXT is refused quietly, exactly as its siblings refuse it: the
+    /// JSON parser throws on a leading U+FEFF and the catch turns that into unknown. This is not
+    /// where the BOM every probe file carries gets handled — the shared file read strips it before
+    /// any of these readers see the text (SessionModelReadingFactoryTests proves the file-level
+    /// path reads through one). Pinned beside the model reader so the two cannot drift apart on it.
+    /// </summary>
+    [Fact]
+    public void Read_EffortLevel_RefusesABomPrefixedStringTheWayTheModelReaderDoes()
+    {
+        var bomPrefixed = "\uFEFF" + PAYLOAD_WITH_EFFORT;
+
+        Assert.Null(RateLimits_Reader.Read_EffortLevel_OrNull(bomPrefixed));
+        Assert.Null(RateLimits_Reader.Read_ModelName_OrNull(bomPrefixed));
+    }
+
+    /// <summary>The live shape (Claude Code 2.1.266), trimmed to the two blocks these readers look at.</summary>
+    const string PAYLOAD_WITH_EFFORT =
+        """{"session_id":"7f34ac2b","effort":{"level":"xhigh"},"model":{"id":"claude-fable-5-1","display_name":"Fable 5.1"},"version":"2.1.266"}""";
+
     static string Build_ProbeJson(string windowKey, double percent, DateTime resetsAtLocal, string modelName)
     {
         return $$"""

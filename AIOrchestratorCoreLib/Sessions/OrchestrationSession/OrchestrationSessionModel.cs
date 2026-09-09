@@ -20,7 +20,10 @@ internal sealed class OrchestrationSessionModel(
     DateTime? closedUtc,
     long? statusLineMessageId,
     bool awaitingTest,
-    bool done) : IOrchestrationSession
+    bool done,
+    bool paused,
+    string? supervisorEffortOverride,
+    string? implementerEffortOverride) : IOrchestrationSession
 {
     public string OrchId { get; } = orchId;
     public string RepoName { get; } = repoName;
@@ -35,10 +38,13 @@ internal sealed class OrchestrationSessionModel(
     public string? DisplayName { get; } = displayName;
     public string? SupervisorModelOverride { get; } = supervisorModelOverride;
     public string? ImplementerModelOverride { get; } = implementerModelOverride;
+    public string? SupervisorEffortOverride { get; } = supervisorEffortOverride;
+    public string? ImplementerEffortOverride { get; } = implementerEffortOverride;
     public IReadOnlyList<IOrchestrationMember> Members { get; } = members;
     public Telegram.TelegramDeliveryModes TelegramMode { get; } = telegramMode;
     public bool AwaitingTest { get; } = awaitingTest;
     public bool Done { get; } = done;
+    public bool Paused { get; } = paused;
 
     public Telegram.OwnerPresenceModes OwnerPresence { get; } = ownerPresence;
     public DateTime? ClosedUtc { get; } = closedUtc;

@@ -43,12 +43,19 @@ public interface IOrchestrationSessionStore
     /// <summary>Finished, and kept open on purpose — see IOrchestrationSession.Done.</summary>
     void Set_Done(string orchId, bool done);
 
+    /// <summary>Asleep for now, and reversibly — see IOrchestrationSession.Paused.</summary>
+    void Set_Paused(string orchId, bool paused);
+
     /// <summary>Where the owner is for this orchestration — see IOrchestrationSession.OwnerPresence.</summary>
     void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence);
     void Set_MemberPid(string orchId, string memberId, int? pid);
     void Set_DisplayName(string orchId, string displayName);
     void Set_SupervisorModelOverride(string orchId, string? model);
     void Set_ImplementerModelOverride(string orchId, string? model);
+
+    /// <summary>Per-orchestration --effort level; null resets to "no flag" (the CLI's own default).</summary>
+    void Set_SupervisorEffortOverride(string orchId, string? effort);
+    void Set_ImplementerEffortOverride(string orchId, string? effort);
 
     void Close_Member(string orchId, string memberId);
     void Close_Orchestration(string orchId);

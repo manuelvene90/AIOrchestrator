@@ -82,6 +82,19 @@ if [ -f "$ORCH_FOLDER/.meeting" ]; then
   exit 0
 fi
 
+# THE OWNER PAUSED THIS ORCHESTRATION. They are done with it for now and have not closed it, so the
+# work is not abandoned — it is asleep, and the whole point of the state is that nothing is expected
+# of this session until they lift it. A hook that refuses the turn end would keep the one session
+# they told to stop working, working: dormancy is exactly what the pause promised them.
+#
+# DERIVED, NEVER AUTHORED, like the meeting flag: the app re-syncs this file for every session on
+# its tick, so a flag left behind by a crash is gone the moment the app returns and finds the
+# orchestration unpaused. Unlike the awaiting-answer flag it deliberately SURVIVES a respawn — that
+# one describes what a process was doing, this one describes what the owner decided.
+if [ -f "$ORCH_FOLDER/.paused" ]; then
+  exit 0
+fi
+
 # NOTHING LEFT TO DO — the endeavour really is finished, so the turn may end. This is the exit that
 # makes the rule livable: it is not "never stop", it is "never stop with work still open".
 # `grep -c` PRINTS 0 AND EXITS 1 when it matches nothing, so an `|| echo 0` here appends a SECOND
