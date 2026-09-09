@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
+using AIOrchestratorCoreLib.Status.SessionModelReading;
 
 namespace AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 
@@ -27,4 +28,10 @@ public interface ITopicStatusMember
 
     /// <summary>Context window usage, if available. Null if the session has not reported context data.</summary>
     ISessionContextUsage? ContextUsage { get; }
+
+    /// <summary>
+    /// What model and effort this session is running, as its own probe last reported. Null when it
+    /// has not reported one, and the row then renders exactly as it did before the field existed.
+    /// </summary>
+    ISessionModelReading? Model { get; }
 }

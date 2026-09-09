@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
+using AIOrchestratorCoreLib.Status.SessionModelReading;
 
 namespace AIOrchestratorCoreLib.Usage;
 
@@ -222,6 +223,16 @@ public static partial class UsageTotals_Reader
     public static ISessionContextUsage? Read_ContextUsage_OrNull(string usageFilePath)
     {
         return SessionContextUsage_Factory.Create_OrNull(usageFilePath);
+    }
+
+    /// <summary>
+    /// What model and effort the session behind this probe file is running, or null when it has not
+    /// said. Delegates, like the context reading above, so this class stays the one front door for
+    /// probe figures without becoming a second parser of any of them.
+    /// </summary>
+    public static ISessionModelReading? Read_ModelReading_OrNull(string usageFilePath)
+    {
+        return SessionModelReading_Factory.Create_OrNull(usageFilePath);
     }
 
     static void Sum_TokenFields(JsonNode node, ref long total)
