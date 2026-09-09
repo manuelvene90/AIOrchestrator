@@ -161,6 +161,15 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
 - **Suite code reuse — RETIRED for now (2026-08-06 live-fix):** v1 referenced the suite's `LoggingLib` for its `ListBoxLoggerSimple` log panel, but that control is hard-designed light (white root background, pastel per-tag rows baked into its template) and cannot be dark-themed from outside; the app now ships its own dark log view (`Views/LogRowView` + `ActivityLogListBox`). **The repo currently builds standalone — no suite checkout required.** Coding patterns still follow the suite's `CODING_PATTERNS.md`; if suite libs are reused later, reference the MAIN checkout at `..\..\manuelvene90\Da-Vinci-Fintech-Suite` (never a worktree).
 - **Per-orchestration logging + live state view** (owner directive mid-design): every orchestration writes `orchestrator.log.jsonl`; the app shows a live log panel and per-member state chips (implementer working / awaiting review / writing window open / blocked on owner) derived from the channel files.
 - **Dual interaction:** Telegram AND direct terminal typing are both first-class; the file protocol works with the app closed.
+- **Model ladder + effort (owner, 2026-09-09):** supervisor and implementer (so also solo and
+  reviewer, which resolve off `ImplementerModel`) default to `claude-fable-5-1` — pinned to the
+  full id, not the `fable` alias that follows the latest Fable. General supervisor and communicator
+  stay on `sonnet` (routing/narration = cheap). **Supervisor and solo sessions spawn with
+  `--effort xhigh`**; no other role carries an effort flag. The flag is emitted at the single
+  chokepoint `SpawnCommand_Builder.Build_ClaudeInvocation`, whose `effortFlags` argument every
+  caller states explicitly. Note the two live in DIFFERENT places: the model is DATA
+  (`~/.claude/supervision/config.json`, read live — a change applies to the next spawn with no
+  restart), the effort is CODE (in the app binary — it needs a rebuilt app running, see decision 23).
 
 ## Design Spec
 

@@ -43,11 +43,25 @@ public static class SpawnCommand_Builder
     /// </summary>
     public const string CLAUDE_LAUNCH_FLAGS = "--dangerously-skip-permissions";
 
+    /// <summary>
+    /// The two roles that TALK TO THE OWNER and decide — supervisor and solo — think at xhigh
+    /// (owner directive 2026-09-09: "XHigh effort in each solo and sup session"). Verified against
+    /// the installed CLI, whose --help lists '--effort &lt;level&gt;' as (low, medium, high, xhigh, max);
+    /// xhigh needs a model that supports it, which the Fable 5.1 default does.
+    /// </summary>
+    public const string SUPERVISION_EFFORT_FLAGS = "--effort xhigh";
+
+    /// <summary>
+    /// Every other role keeps whatever effort the CLI itself defaults to — the owner asked for
+    /// xhigh in solo and supervisor sessions only, and an effort level is billed thinking.
+    /// </summary>
+    public const string? DEFAULT_EFFORT_FLAGS = null;
+
     public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model)} '/supervisor {orchId}'", pidFilePath);
+        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model, SUPERVISION_EFFORT_FLAGS)} '/supervisor {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForSupervisor(orchId), displayName), SUPERVISOR_TAB_COLOR, repoPath, script);
     }
@@ -66,7 +80,7 @@ public static class SpawnCommand_Builder
         // up blank — never booted, never wrote to its channel, and was nudged then respawned on a
         // loop. Verified against the real CLI, which reports "Permission deny rule ... matches no
         // known tool" for each swallowed word.
-        var claudeCommand = $"{Build_ClaudeInvocation(model)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
+        var claudeCommand = $"{Build_ClaudeInvocation(model, DEFAULT_EFFORT_FLAGS)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
         var script = Build_SessionScript("reviewer", orchId, memberId, claudeCommand, pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), REVIEWER_TAB_COLOR, repoPath, script);
@@ -84,7 +98,7 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/solo {orchId}'", pidFilePath);
+        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(model, SUPERVISION_EFFORT_FLAGS)} '/solo {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), SOLO_TAB_COLOR, repoPath, script);
     }
@@ -94,7 +108,7 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(model)} '/communicator {orchId}'", pidFilePath);
+        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(model, DEFAULT_EFFORT_FLAGS)} '/communicator {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForCommunicator(orchId), displayName), COMMUNICATOR_TAB_COLOR, repoPath, script);
     }
@@ -103,7 +117,7 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/implementer {orchId}/{memberId}'", pidFilePath);
+        var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(model, DEFAULT_EFFORT_FLAGS)} '/implementer {orchId}/{memberId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), IMPLEMENTER_TAB_COLOR, repoPath, script);
     }
@@ -120,7 +134,7 @@ public static class SpawnCommand_Builder
     /// </summary>
     public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
     {
-        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(model)} '/general-supervisor'", pidFilePath);
+        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(model, DEFAULT_EFFORT_FLAGS)} '/general-supervisor'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.GENERAL_TITLE, GENERAL_TAB_COLOR, generalHomeFolder, script);
     }
@@ -192,10 +206,17 @@ public static class SpawnCommand_Builder
             claudeCommand;
     }
 
-    static string Build_ClaudeInvocation(string? model)
+    /// <summary>
+    /// effortFlags is stated by EVERY caller rather than defaulted, so the one place that answers
+    /// "which roles think at xhigh" is the call site of the role itself. Both parts land BEFORE
+    /// CLAUDE_LAUNCH_FLAGS and therefore before the reviewer's variadic --disallowedTools, which
+    /// would otherwise swallow them.
+    /// </summary>
+    static string Build_ClaudeInvocation(string? model, string? effortFlags)
     {
         var modelPart = string.IsNullOrWhiteSpace(model) ? string.Empty : $" --model {model}";
-        return $"claude{modelPart} {CLAUDE_LAUNCH_FLAGS}";
+        var effortPart = string.IsNullOrWhiteSpace(effortFlags) ? string.Empty : $" {effortFlags}";
+        return $"claude{modelPart}{effortPart} {CLAUDE_LAUNCH_FLAGS}";
     }
 
     static void Validate_OrchId(string orchId)

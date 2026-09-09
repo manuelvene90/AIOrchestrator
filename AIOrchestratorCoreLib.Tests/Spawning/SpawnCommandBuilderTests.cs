@@ -21,7 +21,45 @@ public class SpawnCommandBuilderTests
         Assert.Contains("$env:AIORCH_ROLE='supervisor'", script);
         Assert.Contains("$env:AIORCH_ID='arb-fix'", script);
         Assert.Contains($"Set-Content -LiteralPath '{PID_FILE}' -Value $PID", script);
-        Assert.Contains("claude --model opus --dangerously-skip-permissions '/supervisor arb-fix'", script);
+        Assert.Contains("claude --model opus --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'", script);
+    }
+
+    /// <summary>
+    /// The owner asked for xhigh in the two roles that talk to them and decide (2026-09-09). The
+    /// flag must sit before --dangerously-skip-permissions and before the slash command, or the
+    /// CLI reads it as part of the prompt.
+    /// </summary>
+    [Fact]
+    public void Build_SupervisorAndSolo_ThinkAtXHighEffort()
+    {
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "claude-fable-5-1", PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "claude-fable-5-1", PID_FILE, null);
+
+        Assert.Contains(
+            "claude --model claude-fable-5-1 --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'",
+            SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.Contains(
+            "claude --model claude-fable-5-1 --effort xhigh --dangerously-skip-permissions '/solo arb-fix'",
+            SpawnCommand_Builder.Decode_SessionScript(solo));
+    }
+
+    /// <summary>
+    /// Effort is billed thinking, so the roles the owner did NOT name keep the CLI's own default.
+    /// The reviewer is the one that would break loudly: its --disallowedTools is variadic, so an
+    /// effort flag emitted after it would be eaten as a tool name.
+    /// </summary>
+    [Fact]
+    public void Build_RolesTheOwnerDidNotName_CarryNoEffortFlag()
+    {
+        var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", "claude-fable-5-1", PID_FILE, null);
+        var reviewer = SpawnCommand_Builder.Build_ForReviewer("arb-fix", "rev-1", @"C:\repos\arb", "claude-fable-5-1", PID_FILE, null);
+        var communicator = SpawnCommand_Builder.Build_ForCommunicator("arb-fix", @"C:\repos\arb", "sonnet", PID_FILE, null);
+        var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", PID_FILE);
+
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(implementer));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(reviewer));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(communicator));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(general));
     }
 
     [Fact]
