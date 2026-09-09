@@ -108,6 +108,30 @@ public static class RateLimits_Reader
     }
 
     /// <summary>
+    /// The effort dial this session runs at — `effort.level`, one of low / medium / high / xhigh /
+    /// max (verified against Claude Code 2.1.266). The block is ABSENT on an older Claude Code and on
+    /// a model without the dial, and absent is UNKNOWN: never a default the owner could mistake for
+    /// a setting they chose. Sits beside <see cref="Read_ModelName_OrNull"/> because the two are
+    /// read together — a model name without its effort is half a reading.
+    /// </summary>
+    public static string? Read_EffortLevel_OrNull(string rawStatuslineJson)
+    {
+        try
+        {
+            var node = (JsonNode.Parse(rawStatuslineJson) as JsonObject)?["effort"]?["level"];
+
+            if (node == null)
+                return null;
+
+            return node.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Highest reading per window across every session's probe file — the number that constrains
     /// you. The clock is a parameter because the expiry and window-instance rules below ARE this
     /// reader, and they cannot be tested against a hidden <see cref="DateTime.Now"/>.

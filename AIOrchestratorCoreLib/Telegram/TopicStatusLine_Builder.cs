@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
+using AIOrchestratorCoreLib.Status.SessionModelReading;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 
 namespace AIOrchestratorCoreLib.Telegram;
@@ -90,7 +91,8 @@ public static class TopicStatusLine_Builder
         DateTime now,
         bool aMessageIsAlreadyPosted,
         TimeSpan? figuresUnchangedFor = null,
-        ISessionContextUsage? supervisorContext = null)
+        ISessionContextUsage? supervisorContext = null,
+        ISessionModelReading? supervisorModel = null)
     {
         List<string> lines = [];
 
@@ -114,7 +116,7 @@ public static class TopicStatusLine_Builder
         if (!hasSubstance)
             return aMessageIsAlreadyPosted ? LEAD_WORD : "";
 
-        lines.Insert(0, Build_LeadLine(progress, figuresUnchangedFor, supervisorContext));
+        lines.Insert(0, Build_LeadLine(progress, figuresUnchangedFor, supervisorContext, supervisorModel));
 
         // NO BULLET on this one, deliberately: it is not a member, and a `• last · …` row reads like
         // one more session called "last". Not having the bullet is what separates it now that the
@@ -148,8 +150,37 @@ public static class TopicStatusLine_Builder
     /// A basic orchestration has no supervisor at all, so nothing is added there and its solo
     /// carries the figure on its own member row instead.
     /// </summary>
-    static string Build_LeadLine(IPlanProgress? progress, TimeSpan? figuresUnchangedFor, ISessionContextUsage? supervisorContext)
+    /// <summary>
+    /// THE SUPERVISOR'S MODEL RIDES THERE TOO, between the ledger reading and its context: the facts
+    /// about the session first, the alarm last, in the same order a member row keeps them. Unlike
+    /// the context figure it has no visibility policy — a context percentage is worth a glance only
+    /// past a threshold, whereas the model is simply known or not, and null drops the field.
+    /// </summary>
+    static string Build_LeadLine(IPlanProgress? progress, TimeSpan? figuresUnchangedFor, ISessionContextUsage? supervisorContext, ISessionModelReading? supervisorModel)
     {
+        // THE LEAD WORD STILL COMES BACK BARE WHEN THERE IS NO LEDGER, and the supervisor fields go
+        // with it. This return is the "nothing to say" shape the whole class is built around, and
+        // hanging a figure off it would be the say-nothing message the class doc refuses.
+        if (progress == null || progress.Total <= 0)
+            return LEAD_WORD;
+
+        // ONE PATH, BUILDING A FIELD LIST — the member row's shape, for the member row's reason.
+        // With three optional fields this had become three copies of one `null ? "" : separator +
+        // field` spelling, which is exactly how a separator ends up different in one of them.
+        List<string> fields = [$"{progress.Done}/{progress.Total}", $"{PlanProgress_Formatter.Percent(progress)}%"];
+
+        var unchanged = figuresUnchangedFor == null
+            ? null
+            : Formatting.UnchangedFor_Formatter.Describe_OrNull(figuresUnchangedFor.Value);
+
+        if (unchanged != null)
+            fields.Add(unchanged);
+
+        var supervisorModelField = ModelReading_Formatter.Describe_OrNull(supervisorModel);
+
+        if (supervisorModelField != null)
+            fields.Add($"sup {supervisorModelField}");
+
         // Describe_OrNull rather than the bang operator: the policy and the formatter each answer
         // the null question for themselves, so neither this line nor the reader has to assert what
         // the other already checked.
@@ -157,23 +188,10 @@ public static class TopicStatusLine_Builder
             ? ContextUsage_Formatter.Describe_OrNull(supervisorContext)
             : null;
 
-        var supervisorContextPart = supervisorContextField == null
-            ? ""
-            : $"{FIELD_SEPARATOR}sup {supervisorContextField}";
+        if (supervisorContextField != null)
+            fields.Add($"sup {supervisorContextField}");
 
-        // THE LEAD WORD STILL COMES BACK BARE WHEN THERE IS NO LEDGER, and the context part goes
-        // with it. This return is the "nothing to say" shape the whole class is built around, and
-        // hanging a figure off it would be the say-nothing message the class doc refuses.
-        if (progress == null || progress.Total <= 0)
-            return LEAD_WORD;
-
-        var unchanged = figuresUnchangedFor == null
-            ? null
-            : Formatting.UnchangedFor_Formatter.Describe_OrNull(figuresUnchangedFor.Value);
-
-        var unchangedPart = unchanged == null ? "" : $"{FIELD_SEPARATOR}{unchanged}";
-
-        return $"{LEAD_WORD}{FIELD_SEPARATOR}{progress.Done}/{progress.Total}{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)}%{unchangedPart}{supervisorContextPart}";
+        return LEAD_WORD + FIELD_SEPARATOR + string.Join(FIELD_SEPARATOR, fields);
     }
 
     /// <summary>
@@ -229,6 +247,14 @@ public static class TopicStatusLine_Builder
             if (onTaskFor != null)
                 fields.Add(onTaskFor);
         }
+
+        // The model sits between the duration and the context figure: what the session IS before
+        // how full it is, so the alarm stays last where a glance lands. No policy gates it — a
+        // reading is either known or not, and null drops the field like every other one here.
+        var modelField = ModelReading_Formatter.Describe_OrNull(member.Model);
+
+        if (modelField != null)
+            fields.Add(modelField);
 
         var contextField = Build_ContextField_OrNull(member);
 
