@@ -142,15 +142,13 @@ public static class TopicStatusLine_Builder
     /// delta. The owner asked for it here INSTEAD of a difference, because this surface refreshes
     /// constantly: *"the difference doesn't make sense because at best, after updating every
     /// 10 seconds it would go back to 0."*
-    /// </summary>
-    /// <summary>
+    ///
     /// THE SUPERVISOR'S CONTEXT RIDES ON THE LEAD LINE, not on a row of its own, because it has no row
     /// here — this line lists MEMBERS, and a crew's supervisor is not one. Giving it a row would
     /// invent a session called "supervisor" that stands beside imp-1 with no task and no duration.
     /// A basic orchestration has no supervisor at all, so nothing is added there and its solo
     /// carries the figure on its own member row instead.
-    /// </summary>
-    /// <summary>
+    ///
     /// THE SUPERVISOR'S MODEL RIDES THERE TOO, between the ledger reading and its context: the facts
     /// about the session first, the alarm last, in the same order a member row keeps them. Unlike
     /// the context figure it has no visibility policy — a context percentage is worth a glance only
