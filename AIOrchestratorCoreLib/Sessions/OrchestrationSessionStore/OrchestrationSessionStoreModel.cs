@@ -192,6 +192,15 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_Paused(string orchId, bool paused)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithPaused(session, paused));
+        }
+    }
+
     public void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence)
     {
         lock (_writeLock)

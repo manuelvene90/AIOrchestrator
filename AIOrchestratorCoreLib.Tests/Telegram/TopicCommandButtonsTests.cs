@@ -32,7 +32,7 @@ public class TopicCommandButtonsTests
     [Fact]
     public void TheCommands_AreTheOnesTheOwnerAskedFor_InDisplayOrder()
     {
-        Assert.Equal(new[] { "screen", "show", "merge", "test", "pc", "close" }, TopicCommandButtons.Commands);
+        Assert.Equal(new[] { "screen", "show", "merge", "test", "pc", "close", "pause", "progress" }, TopicCommandButtons.Commands);
     }
 
     [Fact]
@@ -143,10 +143,38 @@ public class TopicCommandButtonsTests
     {
         var rows = TopicCommandButtons.Build_ReplyKeyboardRows();
 
-        Assert.Equal(3, rows.Count);
+        Assert.Equal(4, rows.Count);
         Assert.Equal(new[] { "/screen", "/show" }, rows[0]);
         Assert.Equal(new[] { "/merge", "/test" }, rows[1]);
         Assert.Equal(new[] { "/pc", "/close" }, rows[2]);
+        Assert.Equal(new[] { "/pause", "/progress" }, rows[3]);
+    }
+
+
+    /// <summary>
+    /// THE ROW THE OWNER ASKED FOR, 2026-09-09: *"it should also become a new button under the pulse
+    /// button, and since we need two buttons per row, let's also add another command that you think
+    /// is useful."* /pause alone would have left a half-empty row, so the count staying EVEN is the
+    /// requirement, not decoration — and it is stated here rather than inferred from the row shapes,
+    /// which is the mistake this file already made once with an odd command count.
+    /// </summary>
+    [Fact]
+    public void TheCommandCount_StaysEven_SoNoRowIsLeftHalfEmpty()
+    {
+        Assert.Equal(0, TopicCommandButtons.Commands.Count % REPLY_KEYBOARD_COLUMNS);
+    }
+
+    /// <summary>
+    /// /pause and /progress share the last row deliberately: the one that changes state is paired
+    /// with a READ-ONLY one, rather than putting a second consequential button beside /close.
+    /// </summary>
+    [Fact]
+    public void PauseAndProgress_AreTheLastRow_AndPauseComesFirst()
+    {
+        var commands = TopicCommandButtons.Commands;
+
+        Assert.Equal("pause", commands[commands.Count - 2]);
+        Assert.Equal("progress", commands[commands.Count - 1]);
     }
 
     /// <summary>
@@ -244,7 +272,11 @@ public class TopicCommandButtonsTests
     [InlineData("cmd:show:notanumber")]
     [InlineData("cmd:show: 5")]             // whitespace is not something Build_ForTopic ever wrote
     [InlineData("cmd::5")]                  // a topic with no verb
-    [InlineData("cmd:pause:5")]             // a verb this class does not offer
+    // "pause" USED TO BE THE EXAMPLE HERE, and it stopped being one the day the owner asked for
+    // the button (2026-09-09) — the case then asserted that a real command was unparseable, and
+    // it failed loudly, which is what a case naming its intent is for. Any stand-in must be a
+    // verb nobody would plausibly add.
+    [InlineData("cmd:defenestrate:5")]      // a verb this class does not offer
     [InlineData("cmd:SHOW:5")]              // ordinal, case-sensitive
     [InlineData("CMD:show:5")]
     [InlineData("cmd")]

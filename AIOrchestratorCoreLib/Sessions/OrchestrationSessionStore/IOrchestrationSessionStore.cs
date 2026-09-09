@@ -43,6 +43,9 @@ public interface IOrchestrationSessionStore
     /// <summary>Finished, and kept open on purpose — see IOrchestrationSession.Done.</summary>
     void Set_Done(string orchId, bool done);
 
+    /// <summary>Asleep for now, and reversibly — see IOrchestrationSession.Paused.</summary>
+    void Set_Paused(string orchId, bool paused);
+
     /// <summary>Where the owner is for this orchestration — see IOrchestrationSession.OwnerPresence.</summary>
     void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence);
     void Set_MemberPid(string orchId, string memberId, int? pid);

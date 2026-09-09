@@ -161,6 +161,32 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
 - **Suite code reuse — RETIRED for now (2026-08-06 live-fix):** v1 referenced the suite's `LoggingLib` for its `ListBoxLoggerSimple` log panel, but that control is hard-designed light (white root background, pastel per-tag rows baked into its template) and cannot be dark-themed from outside; the app now ships its own dark log view (`Views/LogRowView` + `ActivityLogListBox`). **The repo currently builds standalone — no suite checkout required.** Coding patterns still follow the suite's `CODING_PATTERNS.md`; if suite libs are reused later, reference the MAIN checkout at `..\..\manuelvene90\Da-Vinci-Fintech-Suite` (never a worktree).
 - **Per-orchestration logging + live state view** (owner directive mid-design): every orchestration writes `orchestrator.log.jsonl`; the app shows a live log panel and per-member state chips (implementer working / awaiting review / writing window open / blocked on owner) derived from the channel files.
 - **Dual interaction:** Telegram AND direct terminal typing are both first-class; the file protocol works with the app closed.
+- **PAUSE — asleep, not closed and not finished (owner, 2026-09-09).** `session.Paused` is a flag
+  beside the delivery mode, like `AwaitingTest`/`Done`, and it means the owner walked away from an
+  orchestration without ending it. Two halves, and BOTH are needed for "dormant" to be true:
+  **outbound** rides the existing funnel — `EffectiveMode_Resolver.Resolve` answers `Deferred` when
+  paused, ahead of presence, so all fifteen send gates and the offset freeze inherit it and the
+  backlog replays on unpause; **pushing** does not, because nothing a delivery mode says has ever
+  governed what the app WRITES INTO A CHANNEL. Each waker is gated separately —
+  `Append_SupervisorAttention_UnlessMeeting` (the choke point for supervisor traffic), plus the
+  member-side sweeps it deliberately excludes (`Nudge_IdleImplementers_Async`, `Flag_IdleMembers`),
+  `Check_LedgerHealth_Async`, `Push_PeriodicStatus_Async`, `Resume_AllSessions_Async`, the
+  `SessionWatchdog` respawn, and `Break_SilentDeadlock_Async` (which must not CONSUME the suppressed
+  entry even though its send is already suppressed). Miss one and dormancy is a word.
+  `Status/PausedFlag_Marker` writes `.paused`, DERIVED-never-authored like `.meeting` and reconciled
+  every tick, because the turn-end hook is bash and cannot read session.json — without it a paused
+  session with open ledger lines is refused its turn end and keeps working. It SURVIVES a respawn
+  (the inverse of `.awaiting-answer`): that flag describes what a process was doing, this one what
+  the owner decided. Writing in the topic lifts the pause (`Wake_PausedTopic_IfNeeded`), and a
+  second `/pause` inside 60 s re-asserts rather than toggling — the `/done` evidence, where every
+  toggle in this machine's history was undone by a repeat press 17-23 s later.
+- **The app has NEVER pinned a Telegram message.** Do not go looking for a pin to remove: the only
+  pin-family call in the repo is `unpinAllForumTopicMessages`. What the owner sees is Telegram's own
+  auto-pin of the `forum_topic_created` service message, and the unpin used to run ONCE, inside topic
+  creation, fire-and-forget — so any topic created before that code existed, or whose call lost a
+  race, stayed pinned for ever. `Sweep_TopicCreationPins_FireAndForget` now re-runs it over every
+  open topic at startup. **General is deliberately never swept**: the owner pinned their own channel
+  message there, and `unpinAllChatMessages` / `unpinAllGeneralForumTopicMessages` would wipe it.
 
 ## Design Spec
 

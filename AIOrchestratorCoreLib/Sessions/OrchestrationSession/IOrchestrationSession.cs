@@ -85,6 +85,22 @@ public interface IOrchestrationSession
     bool Done { get; }
 
     /// <summary>
+    /// ASLEEP. The owner is done with this orchestration FOR NOW but does not want it closed:
+    /// outbound Telegram is held, the app stops pushing the session, and it goes dormant until the
+    /// pause is lifted.
+    ///
+    /// PERSISTED, because dormancy that ended at the next app restart would not be dormancy — the
+    /// orchestration the owner deliberately put to sleep would wake up pushing at them again, which
+    /// is the one thing pausing exists to stop.
+    ///
+    /// NOT ClosedUtc, which kills the terminals and deletes the Telegram topic — nothing here is
+    /// torn down and nothing is lost. NOT Done either, which is a statement that the endeavour is
+    /// FINISHED; a paused one is unfinished and expected back. Pause is reversible and means
+    /// "asleep", not "over".
+    /// </summary>
+    bool Paused { get; }
+
+    /// <summary>
     /// WHERE THE OWNER IS for this orchestration. TERMINAL means they are in its terminal: nothing
     /// is pushed to Telegram and — the half that matters — no question raises the awaiting-answer
     /// flag, so the supervisor never freezes waiting for a tap that is being typed at it instead.
