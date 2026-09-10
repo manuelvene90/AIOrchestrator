@@ -28,6 +28,15 @@ any code.
 
 1. Read the channel top to bottom. **You may be resuming** — it is the full history; an unanswered
    trailing `FROM owner` entry is your task.
+
+   **You may also have been RESUMED — same conversation, new process.** Since 2026-09-10 the app
+   respawns a solo with `claude --resume <your own session id>` whenever your transcript survives,
+   so you can remember everything up to the moment you were killed (a `/model` or `/effort`
+   change, an app restart, a crash). **Trust the CHANNEL over that memory for anything you were in
+   the middle of DOING**: a request file you remember dropping, a commit, an entry, a window you
+   opened — check whether it actually landed before redoing it. The app confirms every request
+   with a `FROM app` entry; if there is none, the request never arrived. Your Monitor died with the
+   old process — arm it again at step 3 as on any boot.
 2. Append a SHORT greeting: subject `solo online — <repo> — <last two folders>`, empty body.
 3. Arm the monitor (below) and end your turn, unless there is unanswered traffic — then do that
    first.

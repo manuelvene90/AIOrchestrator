@@ -90,6 +90,29 @@ public static class RateLimits_Reader
         }
     }
 
+    /// <summary>
+    /// The session's own id, straight from the status line — the value `claude --resume` takes.
+    /// Sits beside <see cref="Read_TranscriptPath_OrNull"/> because a respawn reads the two
+    /// together: the id to resume, the transcript to prove there is still a conversation behind it
+    /// (see ResumableSession_Resolver). Absent or malformed is UNKNOWN, never a throw.
+    /// </summary>
+    public static string? Read_SessionId_OrNull(string rawStatuslineJson)
+    {
+        try
+        {
+            var node = (JsonNode.Parse(rawStatuslineJson) as JsonObject)?["session_id"];
+
+            if (node == null)
+                return null;
+
+            return node.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static string? Read_ModelName_OrNull(string rawStatuslineJson)
     {
         try

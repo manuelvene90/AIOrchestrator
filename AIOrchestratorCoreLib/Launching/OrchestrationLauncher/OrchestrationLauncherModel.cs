@@ -290,6 +290,11 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_SupervisorPidFile(orchId);
 
+        // Its own previous conversation, when the probe file names a transcript that still exists
+        // (owner request 2026-09-10). Read BEFORE anything is deleted or spawned: the probe is the
+        // previous process's last word, and the new process overwrites it on its first render.
+        var resumeSessionId = ResumableSession_Resolver.Resolve_ForSupervisor_OrNull(_paths, orchId);
+
         // The effort has NO config default on purpose: null means no --effort flag, and the CLI
         // decides. Only the per-orchestration override ever reaches the command line.
         var command = SpawnCommand_Builder.Build_ForSupervisor(
@@ -297,6 +302,7 @@ internal sealed class OrchestrationLauncherModel(
             session.RepoPath,
             session.SupervisorModelOverride ?? _configProvider.Get_Current().SupervisorModel,
             session.SupervisorEffortOverride,
+            resumeSessionId,
             pidFile,
             session.DisplayName);
 
@@ -309,7 +315,7 @@ internal sealed class OrchestrationLauncherModel(
         _spawner.Spawn(command);
         Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
 
-        _log.Log_Info(orchId, "Supervisor session spawned");
+        _log.Log_Info(orchId, Describe_Spawn("Supervisor session spawned", resumeSessionId));
     }
 
     public void Respawn_Communicator(string orchId)
@@ -364,10 +370,15 @@ internal sealed class OrchestrationLauncherModel(
         // override does; null means no --effort flag (the CLI's default), with no config fallback.
         var effort = session.ImplementerEffortOverride;
 
+        // Only the SOLO continues its own conversation (owner request 2026-09-10, for solo and
+        // supervisor): implementers and reviewers re-enter through their role command. Read BEFORE
+        // anything is deleted or spawned — the new process overwrites the probe on its first render.
+        var resumeSessionId = kind == MemberKinds.Solo ? ResumableSession_Resolver.Resolve_ForMember_OrNull(_paths, orchId, memberId) : null;
+
         var command = kind switch
         {
             MemberKinds.Reviewer => SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, effort, pidFile, session.DisplayName),
-            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, effort, pidFile, session.DisplayName),
+            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, effort, resumeSessionId, pidFile, session.DisplayName),
             MemberKinds.Implementer => SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, effort, pidFile, session.DisplayName),
             _ => throw new Exception($"Unhandled MemberKinds '{kind}' respawning '{memberId}' of '{orchId}'"),
         };
@@ -378,7 +389,7 @@ internal sealed class OrchestrationLauncherModel(
         _spawner.Spawn(command);
         Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
 
-        _log.Log_Info(orchId, $"{kind} '{memberId}' session spawned");
+        _log.Log_Info(orchId, kind == MemberKinds.Solo ? Describe_Spawn($"{kind} '{memberId}' session spawned", resumeSessionId) : $"{kind} '{memberId}' session spawned");
     }
 
     public void Spawn_GeneralSupervisor()
@@ -386,14 +397,27 @@ internal sealed class OrchestrationLauncherModel(
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
         // The general folder is the general supervisor's PERMANENT working directory: its
-        // CLAUDE.md (persistent, machine-portable knowledge) auto-loads there, and --continue
-        // resumes unambiguously because only general sessions ever run in it.
+        // CLAUDE.md (persistent, machine-portable knowledge) auto-loads there. Every launch is a
+        // FRESH conversation by owner directive — it is the one role that never resumes (see
+        // SpawnCommand_Builder.Build_ForGeneralSupervisor for the --continue incident behind that).
         var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(
             _paths.GeneralFolder, _configProvider.Get_Current().GeneralSupervisorModel, _paths.GeneralPidFile);
 
         _spawner.Spawn(command);
 
-        _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, "General supervisor session spawned (resume-if-possible)");
+        _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, "General supervisor session spawned (fresh conversation — stateless by design)");
+    }
+
+    /// <summary>
+    /// The log line says WHICH conversation a spawn is, so a respawn that came back empty-headed is
+    /// visible in the log panel rather than discovered when the session asks what it was doing.
+    /// </summary>
+    static string Describe_Spawn(string what, string? resumeSessionId)
+    {
+        if (resumeSessionId == null)
+            return $"{what} — fresh conversation (no resumable transcript)";
+
+        return $"{what} — resuming conversation {resumeSessionId}";
     }
 
     /// <summary>

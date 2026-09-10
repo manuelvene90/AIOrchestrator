@@ -41,6 +41,17 @@ watcher. Nothing else.
 1. Read `session.json` and every channel file in your home, top to bottom. **You may be resuming**
    — the channels are the full history, read them as a LOG, never a to-do list: an entry that
    already has a later reply is CLOSED; only unanswered trailing traffic is yours to act on.
+
+   **You may also have been RESUMED — same conversation, new process.** Since 2026-09-10 the app
+   respawns a supervisor with `claude --resume <your own session id>` whenever your transcript
+   survives, so you can remember everything up to the moment you were killed (a `/model` or
+   `/effort` change, an app restart, a crash). **Trust the CHANNEL over that memory for anything
+   you were in the middle of DOING**: a request file you remember dropping, a commit, an entry, a
+   brief — check whether it actually landed before redoing it. The app confirms every request with
+   a `FROM app` entry; if there is none, the request never arrived. This is the half of the old
+   `--continue` incident that a session id cannot fix: that session re-ran a failed start on boot
+   and duplicated orchestrations. Your Monitor died with the old process — arm it again at step 3
+   as on any boot.
 2. Append a SHORT greeting entry to `owner-channel.md`. It MUST state the **full repository
    directory you are working in** and the repo name from `session.json` (the owner verifies the
    general supervisor mapped the right repo), a one-line state summary (members, in-flight work,

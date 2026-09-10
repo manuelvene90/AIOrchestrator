@@ -37,7 +37,7 @@ public class SessionWindowTitleTests
     public void Solo_TheWindowItSpawns_IsTheWindowTheTerminatorCloses()
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "arb-fix", "solo-1", ".pid");
-        var command = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, pidFile, null);
+        var command = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, null, pidFile, null);
 
         Assert.Equal(Spawned_Title(command), SessionTerminator.Build_TitleFragment_OrNull(pidFile));
     }
@@ -46,7 +46,7 @@ public class SessionWindowTitleTests
     public void Solo_TheWindowItSpawns_IsTheWindowShowSessionFocuses()
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "arb-fix", "solo-1", ".pid");
-        var command = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, pidFile, null);
+        var command = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, null, pidFile, null);
 
         // The app's row builder cannot be referenced from here (it lives in the WPF project), so the
         // shared builder it now calls stands in for it. That call is the whole fix on that side.
@@ -77,7 +77,7 @@ public class SessionWindowTitleTests
     public void Supervisor_TheWindowItSpawns_IsTheWindowTheTerminatorCloses()
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "arb-fix", ".supervisor.pid");
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, pidFile, null);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, null, pidFile, null);
 
         Assert.Equal(Spawned_Title(command), SessionTerminator.Build_TitleFragment_OrNull(pidFile));
         Assert.Equal(Spawned_Title(command), SessionWindowTitle_Builder.Build_ForSupervisor("arb-fix"));
@@ -127,7 +127,7 @@ public class SessionWindowTitleTests
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "arb-fix", ".supervisor.pid");
         var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:
-eposrb", null, null, pidFile, "away mode loop");
+eposrb", null, null, null, pidFile, "away mode loop");
 
         Assert.Equal("SUP · arb-fix · away mode loop", Spawned_Title(command));
     }
@@ -143,7 +143,7 @@ eposrb", null, null, pidFile, "away mode loop");
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "arb-fix", "solo-1", ".pid");
         var command = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:
-eposrb", null, null, pidFile, "away mode loop");
+eposrb", null, null, null, pidFile, "away mode loop");
 
         var fragment = SessionTerminator.Build_TitleFragment_OrNull(pidFile);
 
@@ -174,7 +174,7 @@ eposrb", null, null, pidFile, "away mode loop");
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "arb-fix-10", ".supervisor.pid");
         var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix-10", @"C:
-eposrb", null, null, pidFile, "away mode loop");
+eposrb", null, null, null, pidFile, "away mode loop");
 
         Assert.False(SessionWindowTitle_Matcher.Matches(
             Spawned_Title(command),
@@ -204,7 +204,7 @@ eposrb", null, null, pidFile, "away mode loop");
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "arb-fix", ".supervisor.pid");
         var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:
-eposrb", null, null, pidFile, "away mode loop");
+eposrb", null, null, null, pidFile, "away mode loop");
 
         Assert.Equal(
             Spawned_Title(command),
