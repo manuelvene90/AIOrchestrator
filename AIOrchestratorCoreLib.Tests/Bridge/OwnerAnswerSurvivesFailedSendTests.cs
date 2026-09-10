@@ -116,12 +116,14 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         // behind the starting offset and is never mirrored at all.
         Seed_OwnerChannel(session.OrchId);
 
-        // 1 — the owner asks. This is the only thing that raises the waiting flag.
+        // 1 — the owner asks. This is the only thing that raises the waiting flag, and it is raised
+        // when the message LANDS in the channel (after the aggregation window), not when it is
+        // buffered — an answer the session wrote before it could have read the message is narration.
         _telegram.Queue_OwnerMessage(Build_OwnerMessageJson("is the rebuild done"));
 
         Assert.True(
-            await Run_Until_Async(() => _log.Has_Info_Containing("Owner message buffered"), 10_000),
-            "the owner's message never reached the router, so the waiting flag was never raised");
+            await Run_Until_Async(() => _log.Has_Info_Containing("Owner message delivered"), 40_000),
+            "the owner's message was never delivered to the channel, so the waiting flag was never raised");
 
         // 2 — the supervisor answers, and the send fails.
         Append_SupervisorEntry(session.OrchId, 1, "the answer", ANSWER_TEXT);

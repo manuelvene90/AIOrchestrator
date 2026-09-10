@@ -63,7 +63,7 @@ public class AwaySuppressesAppAlertsScanTests
         var body = Extract_Method("async Task Break_SilentDeadlock_Async");
 
         var gate = body.IndexOf(AWAY_GATE, StringComparison.Ordinal);
-        var removal = body.IndexOf("_lastSuppressedEntry.Remove", StringComparison.Ordinal);
+        var removal = body.IndexOf("_suppressedEntries.Remove", StringComparison.Ordinal);
 
         Assert.True(gate >= 0, "no away gate in the deadlock release");
         Assert.True(removal >= 0, "the deadlock release no longer removes the suppressed entry — this test is reading a method it does not understand");

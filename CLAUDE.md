@@ -172,6 +172,30 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     is no longer `is_persistent`: that flag re-shows the bar whenever the phone keyboard hides (which is
     what the back button does) and disables the icon that collapses it.
 
+25. **THE OWNER'S ANSWER CREDIT: raised at DELIVERY, never spent on a status line, and everything
+    filed inside the reply turn reaches the phone at turn end** (owner reports 2026-09-10 —
+    `da-vinci-fintech-suite-31` entries 137, 183, 202 and the `/merge` silence). `OwnerPush_Policy`
+    pushes an owner-channel entry only if it asks, is blocked, carries a picture, or is THE answer:
+    `_ownerAwaitingAnswer`, one credit, consumed by the first push. **That drop writes NOTHING at any
+    log level** — for a missing entry, `[owner] entry #N FROM Solo` present with no `mirror send
+    failed` line means the push policy suppressed it; absent means it was never tailed. Three drops
+    came from the credit: a `WAITING ON …` SUBJECT (the run-to-the-end hook's own marker) spent it
+    seconds before the real answer; it was raised at buffering, so a line written before the owner's
+    message even landed spent it; and the suppressed memo was one slot, so the status line written
+    after the answer overwrote it and the turn-ended receipt delivered the wrong text. Now
+    `Is_TurnEndDeclaration` (subject only — bodies end with `WAITING ON` lines by habit, so the body
+    says nothing) leaves the credit open; `Raise_OwnerWait` runs at delivery and from `/merge`, which
+    opens the same `Track_OwnerReply` tracker an owner message does (its completion report is the
+    credited answer, its turn end is announced); `_suppressedEntries` is a LIST and
+    `Build_TurnEndedText` sends everything filed since the owner's message as one message; the busy
+    notice is gated on `!pending.Answered`. The credit stays ONE-SHOT on purpose —
+    `OwnerAnswerSurvivesFailedSendTests` pins that narration after the answer is not pushed, because
+    that was the waterfall. **And the compaction guard is asked INSIDE the channel gate**
+    (`Channel_Compactor.Compact_IfNeeded(path, mayRewrite)`): the compactor queues behind a session's
+    append, so a guard answered before that wait describes a file that has since grown — entry 137
+    was kept by the rewrite and parked behind the re-anchored cursor, in the file and never on the
+    phone. The step's old docstring called that window "microseconds"; it was the length of an append.
+
 ## Resolved Decisions (2026-08-06, owner)
 
 - **UI framework: WPF** ("keep it simple") — `net10.0-windows`. The suite's `LoggingLib` ships a WPF `ListBoxLoggerSimple` control, which the app uses as its live log panel.

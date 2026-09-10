@@ -67,6 +67,44 @@ public static class OwnerPush_Policy
     }
 
     /// <summary>
+    /// The turn-end declaration the run-to-the-end hook accepts: "WAITING ON &lt;what&gt;" in the
+    /// subject means the session is ending its turn on a machine — a build, a suite, a sub-agent.
+    /// It is a STATUS LINE by definition, never the answer to anything.
+    /// </summary>
+    public const string WAITING_ON_MARKER = "WAITING ON";
+
+    /// <summary>
+    /// Whether the SUBJECT declares a turn end. Matched on the subject only: the hook also accepts
+    /// the marker at the start of a body line, but sessions end nearly every entry — answers
+    /// included — with a "WAITING ON …" line to satisfy it, so the body says nothing about what the
+    /// entry IS. The boundary is the hook's own ("WAITING ONLY" contains "WAITING ON"): the marker
+    /// must be followed by a non-letter or the end of the subject. The hook
+    /// (kit/hooks/run-to-the-end-check.sh) is the other reader of this marker; the two must agree.
+    /// </summary>
+    public static bool Is_TurnEndDeclaration(string? subject)
+    {
+        if (string.IsNullOrWhiteSpace(subject))
+            return false;
+
+        var searchFrom = 0;
+
+        while (true)
+        {
+            var start = subject.IndexOf(WAITING_ON_MARKER, searchFrom, StringComparison.Ordinal);
+
+            if (start < 0)
+                return false;
+
+            var end = start + WAITING_ON_MARKER.Length;
+
+            if (end >= subject.Length || !char.IsLetter(subject[end]))
+                return true;
+
+            searchFrom = end;
+        }
+    }
+
+    /// <summary>
     /// ownerIsWaitingForAReply: the owner sent something the supervisor has not answered yet, so
     /// THIS entry is that answer and must go through whatever else it contains.
     ///
@@ -76,7 +114,14 @@ public static class OwnerPush_Policy
     /// </summary>
     public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply, string? subject = null)
     {
-        if (ownerIsWaitingForAReply)
+        // THE OWNER'S WAIT IS NOT SPENT ON A STATUS LINE. The wait is one credit, consumed by the
+        // first entry it pushes, and sessions routinely write a turn-end declaration ("WAITING ON
+        // the re-review - fix landed") in the seconds before the actual answer: on 2026-09-10 that
+        // happened three times in one topic, the status line took the credit, and the answer that
+        // followed was filed as narration and never reached the phone. The owner re-typed their
+        // question each time. A status line with the credit open falls through to the merit checks
+        // below, exactly as it would with the credit spent.
+        if (ownerIsWaitingForAReply && !Is_TurnEndDeclaration(subject))
             return true;
 
         if (Is_OnlineGreeting(subject))
@@ -96,7 +141,7 @@ public static class OwnerPush_Policy
     /// at, which is a deliberate act with a cost — nobody attaches a screenshot in passing.
     ///
     /// Suppressing one did not merely delay it, it DESTROYED it: the held entry is remembered as
-    /// already-formatted TEXT (_lastSuppressedEntry), and the two routes that release it later —
+    /// already-formatted TEXT (_suppressedEntries), and the two routes that release it later —
     /// the silent-deadlock net and the turn-ended receipt — send that text through Send_Message_Async,
     /// which has no notion of a photo. So the owner eventually received the literal `IMAGE: C:\…`
     /// line and never the picture, however many times it was resent. On 2026-09-08 that happened all

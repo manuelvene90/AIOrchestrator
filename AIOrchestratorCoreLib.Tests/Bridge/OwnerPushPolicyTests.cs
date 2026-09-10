@@ -35,6 +35,59 @@ public class OwnerPushPolicyTests
     }
 
     /// <summary>
+    /// THE OWNER'S WAIT IS NOT SPENT ON A STATUS LINE. Sessions write a "WAITING ON …" turn-end
+    /// declaration in the seconds before the actual answer, and on 2026-09-10 the declaration took
+    /// the one-shot credit three times in one topic; the answer that followed was narration by shape
+    /// and never reached the phone. The subject is the hook's marker, boundary included.
+    /// </summary>
+    [Theory]
+    [InlineData("WAITING ON the task 6 re-review - fix landed 7af0aafe, 116 tests")]
+    [InlineData("fix landed — WAITING ON the suite")]
+    [InlineData("WAITING ON: the build")]
+    [InlineData("WAITING ON")]
+    public void AWaitingOnStatusLine_DoesNotSpendTheOwnersWait(string subject)
+    {
+        var narration = "## [11] FROM solo — d — s\nTask 6 fix round landed and the re-review is running.";
+
+        Assert.False(OwnerPush_Policy.Should_Push(narration, ownerIsWaitingForAReply: true, subject));
+        Assert.True(OwnerPush_Policy.Is_TurnEndDeclaration(subject));
+    }
+
+    /// <summary>"WAITING ONLY" contains "WAITING ON" — the boundary the hook enforces, kept here.</summary>
+    [Theory]
+    [InlineData("WAITING ONLY for the reviewer")]
+    [InlineData("defaults per root, C is the continuous automatically")]
+    [InlineData("")]
+    public void AnythingElse_StillSpendsTheOwnersWait(string subject)
+    {
+        var answer = "## [12] FROM solo — d — s\nAgreed: every futures root carries a default roll rule.";
+
+        Assert.True(OwnerPush_Policy.Should_Push(answer, ownerIsWaitingForAReply: true, subject));
+        Assert.False(OwnerPush_Policy.Is_TurnEndDeclaration(subject));
+    }
+
+    /// <summary>A status line that ASKS something still pushes on its own merits — the credit was never the only route.</summary>
+    [Fact]
+    public void AWaitingOnStatusLine_WithAQuestionInIt_IsStillPushed()
+    {
+        var entry = "## [13] FROM solo — d — s\nQUESTION: merge now or hold?\nOPTION: Merge\nOPTION: Hold";
+
+        Assert.True(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: true, "WAITING ON your call"));
+    }
+
+    /// <summary>
+    /// The body says nothing about what an entry IS: sessions end nearly every entry — answers
+    /// included — with a "WAITING ON …" line to satisfy the turn-end hook. Only the subject counts.
+    /// </summary>
+    [Fact]
+    public void AWaitingOnLineInTheBody_DoesNotMakeTheEntryAStatusLine()
+    {
+        var answer = "## [14] FROM solo — d — s\nAgreed, three rules.\nWAITING ON the task 6 re-review (sub-agent).";
+
+        Assert.True(OwnerPush_Policy.Should_Push(answer, ownerIsWaitingForAReply: true, "defaults per root"));
+    }
+
+    /// <summary>
     /// The waterfall. Every one of these is real narration from the transcript that prompted this —
     /// useful in the channel, noise on a phone.
     /// </summary>

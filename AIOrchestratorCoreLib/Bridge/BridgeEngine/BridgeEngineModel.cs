@@ -581,8 +581,15 @@ internal sealed class BridgeEngineModel(
         public DateTime SuppressedUtc;
     }
 
-    /// <summary>Per orchestration: the last supervisor entry we chose not to push.</summary>
-    readonly Dictionary<string, SuppressedEntry> _lastSuppressedEntry = [];
+    /// <summary>
+    /// Per orchestration: every owner-facing entry we chose not to push since the owner last spoke,
+    /// in order. It was ONE slot, overwritten by each suppression, until 2026-09-10: the real answer
+    /// to the owner's question was filed here, a "WAITING ON …" status line written a minute later
+    /// replaced it, and the turn-ended receipt delivered the status line. The owner re-typed their
+    /// question three times that morning. Everything filed inside a reply turn now reaches them at
+    /// turn end, as one message (Build_TurnEndedText).
+    /// </summary>
+    readonly Dictionary<string, List<SuppressedEntry>> _suppressedEntries = [];
 
     /// <summary>
     /// Orchestrations where the owner has spoken and the supervisor's reply has NOT yet been pushed.
@@ -3102,11 +3109,11 @@ internal sealed class BridgeEngineModel(
                         // it as an ordinary message, so a marker left in it reaches the owner as
                         // literal words. A picture no longer takes this branch at all
                         // (OwnerPush_Policy.Carries_Image), and this is the belt to that brace.
-                        _lastSuppressedEntry[append.Channel.OrchId] = new SuppressedEntry
+                        Get_OrAdd_SuppressedEntries(append.Channel.OrchId).Add(new SuppressedEntry
                         {
                             Text = text,
                             SuppressedUtc = DateTime.UtcNow,
-                        };
+                        });
                     }
 
                     continue;
@@ -3114,7 +3121,7 @@ internal sealed class BridgeEngineModel(
 
                 lock (_ownerStateLock)
                 {
-                    _lastSuppressedEntry.Remove(append.Channel.OrchId);
+                    _suppressedEntries.Remove(append.Channel.OrchId);
                 }
 
                 // The flag is deliberately NOT cleared here — it is cleared after the send below.
@@ -6618,6 +6625,10 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // Counted BEFORE the ritual lands, exactly as Flush_OwnerDeliveries_Async counts before an
+        // owner entry: a later rise can only mean the session wrote back about THIS request.
+        var ownerAnswerCountBefore = Count_OwnerAnswerEntries(_paths.Get_OwnerChannelFile(session.OrchId));
+
         if (!Append_OrchestrationAppEntry(session.OrchId, AppEntryAudiences.Agent, MergeRitual_Wording.SUBJECT, MergeRitual_Wording.Build()))
         {
             // Told rather than swallowed: the session's own report is the only other feedback this
@@ -6632,10 +6643,20 @@ internal sealed class BridgeEngineModel(
 
         Raise_OrchestrationActivity(session.OrchId);
 
-        await Send_DirectReply_BestEffort_Async(
+        var receiptMessageId = await Send_DirectReply_BestEffort_Async(
             client, messageThreadId,
             "Asked. It merges, runs the full suite on the merged tree, and pushes only if that is green — then cleans up and reports.",
             cancellationToken);
+
+        // /merge IS AN OWNER REQUEST, and it was the one the app never watched. The ritual lands as
+        // an agent-tagged app entry, so nothing raised the owner's wait and nothing tracked the
+        // reply: the session's report — "merged as 3f2a1c9, 214 tests green" — has no question in
+        // it, was filed as narration, and reached the phone only if the whole orchestration then sat
+        // idle for five minutes (owner, 2026-09-10: *"I never quite know if the merge has actually
+        // been done or not"*). Now the report is the credited answer, the "Asked." line above is the
+        // receipt the busy narration edits, and the turn-ended announcement closes it.
+        Raise_OwnerWait(session.OrchId);
+        Track_OwnerReply(session.OrchId, messageThreadId, receiptMessageId, ownerAnswerCountBefore);
     }
 
     async Task Toggle_AwaitingTest_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
@@ -8897,11 +8918,15 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    async Task Send_DirectReply_BestEffort_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
+    /// <summary>Returns the sent message's id, or null when the send failed — best effort, as the name says.</summary>
+    async Task<long?> Send_DirectReply_BestEffort_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
     {
         try
         {
-            Remember_TopicMessage(messageThreadId, await client.Send_Message_Async(messageThreadId, text, cancellationToken));
+            var messageId = await client.Send_Message_Async(messageThreadId, text, cancellationToken);
+            Remember_TopicMessage(messageThreadId, messageId);
+
+            return messageId;
         }
         catch (OperationCanceledException)
         {
@@ -8910,6 +8935,8 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Direct reply send failed: {ex.Message}");
+
+            return null;
         }
     }
 
@@ -9053,14 +9080,15 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
 
-            SuppressedEntry? suppressed;
+            List<SuppressedEntry>? suppressed;
 
             lock (_ownerStateLock)
             {
-                if (!_lastSuppressedEntry.TryGetValue(session.OrchId, out suppressed))
+                if (!_suppressedEntries.TryGetValue(session.OrchId, out suppressed) || suppressed.Count == 0)
                     continue;
 
-                if ((DateTime.UtcNow - suppressed.SuppressedUtc).TotalMinutes < SILENT_DEADLOCK_MINUTES)
+                // The clock runs from the LAST word: the stall this watches for is the silence after it.
+                if ((DateTime.UtcNow - suppressed[^1].SuppressedUtc).TotalMinutes < SILENT_DEADLOCK_MINUTES)
                     continue;
             }
 
@@ -9094,7 +9122,7 @@ internal sealed class BridgeEngineModel(
 
             lock (_ownerStateLock)
             {
-                _lastSuppressedEntry.Remove(session.OrchId);
+                _suppressedEntries.Remove(session.OrchId);
             }
 
             // Info: this is the safety net WORKING, not a failure. It fires by design whenever an
@@ -9104,8 +9132,63 @@ internal sealed class BridgeEngineModel(
 
             await Send_AwayNotice_Async(
                 session,
-                $"{suppressed.Text}\n\n(nothing has moved for {SILENT_DEADLOCK_MINUTES} min — sending you the last thing it said, in case it needed you)",
+                $"{Join_SuppressedTexts(suppressed)}\n\n(nothing has moved for {SILENT_DEADLOCK_MINUTES} min — sending you what it said since, in case it needed you)",
                 cancellationToken);
+        }
+    }
+
+    /// <summary>Under _ownerStateLock only: the list this orchestration's suppressed entries accumulate in.</summary>
+    List<SuppressedEntry> Get_OrAdd_SuppressedEntries(string orchId)
+    {
+        if (_suppressedEntries.TryGetValue(orchId, out var entries))
+            return entries;
+
+        entries = [];
+        _suppressedEntries[orchId] = entries;
+
+        return entries;
+    }
+
+    /// <summary>One message, in the order they were said — each text already carries its speaker glyph.</summary>
+    static string Join_SuppressedTexts(IReadOnlyList<SuppressedEntry> entries)
+    {
+        return string.Join("\n\n", entries.Select(entry => entry.Text));
+    }
+
+    /// <summary>
+    /// The owner has just been heard by the session — a message delivered to its channel, or a
+    /// command that asks it to act — so whatever it says next is the answer, and it MUST reach them.
+    /// Raised at DELIVERY, never at buffering: raised early, the credit went to whatever the session
+    /// happened to write during the aggregation window (2026-09-10: a status line written one second
+    /// before the owner's entry landed), and the real answer that followed was filed as narration.
+    /// </summary>
+    void Raise_OwnerWait(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            _suppressedEntries.Remove(orchId);
+            _ownerAwaitingAnswer.Add(orchId);
+        }
+    }
+
+    /// <summary>
+    /// Tracks the reply until the session answers AND its turn ends — the one construction site for
+    /// PendingOwnerReply, shared by a delivered owner message and by /merge, which is an owner request
+    /// in every way that matters and was the only one the app forgot to watch (owner, 2026-09-10:
+    /// *"The solo/sup does merge, clean, etc, but doesn't tell me anything at completion"*).
+    /// </summary>
+    void Track_OwnerReply(string orchId, long? threadId, long? receiptMessageId, int ownerAnswerCountAtDelivery)
+    {
+        lock (_ownerStateLock)
+        {
+            _pendingOwnerReplies[orchId] = new PendingOwnerReply
+            {
+                ThreadId = threadId,
+                ReceiptMessageId = receiptMessageId,
+                OwnerAnswerCountAtDelivery = ownerAnswerCountAtDelivery,
+                DeliveredUtc = DateTime.UtcNow,
+                Nudged = false,
+            };
         }
     }
 
@@ -9865,12 +9948,15 @@ internal sealed class BridgeEngineModel(
 
         // The owner is engaged, so nothing is deadlocked — a suppressed entry from before must not
         // surface later, out of context, as if it were still waiting for them.
+        //
+        // THE WAIT ITSELF IS RAISED AT DELIVERY (Raise_OwnerWait, from Flush_OwnerDeliveries_Async),
+        // not here. Raised at buffering time it went to whatever the session happened to write
+        // during the aggregation window: on 2026-09-10 a status line written one second before the
+        // owner's message even landed in the channel spent it, and the real answer that followed
+        // was filed as narration and never reached the phone.
         lock (_ownerStateLock)
         {
-            _lastSuppressedEntry.Remove(orchId);
-
-            // Whatever the supervisor says next is the answer to this, and it MUST reach them.
-            _ownerAwaitingAnswer.Add(orchId);
+            _suppressedEntries.Remove(orchId);
         }
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
@@ -10011,6 +10097,7 @@ internal sealed class BridgeEngineModel(
 
         _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
         Raise_OrchestrationActivity(target.OrchId);
+        Raise_OwnerWait(target.OrchId);
 
         // AN OWNER MESSAGE PUTS THE LEDGER IN DEBT, exactly as a verdict does, and this is the half
         // that was missing (owner, 2026-08-14). They asked for six things over two hours and the bar
@@ -10051,17 +10138,7 @@ internal sealed class BridgeEngineModel(
 
             // Tracked until the supervisor actually answers — the owner must never be left
             // staring at a receipt frozen on "thinking…".
-            lock (_ownerStateLock)
-            {
-                _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
-                {
-                    ThreadId = target.ThreadId,
-                    ReceiptMessageId = receiptMessageId,
-                    OwnerAnswerCountAtDelivery = ownerAnswerCountBefore,
-                    DeliveredUtc = DateTime.UtcNow,
-                    Nudged = false,
-                };
-            }
+            Track_OwnerReply(target.OrchId, target.ThreadId, receiptMessageId, ownerAnswerCountBefore);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -11559,7 +11636,7 @@ internal sealed class BridgeEngineModel(
     ///
     /// The content already exists and was already being thrown away. A session's closing report
     /// ("merged, 214 tests green") is narration by shape — no question, no marker — so
-    /// OwnerPush_Policy suppresses it, and the engine files it in _lastSuppressedEntry against the
+    /// OwnerPush_Policy suppresses it, and the engine files it in _suppressedEntries against the
     /// five-minute deadlock release. At the end of a turn the owner was waiting on, that entry is
     /// exactly the thing they are owed, and it is already written and already formatted.
     ///
@@ -11581,10 +11658,22 @@ internal sealed class BridgeEngineModel(
             // Only what was said AFTER their message. An older suppressed entry belongs to a
             // conversation that has already moved on, and replaying it here would answer a question
             // the owner did not just ask.
-            if (_lastSuppressedEntry.TryGetValue(orchId, out var suppressed) && suppressed.SuppressedUtc >= pending.DeliveredUtc)
+            //
+            // ALL of it, in order, not the last line: a session answers and then writes its "WAITING
+            // ON …" status line, and delivering only the last thing filed handed the owner the status
+            // line and lost the answer (2026-09-10, three times in one morning).
+            if (_suppressedEntries.TryGetValue(orchId, out var suppressed))
             {
-                lastWords = suppressed.Text;
-                _lastSuppressedEntry.Remove(orchId);
+                var sinceTheirMessage = suppressed.Where(entry => entry.SuppressedUtc >= pending.DeliveredUtc).ToList();
+
+                if (sinceTheirMessage.Count > 0)
+                {
+                    lastWords = Join_SuppressedTexts(sinceTheirMessage);
+                    suppressed.RemoveAll(entry => entry.SuppressedUtc >= pending.DeliveredUtc);
+                }
+
+                if (suppressed.Count == 0)
+                    _suppressedEntries.Remove(orchId);
             }
         }
 
@@ -11787,7 +11876,13 @@ internal sealed class BridgeEngineModel(
                 // The append is itself what delivers it: the session's watcher fires on the channel
                 // changing, so the entry is waiting to be read at the end of the turn it is currently
                 // inside — which is the first moment it could act on it anyway.
-                if (!pending.BusyNoticeWritten
+                // NOT ONCE THE SESSION HAS ANSWERED. This ignored `Answered` and told a session that
+                // had replied a minute earlier that the owner's message was "still unanswered"; the
+                // session dutifully wrote another status line pointing at its own reply, and on
+                // 2026-09-10 that extra line was what overwrote the real answer in the (then
+                // single-slot) suppressed memo. The nudge below already respects the flag.
+                if (!pending.Answered
+                    && !pending.BusyNoticeWritten
                     && (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds >= OWNER_REPLY_GRACE_SECONDS)
                 {
                     pending.BusyNoticeWritten = ChannelAppender.Append_AppEntry(
