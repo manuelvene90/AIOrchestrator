@@ -122,7 +122,7 @@ internal sealed class SessionWatchdogModel(
             return;
 
         Register_Respawn($"sup:{session.OrchId}", session.OrchId, "supervisor");
-        _log.Log_Warning(session.OrchId, "Supervisor session not running — respawning (it resumes from the channels)");
+        _log.Log_Warning(session.OrchId, "Supervisor session not running — respawning (it resumes its own conversation if the transcript survives, else from the channels)");
 
         Clear_AwaitingAnswer_ForDeadSession(session.OrchId);
 
@@ -190,7 +190,7 @@ internal sealed class SessionWatchdogModel(
             return;
 
         Register_Respawn($"imp:{orchId}/{memberId}", orchId, memberId);
-        _log.Log_Warning(orchId, $"Implementer '{memberId}' session not running — respawning (it resumes from its channel)");
+        _log.Log_Warning(orchId, $"Implementer '{memberId}' session not running — respawning (a solo resumes its own conversation if the transcript survives; every member re-reads its channel)");
         _launcher.Respawn_Implementer(orchId, memberId);
     }
 

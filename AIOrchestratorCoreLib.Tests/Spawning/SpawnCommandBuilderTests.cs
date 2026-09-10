@@ -10,7 +10,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForSupervisor_CarriesTitleColorDirectoryPidFileAndScript()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", null, PID_FILE, null);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", null, null, PID_FILE, null);
 
         Assert.Equal("wt.exe", command.Executable);
         Assert.Contains("SUP · arb-fix", command.Arguments);
@@ -32,8 +32,8 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_SupervisorAndSolo_ThinkAtXHighEffort_ByDefault()
     {
-        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "claude-fable-5-1", null, PID_FILE, null);
-        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "claude-fable-5-1", null, PID_FILE, null);
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "claude-fable-5-1", null, null, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "claude-fable-5-1", null, null, PID_FILE, null);
 
         Assert.Contains(
             "claude --model claude-fable-5-1 --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'",
@@ -69,7 +69,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForSupervisor_WithEffortOverride_EmitsEffortRightAfterTheModel()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "xhigh", PID_FILE, null);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "xhigh", null, PID_FILE, null);
 
         var script = SpawnCommand_Builder.Decode_SessionScript(command);
         Assert.Contains("claude --model opus --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'", script);
@@ -79,7 +79,7 @@ public class SpawnCommandBuilderTests
     public void Build_EveryOverridableRole_WithEffort_CarriesTheFlagBeforeTheLaunchFlags()
     {
         var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-2", @"C:\repos\arb", "opus", "xhigh", PID_FILE, null);
-        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "opus", "xhigh", PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "opus", "xhigh", null, PID_FILE, null);
         var reviewer = SpawnCommand_Builder.Build_ForReviewer("arb-fix", "rev-1", @"C:\repos\arb", "opus", "xhigh", PID_FILE, null);
 
         Assert.Contains(
@@ -104,9 +104,9 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_WithoutEffortOverride_TheRoleDefaultDecides()
     {
-        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "   ", PID_FILE, null);
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "   ", null, PID_FILE, null);
         var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-2", @"C:\repos\arb", "opus", "   ", PID_FILE, null);
-        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, null, PID_FILE, null);
         var reviewer = SpawnCommand_Builder.Build_ForReviewer("arb-fix", "rev-1", @"C:\repos\arb", null, string.Empty, PID_FILE, null);
 
         Assert.Contains("claude --model opus --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'", SpawnCommand_Builder.Decode_SessionScript(supervisor));
@@ -122,8 +122,8 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_SupervisorAndSolo_AnOverrideBeatsTheRoleDefault()
     {
-        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "medium", PID_FILE, null);
-        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "opus", "low", PID_FILE, null);
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "medium", null, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "opus", "low", null, PID_FILE, null);
 
         Assert.Contains("claude --model opus --effort medium --dangerously-skip-permissions '/supervisor arb-fix'", SpawnCommand_Builder.Decode_SessionScript(supervisor));
         Assert.Contains("claude --model opus --effort low --dangerously-skip-permissions '/solo arb-fix'", SpawnCommand_Builder.Decode_SessionScript(solo));
@@ -145,7 +145,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_EverySession_SkipsPermissionPrompts_UnattendedByDesign()
     {
-        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, PID_FILE, null);
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, null, PID_FILE, null);
         var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", null, null, PID_FILE, null);
         var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", null, PID_FILE);
 
@@ -166,7 +166,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForSupervisor_SpawnsInItsOwnTerminalWindow()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, PID_FILE, null);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, null, PID_FILE, null);
 
         // '-w new' → own window, whose title the app's "Show session" focuser matches on.
         Assert.Equal("-w", command.Arguments[0]);
@@ -202,13 +202,14 @@ public class SpawnCommandBuilderTests
         // its CLAUDE.md and the channel file, never in the conversation.
         Assert.Contains("claude --model sonnet --dangerously-skip-permissions '/general-supervisor'", script);
         Assert.DoesNotContain("--continue", script);
+        Assert.DoesNotContain("--resume", script);
         Assert.DoesNotContain("$LASTEXITCODE", script);
     }
 
     [Fact]
     public void Build_AnyCommand_SuppressesApplicationTitle_SoShowSessionFocusingWorks()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, PID_FILE, null);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, null, PID_FILE, null);
 
         Assert.Contains("--suppressApplicationTitle", command.Arguments);
     }
@@ -216,13 +217,13 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForSupervisor_OrchIdWithShellHostileCharacters_Throws()
     {
-        Assert.Throws<ArgumentException>(() => SpawnCommand_Builder.Build_ForSupervisor("arb fix'; rm -rf", @"C:\repos\arb", null, null, PID_FILE, null));
+        Assert.Throws<ArgumentException>(() => SpawnCommand_Builder.Build_ForSupervisor("arb fix'; rm -rf", @"C:\repos\arb", null, null, null, PID_FILE, null));
     }
 
     [Fact]
     public void Build_PowershellFallback_KeepsScriptDropsWindowsTerminalArguments()
     {
-        var wtCommand = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, PID_FILE, null);
+        var wtCommand = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, null, PID_FILE, null);
 
         var fallback = SpawnCommand_Builder.Build_PowershellFallback(wtCommand);
 
@@ -231,5 +232,58 @@ public class SpawnCommandBuilderTests
         Assert.Contains("-NoProfile", fallback.Arguments);
         Assert.Equal(wtCommand.Arguments[wtCommand.Arguments.Count - 1], fallback.Arguments[fallback.Arguments.Count - 1]);
         Assert.Equal(@"C:\repos\arb", fallback.WorkingDirectory);
+    }
+
+    const string RESUME_ID = "504fb5ee-d79d-410e-9876-8fb937949dfe";
+
+    /// <summary>
+    /// Owner request 2026-09-10: a restarted solo or supervisor picks up its OWN conversation rather
+    /// than booting as a new session. The id names one conversation exactly — unlike `--continue`,
+    /// which guesses the most recent one in a directory several sessions share, and which is why
+    /// resuming was ruled out before. It sits FIRST, ahead of the model and effort dials the owner
+    /// may have turned in the meantime (they still apply to the resumed conversation), and ahead of
+    /// the launch flags and the prompt like every other flag.
+    /// </summary>
+    [Fact]
+    public void Build_SupervisorAndSolo_WithAResumableConversation_ResumeIt_AheadOfEveryOtherFlag()
+    {
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "medium", RESUME_ID, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, RESUME_ID, PID_FILE, null);
+
+        Assert.Contains(
+            $"claude --resume {RESUME_ID} --model opus --effort medium --dangerously-skip-permissions '/supervisor arb-fix'",
+            SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.Contains(
+            $"claude --resume {RESUME_ID} --effort xhigh --dangerously-skip-permissions '/solo arb-fix'",
+            SpawnCommand_Builder.Decode_SessionScript(solo));
+    }
+
+    /// <summary>Nothing to resume — the first spawn, or a transcript that is gone — is the command line exactly as it always was.</summary>
+    [Fact]
+    public void Build_SupervisorAndSolo_WithNothingToResume_StartFresh_ExactlyAsBefore()
+    {
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", null, null, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "opus", null, "   ", PID_FILE, null);
+
+        var supervisorScript = SpawnCommand_Builder.Decode_SessionScript(supervisor);
+        var soloScript = SpawnCommand_Builder.Decode_SessionScript(solo);
+
+        Assert.Contains("claude --model opus --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'", supervisorScript);
+        Assert.Contains("claude --model opus --effort xhigh --dangerously-skip-permissions '/solo arb-fix'", soloScript);
+        Assert.DoesNotContain("--resume", supervisorScript);
+        Assert.DoesNotContain("--resume", soloScript);
+    }
+
+    /// <summary>
+    /// The id is read from a file another process wrote and is quoted into a PowerShell command
+    /// line, so only the CLI's own id shape — a UUID in 8-4-4-4-12 form — is ever emitted. The
+    /// resolver refuses anything else upstream; this is the second lock on the same door.
+    /// </summary>
+    [Fact]
+    public void Build_WithAResumeIdThatIsNotAUuid_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, "7f34ac2b", PID_FILE, null));
+        Assert.Throws<ArgumentException>(() => SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, "abc'; Remove-Item -Recurse C:\\", PID_FILE, null));
+        Assert.Throws<ArgumentException>(() => SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, "{504fb5ee-d79d-410e-9876-8fb937949dfe}", PID_FILE, null));
     }
 }

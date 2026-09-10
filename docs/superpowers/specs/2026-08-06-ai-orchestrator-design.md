@@ -126,6 +126,25 @@ stops tailing them; the UI dims the card / greys the chip. Nothing is ever delet
   its own in-flight failed start on boot → duplicate orchestrations; answered/failed requests are
   CLOSED and never auto-retried). Supervisors/implementers resume state the same way: channel
   re-read.
+- **Resume semantics, REVISED AGAIN (2026-09-10, owner request — "when solo and sup sessions
+  are closed and restarted they don't start with --resume, they are actually new sessions"):**
+  a SUPERVISOR or SOLO respawn continues its OWN conversation with `claude --resume <session-id>`.
+  The id is read from the slot's `.usage.json` — the statusline probe (decision 10) already dumps
+  the raw payload, `session_id` and `transcript_path` included — by `ResumableSession_Resolver`,
+  which names it ONLY when the transcript the CLI itself reported still exists and is non-empty:
+  `--resume` of an unknown id prints "No conversation found with session ID" and exits (verified
+  on Claude Code 2.1.267), and under the watchdog that would be a respawn loop. The first spawn
+  has no probe file yet, so it is fresh without any first-spawn/respawn distinction in the
+  callers; every respawn path (watchdog, `/model`, `/effort`, app restart) already funnels through
+  `Respawn_Supervisor` / `Respawn_Implementer`, so there is one apply path. The flag sits FIRST,
+  ahead of `--model`/`--effort`, so a dial the owner turned while the session was down applies to
+  the resumed conversation. The id is a UUID or nothing — it is quoted into a PowerShell command
+  line and was written by a process the app does not control. `--continue` stays banned: it
+  guesses the most recent conversation in a repo directory several sessions share. Implementers
+  and reviewers still re-enter fresh (channels are their durable state); the general supervisor
+  stays stateless by owner directive. The role commands tell a resumed session to trust the
+  CHANNEL over its memory of what it was about to do, which is the half of the `--continue`
+  incident that a session id cannot fix.
 
 ### Orchestration ids & repo naming
 - Ids are ALLOCATED (`OrchId_Allocator`): `repo-slug-n`, incremental per repo, derived from

@@ -276,6 +276,28 @@ public class RateLimitsReaderTests : IDisposable
         Assert.Null(RateLimits_Reader.Read_ModelName_OrNull(bomPrefixed));
     }
 
+    /// <summary>
+    /// The session's own id, straight from the status line — what `claude --resume` takes. Read
+    /// beside the transcript path because a respawn needs both: the id to resume, the path to prove
+    /// there is still a conversation behind it.
+    /// </summary>
+    [Fact]
+    public void Read_SessionId_ReadsTheIdClaudeCodeReports()
+    {
+        Assert.Equal("7f34ac2b", RateLimits_Reader.Read_SessionId_OrNull(PAYLOAD_WITH_EFFORT));
+    }
+
+    /// <summary>Absent, half a file, or not a string: unknown, never a throw — the respawn path runs on it.</summary>
+    [Fact]
+    public void Read_SessionId_IsUnknownWhenAbsentOrMalformed_NeverThrows()
+    {
+        Assert.Null(RateLimits_Reader.Read_SessionId_OrNull("""{ "model": { "id": "claude-opus-5", "display_name": "Opus 5" } }"""));
+        Assert.Null(RateLimits_Reader.Read_SessionId_OrNull("{ not json at all"));
+        Assert.Null(RateLimits_Reader.Read_SessionId_OrNull(""));
+        Assert.Null(RateLimits_Reader.Read_SessionId_OrNull("""{ "session_id": 42 }"""));
+        Assert.Null(RateLimits_Reader.Read_SessionId_OrNull("\uFEFF" + PAYLOAD_WITH_EFFORT));
+    }
+
     /// <summary>The live shape (Claude Code 2.1.266), trimmed to the two blocks these readers look at.</summary>
     const string PAYLOAD_WITH_EFFORT =
         """{"session_id":"7f34ac2b","effort":{"level":"xhigh"},"model":{"id":"claude-fable-5-1","display_name":"Fable 5.1"},"version":"2.1.266"}""";
