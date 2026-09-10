@@ -23,18 +23,16 @@ namespace AIOrchestratorCoreLib.Tailing;
 /// </para>
 /// </para>
 /// <para>
-/// WHAT THESE GUARDS DO NOT COVER, so nobody reads them as more than they are. Two windows, both
-/// narrow, neither closed here, and they are NOT the same age:
-/// (1) an entry appended between the guard's answer and the compactor's read is missed by the GUARD
-/// and present in the COMPACTOR's read — so the rewrite keeps it and the re-anchor parks the cursor
-/// past it, unmirrored. This one is a residual of the unread-bytes clause rather than something older
-/// than it: that clause answers for the instant it was asked, which is microseconds before the read
-/// instead of a whole tick phase before it. Narrower, same shape;
-/// (2) an entry appended between the compactor's read and its rename-over is discarded from the FILE
-/// and not merely from the mirror, because the rewrite replaces the file that append landed in. This
-/// one predates everything here and lives in Channel_Compactor.
-/// Closing either means holding channel writes off across the whole read-decide-rewrite, which
-/// nothing here does.
+/// WHAT THE GUARDS COVER, stated exactly. Both windows below are closed against every writer that
+/// takes the channel gate (the append helper and this process) and open against a bare `>>`:
+/// (1) an entry appended between the guard's answer and the compactor's read used to be missed by
+/// the GUARD and present in the COMPACTOR's read — the rewrite kept it and the re-anchor parked the
+/// cursor past it, unmirrored. It was not the microsecond window this paragraph once claimed: the
+/// compactor QUEUES behind a session mid-append, so the guard's answer aged by the whole append, and
+/// on 2026-09-10 an owner's reply was lost that way. The guard is now asked inside the gate,
+/// immediately before the read (the callback of Channel_Compactor.Compact_IfNeeded);
+/// (2) an entry appended between the compactor's read and its rename-over would be discarded from
+/// the FILE, not merely from the mirror. The gate around the read-and-rewrite closes it.
 /// </para>
 /// </summary>
 public static class Channel_CompactionStep
@@ -60,28 +58,45 @@ public static class Channel_CompactionStep
         // A channel that still owes Telegram a delivery must not be rewritten underneath the tailer:
         // compaction re-anchors the offset to the new file, and the entries waiting to be sent would
         // go with it. It compacts on a later tick, once the send lands.
-        var owesDelivery = tailer.Has_UndeliveredEntries(channelFilePath, out var unevaluableReason);
+        //
+        // ASKED INSIDE THE GATE, not before it. The compactor queues behind any session mid-append,
+        // and a guard answered before that wait describes a file the append has since changed: on
+        // 2026-09-10 the guard said "nothing unread", the compactor then waited for a solo's append,
+        // read the file with the new entry in it, kept it, and parked the cursor past it. The entry
+        // was never mirrored. Under the gate the file cannot change between the question and the
+        // read, for every writer that takes the gate.
+        string? unevaluableReason = null;
+        var guardAsked = false;
+
+        var newLength = Channel_Compactor.Compact_IfNeeded(
+            channelFilePath,
+            () =>
+            {
+                guardAsked = true;
+
+                return !tailer.Has_UndeliveredEntries(channelFilePath, out unevaluableReason);
+            });
+
+        // The compactor asks only once it holds the gate over an existing file. When it declined
+        // before asking — nothing to stat, or a gate it could not take — the guard is still put to
+        // the tailer, so a channel it cannot evaluate says so below instead of vanishing silently.
+        // Nothing can be rewritten on this path: the compactor has already returned null.
+        if (!guardAsked)
+            tailer.Has_UndeliveredEntries(channelFilePath, out unevaluableReason);
 
         // A guard that could not evaluate its predicate SAYS WHICH ONE. Silence in either direction
         // is the failure: an unexplained refusal is unactionable, and an invented "all clear" is how
         // a rewrite proceeds on a question nobody managed to ask. The log is the right home for it —
         // the owner cannot act on this, so it never goes to Telegram.
         //
-        // It reports and FALLS THROUGH rather than returning here. An earlier version returned early,
-        // which read as the refusal but was not: the predicate already answers TRUE when it cannot
-        // evaluate, so that branch could never change the outcome and no mutation could kill it. The
-        // refusal lives in the predicate; this says why.
+        // The refusal lives in the predicate: it answers TRUE (owes delivery) when it cannot
+        // evaluate, so the compactor has already declined. This only says why.
         if (unevaluableReason != null)
         {
             log.Log_Warning(
                 orchId,
                 $"Compaction held off — the undelivered-entries guard could not evaluate '{Describe_Channel(channelFilePath)}': {unevaluableReason}");
         }
-
-        if (owesDelivery)
-            return null;
-
-        var newLength = Channel_Compactor.Compact_IfNeeded(channelFilePath);
 
         if (newLength == null)
             return null;
