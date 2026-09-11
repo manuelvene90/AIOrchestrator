@@ -332,10 +332,11 @@ internal sealed class OrchestrationLauncherModel(
             session.SupervisorModelOverride ?? _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Supervisor),
             pidFile,
             session.DisplayName,
-            // NO EFFORT FROM HERE, and null is not the same as a default: it emits no --effort flag,
-            // which leaves the ROLE default inside SpawnCommand_Builder to decide (xhigh for this
-            // role). The orchestration carries no effort of its own yet, so there is nothing to pass.
-            effort: null,
+
+            // The effort has NO config default on purpose: null means no --effort flag here, which
+            // leaves the ROLE default inside SpawnCommand_Builder to decide (xhigh for this role).
+            // Only the per-orchestration override ever overrules it — /effort, decision 24.
+            session.SupervisorEffortOverride,
             resumeSessionId);
 
         // Stamp the spawn (watchdog grace) BEFORE deleting the stale pid file, so no tick can see
@@ -439,10 +440,12 @@ internal sealed class OrchestrationLauncherModel(
         var resumes = kind == MemberKinds.Solo && Resumes_ItsOwnConversation(runner, role);
         var resumeSessionId = resumes ? ResumableSession_Resolver.Resolve_ForMember_OrNull(_paths, orchId, memberId) : null;
 
-        // NO EFFORT FROM HERE either, and for a different reason than the supervisor's: no member role
-        // has a default at all, so null is the whole answer — it emits no --effort flag and the CLI
-        // applies its own. Effort is billed thinking, and the owner named two roles for it.
-        var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName, effort: null, resumeSessionId);
+        // One implementer-side effort override covers every member kind, exactly as the model
+        // override does; null means no --effort flag (the CLI's default), with no config fallback —
+        // except for a SOLO, which the builder gives the same role default the supervisor gets.
+        var effort = session.ImplementerEffortOverride;
+
+        var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName, effort, resumeSessionId);
 
         _store.Set_MemberPid(orchId, memberId, null);
         Delete_StalePidFile_BestEffort(pidFile);
@@ -558,6 +561,8 @@ internal sealed class OrchestrationLauncherModel(
         return runner.Kind == SessionRunners.Terminal
             && _configProvider.Get_Current().Runners.Get_ForRole(role).Resume == ResumeModes.Transcript;
     }
+
+    public SessionRunners Resolve_RunnerKind(SessionRoles role, string orchId) => Resolve_Runner(role, orchId).Kind;
 
     ISessionRunner Resolve_Runner(SessionRoles role, string orchId)
     {

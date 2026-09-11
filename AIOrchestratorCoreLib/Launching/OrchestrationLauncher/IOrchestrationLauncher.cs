@@ -36,4 +36,14 @@ public interface IOrchestrationLauncher
 
     /// <summary>Spawns (or re-spawns) the general supervisor; resumes its previous conversation when one exists.</summary>
     void Spawn_GeneralSupervisor();
+
+    /// <summary>
+    /// WHICH TRANSPORT THIS ROLE WOULD BE STARTED ON RIGHT NOW. Asked by callers that must know
+    /// whether a session has a shell behind it at all — a bridge-driven one has no pid file to kill
+    /// and no spawn to re-flag, so "apply this and respawn" is not a thing that can be done to it.
+    /// The resolution is the launcher's because the fallback is: a role configured for a transport
+    /// this stage cannot run is started in a terminal, and a caller reading the config key alone
+    /// would believe the word rather than the outcome.
+    /// </summary>
+    Running.SessionRunners Resolve_RunnerKind(Running.SessionRoles role, string orchId);
 }

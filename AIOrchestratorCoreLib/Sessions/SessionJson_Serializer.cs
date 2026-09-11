@@ -38,6 +38,8 @@ public static class SessionJson_Serializer
             ["displayName"] = session.DisplayName,
             ["supervisorModelOverride"] = session.SupervisorModelOverride,
             ["implementerModelOverride"] = session.ImplementerModelOverride,
+            ["supervisorEffortOverride"] = session.SupervisorEffortOverride,
+            ["implementerEffortOverride"] = session.ImplementerEffortOverride,
             ["members"] = membersArray,
             ["telegramMode"] = session.TelegramMode.ToString(),
             ["ownerPresence"] = session.OwnerPresence.ToString(),
@@ -115,7 +117,12 @@ public static class SessionJson_Serializer
             // Bridge.TopicDeletion.TopicDeleteSweep_Planner.
             Get_DateTime_OrNull(root, "telegramTopicDeletePendingUtc"),
             Get_DateTime_OrNull(root, "telegramTopicDeletedUtc"),
-            root["telegramTopicDeleteFailureReported"]?.GetValue<bool>() ?? false);
+            root["telegramTopicDeleteFailureReported"]?.GetValue<bool>() ?? false,
+
+            // Absent in every session written before the effort override existed, and null is the
+            // right reading: no override means no --effort flag, so the CLI keeps its own default.
+            Get_String_OrNull(root, "supervisorEffortOverride"),
+            Get_String_OrNull(root, "implementerEffortOverride"));
     }
 
     /// <summary>

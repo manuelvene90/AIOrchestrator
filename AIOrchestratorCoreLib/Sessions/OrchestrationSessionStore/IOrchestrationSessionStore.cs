@@ -53,6 +53,10 @@ public interface IOrchestrationSessionStore
     void Set_SupervisorModelOverride(string orchId, string? model);
     void Set_ImplementerModelOverride(string orchId, string? model);
 
+    /// <summary>Per-orchestration --effort level; null resets to "no flag" (the CLI's own default).</summary>
+    void Set_SupervisorEffortOverride(string orchId, string? effort);
+    void Set_ImplementerEffortOverride(string orchId, string? effort);
+
     /// <summary>
     /// Records that a <c>deleteForumTopic</c> has been asked for and not yet confirmed. Written
     /// BEFORE the first attempt, so a process killed mid-retry still leaves the record the start-up

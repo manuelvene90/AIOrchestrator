@@ -215,6 +215,51 @@ public class OrchestrationLauncherTests : IDisposable
         Assert.Null(_store.Get_Session(session.OrchId).SupervisorPid);
     }
 
+    /// <summary>
+    /// The stored effort override is the ONLY source of `--effort` — there is no config default,
+    /// so a fresh orchestration spawns without the flag and a respawn after the owner set one
+    /// carries it: the supervisor's own, and the implementer-side one for every member kind.
+    /// </summary>
+    [Fact]
+    public void Respawn_PassesTheStoredEffortOverride_ToTheSupervisorAndToEveryMemberKind()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var orchId = session.OrchId;
+
+        // Supervisor + imp-1 + rev-1, none with an override yet: the supervisor gets its ROLE
+        // DEFAULT (xhigh, owner directive 2026-09-09), the members no flag at all.
+        Assert.Equal(3, _spawner.SpawnedCommands.Count);
+        Assert.Contains($"--effort {SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL} ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]));
+
+        _store.Set_SupervisorEffortOverride(orchId, "medium");
+        _store.Set_ImplementerEffortOverride(orchId, "low");
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Supervisor(orchId);
+        _launcher.Respawn_Implementer(orchId, "imp-1");
+        _launcher.Respawn_Implementer(orchId, "rev-1");
+
+        var supervisorScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
+        var implementerScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]);
+        var reviewerScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]);
+
+        Assert.Contains($"--effort medium {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", supervisorScript);
+        Assert.Contains($"--effort low {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/implementer {orchId}/imp-1'", implementerScript);
+        Assert.Contains($"--effort low {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} {SpawnCommand_Builder.REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/rev-1'", reviewerScript);
+
+        // And a reset goes back to the ROLE DEFAULT, rather than leaving the last value baked in.
+        _store.Set_SupervisorEffortOverride(orchId, null);
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Supervisor(orchId);
+
+        var resetScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
+        Assert.Contains($"--effort {SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL} ", resetScript);
+        Assert.DoesNotContain("medium", resetScript);
+    }
+
     const string SUPERVISOR_SESSION_ID = "11111111-2222-4333-8444-555555555555";
     const string SOLO_SESSION_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa";
 

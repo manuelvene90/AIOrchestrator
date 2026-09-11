@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
+using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
@@ -24,6 +25,7 @@ public class WatchdogPrintSessionTests
         public void Respawn_Communicator(string orchId) => Calls.Add($"com:{orchId}");
         public void Respawn_Implementer(string orchId, string memberId) => Calls.Add($"imp:{orchId}/{memberId}");
         public void Spawn_GeneralSupervisor() => Calls.Add("general");
+        public SessionRunners Resolve_RunnerKind(SessionRoles role, string orchId) => throw new NotSupportedException();
     }
 
     [Fact]

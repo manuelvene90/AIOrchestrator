@@ -38,7 +38,9 @@ public static class OrchestrationSession_Factory
         bool done = false,
         DateTime? telegramTopicDeletePendingUtc = null,
         DateTime? telegramTopicDeletedUtc = null,
-        bool telegramTopicDeleteFailureReported = false)
+        bool telegramTopicDeleteFailureReported = false,
+        string? supervisorEffortOverride = null,
+        string? implementerEffortOverride = null)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -47,7 +49,8 @@ public static class OrchestrationSession_Factory
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
             telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done,
-            telegramTopicDeletePendingUtc, telegramTopicDeletedUtc, telegramTopicDeleteFailureReported);
+            telegramTopicDeletePendingUtc, telegramTopicDeletedUtc, telegramTopicDeleteFailureReported,
+            supervisorEffortOverride, implementerEffortOverride);
     }
 
     /// <summary>
@@ -127,6 +130,17 @@ public static class OrchestrationSession_Factory
     public static IOrchestrationSession CreateFrom_Existing_WithImplementerModelOverride(IOrchestrationSession existing, string? model)
     {
         return CreateFrom_Existing(existing, implementerModelOverride: model, implementerModelWasSet: true);
+    }
+
+    /// <summary>Null RESETS the override — the next spawn then carries no --effort flag at all.</summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithSupervisorEffortOverride(IOrchestrationSession existing, string? effort)
+    {
+        return CreateFrom_Existing(existing, supervisorEffortOverride: effort, supervisorEffortWasSet: true);
+    }
+
+    public static IOrchestrationSession CreateFrom_Existing_WithImplementerEffortOverride(IOrchestrationSession existing, string? effort)
+    {
+        return CreateFrom_Existing(existing, implementerEffortOverride: effort, implementerEffortWasSet: true);
     }
 
     public static IOrchestrationSession CreateFrom_Existing_WithMembers(
@@ -216,6 +230,13 @@ public static class OrchestrationSession_Factory
         bool supervisorModelWasSet = false,
         string? implementerModelOverride = null,
         bool implementerModelWasSet = false,
+
+        // Same wasSet dance as the two model overrides: null must be able to mean "cleared — spawn
+        // with no --effort flag" and not only "unchanged".
+        string? supervisorEffortOverride = null,
+        bool supervisorEffortWasSet = false,
+        string? implementerEffortOverride = null,
+        bool implementerEffortWasSet = false,
         IReadOnlyList<IOrchestrationMember>? members = null,
         TelegramDeliveryModes? telegramMode = null,
         OwnerPresenceModes? ownerPresence = null,
@@ -262,6 +283,8 @@ public static class OrchestrationSession_Factory
             doneWasSet ? done : existing.Done,
             telegramTopicDeletePendingUtc ?? existing.TelegramTopicDeletePendingUtc,
             telegramTopicDeletedUtc ?? existing.TelegramTopicDeletedUtc,
-            telegramTopicDeleteFailureReportedWasSet ? telegramTopicDeleteFailureReported : existing.TelegramTopicDeleteFailureReported);
+            telegramTopicDeleteFailureReportedWasSet ? telegramTopicDeleteFailureReported : existing.TelegramTopicDeleteFailureReported,
+            supervisorEffortWasSet ? supervisorEffortOverride : existing.SupervisorEffortOverride,
+            implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride);
     }
 }

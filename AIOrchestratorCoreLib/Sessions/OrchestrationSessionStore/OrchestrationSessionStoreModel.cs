@@ -314,6 +314,24 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_SupervisorEffortOverride(string orchId, string? effort)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithSupervisorEffortOverride(session, effort));
+        }
+    }
+
+    public void Set_ImplementerEffortOverride(string orchId, string? effort)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithImplementerEffortOverride(session, effort));
+        }
+    }
+
     public void Close_Member(string orchId, string memberId)
     {
         lock (_writeLock)
