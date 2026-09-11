@@ -11,95 +11,24 @@ namespace AIOrchestratorCoreLib.Tests.Formatting;
 public class QuestionPromptBuilderTests
 {
     [Fact]
-    public void Build_ExplicitQuestionLine_Wins()
+    public void Build_IsTheGlyphAndTheQuestion()
     {
-        var prompt = QuestionPrompt_Builder.Build(
-            ["Merge branch wf-perf into master now, or hold?"],
-            "A long body. It even asks something else? Yes it does.");
-
-        Assert.Equal("❓ Merge branch wf-perf into master now, or hold?", prompt);
+        Assert.Equal("❓ Merge wf-perf into master now?", QuestionPrompt_Builder.Build("Merge wf-perf into master now?"));
+        Assert.Equal("❓ Merge wf-perf into master now?", QuestionPrompt_Builder.Build("  Merge wf-perf into master now?  "));
     }
 
-    [Fact]
-    public void Build_SeveralQuestionLines_AreJoined()
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Build_ThrowsOnAnEmptyQuestion_RatherThanSubstitutingOne(string empty)
     {
-        var prompt = QuestionPrompt_Builder.Build(["Ship it now?", "Or wait for the review?"], "body");
-
-        Assert.Equal("❓ Ship it now? Or wait for the review?", prompt);
+        // THE DERIVATION AND THE CANNED "Your call:" ARE RETIRED. Both were rescues of a malformed
+        // question, and the rescue is why the shape was never fixed — the owner spent an afternoon
+        // answering questions with questions. OwnerQuestion_Contract refuses an incomplete question
+        // before this is ever reached, so an empty one here is a broken invariant, not an input.
+        Assert.Throws<ArgumentException>(() => QuestionPrompt_Builder.Build(empty));
     }
 
-    [Fact]
-    public void Build_NoQuestionLine_DerivesTheLastQuestionSentenceFromTheBody()
-    {
-        var body = """
-        I finished the walk-forward run and the numbers look good.
-        There were two regressions but both were in fixtures, not the engine.
-        Do you want me to merge this into master?
-        """;
-
-        Assert.Equal("❓ Do you want me to merge this into master?", QuestionPrompt_Builder.Build([], body));
-    }
-
-    [Fact]
-    public void Derive_TakesTheLAST_Question_NotTheFirst()
-    {
-        var body = "Should I start with the parser? Actually I did. Should I do the writer next?";
-
-        Assert.Equal("Should I do the writer next?", QuestionPrompt_Builder.Derive_OrNull(body));
-    }
-
-    [Fact]
-    public void Derive_StripsTheSpeakerPrefix()
-    {
-        Assert.Equal("Merge it?", QuestionPrompt_Builder.Derive_OrNull("🔴 Sup: Merge it?"));
-    }
-
-    /// <summary>
-    /// Half a question is worse than the canned prompt — a paragraph-long "question" is exactly
-    /// the wall of text the owner cannot answer from a lock screen.
-    /// </summary>
-    [Fact]
-    public void Derive_RejectsAnOverlongSentence_RatherThanTruncatingIt()
-    {
-        var sprawling = $"{new string('x', QuestionPrompt_Builder.MAX_DERIVED_LENGTH + 20)}?";
-
-        Assert.Null(QuestionPrompt_Builder.Derive_OrNull(sprawling));
-        Assert.Equal($"❓ {QuestionPrompt_Builder.FALLBACK_PROMPT}", QuestionPrompt_Builder.Build([], sprawling));
-    }
-
-    [Fact]
-    public void Derive_IgnoresQuestionMarksInsideFencedBlocks()
-    {
-        var body = """
-        Here is the layout:
-
-        ```
-        | ready? | yes |
-        ```
-
-        Plain statement with no question.
-        """;
-
-        Assert.Null(QuestionPrompt_Builder.Derive_OrNull(body));
-    }
-
-    [Fact]
-    public void Build_NothingToWorkWith_FallsBackToTheCannedPrompt()
-    {
-        Assert.Equal($"❓ {QuestionPrompt_Builder.FALLBACK_PROMPT}", QuestionPrompt_Builder.Build([], "No question here."));
-        Assert.Equal($"❓ {QuestionPrompt_Builder.FALLBACK_PROMPT}", QuestionPrompt_Builder.Build([], ""));
-    }
-
-    [Fact]
-    public void Build_BlankQuestionLines_AreIgnored()
-    {
-        Assert.Equal("❓ Real question?", QuestionPrompt_Builder.Build(["   ", "Real question?"], "body"));
-    }
-
-    /// <summary>
-    /// After the tap the question must STAY visible with the answer under it: the Telegram toast is
-    /// transient and the keyboard disappears, so this is the only lasting record of the choice.
-    /// </summary>
     [Fact]
     public void Build_AnsweredText_KeepsTheQuestionAndRecordsTheChoice()
     {
@@ -152,5 +81,20 @@ public class QuestionPromptBuilderTests
         var answered = QuestionPrompt_Builder.Build_AnsweredByMessageText("❓ Which?", ownerText);
 
         Assert.Equal($"❓ Which?\n\n✅ answered: {QuestionPrompt_Builder.ANSWERED_IN_WRITING}", answered);
+    }
+
+    /// <summary>
+    /// A superseded question keeps its words (the owner scrolls back to it) and says plainly why it
+    /// closed — and never with a "✅", because no choice was recorded.
+    /// </summary>
+    [Fact]
+    public void ASupersededQuestion_KeepsItsWords_SaysWhy_AndRecordsNoChoice()
+    {
+        var text = QuestionPrompt_Builder.Build_SupersededText("❓ Start the build now?");
+
+        Assert.StartsWith("❓ Start the build now?", text, StringComparison.Ordinal);
+        Assert.EndsWith(QuestionPrompt_Builder.SUPERSEDED_SUFFIX, text, StringComparison.Ordinal);
+        Assert.Contains("superseded", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("✅", text, StringComparison.Ordinal);
     }
 }

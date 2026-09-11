@@ -45,7 +45,7 @@ aiorch_log_undecidable() {
     return 0
   fi
 
-  orch_folder="$HOME/.claude/supervision/$AIORCH_ID"
+  orch_folder="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID"
 
   # Never CREATE the orchestration folder from here. If it is not there this is not a live
   # orchestration, and a hook inventing state the app owns is worse than a missing record.

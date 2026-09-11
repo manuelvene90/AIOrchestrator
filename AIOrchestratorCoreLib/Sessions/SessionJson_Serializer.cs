@@ -20,6 +20,7 @@ public static class SessionJson_Serializer
                 ["pid"] = member.Pid,
                 ["spawnedUtc"] = member.SpawnedUtc?.ToString("O", CultureInfo.InvariantCulture),
                 ["closedUtc"] = member.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
+                ["model"] = member.Model,
             });
         }
 
@@ -37,15 +38,15 @@ public static class SessionJson_Serializer
             ["displayName"] = session.DisplayName,
             ["supervisorModelOverride"] = session.SupervisorModelOverride,
             ["implementerModelOverride"] = session.ImplementerModelOverride,
-            ["supervisorEffortOverride"] = session.SupervisorEffortOverride,
-            ["implementerEffortOverride"] = session.ImplementerEffortOverride,
             ["members"] = membersArray,
             ["telegramMode"] = session.TelegramMode.ToString(),
             ["ownerPresence"] = session.OwnerPresence.ToString(),
             ["awaitingTest"] = session.AwaitingTest,
             ["done"] = session.Done,
-            ["paused"] = session.Paused,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
+            ["telegramTopicDeletePendingUtc"] = session.TelegramTopicDeletePendingUtc?.ToString("O", CultureInfo.InvariantCulture),
+            ["telegramTopicDeletedUtc"] = session.TelegramTopicDeletedUtc?.ToString("O", CultureInfo.InvariantCulture),
+            ["telegramTopicDeleteFailureReported"] = session.TelegramTopicDeleteFailureReported,
         };
 
         return root.ToJsonString(JsonWriting.INDENTED);
@@ -77,7 +78,7 @@ public static class SessionJson_Serializer
                 var spawnedUtc = Get_DateTime_OrNull(memberObject, "spawnedUtc");
                 var memberClosedUtc = Get_DateTime_OrNull(memberObject, "closedUtc");
 
-                members.Add(OrchestrationMember_Factory.Create(memberId, pid, spawnedUtc, memberClosedUtc));
+                members.Add(OrchestrationMember_Factory.Create(memberId, pid, spawnedUtc, memberClosedUtc, Get_String_OrNull(memberObject, "model")));
             }
         }
 
@@ -107,15 +108,14 @@ public static class SessionJson_Serializer
             // orchestration nobody ever marked finished is not finished.
             root["done"]?.GetValue<bool>() ?? false,
 
-            // Absent in every session written before today, and false is the only safe reading of
-            // absence: an orchestration nobody paused is not paused. Reading a missing key as true
-            // would put every pre-existing orchestration to sleep on the first load.
-            root["paused"]?.GetValue<bool>() ?? false,
-
-            // Absent in every session written before the effort override existed, and null is the
-            // right reading: no override means no --effort flag, so the CLI keeps its own default.
-            Get_String_OrNull(root, "supervisorEffortOverride"),
-            Get_String_OrNull(root, "implementerEffortOverride"));
+            // ABSENT IN EVERY SESSION WRITTEN BEFORE 2026-09-10, AND NULL IS THE ONLY SAFE READING.
+            // A missing pending stamp must mean "no delete is owed", never "a delete was owed and we
+            // forgot" — otherwise the start-up sweep would re-attempt a delete for every
+            // orchestration ever closed, most of whose topics went away correctly at the time. See
+            // Bridge.TopicDeletion.TopicDeleteSweep_Planner.
+            Get_DateTime_OrNull(root, "telegramTopicDeletePendingUtc"),
+            Get_DateTime_OrNull(root, "telegramTopicDeletedUtc"),
+            root["telegramTopicDeleteFailureReported"]?.GetValue<bool>() ?? false);
     }
 
     /// <summary>

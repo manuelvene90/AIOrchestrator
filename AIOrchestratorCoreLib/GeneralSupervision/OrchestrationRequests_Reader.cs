@@ -21,10 +21,13 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 /// alongside processed ones, so a bad file can never wedge the loop.
 ///
 /// Supported actions (retries REUSE the same action string — never invent variants):
-///   {"action":"start-orchestration","repo":"...","mode":"full|basic"}
-///                                       (general supervisor; id auto-allocated. mode is optional
-///                                        and defaults to BASIC — one solo session. A full crew is
-///                                        the expensive shape and must be asked for by name.)
+///   {"action":"start-orchestration","repo":"...","mode":"full|basic","task":"..."}
+///                                       (general supervisor; id auto-allocated. mode is optional:
+///                                        absent means "the request did not say", and config.json's
+///                                        defaults.orchestrationMode decides — shipped as basic, one
+///                                        solo session. task is the owner's own words, which the APP
+///                                        writes into the new orchestration's owner channel as its
+///                                        first FROM owner entry.)
 ///   {"action":"add-implementer","orchId":"..."}                       (orchestration supervisor)
 ///   {"action":"add-reviewer","orchId":"..."}                          (orchestration supervisor; read-only member)
 ///   {"action":"close-implementer","orchId":"...","memberId":"imp-n"}  (orchestration supervisor; also closes rev-n)
@@ -57,16 +60,24 @@ public static class OrchestrationRequests_Reader
     /// Every autonomous action costs the owner tokens, so it must justify itself: the app relays
     /// the reason to them. Rejecting is deliberate — a silent spawn left the owner in the dark.
     /// </summary>
+    /// <summary>Only the owner may choose this one, and only through set-model — never a session on its own.</summary>
+    public const string FORBIDDEN_MEMBER_MODEL = "fable";
+
+    public const string FORBIDDEN_MEMBER_MODEL_MESSAGE = "model 'fable' is not yours to choose — the owner selects it, through set-model; pick sonnet or opus for the task and drop a new file";
+
     public const string MISSING_REASON_MESSAGE = "missing 'reason' — every autonomous action must state WHY in one short line (it is relayed to the owner)";
 
     /// <summary>
-    /// A full crew: supervisor plus imp-1. **Must be asked for by name** since 2026-08-13 — it is the
-    /// expensive shape, and the one the owner wants justified rather than defaulted into.
+    /// A full crew: supervisor plus imp-1. Since 2026-08-13 it has to be asked for by name unless
+    /// config.json says otherwise — it is the expensive shape, and the one the owner wants justified
+    /// rather than defaulted into. The word itself now lives in <see cref="OrchestrationModes"/>,
+    /// because the configuration layer names the same two shapes and two spellings of "full" is how
+    /// the two come to disagree.
     /// </summary>
-    public const string FULL_MODE = "full";
+    public const string FULL_MODE = OrchestrationModes.FULL;
 
-    /// <summary>One solo session, no supervisor. THE DEFAULT: what a start request buys unless it says otherwise.</summary>
-    public const string BASIC_MODE = "basic";
+    /// <summary>One solo session, no supervisor. What a start request buys unless it says otherwise.</summary>
+    public const string BASIC_MODE = OrchestrationModes.BASIC;
 
     public const string MISSING_REQUESTER_MESSAGE = "missing 'requester' — closing an orchestration is irreversible, so the audit trail and the owner's confirmation must both be able to name WHO asked (e.g. \"supervisor of crm-2\")";
 
@@ -255,23 +266,27 @@ public static class OrchestrationRequests_Reader
                     if (string.IsNullOrWhiteSpace(repoQuery))
                         return "missing 'repo'";
 
-                    // ABSENT MEANS BASIC since the owner's directive of 2026-08-13, "as a cost-saving
-                    // measure". A crew is the expensive shape and now has to be asked for by name.
-                    //
-                    // The old default was FULL and its argument was migration — every request written
-                    // before this field existed kept working. That argument now points the other way:
-                    // a stale request buys ONE session instead of a crew, so the failure mode is
-                    // underspending, which the owner sees and corrects. The reverse was overspending
-                    // they only met on the bill.
+                    // ABSENT MEANS "THE REQUEST DID NOT SAY", and it is no longer this reader's place
+                    // to decide what that buys. It used to be: absent collapsed to basic here, per the
+                    // owner's directive of 2026-08-13 ("as a cost-saving measure"). That rule is still
+                    // the shipped default, but it now lives in config.json where the owner who set it
+                    // can change it — so the null has to survive this far, or an unstated shape and an
+                    // explicitly basic one become indistinguishable and the setting can never mean
+                    // anything.
                     //
                     // A value we do not recognise is still REJECTED rather than defaulted: a typo must
-                    // never decide the shape silently, and that is now true in both directions.
-                    var mode = root["mode"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+                    // never decide the shape silently, and that is true in both directions.
+                    var mode = root["mode"]?.GetValue<string>();
+                    var isBasic = OrchestrationModes.Is_Basic_OrNull(mode);
 
-                    if (mode != null && mode != FULL_MODE && mode != BASIC_MODE)
-                        return $"mode must be '{FULL_MODE}' or '{BASIC_MODE}', got '{mode}'";
+                    if (mode != null && isBasic == null)
+                        return $"mode must be {OrchestrationModes.Describe_Accepted()}, got '{mode}'";
 
-                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, mode != FULL_MODE, filePath));
+                    // THE TASK TRAVELS WITH THE REQUEST. Optional, because a request written before this
+                    // key existed must still start an orchestration; but its absence is the defect the
+                    // VPS round found, not a shape anybody wants — a crew that boots with nothing to do
+                    // leaves the owner typing the job a second time, into a topic that does not exist yet.
+                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, isBasic, root["task"]?.GetValue<string>(), filePath));
                     return null;
                 }
                 case ADD_IMPLEMENTER_ACTION:
@@ -286,7 +301,18 @@ public static class OrchestrationRequests_Reader
 
                     var kind = action == ADD_REVIEWER_ACTION ? MemberKinds.Reviewer : MemberKinds.Implementer;
 
-                    addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, kind, reason.Trim(), filePath));
+                    // Optional: the requester's per-task model. Fable is refused HERE, not merely
+                    // forbidden in the manual (decision 21 — the app enforces what it can): a
+                    // session may not put the owner on the most expensive model on its own judgement.
+                    var memberModel = root["model"]?.GetValue<string>()?.Trim();
+
+                    if (memberModel != null && memberModel.Length == 0)
+                        memberModel = null;
+
+                    if (memberModel != null && string.Equals(memberModel, FORBIDDEN_MEMBER_MODEL, StringComparison.OrdinalIgnoreCase))
+                        return FORBIDDEN_MEMBER_MODEL_MESSAGE;
+
+                    addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, kind, reason.Trim(), filePath, memberModel));
                     return null;
                 }
                 case PROMOTE_ORCHESTRATION_ACTION:

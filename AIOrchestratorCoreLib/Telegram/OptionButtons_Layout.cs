@@ -75,7 +75,16 @@ public static class OptionButtons_Layout
         // THE NO-CHANGE PATH. The measurement ignores surrounding whitespace (invisible on a button,
         // so it must not be what tips a question into numbering), but what comes back is the option
         // texts UNTOUCHED: the buttons the owner sees today stay the buttons they see tomorrow.
-        if (optionTexts.All(Fits_OnAButton))
+        //
+        // A FIFTH OPTION FORCES NUMBERING WHATEVER THE LABELS MEASURE (owner, brief C/E2: options are
+        // two to four; past that the buttons are numbered and the supervisor is coached). Length was
+        // the only trigger before, so five short options rendered as five bare buttons — and a column
+        // of five phrases with no numbers is the shape the numbered list exists to replace: the owner
+        // has to re-read all of them to find the one they mean, and there is nothing to say back.
+        // Numbering also gives them a way to answer in one character.
+        var tooManyToReadUnnumbered = optionTexts.Count > Bridge.Decisions.OwnerQuestion_Contract.MAXIMUM_OPTIONS;
+
+        if (!tooManyToReadUnnumbered && optionTexts.All(Fits_OnAButton))
             return ([.. optionTexts], null);
 
         var buttonLabels = new List<string>(optionTexts.Count);

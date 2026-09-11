@@ -5,6 +5,12 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 
 public class OwnerDeliveryBufferTests
 {
+    /// <summary>
+    /// PRODUCTION'S AGGREGATION WINDOW. The finished-message tests compare against it, so a change to
+    /// either number has to be made where both are visible rather than by editing one literal.
+    /// </summary>
+    const int WINDOW_SECONDS = 3;
+
     static readonly DateTime T0 = new(2026, 8, 6, 20, 0, 0, DateTimeKind.Utc);
 
     [Fact]
@@ -355,5 +361,185 @@ public class OwnerDeliveryBufferTests
 
         // And it must not go out on the aggregation window either.
         Assert.Empty(buffer.Take_ReadyDeliveries(start.AddSeconds(40)));
+    }
+    /// <summary>
+    /// A FINISHED MESSAGE SERVES A SHORT WINDOW, NOT THE WHOLE ONE (owner decision, 2026-09-09).
+    ///
+    /// Measured on the VPS that day: 11–12 s median from the owner's Telegram message to the entry
+    /// landing in the supervisor's channel, of which the aggregation window was six. The window was
+    /// being served by EVERY message so that the occasional burst could arrive as one turn — and the
+    /// owner's ruling was that a message which is plainly over ("restart the crew.") must not pay in
+    /// full for the ones that are not.
+    ///
+    /// <para>
+    /// IT WAITED FOR NOTHING FOR ONE EVENING, and this test asserted that. It was wrong in a way a
+    /// buffer test cannot see on its own: the bridge flushes on every mirror tick, so "ready at zero
+    /// idle seconds" meant the first message of a burst left before the second was typed — see
+    /// <c>TwoFinishedSentencesTypedApart_StillRideOneDelivery</c>, and
+    /// <c>OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS</c> for what the two costs balance
+    /// at.
+    /// </para>
+    /// <para>
+    /// BOTH BOUNDS, because only the pair says "shorter": it is not out at the tick it arrived on, and
+    /// it IS out before the window an unfinished line serves.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ACompleteSingleMessage_IsReadyWellBeforeTheWindow()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(WINDOW_SECONDS);
+
+        buffer.Add_Segment("chan-a", "restart the crew.", T0);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0));
+
+        var ready = buffer.Take_ReadyDeliveries(T0.AddSeconds(OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS));
+
+        Assert.Equal("restart the crew.", Assert.Contains("chan-a", ready).Text);
+        Assert.False(buffer.Has_PendingDeliveries());
+
+        Assert.True(
+            OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS < WINDOW_SECONDS,
+            "a finished message is supposed to be the FAST one — it is now serving at least the whole window");
+    }
+
+    /// <summary>
+    /// THE ⏸ BUTTON CAN STILL REACH IT, which is the half the aggregation window is sized around and the
+    /// half a zero wait removed.
+    ///
+    /// <para>
+    /// The hold works on messages still IN THE BUFFER — the owner reads the receipt, thinks of something
+    /// else and taps ⏸ under it. A finished message that left in 150 ms was out of reach of that tap
+    /// before the phone had finished rendering the receipt, while the doc on <c>OWNER_AGGREGATION_SECONDS</c>
+    /// still carried the whole argument for why the window must be long enough to be held. This is the
+    /// two agreeing again.
+    /// </para>
+    /// <para>
+    /// <c>AHoldStopsEvenAFinishedMessage</c> is the other order — hold first, then type — and both are
+    /// needed: that one says the fast path sits below the hold check, this one says there is still a
+    /// message there to hold.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AHoldTappedAfterAFinishedMessage_StillCatchesIt()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(WINDOW_SECONDS);
+
+        buffer.Add_Segment("chan-a", "restart the crew.", T0);
+
+        // A mirror tick or two goes by while the owner reads the receipt and reaches for the button.
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(0.5)));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(1)));
+
+        buffer.Hold("chan-a", T0.AddSeconds(1));
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(2)));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddMinutes(10)));
+        Assert.True(buffer.Is_Holding("chan-a"));
+
+        buffer.Release("chan-a");
+
+        Assert.Equal("restart the crew.", buffer.Take_ReadyDeliveries(T0.AddMinutes(10))["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// THE OTHER HALF, and without it the one above would be satisfied by a buffer that had simply
+    /// stopped waiting for anybody: an unfinished line is exactly what the window exists for, and it
+    /// still serves every second of it.
+    /// </summary>
+    [Fact]
+    public void AnUnfinishedMessage_StillServesTheWholeWindow()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(3);
+
+        buffer.Add_Segment("chan-a", "and then we should", T0);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(2)));
+        Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(3)));
+    }
+
+    /// <summary>
+    /// TWO FINISHED SENTENCES ARE NOT A SINGLE COMPLETE MESSAGE. The second one is evidence that the
+    /// first was not the whole thought, so the burst aggregates as it always did — which is why the
+    /// fast path asks about the SEGMENT COUNT and not only about the text.
+    /// </summary>
+    [Fact]
+    public void TwoFinishedSentencesInABurst_StillAggregate()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(3);
+
+        buffer.Add_Segment("chan-a", "restart the crew.", T0);
+        buffer.Add_Segment("chan-a", "and tell me what it says.", T0.AddSeconds(1));
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(2)));
+
+        Assert.Equal(
+            "restart the crew.\n\nand tell me what it says.",
+            buffer.Take_ReadyDeliveries(T0.AddSeconds(4))["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// A BURST REALLY DOES RIDE ONE TURN, and until 2026-09-09 the test above only LOOKED like it said
+    /// so.
+    ///
+    /// <para>
+    /// <c>TwoFinishedSentencesInABurst_StillAggregate</c> adds both segments and only then takes, so the
+    /// buffer is asked a question it can obviously answer. The bridge does not work that way:
+    /// <c>Flush_OwnerDeliveries_Async</c> runs on EVERY mirror tick, so between two messages typed a
+    /// couple of seconds apart there are several takes — and a rule that released a finished message on
+    /// the first of them took the first message before the second existed. Measured on the VPS that day:
+    /// two messages two seconds apart cost TWO supervisor turns with full stops and ONE without, at
+    /// roughly a million input tokens the turn. A trailing full stop was buying an extra turn.
+    /// </para>
+    /// <para>
+    /// THE TAKES BETWEEN THE ADDS ARE THE TEST. Remove them and it passes on the code that had the bug.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TwoFinishedSentencesTypedApart_StillRideOneDelivery()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(3);
+
+        buffer.Add_Segment("chan-a", "restart the crew.", T0);
+
+        // The mirror ticks. Each of these is a real flush pass, and any one of them taking the message
+        // alone is the defect.
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(0.5)));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(1)));
+
+        buffer.Add_Segment("chan-a", "and tell me what it says.", T0.AddSeconds(1.5));
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(3)));
+
+        Assert.Equal(
+            "restart the crew.\n\nand tell me what it says.",
+            buffer.Take_ReadyDeliveries(T0.AddSeconds(4.5))["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// ⏸ STILL WINS OVER THE FAST PATH — the condition the owner attached to the change.
+    ///
+    /// A hold in force means nothing goes out until GO, and a finished sentence is no exception: the
+    /// receipt says ⏸ holding, and a message escaping under it would be the silent lapse of
+    /// 2026-08-20 all over again, arriving by a new route. The fast path therefore sits BELOW the hold
+    /// check, and this is what says so.
+    /// </summary>
+    [Fact]
+    public void AHoldStopsEvenAFinishedMessage()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(3);
+
+        buffer.Hold("chan-a", T0);
+        buffer.Add_Segment("chan-a", "restart the crew.", T0.AddSeconds(1));
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(1)));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddMinutes(10)));
+        Assert.True(buffer.Is_Holding("chan-a"));
+
+        buffer.Release("chan-a");
+
+        Assert.Equal("restart the crew.", buffer.Take_ReadyDeliveries(T0.AddMinutes(10))["chan-a"].Text);
     }
 }

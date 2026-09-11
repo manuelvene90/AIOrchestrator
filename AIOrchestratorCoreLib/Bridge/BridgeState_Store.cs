@@ -114,6 +114,29 @@ public static class BridgeState_Store
     /// </summary>
     public static void Save(ISupervisionPaths paths, IReadOnlyDictionary<string, long> fileOffsets, long lastUpdateId)
     {
+        Save(paths, fileOffsets, lastUpdateId, sendBudget: null);
+    }
+
+    /// <summary>
+    /// Same write, additionally carrying the outbound SEND allowance (brief F5).
+    ///
+    /// <para>
+    /// It rides on this file rather than a new one because it wants exactly this file's lifecycle:
+    /// rewritten on every tick that moved a cursor, forced once at shutdown, atomic, and quarantined
+    /// rather than fatal when damaged. A bucket that resumes where the process stopped is what stops
+    /// a crash loop minting a fresh burst of twenty messages every time it comes up — and, equally,
+    /// what stops an ordinary restart paying a wait the previous process had not earned.
+    /// </para>
+    /// <para>
+    /// The CONTROL bucket is deliberately not written: it starts empty at every start by design.
+    /// </para>
+    /// </summary>
+    public static void Save(
+        ISupervisionPaths paths,
+        IReadOnlyDictionary<string, long> fileOffsets,
+        long lastUpdateId,
+        Telegram.TelegramSendBudget.ITelegramSendBudget? sendBudget)
+    {
         var offsetsObject = new JsonObject();
 
         foreach (var pair in fileOffsets)
@@ -125,9 +148,76 @@ public static class BridgeState_Store
             ["lastUpdateId"] = lastUpdateId,
         };
 
-        // Rewritten ~30 times a minute: a plain truncate-then-write is one full disk away from
-        // leaving a zero-length or half-written cursor behind. The rename cannot do that.
+        if (sendBudget != null)
+        {
+            var (tokens, refilledUtc) = sendBudget.Read_SendState();
+
+            root["sendBucket"] = new JsonObject
+            {
+                ["tokens"] = tokens,
+                ["refilledUtc"] = refilledUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            };
+        }
+
+        Diagnostics.TickIo_Counters.Count_BridgeStateWrite();
+
+        // Rewritten on every tick that moved a cursor: a plain truncate-then-write is one full disk
+        // away from leaving a zero-length or half-written cursor behind. The rename cannot do that.
         Atomic_FileWriter.Write_AllText(paths.BridgeStateFile, root.ToJsonString(JsonWriting.INDENTED));
+    }
+
+    /// <summary>
+    /// The persisted send allowance, or null when there is none to restore — no file, an unreadable
+    /// or damaged one, or one written before this key existed (brief F5). Null means "start full",
+    /// which is what the bridge has always done.
+    ///
+    /// <para>
+    /// A SECOND READ OF THE SAME FILE, and deliberately so. It happens ONCE, on the start-up path,
+    /// beside the load it duplicates — not on the tick path, where the "one load" rule this file's
+    /// callers follow was written. Folding it into <see cref="Load_OrEmpty"/> would change that
+    /// method's return shape for every caller and every test that destructures it, to save one
+    /// file read per process start.
+    /// </para>
+    /// <para>
+    /// NEVER THROWS AND NEVER QUARANTINES. A bucket is a performance detail; refusing to start the
+    /// bridge over one, or moving the OFFSETS aside because the bucket was malformed, would trade a
+    /// rate-limit nicety for the owner's remote control. The reading of the values themselves is
+    /// <see cref="Telegram.TelegramSendBudget.TelegramSendBudget_Factory.Create_FromPersisted"/>'s
+    /// job — it clamps them, because this file is untrusted input like any other on disk.
+    /// </para>
+    /// </summary>
+    public static (double Tokens, DateTime RefilledUtc)? Load_SendBucket_OrNull(ISupervisionPaths paths)
+    {
+        try
+        {
+            if (!File.Exists(paths.BridgeStateFile))
+                return null;
+
+            if (JsonNode.Parse(File.ReadAllText(paths.BridgeStateFile)) is not JsonObject root)
+                return null;
+
+            if (root["sendBucket"] is not JsonObject bucket)
+                return null;
+
+            var tokensNode = bucket["tokens"];
+            var stampNode = bucket["refilledUtc"];
+
+            if (tokensNode == null || stampNode == null)
+                return null;
+
+            return (
+                tokensNode.GetValue<double>(),
+                DateTime.Parse(
+                    stampNode.GetValue<string>(),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind));
+        }
+        catch
+        {
+            // Broad by intent: every way this can fail — locked file, malformed JSON, a value of the
+            // wrong type — has the same right answer, which is to start with a fresh bucket.
+            return null;
+        }
     }
 
     /// <summary>

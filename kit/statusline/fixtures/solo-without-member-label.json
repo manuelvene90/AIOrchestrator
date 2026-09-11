@@ -1,0 +1,26 @@
+{
+  "name": "solo-without-member-label",
+  "env": {
+    "AIORCH_ROLE": "solo",
+    "AIORCH_ID": "option-lab-2",
+    "AIORCH_MEMBER": ""
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Sonnet"
+    },
+    "workspace": {
+      "current_dir": "C:\\repos\\AIOrchestrator"
+    },
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {},
+  "expected": "\u001b[1;38;5;208m SOLO \u001b[0m\u001b[38;5;208m option-lab-2 \u001b[0m Sonnet"
+}

@@ -41,14 +41,6 @@ public interface IOrchestrationSession
     string? SupervisorModelOverride { get; }
     string? ImplementerModelOverride { get; }
 
-    /// <summary>
-    /// Per-orchestration EFFORT overrides (low / medium / high / xhigh / max), passed to
-    /// `claude --effort` at spawn. Null means NO FLAG AT ALL — the CLI then uses its own default —
-    /// so unlike the model there is no config default to fall back to.
-    /// </summary>
-    string? SupervisorEffortOverride { get; }
-    string? ImplementerEffortOverride { get; }
-
     IReadOnlyList<IOrchestrationMember> Members { get; }
 
     /// <summary>
@@ -93,28 +85,42 @@ public interface IOrchestrationSession
     bool Done { get; }
 
     /// <summary>
-    /// ASLEEP. The owner is done with this orchestration FOR NOW but does not want it closed:
-    /// outbound Telegram is held, the app stops pushing the session, and it goes dormant until the
-    /// pause is lifted.
-    ///
-    /// PERSISTED, because dormancy that ended at the next app restart would not be dormancy — the
-    /// orchestration the owner deliberately put to sleep would wake up pushing at them again, which
-    /// is the one thing pausing exists to stop.
-    ///
-    /// NOT ClosedUtc, which kills the terminals and deletes the Telegram topic — nothing here is
-    /// torn down and nothing is lost. NOT Done either, which is a statement that the endeavour is
-    /// FINISHED; a paused one is unfinished and expected back. Pause is reversible and means
-    /// "asleep", not "over".
-    /// </summary>
-    bool Paused { get; }
-
-    /// <summary>
     /// WHERE THE OWNER IS for this orchestration. TERMINAL means they are in its terminal: nothing
     /// is pushed to Telegram and — the half that matters — no question raises the awaiting-answer
     /// flag, so the supervisor never freezes waiting for a tap that is being typed at it instead.
     /// Persisted, because an app restart does not move the owner out of their chair.
     /// </summary>
     Telegram.OwnerPresenceModes OwnerPresence { get; }
+
+    /// <summary>
+    /// A <c>deleteForumTopic</c> WAS ASKED FOR AND HAS NOT BEEN CONFIRMED. Stamped by the close path
+    /// before the first attempt, cleared by nothing — <see cref="TelegramTopicDeletedUtc"/> is what
+    /// ends it.
+    ///
+    /// <para>
+    /// It exists because the delete used to be fire-and-forget: a failure left an orphan topic on the
+    /// owner's phone and NOTHING on disk said so, so no later start could ever know to try again
+    /// (audit 2026-09-09, brief E1). This stamp is that record. Its ABSENCE is equally load-bearing —
+    /// see <see cref="Bridge.TopicDeletion.TopicDeleteSweep_Planner"/> for why every orchestration
+    /// closed before this feature must stay out of the sweep.
+    /// </para>
+    /// </summary>
+    DateTime? TelegramTopicDeletePendingUtc { get; }
+
+    /// <summary>
+    /// Telegram confirmed the topic is gone — either it deleted it, or it answered that there is no
+    /// such thread, which is the same fact arriving by a different door. Terminal: the sweep never
+    /// looks at this orchestration again.
+    /// </summary>
+    DateTime? TelegramTopicDeletedUtc { get; }
+
+    /// <summary>
+    /// The owner has been told, ONCE, that this topic cannot be deleted (the bot lost the right).
+    /// Persisted for the only reason that matters: the sweep runs at every start and a permission
+    /// failure survives restarts, so without this the alert would repeat for ever — decision 14's
+    /// waterfall, on something the owner can act on exactly once.
+    /// </summary>
+    bool TelegramTopicDeleteFailureReported { get; }
 
     /// <summary>Set when the general supervisor closed this orchestration. Folder stays as audit trail.</summary>
     DateTime? ClosedUtc { get; }

@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Storage;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Storage;
@@ -57,7 +58,7 @@ public class AtomicFileWriterTests : IDisposable
         Assert.Empty(Directory.GetFiles(_tempFolder, $"*{Atomic_FileWriter.TEMP_FILE_SUFFIX}"));
     }
 
-    [Fact]
+    [RequiresFileShareEnforcementFact]
     public void Write_AllText_WhenTheTargetCannotBeReplaced_ThrowsAndLeavesTheOriginalIntact()
     {
         File.WriteAllText(_targetFile, "the original content");

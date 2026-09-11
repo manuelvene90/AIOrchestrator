@@ -1,0 +1,43 @@
+{
+  "name": "communicator-green",
+  "env": {
+    "AIORCH_ROLE": "communicator",
+    "AIORCH_ID": "strategy-lab-7",
+    "AIORCH_MEMBER": ""
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Sonnet"
+    },
+    "workspace": {
+      "current_dir": "C:\\repos\\AIOrchestrator"
+    },
+    "context_window": {
+      "total_input_tokens": 79558,
+      "total_output_tokens": 230,
+      "context_window_size": 1000000,
+      "current_usage": {
+        "input_tokens": 2,
+        "output_tokens": 230
+      },
+      "used_percentage": 8,
+      "remaining_percentage": 92
+    },
+    "exceeds_200k_tokens": false,
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {
+    "strategy-lab-7/session.json": {
+      "displayName": "PB · equity control bug"
+    }
+  },
+  "expected": "\u001b[1;92m COMMUNICATOR \u001b[0m\u001b[32m PB · equity control bug \u001b[0m Sonnet \u001b[90mctx 8%\u001b[0m",
+  "expectedUsageFile": "strategy-lab-7/.communicator.usage.json"
+}

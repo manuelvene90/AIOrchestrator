@@ -64,7 +64,10 @@ public static class OwnerQuestionPending_Decider
     /// unequivocal counterpart to `QUESTION:`. Read by the shared marker matcher, so it counts in
     /// the SUBJECT anywhere or at the START of a body line, and never mid-sentence.
     /// </summary>
-    public const string ANSWERED_MARKER = "ANSWERED";
+    // FROM THE GRAMMAR, and `static readonly` rather than `const` because of it: the grammar is a
+    // FILE both this app and the bash tool read, so its values arrive at runtime. A `const` would
+    // have to be a literal here, which is the ninth copy E3 removes.
+    public static readonly string ANSWERED_MARKER = ChannelGrammar.ANSWERED;
 
     public static bool Decide(IReadOnlyList<IChannelEntry> ownerChannelEntries)
     {

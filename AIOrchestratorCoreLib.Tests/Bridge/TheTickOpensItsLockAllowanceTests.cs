@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Channels;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -51,7 +52,7 @@ public class TheTickOpensItsLockAllowanceTests : IDisposable
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -63,7 +64,8 @@ public class TheTickOpensItsLockAllowanceTests : IDisposable
             _paths, configProvider, store, new RecordingSpawner_Fake(), _log);
 
         _engine = BridgeEngine_Factory.Create_WithTelegramClient(
-            _paths, configProvider, store, launcher, _log, new FailableTelegram_Fake());
+            _paths, configProvider, store, launcher, _log, new FailableTelegram_Fake(),
+            BridgeTestTiming.Fast());
     }
 
     public void Dispose()

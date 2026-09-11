@@ -12,14 +12,12 @@ namespace AIOrchestratorCoreLib.Spawning;
 /// role slash command as its initial prompt. No -NoExit: the shell dies with claude, so a dead pid
 /// means a dead session.
 ///
-/// Resume semantics (owner request 2026-09-10): a SUPERVISOR or SOLO respawn continues its OWN
-/// conversation with 'claude --resume &lt;session-id&gt;' when the slot's probe file names a transcript
-/// that still exists (see <see cref="ResumableSession_Resolver"/>). The id names one conversation
-/// exactly — '--continue' would have guessed the most recent one in a repo directory several
-/// sessions share, which is why resuming was ruled out before. The first spawn has no probe file
-/// and starts fresh; so does any respawn whose transcript is gone. Implementers and reviewers
-/// re-enter through their role command (the channels are their durable state), and the GENERAL
-/// supervisor is stateless by owner directive (see <see cref="Build_ForGeneralSupervisor"/>).
+/// Resume semantics: the GENERAL supervisor runs in the supervision root (a directory only it uses),
+/// so a restart safely resumes its previous conversation via 'claude --continue' (falling back to
+/// the role command on first-ever start). Orchestration supervisors and implementers share the
+/// repo directory, where --continue could resume the WRONG session's conversation — they restart
+/// through their role command instead, whose boot sequence re-reads the channels (the channels ARE
+/// the durable state by design).
 /// </summary>
 public static class SpawnCommand_Builder
 {
@@ -45,25 +43,11 @@ public static class SpawnCommand_Builder
     /// </summary>
     public const string CLAUDE_LAUNCH_FLAGS = "--dangerously-skip-permissions";
 
-    /// <summary>
-    /// The ROLE DEFAULT for the two roles that talk to the owner and decide — supervisor and solo
-    /// (owner directive 2026-09-09: "XHigh effort in each solo and sup session"). It applies only
-    /// when the orchestration carries no effort override: the dial the owner turns from the phone
-    /// (/effort) wins, or a solo could never be told to think at anything but xhigh. Every other
-    /// role has no default — effort is billed thinking, and the owner named these two. Verified
-    /// against the installed CLI, whose --help lists --effort as (low, medium, high, xhigh, max).
-    /// </summary>
-    public const string SUPERVISION_EFFORT_LEVEL = "xhigh";
-
-    /// <summary>
-    /// resumeSessionId is the conversation this slot ran before, when there is one to pick up
-    /// (see <see cref="ResumableSession_Resolver"/>); null or blank starts fresh.
-    /// </summary>
-    public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string? effort, string? resumeSessionId, string pidFilePath, string? displayName)
+    public static ISpawnCommand Build_ForSupervisor(string orchId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(resumeSessionId, model, Resolve_Effort_OrDefault(effort, SUPERVISION_EFFORT_LEVEL))} '/supervisor {orchId}'", pidFilePath);
+        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(model)} '/supervisor {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForSupervisor(orchId), displayName), SUPERVISOR_TAB_COLOR, repoPath, script);
     }
@@ -72,7 +56,7 @@ public static class SpawnCommand_Builder
     /// A reviewer session: adversarial review by default, no worktree (it reads the repo and the
     /// implementers' branches), and no ability to edit or commit.
     /// </summary>
-    public static ISpawnCommand Build_ForReviewer(string orchId, string memberId, string repoPath, string? model, string? effort, string pidFilePath, string? displayName)
+    public static ISpawnCommand Build_ForReviewer(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
@@ -81,9 +65,8 @@ public static class SpawnCommand_Builder
         // as TOOL NAMES and started a session with no prompt at all. Every reviewer therefore came
         // up blank — never booted, never wrote to its channel, and was nudged then respawned on a
         // loop. Verified against the real CLI, which reports "Permission deny rule ... matches no
-        // known tool" for each swallowed word. The model and effort flags sit BEFORE it for the
-        // same reason — placed after, they would be eaten as tool names too.
-        var claudeCommand = $"{Build_ClaudeInvocation(null, model, effort)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
+        // known tool" for each swallowed word.
+        var claudeCommand = $"{Build_ClaudeInvocation(model)} {REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/{memberId}'";
         var script = Build_SessionScript("reviewer", orchId, memberId, claudeCommand, pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), REVIEWER_TAB_COLOR, repoPath, script);
@@ -97,11 +80,11 @@ public static class SpawnCommand_Builder
     /// same file a supervisor would own — so the owner's Telegram topic reaches it with no routing
     /// changes anywhere. No supervisor, no reviewer, no worktree assignment.
     /// </summary>
-    public static ISpawnCommand Build_ForSolo(string orchId, string memberId, string repoPath, string? model, string? effort, string? resumeSessionId, string pidFilePath, string? displayName)
+    public static ISpawnCommand Build_ForSolo(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(resumeSessionId, model, Resolve_Effort_OrDefault(effort, SUPERVISION_EFFORT_LEVEL))} '/solo {orchId}'", pidFilePath);
+        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/solo {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), SOLO_TAB_COLOR, repoPath, script);
     }
@@ -111,16 +94,16 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(null, model, null)} '/communicator {orchId}'", pidFilePath);
+        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(model)} '/communicator {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForCommunicator(orchId), displayName), COMMUNICATOR_TAB_COLOR, repoPath, script);
     }
 
-    public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string? effort, string pidFilePath, string? displayName)
+    public static ISpawnCommand Build_ForImplementer(string orchId, string memberId, string repoPath, string? model, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(null, model, effort)} '/implementer {orchId}/{memberId}'", pidFilePath);
+        var script = Build_SessionScript("implementer", orchId, memberId, $"{Build_ClaudeInvocation(model)} '/implementer {orchId}/{memberId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), IMPLEMENTER_TAB_COLOR, repoPath, script);
     }
@@ -137,7 +120,7 @@ public static class SpawnCommand_Builder
     /// </summary>
     public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
     {
-        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(null, model, null)} '/general-supervisor'", pidFilePath);
+        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(model)} '/general-supervisor'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.GENERAL_TITLE, GENERAL_TAB_COLOR, generalHomeFolder, script);
     }
@@ -209,45 +192,43 @@ public static class SpawnCommand_Builder
             claudeCommand;
     }
 
-    /// <summary>
-    /// All three parts are OPTIONAL and independent. A null or blank resume id starts a fresh
-    /// conversation; a null or blank effort emits NO --effort flag at all, so the CLI applies its
-    /// own default — there is no config fallback for it, unlike the model; the only default is the
-    /// ROLE default a caller resolves before getting here (see <see cref="SUPERVISION_EFFORT_LEVEL"/>).
-    /// Order is resume, then model, then effort, then the launch flags, always ahead of the prompt
-    /// — and ahead of the reviewer's variadic --disallowedTools, which would otherwise swallow them
-    /// as tool names. The dials come AFTER the resume on purpose: a model or effort the owner turned
-    /// while the session was down applies to the resumed conversation (verified against the
-    /// installed CLI, whose --help lists --model and --effort as per-session, alongside --resume).
-    /// </summary>
-    static string Build_ClaudeInvocation(string? resumeSessionId, string? model, string? effort)
+    static string Build_ClaudeInvocation(string? model)
     {
-        var resumePart = string.IsNullOrWhiteSpace(resumeSessionId) ? string.Empty : $" --resume {Validate_ResumeSessionId(resumeSessionId)}";
-        var modelPart = string.IsNullOrWhiteSpace(model) ? string.Empty : $" --model {model}";
-        var effortPart = string.IsNullOrWhiteSpace(effort) ? string.Empty : $" --effort {effort}";
-        return $"claude{resumePart}{modelPart}{effortPart} {CLAUDE_LAUNCH_FLAGS}";
+        if (string.IsNullOrWhiteSpace(model))
+            return $"claude {CLAUDE_LAUNCH_FLAGS}";
+
+        Validate_Model(model);
+
+        return $"claude --model {model} {CLAUDE_LAUNCH_FLAGS}";
     }
 
     /// <summary>
-    /// The id was read from a file another process wrote and is quoted into a PowerShell command
-    /// line: only the CLI's own id shape (a UUID in 8-4-4-4-12 form) is ever emitted. The resolver
-    /// refuses anything else upstream; this is the second lock on the same door.
+    /// THE MODEL WORD TRAVELS THROUGH A SHELL COMMAND, exactly like the orchestration id below, and
+    /// until 2026-09-10 it was the only part of this script that went in unprotected: role, id, member
+    /// and pid path are all single-quoted, and the model was interpolated bare into a PowerShell string
+    /// that is then base64-encoded and run. A value carrying a quote or a semicolon would have become
+    /// PowerShell in every session spawned with it. Found by the re-review of the per-role model keys,
+    /// which had just added two more places an owner types this word by hand.
+    ///
+    /// <para>
+    /// VALIDATED RATHER THAN QUOTED, for the reason the id beside it is: quoting a value that may
+    /// itself contain a quote only moves the problem, while the alphabet a model name actually uses —
+    /// letters, digits, dots and dashes — excludes every character that could end the argument. It
+    /// THROWS, naming the value: this is a spawn that must not happen, not a setting that can fall back
+    /// (`.claude/rules/code-conventions.md`: invariant violations throw, naming the bad value). The
+    /// bridge-driven runners are unaffected either way — they pass --model as a real argument, never
+    /// through a shell — so this closes the terminal path, which is the one that builds a script.
+    /// </para>
     /// </summary>
-    static string Validate_ResumeSessionId(string resumeSessionId)
+    static void Validate_Model(string model)
     {
-        if (!ResumableSession_Resolver.Is_ClaudeSessionId(resumeSessionId))
-            throw new ArgumentException($"Resume session id '{resumeSessionId}' is not a UUID in 8-4-4-4-12 form — it travels through a shell command, so only the CLI's own id shape is accepted");
+        foreach (var character in model)
+        {
+            var valid = char.IsAsciiLetterOrDigit(character) || character == '-' || character == '_' || character == '.';
 
-        return resumeSessionId;
-    }
-
-    /// <summary>The override when it says something, else the role's default — blank counts as unset.</summary>
-    static string? Resolve_Effort_OrDefault(string? effort, string? roleDefault)
-    {
-        if (string.IsNullOrWhiteSpace(effort))
-            return roleDefault;
-
-        return effort;
+            if (!valid)
+                throw new ArgumentException($"Model '{model}' contains invalid character '{character}' — a model name may hold letters, digits, '-', '_' or '.' (it travels through a shell command)");
+        }
     }
 
     static void Validate_OrchId(string orchId)

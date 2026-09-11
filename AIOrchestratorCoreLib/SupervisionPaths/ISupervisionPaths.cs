@@ -10,7 +10,23 @@ public interface ISupervisionPaths
     string ConfigFile { get; }
     string SecretsFile { get; }
     string BridgeStateFile { get; }
+
+    /// <summary>
+    /// The bridge's DECISION state: open questions, pending buttons, second-gesture confirmations,
+    /// nudge memory, crash-loop counters, the dispatcher pause. Separate from
+    /// <see cref="BridgeStateFile"/> on purpose — that one is a CURSOR, rewritten on every tick
+    /// that actually moved it, and losing it costs replayed traffic, while losing this one costs a
+    /// decision the owner was asked to take.
+    /// </summary>
+    string EngineStateFile { get; }
     string GlobalLogFile { get; }
+
+    /// <summary>
+    /// Held open for the lifetime of the ONE running host (WPF app or daemon). The bridge's
+    /// getUpdates long-poll tolerates a single consumer per bot token, so a second host must
+    /// refuse to start — on every OS, which a Windows named mutex could not promise.
+    /// </summary>
+    string InstanceLockFile { get; }
 
     /// <summary>Home of the always-on GENERAL supervisor (owner ⇄ general, mirrored to the General topic).</summary>
     string GeneralFolder { get; }
@@ -48,6 +64,13 @@ public interface ISupervisionPaths
     /// disagree the first time either arithmetic changed.
     /// </summary>
     string Get_ProgressFile(string orchId);
+
+    /// <summary>
+    /// What this orchestration has already told its plan backend — which upstream requests became
+    /// ledger lines, and which of those lines were reported closed. Persisted beside the plan because
+    /// the app restarts daily and a forgotten record re-sends every gesture on the next launch.
+    /// </summary>
+    string Get_PlanBackendStateFile(string orchId);
     string Get_OwnerChannelFile(string orchId);
     string Get_OrchestrationLogFile(string orchId);
     string Get_ImplementerFolder(string orchId, string memberId);

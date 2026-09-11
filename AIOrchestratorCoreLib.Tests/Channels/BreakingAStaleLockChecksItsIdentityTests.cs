@@ -19,6 +19,14 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 /// to hit by luck is constructed directly: passing a token that does not match the lock at the path
 /// IS the state that race produces.
 /// </para>
+/// <para>
+/// THE DIAGNOSTIC CAPTURE IS PER-FLOW, opened in each case rather than wired process-wide in the
+/// constructor. The process-wide sink is rewired by every engine start, so a capture held that way is
+/// taken from under a test by an unrelated one running in parallel — the intermittent
+/// <c>ChannelLockDiagnosticsTests</c> carried for a month, measured five reds in six full runs on
+/// 2026-09-09. This class asserted on captured lines the same way and was exposed to exactly the same
+/// theft; it simply lost the race less often.
+/// </para>
 /// </summary>
 [Collection(CHANNEL_LOCK_COLLECTION.NAME)]
 public class BreakingAStaleLockChecksItsIdentityTests : IDisposable
@@ -37,14 +45,16 @@ public class BreakingAStaleLockChecksItsIdentityTests : IDisposable
         File.WriteAllText(_channelFile, "seed\n");
 
         _lockDirectory = ChannelFile_Lock.Build_LockDirectoryPath(_channelFile);
-
-        ChannelLock_Diagnostics.Set_Sink(line => { lock (_lines) _lines.Add(line); });
     }
 
     public void Dispose()
     {
-        ChannelLock_Diagnostics.Clear_Sink();
         Directory.Delete(_tempFolder, recursive: true);
+    }
+
+    ChannelLock_Diagnostics.Capture Capture_Diagnostics()
+    {
+        return ChannelLock_Diagnostics.Capture_OnThisFlow(line => { lock (_lines) _lines.Add(line); });
     }
 
     /// <summary>
@@ -54,6 +64,8 @@ public class BreakingAStaleLockChecksItsIdentityTests : IDisposable
     [Fact]
     public void ALockReAcquiredBetweenTheJudgementAndTheMove_IsPutBackAndReported()
     {
+        using var capture = Capture_Diagnostics();
+
         Hold_Lock("token-B-the-new-live-holder");
 
         var broke = ChannelFile_Lock.Try_BreakStale(_lockDirectory, "token-A-the-one-we-judged");
@@ -80,6 +92,8 @@ public class BreakingAStaleLockChecksItsIdentityTests : IDisposable
     [Fact]
     public void ALockStillCarryingTheJudgedToken_IsBrokenNormally()
     {
+        using var capture = Capture_Diagnostics();
+
         Hold_Lock("token-A-the-one-we-judged");
 
         var broke = ChannelFile_Lock.Try_BreakStale(_lockDirectory, "token-A-the-one-we-judged");
@@ -101,6 +115,8 @@ public class BreakingAStaleLockChecksItsIdentityTests : IDisposable
     [Fact]
     public void ALockWithNoReadableToken_IsStillBreakable()
     {
+        using var capture = Capture_Diagnostics();
+
         Directory.CreateDirectory(_lockDirectory);
         File.WriteAllText(Path.Combine(_lockDirectory, ChannelFile_Lock.OWNER_FILE_NAME), "pid=4242\n");
 
@@ -129,6 +145,8 @@ public class BreakingAStaleLockChecksItsIdentityTests : IDisposable
     [Fact]
     public void ALockReAcquiredButNotYETCarryingItsOwnerFile_IsNotMistakenForTheJudgedOne()
     {
+        using var capture = Capture_Diagnostics();
+
         // A real lock the way bash makes one, in the instant between mkdir and the owner file.
         Directory.CreateDirectory(_lockDirectory);
 
@@ -155,6 +173,8 @@ public class BreakingAStaleLockChecksItsIdentityTests : IDisposable
     [Fact]
     public void BreakingALockThatIsAlreadyGone_ReportsNothingAndBreaksNothing()
     {
+        using var capture = Capture_Diagnostics();
+
         var broke = ChannelFile_Lock.Try_BreakStale(_lockDirectory, "token-A");
 
         Assert.False(broke);

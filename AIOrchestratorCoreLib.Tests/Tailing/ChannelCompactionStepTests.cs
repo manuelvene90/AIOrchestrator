@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
 using AIOrchestratorCoreLib.Tailing;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Tailing;
@@ -44,7 +45,7 @@ public class ChannelCompactionStepTests : IDisposable
         // green — the entry survives because compaction was blocked, or because the file was too
         // short to compact at all — and a test that allows either pins neither.
         Write_LongChannel(_channelFile);
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         var lengthBefore = new FileInfo(_channelFile).Length;
@@ -64,7 +65,7 @@ public class ChannelCompactionStepTests : IDisposable
         // deliberately oversized, which left the ordinary path unexercised.
         File.WriteAllText(_channelFile, Build_Entry(1, "hello") + Build_Entry(2, "still here"));
 
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         var lengthBefore = new FileInfo(_channelFile).Length;
@@ -79,7 +80,7 @@ public class ChannelCompactionStepTests : IDisposable
     public void CompactedChannel_ReAnchorsTheCursor_SoTheShrinkIsNotReadAsAProtocolAnomaly()
     {
         Write_LongChannel(_channelFile);
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         var newLength = Channel_CompactionStep.Compact_IfAllowed(tailer, _channelFile, new RecordingLog(), "orch-x");
@@ -110,7 +111,7 @@ public class ChannelCompactionStepTests : IDisposable
         Write_LongChannel(_channelFile);
         File.WriteAllText(activeFile, "seed\n");
 
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel, activeChannel]);
 
         // This channel owes NOTHING — its cursor sits at EOF and no byte has arrived since — and it
@@ -133,12 +134,12 @@ public class ChannelCompactionStepTests : IDisposable
     public void ChannelOwingAnUnemittedEntry_IsNotCompacted_AndTheEntryIsStillMirrored()
     {
         Write_LongChannel(_channelFile);
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, Build_Entry(ENTRIES_ABOVE_THRESHOLD + 1, "the newest thing said"));
 
-        // The poll that READS the entry emits nothing — it is the trailing entry and the quiet-poll
+        // The poll that READS the entry emits nothing — it is the trailing entry and the quiet
         // window has not elapsed — so the bytes are owed to Telegram and held in Pending alone.
         tailer.Poll([_channel]);
 
@@ -153,7 +154,7 @@ public class ChannelCompactionStepTests : IDisposable
     public void ChannelWithAnEmittedButUnconfirmedEntry_IsNotCompacted_UntilTheSendIsAcknowledged()
     {
         Write_LongChannel(_channelFile);
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, Build_Entry(ENTRIES_ABOVE_THRESHOLD + 1, "sent but not acknowledged"));
@@ -177,11 +178,11 @@ public class ChannelCompactionStepTests : IDisposable
     public void ChannelAppendedToAfterItsPoll_IsNotCompacted_AndTheNewEntryIsStillMirrored()
     {
         Write_LongChannel(_channelFile);
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         // The mirror tick appends to channel files BETWEEN the poll and the compaction step, on the
-        // same thread: Check_LedgerHealth_Async, Check_ChannelShapes_Async and Push_PeriodicStatus_Async
+        // same thread: Check_LedgerHealth_Async, Check_ChannelShapes_Async and Push_AwayDigests_Async
         // all write entries after the poll has run. The tailer has not seen these bytes, so nothing
         // it holds says they exist — Pending is empty and the channel looks perfectly clear.
         File.AppendAllText(_channelFile, Build_Entry(ENTRIES_ABOVE_THRESHOLD + 1, "written after the poll"));
@@ -205,7 +206,7 @@ public class ChannelCompactionStepTests : IDisposable
         Write_LongChannel(_channelFile);
         File.WriteAllText(activeFile, "seed\n");
 
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel, activeChannel]);
 
         File.AppendAllText(_channelFile, Build_Entry(ENTRIES_ABOVE_THRESHOLD + 1, "while you were away"));
@@ -237,7 +238,7 @@ public class ChannelCompactionStepTests : IDisposable
     public void ChannelThatCannotBeEvaluated_IsNotCompacted_AndSaysWhichGuardFailed()
     {
         Write_LongChannel(_channelFile);
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         // The tailer still holds a cursor into this file and the file is now gone. Whether it owed a
@@ -275,7 +276,7 @@ public class ChannelCompactionStepTests : IDisposable
     {
         // Polled — so the first guard passes — but the file does not exist, so the poll records it
         // without ever giving the tailer state for it.
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         var log = new RecordingLog();
@@ -294,7 +295,7 @@ public class ChannelCompactionStepTests : IDisposable
         var unstatablePath = Path.Combine(_tempFolder, "chan\0nel.md");
         var unstatableChannel = DiscoveredChannel_Factory.Create_ForImplementer("orch-x", "imp-9", unstatablePath);
 
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         var pollResult = tailer.Poll([unstatableChannel]);
         tailer.Set_Offset(unstatablePath, 0);
 
@@ -321,7 +322,7 @@ public class ChannelCompactionStepTests : IDisposable
         }
     }
 
-    /// <summary>Polls until the trailing entry clears its quiet-poll window, WITHOUT confirming it.</summary>
+    /// <summary>Polls until the trailing entry clears its quiet period, WITHOUT confirming it.</summary>
     void Emit_UntilAnAppendArrives(IChannelTailer tailer)
     {
         for (var i = 0; i < 5; i++)
@@ -330,7 +331,7 @@ public class ChannelCompactionStepTests : IDisposable
                 return;
         }
 
-        throw new Exception("The tailer emitted nothing within 5 polls — the quiet-poll flush never happened.");
+        throw new Exception("The tailer emitted nothing within 5 polls — the trailing entry never cleared its quiet period.");
     }
 
     static void Write_LongChannel(string channelFilePath)
@@ -371,4 +372,31 @@ public class ChannelCompactionStepTests : IDisposable
 
         return entries;
     }
+
+    /// <summary>
+    /// THE TAILER THESE TESTS DRIVE, and it is not <c>Create_Fresh()</c> for one reason: since
+    /// 2026-09-09 the trailing entry is released after a DURATION of no growth rather than after two
+    /// polls (<c>ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS</c> — the count silently meant
+    /// "two times the poll interval" and the mirror loop's new 200 ms cadence cut it 12×). Every
+    /// assertion below polls synchronously, so the clock has to come from somewhere; a step of one
+    /// mirror tick per poll reproduces exactly the cadence the old count was written against, which is
+    /// why not one of these tests had to change its expectations.
+    /// </summary>
+    static IChannelTailer New_Tailer() => New_Tailer(new Dictionary<string, long>());
+
+    /// <inheritdoc cref="New_Tailer()"/>
+    static IChannelTailer New_Tailer(IReadOnlyDictionary<string, long> persistedOffsets)
+    {
+        return ChannelTailer_Factory.Create(
+            persistedOffsets,
+            TimeSpan.FromMilliseconds(ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS),
+            new SteppingClock_Fake(TimeSpan.FromMilliseconds(PRE_WAKER_MIRROR_TICK_MILLISECONDS)));
+    }
+
+    /// <summary>
+    /// The mirror loop's tick, which was the tailer's poll interval before the waker existed. Written
+    /// here rather than borrowed so that a change to the loop's cadence cannot quietly change what
+    /// these tests mean — the whole defect was one number moving another.
+    /// </summary>
+    const int PRE_WAKER_MIRROR_TICK_MILLISECONDS = 2000;
 }

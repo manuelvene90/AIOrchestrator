@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AI Orchestrator bridge daemon — launchd user agent (macOS).
+
+  Install, with the daemon published to /usr/local/opt/aiorchestrator:
+    (publish the daemon self-contained for osx-arm64 into /usr/local/opt/aiorchestrator; the exact
+     dotnet publish line is in README-daemon.md, since a double dash cannot appear in this XML comment)
+    mkdir -p ~/Library/Logs/aiorchestrator
+    sed "s#HOME_DIR#$HOME#g" deploy/launchd/com.aiorchestrator.daemon.plist > ~/Library/LaunchAgents/com.aiorchestrator.daemon.plist
+    launchctl load ~/Library/LaunchAgents/com.aiorchestrator.daemon.plist      # starts it (RunAtLoad)
+    tail -f ~/Library/Logs/aiorchestrator/daemon.log
+    launchctl unload ~/Library/LaunchAgents/com.aiorchestrator.daemon.plist    # SIGTERM -> clean stop
+
+  A USER agent, not a system daemon, on purpose: the sessions the bridge spawns run `claude` with
+  THIS user's login and ~/.claude, and launchd hands a user agent that user's HOME. KeepAlive
+  restarts it if it exits; the daemon exits non-zero when its engine dies, which is what makes
+  KeepAlive/SuccessfulExit=false the restart trigger rather than a masking one.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aiorchestrator.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/opt/aiorchestrator/aiorchestrator-daemon</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/opt/aiorchestrator</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!-- SIGTERM on unload/stop; the daemon has this long to cancel the engine and kill sessions. -->
+    <key>ExitTimeOut</key>
+    <integer>30</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd gives an agent a minimal PATH; jq (status line) and claude (sessions) live here. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:HOME_DIR/.local/bin</string>
+        <!-- Defaults: HOME_DIR/.claude/supervision and HOME_DIR/.claude. Override to relocate:
+        <key>AIORCH_SUPERVISION_ROOT</key>
+        <string>HOME_DIR/.claude/supervision</string>
+        <key>AIORCH_CLAUDE_HOME</key>
+        <string>HOME_DIR/.claude</string>
+        -->
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>HOME_DIR/Library/Logs/aiorchestrator/daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>HOME_DIR/Library/Logs/aiorchestrator/daemon.err.log</string>
+</dict>
+</plist>

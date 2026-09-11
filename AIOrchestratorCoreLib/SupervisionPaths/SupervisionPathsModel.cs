@@ -6,7 +6,9 @@ internal sealed class SupervisionPathsModel(string root) : ISupervisionPaths
     public string ConfigFile { get; } = Path.Combine(root, "config.json");
     public string SecretsFile { get; } = Path.Combine(root, "secrets.json");
     public string BridgeStateFile { get; } = Path.Combine(root, ".bridge-state.json");
+    public string EngineStateFile { get; } = Path.Combine(root, ".engine-state.json");
     public string GlobalLogFile { get; } = Path.Combine(root, "orchestrator-global.log.jsonl");
+    public string InstanceLockFile { get; } = Path.Combine(root, ".instance.lock");
     public string GeneralFolder { get; } = Path.Combine(root, "general");
     public string GeneralChannelFile { get; } = Path.Combine(root, "general", "channel.md");
     public string GeneralPidFile { get; } = Path.Combine(root, "general", ".pid");
@@ -32,6 +34,11 @@ internal sealed class SupervisionPathsModel(string root) : ISupervisionPaths
     public string Get_ProgressFile(string orchId)
     {
         return Path.Combine(Get_OrchestrationFolder(orchId), ".progress.json");
+    }
+
+    public string Get_PlanBackendStateFile(string orchId)
+    {
+        return Path.Combine(Get_OrchestrationFolder(orchId), ".plan-backend.json");
     }
 
     public string Get_OwnerChannelFile(string orchId)

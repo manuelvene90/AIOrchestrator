@@ -1,27 +1,23 @@
 using System.IO;
 using System.Windows;
-using AIOrchestratorCoreLib.Bridge.BridgeEngine;
-using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Composition;
+using AIOrchestratorCoreLib.Composition.HostOptions;
+using AIOrchestratorCoreLib.Composition.OrchestratorServices;
 using AIOrchestratorCoreLib.Kit;
-using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
-using AIOrchestratorCoreLib.Logging.OrchestrationLog;
-using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
-using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Termination;
 
 namespace AIOrchestrator;
 
 /// <summary>
-/// Composition root. Builds the CoreLib services, enforces single instance (the bridge's
-/// getUpdates long-poll only tolerates ONE consumer per bot token), starts the bridge engine
-/// in the background and opens the main window.
+/// The WPF host. The service graph itself is built by <see cref="OrchestratorServices_Factory"/>
+/// (shared with the headless daemon); this class enforces single instance (the bridge's
+/// getUpdates long-poll only tolerates ONE consumer per bot token), starts the bridge engine in
+/// the background and opens the main window.
 /// </summary>
 public partial class App : Application
 {
-    const string SINGLE_INSTANCE_MUTEX_NAME = "AIOrchestrator_SingleInstance";
-
-    Mutex? _singleInstanceMutex;
+    IDisposable? _instanceLock;
     CancellationTokenSource? _engineCancellation;
     ISupervisionPaths? _paths;
     AIOrchestratorCoreLib.Logging.OrchestrationLog.IOrchestrationLog? _log;
@@ -30,12 +26,20 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        _singleInstanceMutex = new Mutex(initiallyOwned: true, SINGLE_INSTANCE_MUTEX_NAME, out var createdNew);
+        // FIRST, BEFORE ANYTHING IS BUILT. On master only the config provider and the log were
+        // constructed ahead of these handlers; extracting the composition root moved four more
+        // constructors above them, which widened the window where a throw is an uncontained crash
+        // instead of the contained message box this file exists to guarantee.
+        Install_GlobalExceptionHandlers();
 
-        if (!createdNew)
+        var options = HostOptions_Factory.Create_Default();
+        var paths = SupervisionPaths_Factory.Create(options.SupervisionRoot);
+        _instanceLock = SingleInstance_Guard.Try_Acquire(paths, out var lockFailure);
+
+        if (_instanceLock == null)
         {
             MessageBox.Show(
-                "AI Orchestrator is already running. Only one instance may run (the Telegram bridge allows a single poller).",
+                $"AI Orchestrator cannot start: {lockFailure}.",
                 "AI Orchestrator",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -43,24 +47,23 @@ public partial class App : Application
             return;
         }
 
-        var paths = SupervisionPaths_Factory.Create_Default();
         _paths = paths;
-        var configProvider = OrchestratorConfigProvider_Factory.Create(paths);
-        var log = OrchestrationLog_Factory.Create(paths);
-        _log = log;
 
-        Install_GlobalExceptionHandlers();
-        Ensure_KitAssetsInstalled(paths, log);
-        var store = OrchestrationSessionStore_Factory.Create(paths);
-        var spawner = SessionSpawner_Factory.Create();
-        var launcher = OrchestrationLauncher_Factory.Create(paths, configProvider, store, spawner, log);
-        var engine = BridgeEngine_Factory.Create(paths, configProvider, store, launcher, log);
+        // The sessions this app spawns read their channel path from this variable (see the daemon's
+        // note): here it is always the default root, so nothing changes — it is set so the contract
+        // is the host's, stated once, rather than a default the role commands are lucky to match.
+        Environment.SetEnvironmentVariable(HostOptions_Factory.SUPERVISION_ROOT_ENV, paths.Root);
+
+        var services = OrchestratorServices_Factory.Create(paths);
+        _log = services.Log;
+
+        KitAssets_Bootstrapper.Ensure_Installed(Path.Combine(AppContext.BaseDirectory, "kit"), options.ClaudeHome, paths, services.Log, services.PluginGate);
 
         _engineCancellation = new CancellationTokenSource();
         var engineToken = _engineCancellation.Token;
-        _ = Task.Run(() => engine.Run_Async(engineToken), engineToken);
+        _ = Task.Run(() => services.Engine.Run_Async(engineToken), engineToken);
 
-        var mainWindow = new MainWindow(paths, configProvider, store, launcher, engine, log);
+        var mainWindow = new MainWindow(paths, services.ConfigProvider, services.Store, services.Launcher, services.Engine, services.Log);
         mainWindow.Show();
     }
 
@@ -95,83 +98,6 @@ public partial class App : Application
         };
     }
 
-    /// <summary>
-    /// Launching the app must be enough: every role command in the shipped kit, plus the status
-    /// line script and the hooks, self-install/refresh from the app's output folder — no
-    /// install.ps1 prerequisite for them. This is THE delivery path: editing kit/commands in the
-    /// repo changes nothing until a rebuild refreshes that output folder.
-    /// </summary>
-    static void Ensure_KitAssetsInstalled(ISupervisionPaths paths, AIOrchestratorCoreLib.Logging.OrchestrationLog.IOrchestrationLog log)
-    {
-        try
-        {
-            var kitCommandsFolder = Path.Combine(AppContext.BaseDirectory, "kit", "commands");
-            var kitStatuslineFile = Path.Combine(AppContext.BaseDirectory, "kit", "statusline", "statusline.ps1");
-            var claudeCommandsFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "commands");
-            var statuslineTargetFile = Path.Combine(paths.Root, "statusline.ps1");
-
-            var kitHooksFolder = Path.Combine(AppContext.BaseDirectory, "kit", "hooks");
-            var claudeHooksFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "hooks");
-
-            // The stamp goes in the log FIRST and into the installed folder second: which app is
-            // running, and which app owns the commands the sessions read. Both were guesswork.
-            var buildStamp = AIOrchestratorCoreLib.Build.BuildStamp_Reader.Describe_RunningApp();
-            log.Log_Info("", $"Running {buildStamp} — from {AppContext.BaseDirectory}");
-
-            var installedFiles = KitAssets_Installer.Ensure_Installed(
-                kitCommandsFolder, kitStatuslineFile, claudeCommandsFolder, statuslineTargetFile,
-                kitHooksFolder, claudeHooksFolder, $"{buildStamp} — {AppContext.BaseDirectory}");
-
-            foreach (var installedFile in installedFiles)
-                log.Log_Info("", $"Kit asset installed/updated: {installedFile}");
-
-            if (!Directory.Exists(kitCommandsFolder))
-                log.Log_Warning("", $"Kit commands folder not found at {kitCommandsFolder} — role commands NOT installed");
-
-            var settingsFile = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
-
-            if (StatusLineSettings_Wirer.Ensure_Wired(settingsFile, statuslineTargetFile))
-                log.Log_Info("", $"Status line wired into {settingsFile} (previous file backed up); active for newly spawned sessions");
-
-            // Turn-end enforcement for the task ledger: prose in a role command gets skipped, a
-            // Stop hook does not.
-            var ledgerHookFile = Path.Combine(claudeHooksFolder, "supervisor-ledger-check.sh");
-
-            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, ledgerHookFile, AgentHookSettings_Wirer.STOP_EVENT, null))
-                log.Log_Info("", $"Ledger Stop hook wired into {settingsFile}; supervisors spawned from now on cannot end a turn owing a PLAN.md update");
-
-            // Turn-end enforcement for "run to the end". The owner told sessions not to stop
-            // mid-endeavour and they kept stopping — "no matter how many times i tell it not to get
-            // stuck and keep going, it will keep getting stuck" (2026-08-20). Prose is what had
-            // already failed; this is the same lever the ledger got, for the same reason.
-            var runToTheEndHookFile = Path.Combine(claudeHooksFolder, "run-to-the-end-check.sh");
-
-            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, runToTheEndHookFile, AgentHookSettings_Wirer.STOP_EVENT, null))
-                log.Log_Info("", $"Run-to-the-end Stop hook wired into {settingsFile}; a session with open ledger work and nothing blocked on the owner cannot end its turn");
-
-            // Read-only enforcement for reviewers: the CLI already withholds Write/Edit, but Bash
-            // could mutate the repo just as effectively — this closes that route.
-            var reviewerHookFile = Path.Combine(claudeHooksFolder, "reviewer-readonly-check.sh");
-
-            // A question stops the supervisor dead: no tool runs while the owner's answer is
-            // pending, so their answer can never arrive against a world that moved meanwhile.
-            var awaitingAnswerHookFile = Path.Combine(claudeHooksFolder, "supervisor-awaiting-answer-check.sh");
-
-            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, awaitingAnswerHookFile, AgentHookSettings_Wirer.PRE_TOOL_USE_EVENT, "*"))
-                log.Log_Info("", $"Awaiting-answer PreToolUse hook wired into {settingsFile}; a supervisor that asked a question cannot act until it is answered");
-
-            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, reviewerHookFile, AgentHookSettings_Wirer.PRE_TOOL_USE_EVENT, "Bash"))
-                log.Log_Info("", $"Reviewer read-only PreToolUse hook wired into {settingsFile}; reviewers spawned from now on cannot mutate the repo through Bash");
-        }
-        catch (Exception ex)
-        {
-            log.Log_Error("", "Kit asset self-install failed", ex);
-        }
-    }
-
     protected override void OnExit(ExitEventArgs e)
     {
         _engineCancellation?.Cancel();
@@ -182,7 +108,7 @@ public partial class App : Application
         if (_paths != null)
             SessionTerminator.Kill_AllSessions(_paths);
 
-        _singleInstanceMutex?.Dispose();
+        _instanceLock?.Dispose();
         base.OnExit(e);
     }
 }

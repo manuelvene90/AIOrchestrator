@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Planning.PlanBackend;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -74,6 +75,16 @@ public static class LedgerHealth_Tracker
     /// <summary>
     /// True when a supervisor verdict is newer than the ledger. Verdict time is supplied by the
     /// caller (the bridge observes verdicts as they are appended), so this stays a pure comparison.
+    ///
+    /// <para>
+    /// EXCEPT THAT THE APP CAN NOW WRITE PLAN.md ITSELF. A plan backend's ingestion rewrites the file,
+    /// which bumps the mtime this comparison reads — so an unrelated upstream request arriving mid-debt
+    /// looked exactly like the supervisor updating its ledger, deleted <c>.ledger-behind</c>, and let a
+    /// turn end with the owner's request still unwritten. The app was paying the session's debt on its
+    /// behalf, silently, defeating the one enforcement the role commands promise. When the newest write
+    /// is the app's own, the debt therefore stands: fail-closed, and it clears itself the moment the
+    /// session actually writes.
+    /// </para>
     /// </summary>
     public static bool Is_LedgerBehind(ISupervisionPaths paths, string orchId, DateTime? lastVerdictUtc)
     {
@@ -88,7 +99,12 @@ public static class LedgerHealth_Tracker
         if (!File.Exists(planFile))
             return true;
 
-        return File.GetLastWriteTimeUtc(planFile) < lastVerdictUtc.Value;
+        var planWriteUtc = File.GetLastWriteTimeUtc(planFile);
+
+        if (planWriteUtc < lastVerdictUtc.Value)
+            return true;
+
+        return PlanBackendState_Store.Wrote_ThePlan_Itself(paths, orchId, planWriteUtc);
     }
 
     /// <summary>Raises or clears the flag the hook reads; returns whether it is now raised.</summary>

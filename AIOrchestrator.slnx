@@ -1,5 +1,10 @@
 <Solution>
   <Project Path="AIOrchestrator/AIOrchestrator.csproj" />
+  <Project Path="AIOrchestrator.Daemon/AIOrchestrator.Daemon.csproj" />
   <Project Path="AIOrchestratorCoreLib/AIOrchestratorCoreLib.csproj" />
   <Project Path="AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj" />
+  <Folder Name="/tools/">
+    <Project Path="tools/claude-contract/FakeClaude/FakeClaude.csproj" />
+    <Project Path="tools/claude-contract/ClaudeContract.Tests/ClaudeContract.Tests.csproj" />
+  </Folder>
 </Solution>

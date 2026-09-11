@@ -19,6 +19,26 @@ public static class Channel_Compactor
     /// <summary>Recent entries the live file always keeps — a resuming session's working memory.</summary>
     public const int KEEP_RECENT_ENTRIES = 45;
 
+    /// <summary>
+    /// The FEWEST bytes one entry can occupy, so a file's LENGTH alone can rule compaction out.
+    ///
+    /// <para>
+    /// Derived from the header pattern in <see cref="ChannelEntry_Parser"/>, at its most permissive
+    /// reading: <c>##[1]FROM a</c> — eleven single-byte characters, every optional space omitted.
+    /// Nothing shorter can open an entry, so a file of fewer than
+    /// <c>(COMPACT_ABOVE_ENTRIES + 1) * MIN_ENTRY_BYTES</c> bytes cannot hold enough entries to be
+    /// eligible, and does not need to be opened to find that out.
+    /// </para>
+    /// <para>
+    /// THE FLOOR IS PINNED BY A TEST, not by this comment: <c>ChannelCompactionGateTests</c> builds
+    /// exactly <c>COMPACT_ABOVE_ENTRIES + 1</c> minimal entries and requires compaction to happen. A
+    /// floor set too high would silently stop compacting a real channel — the file would grow instead
+    /// of being archived, which loses nothing but is invisible — so the derivation may not live only
+    /// in prose.
+    /// </para>
+    /// </summary>
+    public const int MIN_ENTRY_BYTES = 11;
+
     public static string Build_ArchiveFilePath(string channelFilePath)
     {
         var folder = Path.GetDirectoryName(channelFilePath) ?? "";
@@ -56,7 +76,18 @@ public static class Channel_Compactor
     {
         try
         {
-            if (!File.Exists(channelFilePath))
+            var file = new FileInfo(channelFilePath);
+
+            if (!file.Exists)
+                return null;
+
+            // THE CHEAPEST NO IN THE SYSTEM, and the one asked most often: every channel of every
+            // orchestration is offered here on every 2-second tick, and almost all of them are far
+            // short of the threshold. Answering from the length the stat above already returned
+            // means a short channel is neither opened, nor read, nor parsed, and does not take the
+            // write gate — which is what it used to do before returning "nothing to do".
+            // See MIN_ENTRY_BYTES for why a length can answer an entry-count question.
+            if (file.Length < (COMPACT_ABOVE_ENTRIES + 1) * (long)MIN_ENTRY_BYTES)
                 return null;
 
             // Read-then-rewrite is only safe if nothing appends in between: an entry landing after
@@ -94,6 +125,16 @@ public static class Channel_Compactor
     static long? Compact_Gated(string channelFilePath)
     {
         var text = Read_Text_Safe(channelFilePath);
+
+        // PRE-FILTER, cheap, on the same splitting and the same header pattern the parse uses. A
+        // file long enough to reach here is usually still under the threshold — 90 entries is a
+        // days-long orchestration — so the common answer is this "no", and it now costs a scan
+        // rather than a full entry construction per header.
+        if (ChannelEntry_Parser.Count_Entries(text) <= COMPACT_ABOVE_ENTRIES)
+            return null;
+
+        // THE DECISION, on the entries themselves. What leaves the live file has to be the entries,
+        // so the count that authorises moving them is the parse's own — never the pre-filter's.
         var entries = ChannelEntry_Parser.Parse_All(text);
 
         if (entries.Count <= COMPACT_ABOVE_ENTRIES)
@@ -153,6 +194,8 @@ public static class Channel_Compactor
 
     static string Read_Text_Safe(string filePath)
     {
+        Diagnostics.TickIo_Counters.Count_TextFileRead();
+
         using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();

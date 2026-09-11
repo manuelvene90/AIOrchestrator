@@ -15,4 +15,11 @@ public interface IOrchestrationMember
 
     /// <summary>Set when the supervisor retired this member. The folder stays on disk as audit trail.</summary>
     DateTime? ClosedUtc { get; }
+
+    /// <summary>
+    /// The model this member was asked for when it was requested — the supervisor's per-task
+    /// choice — or null for the role's configured default. Carried on the record so a respawn
+    /// comes back on the same model the task was sized for.
+    /// </summary>
+    string? Model { get; }
 }

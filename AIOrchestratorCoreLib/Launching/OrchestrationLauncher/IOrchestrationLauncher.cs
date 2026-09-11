@@ -24,6 +24,12 @@ public interface IOrchestrationLauncher
 
     /// <summary>Adds a member of the given kind — a reviewer spawns read-only, with no worktree.</summary>
     IOrchestrationSession Add_Member(string orchId, MemberKinds kind);
+
+    /// <summary>
+    /// Same, spawned on the model the requester chose for this task. The owner's per-orchestration
+    /// override (set-model) still wins over it; the config default is the floor beneath both.
+    /// </summary>
+    IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model);
     void Respawn_Supervisor(string orchId);
     void Respawn_Communicator(string orchId);
     void Respawn_Implementer(string orchId, string memberId);

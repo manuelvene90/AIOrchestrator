@@ -6,7 +6,7 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 
 /// <summary>
 /// The protocol is only worth anything if BOTH sides implement it identically, so these run the
-/// REAL kit/channel-append.sh against the REAL <see cref="ChannelFile_Lock"/>. A .NET-only test of
+/// REAL kit/bin/channel-append.sh against the REAL <see cref="ChannelFile_Lock"/>. A .NET-only test of
 /// the .NET half would prove the app cannot collide with itself, which was never the open question.
 /// <para>
 /// Nothing here skips. If bash or the script cannot be found, the test FAILS: a harness that cannot
@@ -411,7 +411,7 @@ public class ChannelAppendHelperInteropTests : IDisposable
 
         while (directory != null)
         {
-            var candidate = Path.Combine(directory.FullName, "kit", "channel-append.sh");
+            var candidate = Path.Combine(directory.FullName, "kit", "bin", "channel-append.sh");
 
             if (File.Exists(candidate))
                 return candidate;
@@ -420,27 +420,13 @@ public class ChannelAppendHelperInteropTests : IDisposable
         }
 
         throw new Exception(
-            $"kit/channel-append.sh was not found walking up from '{AppContext.BaseDirectory}'. "
+            $"kit/bin/channel-append.sh was not found walking up from '{AppContext.BaseDirectory}'. "
             + "This test asserts on the real script; without it there is nothing under test and a pass would be meaningless.");
     }
 
+    /// <summary>One locator for every kit test — Windows paths first, then the POSIX ones, so this runs on every OS the kit ships to.</summary>
     static string Find_Bash_OrFail()
     {
-        string[] candidates =
-        [
-            @"C:\Program Files\Git\bin\bash.exe",
-            @"C:\Program Files\Git\usr\bin\bash.exe",
-            @"C:\Windows\System32\bash.exe",
-        ];
-
-        foreach (var candidate in candidates)
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        throw new Exception(
-            $"No bash found at any of: {string.Join(", ", candidates)}. The append protocol has a bash half and a .NET half; "
-            + "without bash this suite cannot show they agree, and passing without checking is the failure mode this test exists to avoid.");
+        return TestSupport.Bash_Locator.Find_OrFail();
     }
 }

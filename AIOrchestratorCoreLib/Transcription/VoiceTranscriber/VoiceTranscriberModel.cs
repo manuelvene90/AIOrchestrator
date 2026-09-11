@@ -1,12 +1,14 @@
 using System.Diagnostics;
 using System.Text;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Processes;
 
 namespace AIOrchestratorCoreLib.Transcription.VoiceTranscriber;
 
 /// <summary>
-/// Runs the configured command with {input} replaced by the audio file path (quoted), via
-/// cmd /c so PATH and .cmd shims resolve. Stdout (trimmed) is the transcript.
+/// Runs the configured command with {input} replaced by the audio file path (quoted), through the
+/// OS's own shell (cmd /c on Windows so PATH and .cmd shims resolve, /bin/sh -c elsewhere — see
+/// <see cref="ShellCommand_Builder"/>). Stdout (trimmed) is the transcript.
 /// </summary>
 internal sealed class VoiceTranscriberModel(IOrchestrationLog log) : IVoiceTranscriber
 {
@@ -20,17 +22,11 @@ internal sealed class VoiceTranscriberModel(IOrchestrationLog log) : IVoiceTrans
         {
             var command = commandTemplate.Replace("{input}", $"\"{audioFilePath}\"");
 
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = $"/c {command}",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = new UTF8Encoding(false),
-                StandardErrorEncoding = new UTF8Encoding(false),
-            };
+            var startInfo = ShellCommand_Builder.Build_StartInfo(command);
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            startInfo.StandardOutputEncoding = new UTF8Encoding(false);
+            startInfo.StandardErrorEncoding = new UTF8Encoding(false);
 
             using var process = Process.Start(startInfo)
                 ?? throw new Exception($"Process.Start returned null for transcribe command: {command}");

@@ -17,6 +17,16 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
     }
 
     readonly int _aggregationSeconds = aggregationSeconds;
+
+    /// <summary>
+    /// CLAMPED TO THE WINDOW, and that is the whole reason it is computed rather than read. The discount
+    /// a finished message gets (<see cref="OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS"/>)
+    /// is only a discount while the window is the longer of the two; the test seam runs a one-second
+    /// window, and without this a finished message would be the SLOW one there — a rule inverting itself
+    /// under a configuration nobody would think to check.
+    /// </summary>
+    readonly int _finishedMessageQuietSeconds =
+        Math.Min(OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS, aggregationSeconds);
     readonly Dictionary<string, PendingDelivery> _pending = [];
 
     /// <summary>
@@ -199,6 +209,30 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
         // state is in front of them.
         if (_heldSinceUtc.ContainsKey(targetKey))
             return false;
+
+        // A FINISHED MESSAGE SERVES A SHORTER WINDOW (owner decision, 2026-09-09). Measured on the VPS
+        // that day: 11–12 s median from the owner's text to the entry landing in the supervisor's
+        // channel, six of them this window. Every message was serving it so that the occasional burst
+        // could arrive as ONE turn; a message that is plainly over must not pay in full for the ones
+        // that are not.
+        //
+        // IT WAITED FOR NOTHING AT ALL FOR ONE EVENING, and that is the line this comment exists to
+        // stop coming back. Flush_OwnerDeliveries_Async runs on EVERY mirror tick, so "ready at zero
+        // idle seconds" means the first message of a burst is taken 150 ms after it lands — before the
+        // second is typed. Measured: two messages two seconds apart bought TWO supervisor turns with
+        // full stops and ONE without, at ~1 M input tokens the turn, and the ⏸ button could not reach
+        // a message that left the buffer that fast either. A shorter window is the discount; no window
+        // was a different feature, and an expensive one.
+        //
+        // BELOW THE HOLD CHECK, and that ORDER IS THE CONDITION the owner attached to the change: ⏸
+        // still stops everything, finished sentences included. A message escaping a hold by this route
+        // would be the silent lapse of 2026-08-20 arriving again by a new door.
+        //
+        // ONE SEGMENT IS HALF THE RULE. A second segment is evidence that the first was not the whole
+        // thought, so a burst serves the FULL window from the later message — Bridge.OwnerMessageComplete_Decider
+        // decides only whether ONE text reads as finished, never whether it is alone.
+        if (delivery.Segments.Count == 1 && OwnerMessageComplete_Decider.Is_Complete(delivery.Segments[0].Text))
+            return idleSeconds >= _finishedMessageQuietSeconds;
 
         return idleSeconds >= _aggregationSeconds;
     }

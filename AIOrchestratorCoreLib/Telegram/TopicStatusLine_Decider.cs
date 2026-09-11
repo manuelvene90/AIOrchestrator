@@ -45,7 +45,10 @@ public static class TopicStatusLine_Decider
     /// </summary>
     public static bool Is_MessageAlreadyCurrent(string errorMessage)
     {
-        return errorMessage.Contains("message is not modified", StringComparison.OrdinalIgnoreCase);
+        // The WORDING now lives in TelegramError_Table (brief F10) — one place where a Telegram
+        // answer becomes a case the bridge means. This predicate keeps its name, its callers and
+        // the reasoning above it; what moved is the string.
+        return TelegramError_Table.Classify(400, errorMessage) == TelegramErrorCases.AlreadyCurrent;
     }
 
     /// <summary>
@@ -65,9 +68,7 @@ public static class TopicStatusLine_Decider
     /// </summary>
     public static bool Is_MessageGone(string errorMessage)
     {
-        return errorMessage.Contains("message to edit not found", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("message to delete not found", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("MESSAGE_ID_INVALID", StringComparison.OrdinalIgnoreCase);
+        return TelegramError_Table.Classify(400, errorMessage) == TelegramErrorCases.MessageGone;
     }
 
     /// <summary>
@@ -85,11 +86,15 @@ public static class TopicStatusLine_Decider
     /// </summary>
     public static bool Is_DeleteRefused(string errorMessage)
     {
-        return errorMessage.Contains("message can't be deleted", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("message can not be deleted", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("message cannot be deleted", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("not enough rights", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("CHAT_ADMIN_REQUIRED", StringComparison.OrdinalIgnoreCase);
+        // TWO CASES OF THE TABLE, one predicate — deliberately. Telegram's 48-hour refusal
+        // ("message can't be deleted") mentions no rights at all and its permission variant
+        // mentions both, but this caller does the same thing with either: latch the topic and stop
+        // trying to move its line. The table keeps them apart because the topic-delete path needs
+        // the distinction; this one does not, and collapsing it here is cheaper than a caller that
+        // has to remember both names.
+        var telegramCase = TelegramError_Table.Classify(400, errorMessage);
+
+        return telegramCase is TelegramErrorCases.DeleteRefused or TelegramErrorCases.NotEnoughRights;
     }
 
     public static TopicStatusActions Decide(string statusText, string? lastWrittenText, long? existingMessageId)

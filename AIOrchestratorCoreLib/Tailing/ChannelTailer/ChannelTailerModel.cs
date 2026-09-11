@@ -4,14 +4,12 @@ using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Tailing.CompletedChannelAppend;
 using AIOrchestratorCoreLib.Tailing.TailerPollResult;
+using AIOrchestratorCoreLib.Time.Clock;
 
 namespace AIOrchestratorCoreLib.Tailing.ChannelTailer;
 
 internal sealed class ChannelTailerModel : IChannelTailer
 {
-    /// <summary>Polls with no growth after which the trailing entry is considered complete.</summary>
-    const int QUIET_POLLS_TO_FLUSH = 2;
-
     sealed class FileTailState
     {
         public long Offset;
@@ -23,7 +21,23 @@ internal sealed class ChannelTailerModel : IChannelTailer
         /// that failed is retried instead of being silently skipped.
         /// </summary>
         public readonly StringBuilder Unconfirmed = new();
-        public int QuietPolls;
+
+        /// <summary>
+        /// WHEN THIS FILE WAS LAST SEEN TO GROW — the start of the current quiet stretch, and the only
+        /// thing the trailing-entry release is measured against. Null until a poll has looked at the
+        /// file at all.
+        ///
+        /// <para>
+        /// IT WAS A POLL COUNT UNTIL 2026-09-09, and that is the defect this field exists to close. The
+        /// rule was "two polls with no growth", so the protection it bought was always two times the
+        /// poll interval — never written down anywhere, and true only while that interval was the 2000 ms
+        /// mirror tick. <c>ChannelChangeWaker</c> then made the loop poll at 200 ms after a wake without
+        /// touching the count, and the guarantee silently shrank 12×: swept against a real stalling
+        /// writer, an entry survived a 300 ms pause and was TORN at 400 ms, where the pre-merge cadence
+        /// carried it to 4000 ms. A duration cannot be moved by somebody changing how often the loop runs.
+        /// </para>
+        /// </summary>
+        public DateTime? QuietSinceUtc;
     }
 
     /// <summary>
@@ -50,8 +64,26 @@ internal sealed class ChannelTailerModel : IChannelTailer
     /// </summary>
     readonly HashSet<string> _lastPolledFiles = [];
 
-    public ChannelTailerModel(IReadOnlyDictionary<string, long> persistedOffsets)
+    /// <summary>
+    /// How long a file must have stopped growing before its LAST entry may be released — see
+    /// <see cref="ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS"/> for the number and why it
+    /// is the number. A duration, never a count of polls: how often the loop polls is a latency
+    /// decision belonging to the mirror loop, and it must not be able to move this.
+    /// </summary>
+    readonly TimeSpan _trailingEntryQuiet;
+
+    /// <summary>
+    /// Injected because the release above is a DEADLINE READ, which is exactly the case
+    /// <see cref="IClock"/> exists for: a test that drives polls synchronously has no wall clock to
+    /// wait out, and sleeping through four real seconds per assertion is not a test suite.
+    /// </summary>
+    readonly IClock _clock;
+
+    public ChannelTailerModel(IReadOnlyDictionary<string, long> persistedOffsets, TimeSpan trailingEntryQuiet, IClock clock)
     {
+        _trailingEntryQuiet = trailingEntryQuiet;
+        _clock = clock;
+
         foreach (var pair in persistedOffsets)
         {
             var state = new FileTailState { Offset = pair.Value };
@@ -61,17 +93,22 @@ internal sealed class ChannelTailerModel : IChannelTailer
 
     public ITailerPollResult Poll(IReadOnlyList<IDiscoveredChannel> channels)
     {
+        // ONE clock read for the whole poll, and every channel is judged against it. Reading per file
+        // would let a poll that takes a second over twenty channels hold the first to a stricter quiet
+        // period than the last, for no reason a reader could ever reconstruct.
+        var nowUtc = _clock.UtcNow;
+
         // The file reads happen under the lock too. They are the only reason a poll takes long
         // enough to matter, and dropping the lock around them would hand the snapshot reader a
         // half-updated cursor — precisely the state this lock exists to make unobservable.
         lock (_statesLock)
         {
-            return Poll_AllChannels(channels);
+            return Poll_AllChannels(channels, nowUtc);
         }
     }
 
     /// <summary>Runs with <see cref="_statesLock"/> HELD, as does everything it calls.</summary>
-    ITailerPollResult Poll_AllChannels(IReadOnlyList<IDiscoveredChannel> channels)
+    ITailerPollResult Poll_AllChannels(IReadOnlyList<IDiscoveredChannel> channels, DateTime nowUtc)
     {
         List<ICompletedChannelAppend> completedAppends = [];
         List<string> truncatedFiles = [];
@@ -90,7 +127,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
         {
             try
             {
-                var entries = Poll_OneChannel(channel, truncatedFiles, heldTrailingEntryFiles);
+                var entries = Poll_OneChannel(channel, nowUtc, truncatedFiles, heldTrailingEntryFiles);
 
                 if (entries.Count > 0)
                     completedAppends.Add(CompletedChannelAppend_Factory.Create(channel, entries));
@@ -110,7 +147,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
     }
 
     /// <summary>Runs with <see cref="_statesLock"/> HELD.</summary>
-    IReadOnlyList<IChannelEntry> Poll_OneChannel(IDiscoveredChannel channel, List<string> truncatedFiles, List<string> heldTrailingEntryFiles)
+    IReadOnlyList<IChannelEntry> Poll_OneChannel(IDiscoveredChannel channel, DateTime nowUtc, List<string> truncatedFiles, List<string> heldTrailingEntryFiles)
     {
         var fileLength = Get_FileLength_OrNull(channel.FilePath);
         if (fileLength == null)
@@ -128,13 +165,13 @@ internal sealed class ChannelTailerModel : IChannelTailer
         // the FRONT of the pending text and is re-emitted, in order, ahead of anything new. This is
         // what makes the mirror at-least-once: entries leave only when the bridge says they were
         // delivered, never as a side effect of an offset that ran ahead of the send.
-        Rewind_Unconfirmed(state);
+        Rewind_Unconfirmed(state, nowUtc);
 
         if (fileLength.Value < state.Offset)
         {
             state.Offset = fileLength.Value;
             state.Pending.Clear();
-            state.QuietPolls = 0;
+            state.QuietSinceUtc = nowUtc;
             truncatedFiles.Add(channel.FilePath);
             return [];
         }
@@ -151,20 +188,19 @@ internal sealed class ChannelTailerModel : IChannelTailer
             // afterwards because the channel file on disk is perfectly intact.
             state.Offset += byteCount;
 
-            // A read that returned NOTHING is not activity. Counting it as such would reset the
-            // quiet counter on every poll, and a trailing entry waiting out its quiet window would
-            // never flush.
+            // A read that returned NOTHING is not activity. Counting it as such would restart the
+            // quiet stretch on every poll, and a trailing entry waiting it out would never flush.
             if (byteCount > 0)
-                state.QuietPolls = 0;
+                state.QuietSinceUtc = nowUtc;
             else
-                state.QuietPolls++;
+                state.QuietSinceUtc ??= nowUtc;
         }
         else
         {
-            state.QuietPolls++;
+            state.QuietSinceUtc ??= nowUtc;
         }
 
-        return Extract_CompleteEntries(state, channel.FilePath, heldTrailingEntryFiles);
+        return Extract_CompleteEntries(state, channel.FilePath, nowUtc, _trailingEntryQuiet, heldTrailingEntryFiles);
     }
 
     /// <summary>
@@ -198,7 +234,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
 
             // PENDING COUNTS TOO, and testing Unconfirmed alone was a silent-loss bug: every poll
             // starts by draining Unconfirmed back into Pending (Rewind_Unconfirmed), and bytes read
-            // but not yet emitted — a trailing entry still serving its quiet-poll window — live in
+            // but not yet emitted — a trailing entry still serving its quiet period — live in
             // Pending and nowhere else. The compaction guard asking this question was told "nothing
             // owed", rewrote the file underneath the tailer, and Set_Offset then discarded exactly
             // those bytes: the newest entry vanished from Telegram for good while the file on disk
@@ -208,14 +244,14 @@ internal sealed class ChannelTailerModel : IChannelTailer
             // forever and so never compacts. That file's trailing entry is already permanently
             // unemitted (Extract_CompleteEntries needs Ends_WithLineBreak), so this trades a file
             // that grows — visible, recoverable — for a delivery that disappears silently.
-            // Header-less noise does not stick: it is cleared after the quiet-poll window.
+            // Header-less noise does not stick: it is cleared once the file has been quiet.
             if (state.Unconfirmed.Length > 0 || state.Pending.Length > 0)
                 return true;
 
             // THE FILE IS THE THIRD PLACE AN ENTRY CAN BE OWED FROM, and it was the blind spot that
             // made the two clauses above insufficient. The mirror tick appends to channel files
             // BETWEEN the poll and compaction, on the same thread — Check_LedgerHealth_Async,
-            // Check_ChannelShapes_Async and Push_PeriodicStatus_Async all write entries after the
+            // Check_ChannelShapes_Async and Push_AwayDigests_Async all write entries after the
             // poll has run. Those bytes are in no buffer here, so both clauses answered false;
             // compaction then kept the new entry among the newest 45, returned EOF, and Set_Offset
             // parked the cursor past it. Gone from Telegram, intact on disk, and invisible to the
@@ -276,7 +312,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
         }
     }
 
-    static void Rewind_Unconfirmed(FileTailState state)
+    void Rewind_Unconfirmed(FileTailState state, DateTime nowUtc)
     {
         if (state.Unconfirmed.Length == 0)
             return;
@@ -284,9 +320,10 @@ internal sealed class ChannelTailerModel : IChannelTailer
         state.Pending.Insert(0, state.Unconfirmed.ToString());
         state.Unconfirmed.Clear();
 
-        // Those entries were already judged COMPLETE once; making them serve the quiet-poll window
-        // a second time would delay every retry by two more polls for no new information.
-        state.QuietPolls = QUIET_POLLS_TO_FLUSH;
+        // Those entries were already judged COMPLETE once; making them serve the quiet period a
+        // second time would delay every retry by the whole of it for no new information. Backdated
+        // rather than flagged, so there is one rule for "is this file quiet" and not two.
+        state.QuietSinceUtc = nowUtc - _trailingEntryQuiet;
     }
 
     public void Set_Offset(string channelFilePath, long offset)
@@ -306,7 +343,10 @@ internal sealed class ChannelTailerModel : IChannelTailer
             state.Offset = offset;
             state.Pending.Clear();
             state.Unconfirmed.Clear();
-            state.QuietPolls = 0;
+
+            // NULL, not "now": the rewrite discarded everything that could have been released, so
+            // there is nothing for a quiet stretch to be about until the next poll looks at the file.
+            state.QuietSinceUtc = null;
         }
     }
 
@@ -334,7 +374,12 @@ internal sealed class ChannelTailerModel : IChannelTailer
         return snapshot;
     }
 
-    static IReadOnlyList<IChannelEntry> Extract_CompleteEntries(FileTailState state, string channelFilePath, List<string> heldTrailingEntryFiles)
+    static IReadOnlyList<IChannelEntry> Extract_CompleteEntries(
+        FileTailState state,
+        string channelFilePath,
+        DateTime nowUtc,
+        TimeSpan trailingEntryQuiet,
+        List<string> heldTrailingEntryFiles)
     {
         var pendingText = state.Pending.ToString();
 
@@ -344,16 +389,17 @@ internal sealed class ChannelTailerModel : IChannelTailer
         var lines = pendingText.Split('\n');
         var headerLineIndexes = Find_HeaderLineIndexes(lines);
 
+        var quiet = Is_Quiet(state, nowUtc, trailingEntryQuiet);
+
         if (headerLineIndexes.Count == 0)
         {
             // No entry header in the pending text. Once quiet, it is preamble/noise — drop it.
-            if (state.QuietPolls >= QUIET_POLLS_TO_FLUSH)
+            if (quiet)
                 state.Pending.Clear();
 
             return [];
         }
 
-        var quiet = state.QuietPolls >= QUIET_POLLS_TO_FLUSH;
         var flushTrailingEntry = quiet && Ends_WithLineBreak(pendingText);
 
         // HELD, AND SAID SO. Quiet but unterminated means the trailing entry parses and cannot be
@@ -414,6 +460,19 @@ internal sealed class ChannelTailerModel : IChannelTailer
         }
 
         return indexes;
+    }
+
+    /// <summary>
+    /// WHETHER THIS FILE HAS STOPPED BEING WRITTEN, as far as anyone here can tell — the one question
+    /// the trailing entry's release turns on, asked in ONE place so it cannot grow a second answer.
+    /// <para>
+    /// A null stretch is NOT quiet: it means no poll has looked at the file yet, and answering "quiet"
+    /// from an observation nobody made is the shape of the failure this whole class documents.
+    /// </para>
+    /// </summary>
+    static bool Is_Quiet(FileTailState state, DateTime nowUtc, TimeSpan trailingEntryQuiet)
+    {
+        return state.QuietSinceUtc != null && nowUtc - state.QuietSinceUtc.Value >= trailingEntryQuiet;
     }
 
     static bool Ends_WithLineBreak(string text)

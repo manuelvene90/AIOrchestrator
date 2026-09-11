@@ -1,3 +1,6 @@
+using AIOrchestratorCoreLib.Status;
+using AIOrchestratorCoreLib.Channels;
+
 namespace AIOrchestratorCoreLib.Bridge;
 
 /// <summary>
@@ -16,15 +19,25 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// </summary>
 public static class OwnerPush_Policy
 {
-    /// <summary>Written by the supervisor when it needs a decision — rendered as tappable buttons.</summary>
-    public const string QUESTION_MARKER = "QUESTION:";
-    public const string OPTION_MARKER = "OPTION:";
+    /// <summary>
+    /// Written by the supervisor when it needs a decision — rendered as tappable buttons. The word
+    /// itself lives with the rest of the channel vocabulary (<see cref="MemberState_Resolver.QUESTION_MARKER"/>);
+    /// this name stays because this file's readers are about the owner's phone, not about member state.
+    /// </summary>
+    // FROM THE GRAMMAR, and `static readonly` rather than `const` because of it: the grammar is a
+    // FILE both this app and the bash tool read, so its values arrive at runtime. A `const` would
+    // have to be a literal here, which is the ninth copy E3 removes.
+    public static readonly string QUESTION_MARKER = MemberState_Resolver.QUESTION_MARKER;
+    public static readonly string OPTION_MARKER = ChannelGrammar.OPTION;
 
     /// <summary>Work has stopped and only the owner can restart it.</summary>
-    public const string BLOCKED_MARKER = "BLOCKED ON OWNER";
+    public static readonly string BLOCKED_MARKER = ChannelGrammar.BLOCKED_ON_OWNER;
 
-    /// <summary>A picture the session wants the owner to SEE — uploaded as a photo, never texted.</summary>
-    public const string IMAGE_MARKER = "IMAGE:";
+    /// <summary>A picture for the owner, uploaded as a photo. See <see cref="Carries_FileForTheOwner"/>.</summary>
+    public static readonly string IMAGE_MARKER = ChannelGrammar.IMAGE;
+
+    /// <summary>A file for the owner, uploaded as a document. See <see cref="Carries_FileForTheOwner"/>.</summary>
+    public static readonly string ATTACH_MARKER = ChannelGrammar.ATTACH;
 
     /// <summary>
     /// The one-line greeting a session writes as it boots — "supervisor online — …", "solo online
@@ -41,7 +54,7 @@ public static class OwnerPush_Policy
     ///
     /// It cannot become a waterfall: a session writes it exactly once, at boot.
     /// </summary>
-    public const string ONLINE_MARKER = "online";
+    public static readonly string ONLINE_MARKER = ChannelGrammar.BOOT_ANNOUNCEMENT_WORD;
 
     /// <summary>
     /// Matched on the SUBJECT, not the raw text, so the word "online" in a sentence is not a
@@ -67,97 +80,84 @@ public static class OwnerPush_Policy
     }
 
     /// <summary>
-    /// The turn-end declaration the run-to-the-end hook accepts: "WAITING ON &lt;what&gt;" in the
-    /// subject means the session is ending its turn on a machine — a build, a suite, a sub-agent.
-    /// It is a STATUS LINE by definition, never the answer to anything.
-    /// </summary>
-    public const string WAITING_ON_MARKER = "WAITING ON";
-
-    /// <summary>
-    /// Whether the SUBJECT declares a turn end. Matched on the subject only: the hook also accepts
-    /// the marker at the start of a body line, but sessions end nearly every entry — answers
-    /// included — with a "WAITING ON …" line to satisfy it, so the body says nothing about what the
-    /// entry IS. The boundary is the hook's own ("WAITING ONLY" contains "WAITING ON"): the marker
-    /// must be followed by a non-letter or the end of the subject. The hook
-    /// (kit/hooks/run-to-the-end-check.sh) is the other reader of this marker; the two must agree.
-    /// </summary>
-    public static bool Is_TurnEndDeclaration(string? subject)
-    {
-        if (string.IsNullOrWhiteSpace(subject))
-            return false;
-
-        var searchFrom = 0;
-
-        while (true)
-        {
-            var start = subject.IndexOf(WAITING_ON_MARKER, searchFrom, StringComparison.Ordinal);
-
-            if (start < 0)
-                return false;
-
-            var end = start + WAITING_ON_MARKER.Length;
-
-            if (end >= subject.Length || !char.IsLetter(subject[end]))
-                return true;
-
-            searchFrom = end;
-        }
-    }
-
-    /// <summary>
-    /// ownerIsWaitingForAReply: the owner sent something the supervisor has not answered yet, so
-    /// THIS entry is that answer and must go through whatever else it contains.
+    /// WHETHER A SUPERVISOR ENTRY REACHES THE PHONE — and since 2026-09-09 the answer is YES, for
+    /// every entry the supervisor writes on the owner channel.
     ///
-    /// subject: the entry's subject line, used ONLY for the boot greeting above. Optional so the
-    /// callers that genuinely have no subject to offer keep working; the mirror path always passes
-    /// it.
+    /// <para>
+    /// WHAT THIS USED TO DO, AND WHY IT IS GONE. It let through a question, an answer the owner was
+    /// waiting for, a <c>BLOCKED ON OWNER</c>, a file, and the boot greeting — and suppressed
+    /// everything else as "progress narration", on the owner's earlier words about a waterfall of
+    /// messages. It worked exactly as designed and produced the opposite of what they wanted: their
+    /// own quoted example of a message they NEEDED — *"La regola ora è completa…"* — was suppressed
+    /// here and reached them five minutes late, through the silent-deadlock net, in raw Markdown.
+    /// Meanwhile the noise they were actually drowning in came from the APP: a fifteen-line STATUS
+    /// every half hour, a receipt sentence under every message, false stall alerts.
+    /// </para>
+    /// <para>
+    /// THE OWNER'S RULING, 2026-09-09: *"If the supervisor writes to me, I must know it — that
+    /// rings. Status, receipts and app bookkeeping do not ring."* So the brake on chatter is no
+    /// longer a filter that guesses which of the supervisor's words matter; it is the SKILL (write
+    /// to the owner only what they must know) plus the brevity nudge that already measures every
+    /// entry. A filter cannot tell a thought from a status line, and the one it suppressed by
+    /// mistake was the one that mattered.
+    /// </para>
+    /// <para>
+    /// ONE EXCEPTION SURVIVES, and it is not narration filtering: the owner's own words quoted back
+    /// at them (<see cref="Is_OwnerRestatement"/>). That says nothing they did not just type, and it
+    /// spent their wait — the real answer that followed then read as narration.
+    /// </para>
     /// </summary>
     public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply, string? subject = null)
     {
-        // THE OWNER'S WAIT IS NOT SPENT ON A STATUS LINE. The wait is one credit, consumed by the
-        // first entry it pushes, and sessions routinely write a turn-end declaration ("WAITING ON
-        // the re-review - fix landed") in the seconds before the actual answer: on 2026-09-10 that
-        // happened three times in one topic, the status line took the credit, and the answer that
-        // followed was filed as narration and never reached the phone. The owner re-typed their
-        // question each time. A status line with the credit open falls through to the merit checks
-        // below, exactly as it would with the credit spent.
-        if (ownerIsWaitingForAReply && !Is_TurnEndDeclaration(subject))
-            return true;
-
-        if (Is_OnlineGreeting(subject))
-            return true;
-
-        if (string.IsNullOrEmpty(rawEntryText))
+        // An entry with no body is nothing to read. Not a filter — a guard against sending an empty
+        // message, which Telegram refuses anyway.
+        if (string.IsNullOrWhiteSpace(rawEntryText))
             return false;
 
-        return Carries_Question(rawEntryText)
-            || Asks_InProse(rawEntryText)
-            || Carries_Image(rawEntryText)
-            || rawEntryText.Contains(BLOCKED_MARKER, StringComparison.OrdinalIgnoreCase);
+        return !Is_OwnerRestatement(rawEntryText);
     }
 
     /// <summary>
-    /// A PICTURE IS NEVER NARRATION. The session went and rendered something for the owner to look
-    /// at, which is a deliberate act with a cost — nobody attaches a screenshot in passing.
+    /// A FIFTH thing the phone gets: an entry carrying a file for the owner — a screenshot
+    /// (<c>IMAGE:</c>) or a document (<c>ATTACH:</c>).
     ///
-    /// Suppressing one did not merely delay it, it DESTROYED it: the held entry is remembered as
-    /// already-formatted TEXT (_suppressedEntries), and the two routes that release it later —
-    /// the silent-deadlock net and the turn-ended receipt — send that text through Send_Message_Async,
-    /// which has no notion of a photo. So the owner eventually received the literal `IMAGE: C:\…`
-    /// line and never the picture, however many times it was resent. On 2026-09-08 that happened all
-    /// day in one topic: *"Continui a inviarmi la directory dell'immagine invece dell'immagine
-    /// stessa"*, and the only pictures that ever arrived were the mock-ups, which carried OPTION:
-    /// lines and so were pushed for a completely unrelated reason.
-    ///
-    /// It cannot become the waterfall this policy exists to prevent — these entries already reached
-    /// the phone, just late and as a broken path.
+    /// <para>
+    /// A FILE IS A DELIVERY, NOT NARRATION. The mockups, the CSV, the failing output: the owner has
+    /// to LOOK at it, which is the whole reason it was produced, and an upload the phone never
+    /// announces is an upload nobody opens. It also cannot become the waterfall this policy exists
+    /// to prevent — a session writes a file for the owner rarely, and never on a loop.
+    /// </para>
+    /// <para>
+    /// IT WAS ALREADY BROKEN FOR <c>IMAGE:</c>, silently, and that is why this is a fix rather than
+    /// an addition: a screenshot sent as ordinary narration met the four rules above, matched none
+    /// of them, and was suppressed with its photo. It only ever arrived when the owner happened to
+    /// be waiting for a reply — which is how nobody noticed. <c>ATTACH:</c> (2026-09-07) would have
+    /// inherited exactly that, so both markers are named here.
+    /// </para>
+    /// <para>
+    /// MATCHED AT THE START OF A LINE, like the engine's own extractor, and not with
+    /// <see cref="string.Contains(string, StringComparison)"/> the way <see cref="Carries_Question"/>
+    /// is: only a column-0 marker line actually produces an upload, so a prose mention of "ATTACH:"
+    /// must not push an entry that delivers nothing.
+    /// </para>
     /// </summary>
-    public static bool Carries_Image(string rawEntryText)
+    public static bool Carries_FileForTheOwner(string rawEntryText)
     {
         if (string.IsNullOrEmpty(rawEntryText))
             return false;
 
-        return rawEntryText.Contains(IMAGE_MARKER, StringComparison.Ordinal);
+        foreach (var rawLine in rawEntryText.Split('\n'))
+        {
+            var line = rawLine.TrimEnd();
+
+            foreach (var marker in new[] { IMAGE_MARKER, ATTACH_MARKER })
+            {
+                if (line.StartsWith(marker, StringComparison.Ordinal) && line.Length > marker.Length && line[marker.Length..].Trim().Length > 0)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -188,6 +188,37 @@ public static class OwnerPush_Policy
     /// it firing on 2026-08-21: *"Everything went idle with an unsent supervisor entry — releasing
     /// it in case it was a question"*. This filter is the fast path; that is the guarantee.
     /// </summary>
+    /// <summary>
+    /// The session quoting the owner back to the owner — an entry whose whole body is
+    /// <c>Owner: "…"</c> and nothing else. It reached the phone as "🔴 Sup: Owner: 'Che ne pensi?…'"
+    /// (2026-09-07): a message from the session that says nothing the owner did not just type, and
+    /// worse, it spent their wait, so the real answer that followed was narration again. Such an
+    /// entry is never pushed, and never counts as the reply they were waiting for.
+    ///
+    /// Only the bare quotation is caught. A reply that OPENS by quoting them and goes on to answer
+    /// has more than one line of body, and is a reply.
+    /// </summary>
+    public static bool Is_OwnerRestatement(string rawEntryText)
+    {
+        if (string.IsNullOrEmpty(rawEntryText))
+            return false;
+
+        var bodyLines = rawEntryText.Split('\n')
+            .Select(line => line.TrimEnd())
+            .Where(line => line.Length > 0)
+            .SkipWhile(line => line.StartsWith("## ", StringComparison.Ordinal))
+            .ToList();
+
+        if (bodyLines.Count != 1)
+            return false;
+
+        return OwnerRestatement_Pattern.IsMatch(bodyLines[0].Trim());
+    }
+
+    static readonly System.Text.RegularExpressions.Regex OwnerRestatement_Pattern = new(
+        "^(the\\s+)?owner(\\s+(said|says|asked|asks|wrote|writes))?\\s*:\\s*[\"\u201C\u201D'\u2018\u2019\u00AB\u00BB].*[\"\u201C\u201D'\u2018\u2019\u00AB\u00BB]\\s*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     public static bool Asks_InProse(string rawEntryText)
     {
         if (string.IsNullOrEmpty(rawEntryText))
@@ -218,21 +249,56 @@ public static class OwnerPush_Policy
     }
 
     /// <summary>
-    /// Added to EVERY question automatically. A question on a phone is compressed to a couple of
-    /// lines, so the owner regularly needs the reasoning behind it before they can choose — and
-    /// without a button the only way to ask is to type, which defeats the point of tappable options.
+    /// Added to EVERY question automatically, and it is now the ONLY button the app contributes.
+    ///
+    /// <para>
+    /// THERE WERE TWO, AND THE SECOND ONE EARNED ITS REMOVAL. "❔ Explain the options" spent the
+    /// buttons and asked the supervisor to explain and re-ask; "💬 Let's talk" left the question and
+    /// its keyboard exactly where they were. Once a tap on "Let's talk" also closes its question —
+    /// which is what the owner asked for, having tapped a mute button twelve times in one afternoon
+    /// — the two are the same gesture with two labels, and offering both only makes the owner
+    /// choose between synonyms before they can ask their real question.
+    /// </para>
+    /// <para>
+    /// A question on a phone is compressed to a couple of lines, so the owner regularly needs the
+    /// reasoning behind it before they can choose — and without a button the only way to ask is to
+    /// type, which defeats the point of tappable options.
+    /// </para>
     /// </summary>
-    public const string MORE_DETAIL_LABEL = "❔ Explain the options";
+    public const string TALK_LABEL = "💬 Let's talk";
 
     /// <summary>
     /// What the SUPERVISOR actually receives when that button is tapped. It is deliberately fuller
-    /// than the label: the button is one tap, the instruction behind it has to be unambiguous, and
-    /// it must end by re-asking so the decision is not left dangling.
+    /// than the label: the button is one tap, the instruction behind it has to be unambiguous.
+    ///
+    /// <para>
+    /// AND IT ENDS BY RE-ASKING, which is the reverse of what it said before. The old text ordered
+    /// the supervisor NOT to ask again, because the question was still live on the phone with its
+    /// buttons — a second copy would have been the waterfall this policy exists to prevent
+    /// (decision 14). The tap now closes the question, so there is no live copy left: a decision
+    /// nobody re-asks is a decision that silently never gets taken, which is exactly what happened
+    /// on 2026-09-09 to an orphaned-processes question the owner tapped and nobody ever decided.
+    /// </para>
     /// </summary>
-    public const string MORE_DETAIL_REQUEST =
-        "Explain this decision before I choose: what each option actually means in practice, what "
-        + "differs between them, what it costs to get wrong, and which one you recommend and why. "
-        + "Keep it short. Then ask the question again.";
+    public const string TALK_REQUEST =
+        "The owner wants to talk this decision through before choosing. Their question closed when "
+        + "they tapped, so nothing is live on their phone right now. Explain it in prose, briefly: "
+        + "what each option actually means in practice, what differs between them, what it costs to "
+        + "get wrong, and which one you recommend and why. Answer whatever they ask next. Then, once "
+        + "the discussion has settled, ask the question again with fresh QUESTION:/OPTION: lines — "
+        + "otherwise the decision is left dangling.";
+
+    /// <summary>
+    /// What the question message is edited to on that tap — the owner's own words for it: *"the
+    /// message says 'ok, tell me what you have in mind'"*.
+    ///
+    /// <para>
+    /// IT IS ENGLISH, like every other string the app itself writes (owner's rule, 2026-09-09).
+    /// Decision 11 governs what a ROLE writes to the owner — that is in the owner's language — not
+    /// what is hardcoded here.
+    /// </para>
+    /// </summary>
+    public const string TALK_ACKNOWLEDGEMENT = "💬 Ok — tell me what you have in mind.";
 
     public static bool Carries_Question(string rawEntryText)
     {

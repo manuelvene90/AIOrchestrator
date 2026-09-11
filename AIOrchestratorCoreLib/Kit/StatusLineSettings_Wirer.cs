@@ -5,17 +5,32 @@ namespace AIOrchestratorCoreLib.Kit;
 
 /// <summary>
 /// Wires the orchestrator status line into ~/.claude/settings.json (statusLine → the installed
-/// statusline.ps1). Careful read-modify-write: every other setting is preserved, and the previous
-/// file is backed up beside it before the first change. Idempotent — no write when already wired.
+/// statusline script). Careful read-modify-write: every other setting is preserved, and the
+/// previous file is backed up beside it before the first change. Idempotent — no write when
+/// already wired.
 /// </summary>
 public static class StatusLineSettings_Wirer
 {
     public const string BACKUP_SUFFIX = ".aiorch-backup";
 
+    /// <summary>
+    /// The command Claude Code runs for the status line, decided by the SCRIPT's extension: the
+    /// .ps1 goes through Windows PowerShell as it always has, the .sh twin through bash. The
+    /// extension is the truth because the installer picks the script per OS and this must agree
+    /// with it by construction rather than by a second OS check.
+    /// </summary>
+    public static string Build_Command(string statuslineScriptPath)
+    {
+        if (statuslineScriptPath.EndsWith(".sh", StringComparison.OrdinalIgnoreCase))
+            return $"bash \"{statuslineScriptPath.Replace('\\', '/')}\"";
+
+        return $"powershell -NoProfile -ExecutionPolicy Bypass -File \"{statuslineScriptPath}\"";
+    }
+
     /// <summary>Returns true when the settings file was changed (false = already wired).</summary>
     public static bool Ensure_Wired(string settingsFilePath, string statuslineScriptPath)
     {
-        var desiredCommand = $"powershell -NoProfile -ExecutionPolicy Bypass -File \"{statuslineScriptPath}\"";
+        var desiredCommand = Build_Command(statuslineScriptPath);
 
         JsonObject root;
 

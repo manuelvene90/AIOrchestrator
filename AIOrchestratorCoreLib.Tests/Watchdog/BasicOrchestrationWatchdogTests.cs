@@ -59,7 +59,7 @@ public class BasicOrchestrationWatchdogTests : IDisposable
         _launcher = OrchestrationLauncher_Factory.Create(
             _paths, OrchestratorConfigProvider_Factory.Create(_paths), _store, _spawner, log);
 
-        _watchdog = SessionWatchdog_Factory.Create(_paths, _store, _launcher, log);
+        _watchdog = SessionWatchdog_Factory.Create(_paths, OrchestratorConfigProvider_Factory.Create(_paths), _store, _launcher, log);
     }
 
     public void Dispose()

@@ -7,7 +7,10 @@ namespace AIOrchestratorCoreLib.Tailing.ChannelTailer;
 /// Byte-offset tailer over channel files. On the FIRST sighting of a file its offset is set to the
 /// current length (history is never mirrored). On later polls new bytes accumulate per file, and
 /// entries are emitted only when COMPLETE: a following header proves completion immediately; the
-/// trailing entry is emitted after the file has been quiet for the configured number of polls.
+/// trailing entry is emitted only once the file has stopped growing for
+/// <see cref="ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS"/> — a DURATION, never a count
+/// of polls, because how often the loop polls is the mirror loop's latency decision and moving it
+/// must not move this (it did, on 2026-09-09; see that constant).
 /// <para>
 /// Emission is AT-LEAST-ONCE, by contract: entries stay emitted-but-unconfirmed until the caller
 /// calls <see cref="Confirm_Append"/>, and every poll re-emits whatever is still unconfirmed. A

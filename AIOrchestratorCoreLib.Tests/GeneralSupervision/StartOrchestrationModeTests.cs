@@ -28,28 +28,31 @@ public class StartOrchestrationModeTests : IDisposable
     }
 
     /// <summary>
-    /// THE DEFAULT IS BASIC since the owner's directive of 2026-08-13: "as a cost-saving measure, a
-    /// new session should be Basic by default, not an orchestration session".
+    /// NO MODE MEANS "THE REQUEST DID NOT SAY" — and that is all it means here now.
     ///
-    /// IT USED TO BE FULL, and the argument for that was migration — "every request written before
-    /// this field existed must keep working". That argument is now on the other side: an omitted
-    /// `mode` buys one session instead of a crew, so the failure mode of a stale request is
-    /// UNDERSPENDING, which the owner can see and correct. The reverse was overspending they only
-    /// discovered on the bill.
-    ///
-    /// The exposure window is seconds — the requests folder is drained every tick — but a general
-    /// supervisor mid-turn may already have composed one, so the kit doc has to change with the code
-    /// or the concierge is instructed that omitting `mode` buys a crew while the app hands it a solo.
+    /// <para>
+    /// It used to mean BASIC, collapsed at this line, per the owner's directive of 2026-08-13: "as a
+    /// cost-saving measure, a new session should be Basic by default, not an orchestration session".
+    /// Basic is still what an untouched machine gets, but the rule moved to <c>config.json</c>
+    /// (<c>defaults.orchestrationMode</c>) so the owner who set it can change it — and a default can
+    /// only mean anything if the silence it settles is still legible when it reaches the thing that
+    /// holds it. Collapsing here made "absent" and "explicitly basic" one value, and the setting
+    /// unreachable.
+    /// </para>
+    /// <para>
+    /// Where the null becomes a shape is <c>BridgeEngineModel.Process_StartRequests</c>, and what it
+    /// becomes there is pinned by <c>StartOrchestrationDefaultShapeTests</c>.
+    /// </para>
     /// </summary>
     [Fact]
-    public void NoMode_IsTheCheapShape()
+    public void NoMode_LeavesTheShapeToTheConfiguredDefault()
     {
         Write("a.json", """{"action":"start-orchestration","repo":"skeleton client"}""");
 
         var request = Assert.Single(OrchestrationRequests_Reader.Read_Pending(_paths).StartRequests);
 
         Assert.Equal("skeleton client", request.RepoQuery);
-        Assert.True(request.IsBasic);
+        Assert.Null(request.IsBasic);
     }
 
     [Fact]

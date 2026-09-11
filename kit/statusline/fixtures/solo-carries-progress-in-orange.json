@@ -1,0 +1,35 @@
+{
+  "name": "solo-carries-progress-in-orange",
+  "env": {
+    "AIORCH_ROLE": "solo",
+    "AIORCH_ID": "option-lab-2",
+    "AIORCH_MEMBER": "solo-1"
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Sonnet"
+    },
+    "workspace": {
+      "current_dir": "C:\\repos\\AIOrchestrator"
+    },
+    "context_window": {
+      "used_percentage": 42.7
+    },
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {
+    "option-lab-2/.progress.json": {
+      "text": "1 of 2 done"
+    },
+    "option-lab-2/solo-1/.keep": {}
+  },
+  "expected": "\u001b[1;38;5;208m SOLO-1 \u001b[0m\u001b[38;5;208m option-lab-2 \u001b[0m Sonnet \u001b[90mctx 43%\u001b[0m \u001b[90m1 of 2 done\u001b[0m",
+  "expectedUsageFile": "option-lab-2/solo-1/.usage.json"
+}

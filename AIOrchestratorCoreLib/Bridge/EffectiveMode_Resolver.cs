@@ -16,7 +16,7 @@ namespace AIOrchestratorCoreLib.Bridge;
 public static class EffectiveMode_Resolver
 {
     /// <summary>
-    /// PAUSE FIRST, THEN PRESENCE, AND FOR EVERY TOPIC INCLUDING GENERAL. The owner being in a terminal is not a
+    /// PRESENCE FIRST, AND FOR EVERY TOPIC INCLUDING GENERAL. The owner being in a terminal is not a
     /// delivery setting to be weighed against the others — it is a statement about where they are,
     /// and pushing to a phone they are not holding is the thing it exists to stop.
     /// <para>
@@ -29,19 +29,10 @@ public static class EffectiveMode_Resolver
     public static TelegramDeliveryModes Resolve(
         OwnerPresenceModes presence,
         bool isGeneral,
-        bool paused,
         TelegramDeliveryModes topicMode,
         bool appWideDeferred,
         bool appWideSilenced)
     {
-        // PAUSE OUTRANKS EVERYTHING, PRESENCE INCLUDED, and it resolves to DEFERRED rather than
-        // Silenced deliberately. Silenced's licence to DROP rests on the owner reading the same
-        // content live in a terminal (see Freezes_Offsets below); a paused orchestration is one they
-        // have walked away from, so nothing written while it slept may be thrown away. It freezes
-        // and replays the moment they lift the pause — which is the promise the button makes.
-        if (paused)
-            return TelegramDeliveryModes.Deferred;
-
         var presenceOverride = OwnerPresence_Policy.Resolve_ModeOverride_OrNull(presence);
 
         if (presenceOverride != null)

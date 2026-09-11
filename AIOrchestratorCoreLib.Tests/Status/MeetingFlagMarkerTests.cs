@@ -1,6 +1,7 @@
 ﻿using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Status;
@@ -72,7 +73,7 @@ public class MeetingFlagMarkerTests : IDisposable
     /// simply quiet — so the failure must be reported, not swallowed. The lock is exclusive, so this
     /// is a deterministic failure rather than a race the test hopes to win.
     /// </summary>
-    [Fact]
+    [RequiresFileShareEnforcementFact]
     public void AFailedRemoval_IsREPORTED_BecauseASilentOneSilencesAWatcherForever()
     {
         MeetingFlag_Marker.Sync(_paths, "arb-fix", OwnerPresenceModes.Terminal, out _);

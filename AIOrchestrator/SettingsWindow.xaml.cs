@@ -26,7 +26,6 @@ public partial class SettingsWindow : Window
         ImplementerModelTextBox.Text = config.ImplementerModel ?? "";
         GeneralModelTextBox.Text = config.GeneralSupervisorModel ?? "";
         CommunicatorModelTextBox.Text = config.CommunicatorModel ?? "";
-        ItalianLayerCheckBox.IsChecked = config.TelegramItalianLayer;
     }
 
     void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -60,15 +59,21 @@ public partial class SettingsWindow : Window
             _config.Repos,
             Null_IfEmpty(SupervisorModelTextBox.Text),
             Null_IfEmpty(ImplementerModelTextBox.Text),
+
+            // NO FIELD FOR THESE TWO, and none is wanted: reviewerModel/soloModel are hand-edited
+            // keys the loader reads and never writes, so the window carries whatever the config it
+            // was opened with resolved to and Save leaves the file's own value alone.
+            _config.ReviewerModel,
+            _config.SoloModel,
             Null_IfEmpty(GeneralModelTextBox.Text),
             Null_IfEmpty(CommunicatorModelTextBox.Text),
             chatId,
             ownerId,
             Null_IfEmpty(BotTokenTextBox.Text),
-            ItalianLayerCheckBox.IsChecked == true,
             _config.TelegramStatusScreenshots,
             _config.VoiceTranscribeCommand,
-            _config.OrchestrationTokenBudget);
+            _config.OrchestrationTokenBudget,
+            _config.Runners);
 
         OrchestratorConfig_Loader.Save(updated, _paths);
         Close();

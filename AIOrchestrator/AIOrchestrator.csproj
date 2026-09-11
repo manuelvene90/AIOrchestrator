@@ -37,14 +37,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The kit ships WITH the app so startup can self-install the role commands and the status
-         line script (~/.claude) — running install.ps1 is no longer a prerequisite for them. -->
-    <Content Include="..\kit\commands\*.md" Link="kit\commands\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <!-- The append helper ships INTO the commands folder, because that is where the role commands
-         tell every session to run it from. Ship it anywhere else and the instruction is a dead path. -->
-    <Content Include="..\kit\channel-append.sh" Link="kit\commands\channel-append.sh" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The kit ships WITH the app as a COMPLETE PLUGIN FOLDER, so `claude plugin marketplace add`
+         can point at the running app's own copy and the installed kit is by construction the one
+         this binary was built with (decision 23). The app no longer copies any of it into ~/.claude
+         — it only checks the version that is installed there. -->
+    <Content Include="..\kit\.claude-plugin\*.json" Link="kit\.claude-plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\skills\**\*.md" Link="kit\skills\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\bin\*.sh" Link="kit\bin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The grammar the tool in kit/bin reads with jq. It travels WITH the tool, so an installed kit
+         is never a tool without its grammar. -->
+    <Content Include="..\kit\grammar\*.json" Link="kit\grammar\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

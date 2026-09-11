@@ -86,10 +86,21 @@ public static class AwayMode_Policy
         return awayActive && ownerAtAPc;
     }
 
-    /// <summary>Marks an away topic in the owner's topic LIST, so the state is visible without opening it.</summary>
+    /// <summary>
+    /// Away's glyph. NOT IN THE TOPIC LIST ANY MORE — it moved to PULSE's header on 2026-09-10, with
+    /// the other four mode glyphs, because away is APP-WIDE: on a name it renamed every open topic
+    /// the moment the owner went away, and each rename writes a service message into the thread it
+    /// renames.
+    ///
+    /// This constant has no reader outside the test that asserts it still equals
+    /// <c>TelegramDeliveryMode_Glyphs.AWAY</c>, which is the character everything actually draws.
+    /// It is a SECOND SPELLING and that test is the only thing keeping the two in step; the pair is
+    /// noted for removal rather than removed here, because deleting a constant is not one of the six
+    /// points this branch was asked for (decision 22).
+    /// </summary>
     public const string AWAY_GLYPH = "✈";
 
-    /// <summary>Per-topic quiet marker, for the same reason.</summary>
+    /// <summary>Per-topic quiet marker — same move, same duplication, same note.</summary>
     public const string QUIET_GLYPH = "🤐";
 
     /// <summary>

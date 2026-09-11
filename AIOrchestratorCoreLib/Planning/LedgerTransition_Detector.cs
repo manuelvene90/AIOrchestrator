@@ -36,16 +36,13 @@ public static class LedgerTransition_Detector
         if (previous == null || current == null)
             return new LedgerTransition([], []);
 
-        var before = previous.Lines.Where(line => !line.IsSubTask).ToDictionary(line => line.Text, line => line.Marker);
+        var before = PlanLedger_Lines.Top_Level(previous).ToDictionary(line => line.Text, line => line.Marker);
 
         List<string> finished = [];
         List<string> started = [];
 
-        foreach (var line in current.Lines)
+        foreach (var line in PlanLedger_Lines.Top_Level(current))
         {
-            if (line.IsSubTask)
-                continue;
-
             // A line the previous reading never had is NOT a transition. New work appearing is the
             // supervisor writing its plan, and the owner asked to hear about movement, not authoring.
             if (!before.TryGetValue(line.Text, out var was))

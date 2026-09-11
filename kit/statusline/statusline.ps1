@@ -33,7 +33,7 @@ $member = $env:AIORCH_MEMBER
 # Hoisted out of the telemetry probe below, which used to be the only thing that computed it. The
 # probe runs only when there is stdin to dump; the progress read has to work regardless, and a
 # variable defined inside a block that did not run is silently $null rather than an error.
-$supervisionRoot = Join-Path $env:USERPROFILE '.claude\supervision'
+$supervisionRoot = if ($env:AIORCH_SUPERVISION_ROOT) { $env:AIORCH_SUPERVISION_ROOT } else { Join-Path $env:USERPROFILE '.claude\supervision' }
 
 # How old a progress artefact may be before it is treated as absent. The app rewrites it at least
 # once a minute while it is alive, so anything past this means the app is not running and the number

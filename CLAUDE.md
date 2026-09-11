@@ -39,11 +39,16 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     cards, the detail window, `/tokens` and `/cost` can never disagree — and every source passes
     exactly once through the respawn accumulator. `/cost` is the money reading (per-session share
     + burn rate, suppressed under 15 min as meaningless); `/tokens` is the token reading.
-11. **`/italian` toggles the translation layer** from the phone, and the app's status-bar
-    checkbox mirrors it. Unlike 🌙/🔕 (passing state, in-memory) this one is PERSISTED to
-    config.json — the provider reloads on the file's write stamp, so there is no in-memory copy to
-    keep in step. Use `OrchestratorConfig_Factory.Create_WithItalianLayer` rather than restating
-    every field.
+11. **~~`/italian` toggles the translation layer~~ — THE TRANSLATION LAYER IS GONE (owner
+    decision 2026-09-09).** The app no longer translates anything: the `Translation/` tree, the
+    `telegramItalianLayer` key, `Create_WithItalianLayer`, the `/italian` command and the status-bar
+    checkbox were all removed. Roles handle languages themselves — with the owner a role writes in
+    the language the owner used; files, code, commits, the ledger and every channel entry addressed
+    to another agent stay English. Kept switched off the layer was not merely dead: turned back on it
+    would have fed already-Italian prose through an English→Italian prompt, and the unchanged text
+    coming back reads as a failed translation, so a correct message got stamped with a flag. What
+    survives of this decision is the rule it taught, which is decision 14's neighbour: nothing may put
+    an output of the outbound pipeline back into its input side.
 12. **Channel headers are AGENT-WRITTEN — treat `[n]` and the timestamp as untrusted input.** Both
     are guesses unless the agent re-read the file: on 2026-08-10 `option-lab-2` carried two `[80]`
     and two `[81]` entries, and a supervisor stamped `2026-08-11 01:34` on an entry written at

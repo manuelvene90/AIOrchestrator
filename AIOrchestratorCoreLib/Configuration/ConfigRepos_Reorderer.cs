@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Configuration;
@@ -28,7 +29,9 @@ public static class ConfigRepos_Reorderer
         foreach (var node in nodes.OrderBy(node => Get_OrderIndex(node, repoNamesInOrder)))
             reposArray.Add(node);
 
-        File.WriteAllText(paths.ConfigFile, root.ToJsonString(JsonWriting.INDENTED));
+        // Atomic for the same reason Save is: an interrupted reorder must not be able to leave a
+        // zero-length config.json, which is an app with no repos at all.
+        Atomic_FileWriter.Write_AllText(paths.ConfigFile, root.ToJsonString(JsonWriting.INDENTED));
     }
 
     static int Get_OrderIndex(JsonNode? node, IReadOnlyList<string> repoNamesInOrder)

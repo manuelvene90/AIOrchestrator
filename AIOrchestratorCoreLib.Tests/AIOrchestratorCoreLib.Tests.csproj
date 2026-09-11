@@ -14,7 +14,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Master-only tests parked by the 2026-09-11 merge until their feature is re-ported (plan 01,
+         Tasks 3-11). Each task moves its files back; Task 14 deletes this folder and this item. -->
+    <Compile Remove="_pending-reports\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\AIOrchestratorCoreLib\AIOrchestratorCoreLib.csproj" />
+    <!-- The stand-in for the claude CLI (tools/claude-contract): the print-runner tests launch it
+         instead of the real binary, with injected delays and errors. -->
+    <ProjectReference Include="..\tools\claude-contract\FakeClaude\FakeClaude.csproj" />
   </ItemGroup>
 
 </Project>

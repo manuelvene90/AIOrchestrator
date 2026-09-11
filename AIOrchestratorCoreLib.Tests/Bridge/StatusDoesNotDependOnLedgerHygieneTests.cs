@@ -3,37 +3,66 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
 /// <summary>
-/// THE OWNER'S STATUS FEED MUST NOT DEPEND ON A SESSION MAINTAINING ITS LEDGER.
+/// THE HALF-HOURLY STATUS MESSAGE IS GONE, AND CANNOT COME BACK BY ACCIDENT.
 ///
-/// On 2026-08-20 `Tear-off tabs` went five hours without a periodic status while its solo worked
-/// the whole time. Has_WorkInFlight asked two questions and got "no" twice: the ledger said nothing
-/// was `[>]` (8 done, 3 open, none in progress), and "is a member mid-turn?" was asked once every
-/// THIRTY MINUTES — which a session between turns fails almost every time. Neither answer was wrong;
-/// together they silenced the feed.
-///
-/// A ledger nobody updates is a reason to NUDGE THE SESSION — Report_StaleInProgress does that — and
-/// never a reason to stop telling the owner what is happening.
-///
+/// <para>
+/// WHAT THIS FILE USED TO TEST, and why that claim retired. It pinned `Has_WorkInFlight` — the
+/// trigger of the periodic status feed — after `Tear-off tabs` went five hours without a status on
+/// 2026-08-20: the ledger said nothing was `[>]`, and "is a member mid-turn?" asked once every
+/// thirty minutes fails almost every time. Both fixes were right for a feed that POSTS.
+/// </para>
+/// <para>
+/// The owner removed the feed instead (2026-09-09). It sent a fresh fifteen-line message every half
+/// hour — ten in five and a half hours in one topic, three identical with every member closed — and
+/// a cadence that posts is a waterfall by construction, however good its content is. So the trigger
+/// this file guarded no longer exists, and the claim that replaces it is that the CADENCE is gone:
+/// nothing in the engine may post a status entry on a clock again.
+/// </para>
+/// <para>
+/// The original concern — the owner's view of the work must not depend on a session maintaining its
+/// ledger — did not retire with it. It moved to the one surface that remains, PULSE, and is tested
+/// where that is built (`TopicStatusLineBuilderTests`).
+/// </para>
+/// <para>
 /// A source scan, because the engine is `internal sealed` with no InternalsVisibleTo: the suite
-/// cannot call Has_WorkInFlight at all. A weak oracle that exists beats a strong one that cannot run.
+/// cannot call these methods at all. A weak oracle that exists beats a strong one that cannot run.
+/// </para>
 /// </summary>
 public class StatusDoesNotDependOnLedgerHygieneTests
 {
     const string ENGINE_FILE = "BridgeEngineModel.cs";
 
+    /// <summary>
+    /// The half-hourly poster and its trigger are absent from the engine — not merely unreachable.
+    /// A dormant `Has_WorkInFlight` and a `Build_PeriodicStatusText` left in the file are an
+    /// invitation to wire them up again, and the owner's decision was about the cadence existing at
+    /// all.
+    /// </summary>
     [Fact]
-    public void WorkInFlightAsksWhetherAnyoneWorkedRECENTLY_NotOnlyAtThisInstant()
+    public void ThePeriodicStatusFeed_AndItsTrigger_AreGoneFromTheEngine()
     {
-        var body = Extract_Method("bool Has_WorkInFlight");
+        var source = Read_EngineSource();
 
-        // Proves the extraction found the right method before asserting anything about it.
-        Assert.Contains("InProgress > 0", body);
+        Assert.DoesNotContain("Has_WorkInFlight", source);
+        Assert.DoesNotContain("Build_PeriodicStatusText", source);
+        Assert.DoesNotContain("Remember_PostedProgress", source);
+    }
 
-        Assert.Contains("Has_AnySessionWorkedWithin", body);
+    /// <summary>
+    /// The ONE surviving caller of the status-entry poster is the AWAY digest, which is not a
+    /// cadence: it fires only while the owner is away, and only when its content has changed. If a
+    /// second caller ever appears, this test is the thing that asks why.
+    /// </summary>
+    [Fact]
+    public void TheOnlyThingThatStillPostsAStatusEntry_IsTheAwayDigest()
+    {
+        var body = Extract_Method("async Task Push_AwayDigests_Async");
 
-        // The instant-only probe is GONE from this method. It is the half that made a working
-        // orchestration look idle, and it would reintroduce the silence on its own.
-        Assert.DoesNotContain("Is_MidTurn", body);
+        var posts = body.Split("Post_StatusEntry(").Length - 1;
+
+        Assert.Equal(1, posts);
+        Assert.Contains("Is_AwayMode()", body);
+        Assert.Contains("AwayDigest_Decider.Should_Send", body);
     }
 
     static string Extract_Method(string signatureMark)

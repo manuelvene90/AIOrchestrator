@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
 using Xunit.Abstractions;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -45,7 +46,8 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
 
     /// <summary>Carries the markers, so the mirror turns it into a button message.</summary>
     const string QUESTION_BODY =
-        "QUESTION: What starts the N-year clock?\nOPTION: Reserve idle\nOPTION: Per-deposit\nOPTION: Pick later";
+        "QUESTION: What starts the N-year clock?\nOPTION: Reserve idle\nOPTION: Per-deposit\nOPTION: Pick later\n"
+        + "RECOMMEND: Reserve idle — it is the one the ledger already assumes.\nRISK: low\nROW: none";
 
     /// <summary>
     /// The detailed reply the owner said they needed to write. Deliberately free of any question mark
@@ -77,7 +79,7 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -88,7 +90,7 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
     public void Dispose()
@@ -213,7 +215,7 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
         _store.Set_DisplayName(session.OrchId, DISPLAY_NAME);
         Seed_OwnerChannel(session.OrchId);
 
-        await Run_For_Async(4_000);
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(3));
 
         return session.OrchId;
     }
@@ -277,6 +279,18 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
 /// </summary>
 internal sealed class RecordingTelegram_Fake : ITelegramApiClient
 {
+
+    // The startup handshake (see ITelegramApiClient): a fake not testing it answers with a name and
+    // a cleared webhook, so the inbound loop starts exactly as it does in production.
+    public Task<string> Get_BotUsername_Async(CancellationToken cancellationToken) => Task.FromResult("test_bot");
+
+    public Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken) => Task.CompletedTask;
+    // The typing bubble is not this probe's subject; it creates no message, so it is not recorded.
+    public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     const string EMPTY_UPDATES = "{\"ok\":true,\"result\":[]}";
 
     readonly object _lock = new();
@@ -344,7 +358,7 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
             return [.. _sentTexts];
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         lock (_lock)
         {
@@ -354,10 +368,22 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
         }
     }
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    // RECORDED SINCE 2026-09-07, when the mirror started sending every entry as HTML. It used to
+    // ignore this call because only ASCII mockups came through it; leaving it blind now would hide
+    // the whole conversation from a probe that counts what reached the phone.
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        lock (_lock)
-            return Task.FromResult<long?>(_nextMessageId++);
+        return Send_Message_Async(messageThreadId, html, sound, cancellationToken);
+    }
+
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
     }
 
     // The General topic's name is not this probe's subject; accepting it silently keeps the rename
@@ -367,21 +393,11 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    public Task<long?> Send_MessageWithReplyKeyboard_Async(
-        long? messageThreadId,
-        string text,
-        IReadOnlyList<IReadOnlyList<string>> keyboardRows,
-        CancellationToken cancellationToken)
-    {
-        // The persistent command bar is not this probe's subject. Accept it and hand back no id, so
-        // installing it cannot perturb the sends this test actually counts.
-        return Task.FromResult<long?>(null);
-    }
-
     public Task<long?> Send_MessageWithButtons_Async(
         long? messageThreadId,
         string text,
         IReadOnlyList<(string Data, string Label)> buttons,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         lock (_lock)
@@ -412,7 +428,7 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
-    public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken)
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
         return Task.FromResult(7777L);
     }
@@ -456,9 +472,9 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
         return Edit_MessageText_Async(messageId, text, cancellationToken);
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
@@ -481,10 +497,15 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
 
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken) => Task.CompletedTask;
+
 
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<byte>());
 }

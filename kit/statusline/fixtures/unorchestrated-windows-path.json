@@ -1,0 +1,38 @@
+{
+  "name": "unorchestrated-windows-path",
+  "env": {
+    "AIORCH_ROLE": "",
+    "AIORCH_ID": "",
+    "AIORCH_MEMBER": ""
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Opus"
+    },
+    "workspace": {
+      "current_dir": "C:\\repos\\AIOrchestrator"
+    },
+    "context_window": {
+      "total_input_tokens": 79558,
+      "total_output_tokens": 230,
+      "context_window_size": 1000000,
+      "current_usage": {
+        "input_tokens": 2,
+        "output_tokens": 230
+      },
+      "used_percentage": 8,
+      "remaining_percentage": 92
+    },
+    "exceeds_200k_tokens": false,
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {},
+  "expected": "Opus · AIOrchestrator \u001b[90mctx 8%\u001b[0m"
+}

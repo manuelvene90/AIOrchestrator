@@ -198,23 +198,9 @@ public class RunToTheEndHookTests : IDisposable
         throw new Exception($"kit/hooks/run-to-the-end-check.sh not found walking up from {AppContext.BaseDirectory}");
     }
 
+    /// <summary>One locator for every kit test — Windows paths first, then the POSIX ones, so this runs on every OS the kit ships to.</summary>
     static string Find_Bash_OrFail()
     {
-        string[] candidates =
-        [
-            @"C:\Program Files\Git\bin\bash.exe",
-            @"C:\Program Files\Git\usr\bin\bash.exe",
-            @"C:\Windows\System32\bash.exe",
-        ];
-
-        foreach (var candidate in candidates)
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        throw new Exception(
-            $"No bash found at any of: {string.Join(", ", candidates)}. This hook is bash and cannot be checked without it; "
-            + "passing without running it is the failure mode the test exists to avoid.");
+        return TestSupport.Bash_Locator.Find_OrFail();
     }
 }

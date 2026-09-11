@@ -5,16 +5,18 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 /// <summary>
 /// Serialises every test class that exercises the channel lock.
 /// <para>
-/// Not a workaround — it follows from the design. <c>ChannelLock_Diagnostics</c> is a PROCESS-WIDE
-/// sink, deliberately, because the lock has to be able to report a failure no matter which of the
-/// ~24 call sites triggered it. A process-wide sink is also process-wide in a test run: with these
-/// classes in parallel, one class's contention lands in another's captured lines, and a test that
-/// asserts "exactly one diagnostic" fails for a reason that has nothing to do with its subject.
-/// That happened, and the failure named the wrong culprit.
+/// WHAT IS LEFT OF THE REASON: these classes contend for real filesystem locks and spawn bash
+/// processes, and several assert on a wait measured in hundreds of milliseconds. Serialising them
+/// makes those timing assertions mean what they say.
 /// </para>
 /// <para>
-/// These classes also contend for real filesystem locks and spawn bash processes, so serialising
-/// them makes the timing assertions mean what they say.
+/// THE SINK IS NO LONGER ONE OF THE REASONS (2026-09-09). This collection also used to be justified
+/// by <c>ChannelLock_Diagnostics</c> being a process-wide sink, and that justification never held:
+/// it serialises the classes IN it, while the theft came from the Bridge tests OUTSIDE it that start
+/// a real engine — <c>BridgeEngineModel.Run_Async</c> rewires the sink at every start. Five of six
+/// full runs on this branch were red for it. Diagnostics are now captured per async flow
+/// (<c>ChannelLock_Diagnostics.Capture_OnThisFlow</c>), so a capture cannot be taken by any test in
+/// or out of this collection, and no test has to join it to be safe.
 /// </para>
 /// </summary>
 [CollectionDefinition(NAME)]

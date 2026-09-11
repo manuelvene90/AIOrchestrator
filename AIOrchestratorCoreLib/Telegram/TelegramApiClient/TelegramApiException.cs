@@ -36,10 +36,25 @@ namespace AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 /// </summary>
 public sealed class TelegramApiException : Exception
 {
-    public TelegramApiException(int statusCode, string message) : base(message)
+    public TelegramApiException(int statusCode, string message, int? retryAfterSeconds = null) : base(message)
     {
         StatusCode = statusCode;
+        RetryAfterSeconds = retryAfterSeconds;
     }
+
+    /// <summary>
+    /// Telegram's own answer to "how long should I wait", from the <c>parameters.retry_after</c>
+    /// field of a 429 body. Null when the response did not carry one.
+    ///
+    /// <para>
+    /// THIS IS NOT THE STRING PARSING THIS TYPE FORBIDS. The rule above is about reading a status
+    /// back out of an ENGLISH message written for a human — a sentence nothing stops changing.
+    /// <c>retry_after</c> is a documented machine-readable field of the response body, in the same
+    /// class as <c>TOPIC_NOT_MODIFIED</c>, which <see cref="TelegramAttempt_Gate"/> already matches on
+    /// for exactly the same reason: it is the only place the fact is expressed at all.
+    /// </para>
+    /// </summary>
+    public int? RetryAfterSeconds { get; }
 
     /// <summary>The HTTP status Telegram answered with.</summary>
     public int StatusCode { get; }

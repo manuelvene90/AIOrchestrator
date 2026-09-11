@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>aiorchestrator-daemon</AssemblyName>
+    <RootNamespace>AIOrchestrator.Daemon</RootNamespace>
+    <!-- One binary per OS: linux-x64, osx-arm64, win-x64. No RuntimeIdentifier is pinned here so
+         `dotnet run` works on the machine at hand and `dotnet publish -r <rid>` picks the target. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AIOrchestratorCoreLib\AIOrchestratorCoreLib.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The generic host, plus the two service lifetimes. Both lifetime packages are referenced
+         unconditionally: each detects at RUNTIME whether it is running under its init system and
+         is a no-op otherwise, so the same build serves systemd, launchd (which needs neither — a
+         plain console process with KeepAlive) and the Windows SCM. No #if per OS anywhere. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The kit ships WITH the daemon as a COMPLETE PLUGIN FOLDER, exactly as it ships with the WPF
+         app. Same Link layout as AIOrchestrator.csproj: KitAssets_Bootstrapper reads kit/ beside the
+         binary — now to check a version, not to copy files. -->
+    <Content Include="..\kit\.claude-plugin\*.json" Link="kit\.claude-plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\skills\**\*.md" Link="kit\skills\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\bin\*.sh" Link="kit\bin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\statusline\statusline.sh" Link="kit\statusline\statusline.sh" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

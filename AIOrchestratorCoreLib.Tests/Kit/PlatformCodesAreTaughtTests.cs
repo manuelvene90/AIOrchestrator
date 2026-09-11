@@ -62,27 +62,18 @@ public class PlatformCodesAreTaughtTests
         Assert.Null(Platform_Abbreviations.Resolve_RepoCode_OrNull(""));
     }
 
+    /// <summary>
+    /// The role protocols moved to kit/skills/&lt;role&gt;/SKILL.md when the kit became a plugin. The
+    /// argument is still the old "&lt;role&gt;.md" spelling, because it is what every assertion above
+    /// reads as; only where the file LIVES changed. Refuses rather than returning a guess — a
+    /// content test that located no content passes by finding nothing (decision 20).
+    /// </summary>
     static string Read_RoleCommand(string fileName)
     {
-        var folder = AppContext.BaseDirectory;
+        var role = Path.GetFileNameWithoutExtension(fileName);
 
-        for (var depth = 0; depth < 8; depth++)
-        {
-            var candidate = Path.Combine(folder, "kit", "commands", fileName);
-
-            if (File.Exists(candidate))
-                return File.ReadAllText(candidate);
-
-            var parent = Directory.GetParent(folder);
-
-            if (parent == null)
-                break;
-
-            folder = parent.FullName;
-        }
-
-        Assert.Fail($"kit/commands/{fileName} was not found walking up from {AppContext.BaseDirectory}");
-
-        return "";
+        return Kit.KitRepoFiles.Find_RoleProtocol(role) is string path
+            ? File.ReadAllText(path)
+            : throw new Exception($"kit/skills/{role}/SKILL.md was not found walking up from {AppContext.BaseDirectory} — REFUSING to assert about a file this harness never read.");
     }
 }

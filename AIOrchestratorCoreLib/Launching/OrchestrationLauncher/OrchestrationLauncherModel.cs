@@ -1,12 +1,16 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.Kit;
+using AIOrchestratorCoreLib.Kit.PluginGate;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.SessionLaunch;
+using AIOrchestratorCoreLib.Running.SessionRunner;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
-using AIOrchestratorCoreLib.Spawning;
-using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -15,7 +19,8 @@ internal sealed class OrchestrationLauncherModel(
     ISupervisionPaths paths,
     IOrchestratorConfigProvider configProvider,
     IOrchestrationSessionStore store,
-    ISessionSpawner spawner,
+    IReadOnlyList<ISessionRunner> runners,
+    IPluginGate pluginGate,
     IOrchestrationLog log) : IOrchestrationLauncher
 {
     /// <summary>The shell writes its pid file within ~1 s of starting; 40 × 500 ms is generous.</summary>
@@ -25,7 +30,19 @@ internal sealed class OrchestrationLauncherModel(
     readonly ISupervisionPaths _paths = paths;
     readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
-    readonly ISessionSpawner _spawner = spawner;
+    /// <summary>
+    /// One entry per transport this app can start, keyed by its kind. A LIST rather than a
+    /// parameter per runner because the third one arrived and the fourth is already named in the
+    /// enum: a shape that has to be widened for each of them is a shape that gets one of them
+    /// forgotten at one of its three call sites.
+    /// </summary>
+    readonly IReadOnlyDictionary<SessionRunners, ISessionRunner> _runners = runners.ToDictionary(runner => runner.Kind);
+
+    /// <summary>
+    /// Consulted in Start_Session, AFTER the runner is resolved and BEFORE it is started — so the
+    /// kit is gated once for every transport in that dictionary, including the ones not written yet.
+    /// </summary>
+    readonly IPluginGate _pluginGate = pluginGate;
     readonly IOrchestrationLog _log = log;
 
     public IOrchestrationSession Start_Orchestration(string repoName, string repoPath)
@@ -89,6 +106,11 @@ internal sealed class OrchestrationLauncherModel(
 
     public IOrchestrationSession Add_Member(string orchId, MemberKinds kind)
     {
+        return Add_Member(orchId, kind, null);
+    }
+
+    public IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model)
+    {
         // THE SHAPE GATE, and it is here rather than in the button because a click can only ask.
         // The desktop's "+ Implementer" reaches this method directly, so before this a click on a
         // basic card spawned an implementer beside the solo with NO supervisor and no stamp — the
@@ -102,7 +124,7 @@ internal sealed class OrchestrationLauncherModel(
         if (!OrchestrationShape.Can_AddMember(_store.Get_Session(orchId).SupervisorSpawnedUtc, kind))
             throw new Exception(OrchestrationShape.Describe_AddMemberRefusal(_store.Get_Session(orchId).SupervisorSpawnedUtc, kind));
 
-        var session = _store.Add_Member(orchId, kind);
+        var session = _store.Add_Member(orchId, kind, model);
         var newMember = session.Members[session.Members.Count - 1];
 
         Respawn_Implementer(orchId, newMember.MemberId);
@@ -290,19 +312,12 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_SupervisorPidFile(orchId);
 
-        // Its own previous conversation, when the probe file names a transcript that still exists
-        // (owner request 2026-09-10). Read BEFORE anything is deleted or spawned: the probe is the
-        // previous process's last word, and the new process overwrites it on its first render.
-        var resumeSessionId = ResumableSession_Resolver.Resolve_ForSupervisor_OrNull(_paths, orchId);
-
-        // The effort has NO config default on purpose: null means no --effort flag, and the CLI
-        // decides. Only the per-orchestration override ever reaches the command line.
-        var command = SpawnCommand_Builder.Build_ForSupervisor(
+        var launch = SessionLaunch_Factory.Create(
+            SessionRoles.Supervisor,
             orchId,
+            SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
             session.RepoPath,
-            session.SupervisorModelOverride ?? _configProvider.Get_Current().SupervisorModel,
-            session.SupervisorEffortOverride,
-            resumeSessionId,
+            session.SupervisorModelOverride ?? _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Supervisor),
             pidFile,
             session.DisplayName);
 
@@ -312,10 +327,15 @@ internal sealed class OrchestrationLauncherModel(
         _store.Set_SupervisorPid(orchId, null);
         Delete_StalePidFile_BestEffort(pidFile);
 
-        _spawner.Spawn(command);
-        Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
+        var runner = Start_Session(launch);
 
-        _log.Log_Info(orchId, Describe_Spawn("Supervisor session spawned", resumeSessionId));
+        if (runner == null)
+            return;
+
+        if (runner.Kind == SessionRunners.Terminal)
+            Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
+
+        _log.Log_Info(orchId, $"Supervisor session {Describe_Started(runner)}");
     }
 
     public void Respawn_Communicator(string orchId)
@@ -323,10 +343,12 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_CommunicatorPidFile(orchId);
 
-        var command = SpawnCommand_Builder.Build_ForCommunicator(
+        var launch = SessionLaunch_Factory.Create(
+            SessionRoles.Communicator,
             orchId,
+            SessionLaunch_Factory.COMMUNICATOR_MEMBER_ID,
             session.RepoPath,
-            _configProvider.Get_Current().CommunicatorModel,
+            _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Communicator),
             pidFile,
             session.DisplayName);
 
@@ -335,8 +357,10 @@ internal sealed class OrchestrationLauncherModel(
         _store.Stamp_CommunicatorSpawned(orchId);
         Delete_StalePidFile_BestEffort(pidFile);
 
-        _spawner.Spawn(command);
-        _log.Log_Info(orchId, "Communicator session spawned");
+        var runner = Start_Session(launch);
+
+        if (runner != null)
+            _log.Log_Info(orchId, $"Communicator session {Describe_Started(runner)}");
     }
 
     /// <summary>
@@ -356,7 +380,9 @@ internal sealed class OrchestrationLauncherModel(
         // The store no longer re-opens the member on the pid write, so the roster stays honest either
         // way — but without this the app would still open a terminal for a session it had retired,
         // and the owner would find a solo alive beside the supervisor that replaced it.
-        if (session.Members.FirstOrDefault(member => member.MemberId == memberId)?.ClosedUtc != null)
+        var member = session.Members.FirstOrDefault(member => member.MemberId == memberId);
+
+        if (member?.ClosedUtc != null)
         {
             _log.Log_Info(orchId, $"Respawn of '{memberId}' skipped — it was closed while the tick was in flight");
             return;
@@ -364,32 +390,39 @@ internal sealed class OrchestrationLauncherModel(
 
         var pidFile = _paths.Get_ImplementerPidFile(orchId, memberId);
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
-        var model = session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel;
 
-        // One implementer-side effort override covers every member kind, exactly as the model
-        // override does; null means no --effort flag (the CLI's default), with no config fallback.
-        var effort = session.ImplementerEffortOverride;
+        var role = SessionRole_Names.From_MemberKind(kind);
 
-        // Only the SOLO continues its own conversation (owner request 2026-09-10, for solo and
-        // supervisor): implementers and reviewers re-enter through their role command. Read BEFORE
-        // anything is deleted or spawned — the new process overwrites the probe on its first render.
-        var resumeSessionId = kind == MemberKinds.Solo ? ResumableSession_Resolver.Resolve_ForMember_OrNull(_paths, orchId, memberId) : null;
+        // THREE TIERS, IN THIS ORDER: the owner's set-model for this orchestration, then the model
+        // the supervisor asked for when it requested this member (sized to the task — on the record,
+        // so a respawn keeps it), then the config default. A fixed model per role made no sense to
+        // the owner (2026-09-07): a one-line fix and a redesign are not the same job.
+        //
+        // THE THIRD TIER IS NOW PER ROLE, not per member-that-writes-code. A reviewer and a solo both
+        // took `implementerModel` here until 2026-09-09, which made the owner's decision — implementer
+        // sonnet, reviewer opus — unstateable rather than merely unset. The ladder inside
+        // Get_ModelForRole keeps the old answer for a config.json that never heard of the new keys.
+        //
+        // THE FIRST TIER IS STILL THE IMPLEMENTER'S, deliberately: `set-model implementer` is the
+        // owner reaching into ONE orchestration by hand, and it has covered every working member
+        // since it existed. Narrowing it to implementers here would silently stop applying to the
+        // reviewer the owner had just used it on — a separate decision, and theirs, not this stage's.
+        var model = session.ImplementerModelOverride ?? member?.Model ?? _configProvider.Get_Current().Get_ModelForRole(role);
 
-        var command = kind switch
-        {
-            MemberKinds.Reviewer => SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, effort, pidFile, session.DisplayName),
-            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, effort, resumeSessionId, pidFile, session.DisplayName),
-            MemberKinds.Implementer => SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, effort, pidFile, session.DisplayName),
-            _ => throw new Exception($"Unhandled MemberKinds '{kind}' respawning '{memberId}' of '{orchId}'"),
-        };
+        var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName);
 
         _store.Set_MemberPid(orchId, memberId, null);
         Delete_StalePidFile_BestEffort(pidFile);
 
-        _spawner.Spawn(command);
-        Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
+        var runner = Start_Session(launch);
 
-        _log.Log_Info(orchId, kind == MemberKinds.Solo ? Describe_Spawn($"{kind} '{memberId}' session spawned", resumeSessionId) : $"{kind} '{memberId}' session spawned");
+        if (runner == null)
+            return;
+
+        if (runner.Kind == SessionRunners.Terminal)
+            Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
+
+        _log.Log_Info(orchId, $"{kind} '{memberId}' session {Describe_Started(runner)}");
     }
 
     public void Spawn_GeneralSupervisor()
@@ -397,27 +430,105 @@ internal sealed class OrchestrationLauncherModel(
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
         // The general folder is the general supervisor's PERMANENT working directory: its
-        // CLAUDE.md (persistent, machine-portable knowledge) auto-loads there. Every launch is a
-        // FRESH conversation by owner directive — it is the one role that never resumes (see
-        // SpawnCommand_Builder.Build_ForGeneralSupervisor for the --continue incident behind that).
-        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(
-            _paths.GeneralFolder, _configProvider.Get_Current().GeneralSupervisorModel, _paths.GeneralPidFile);
+        // CLAUDE.md (persistent, machine-portable knowledge) auto-loads there, and --continue
+        // resumes unambiguously because only general sessions ever run in it.
+        var launch = SessionLaunch_Factory.Create(
+            SessionRoles.General,
+            ChannelDiscovery.GENERAL_ORCH_ID,
+            SessionLaunch_Factory.GENERAL_MEMBER_ID,
+            _paths.GeneralFolder,
+            _configProvider.Get_Current().Get_ModelForRole(SessionRoles.General),
+            _paths.GeneralPidFile,
+            null);
 
-        _spawner.Spawn(command);
+        var runner = Start_Session(launch);
 
-        _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, "General supervisor session spawned (fresh conversation — stateless by design)");
+        if (runner != null)
+            _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"General supervisor session {Describe_Started(runner)}");
     }
 
     /// <summary>
-    /// The log line says WHICH conversation a spawn is, so a respawn that came back empty-headed is
-    /// visible in the log panel rather than discovered when the session asks what it was doing.
+    /// THE RUNNER SEAM. The role's configured runner starts the session; a role configured print
+    /// that this stage cannot print-run is started in a terminal, with a warning that says so.
+    /// Terminal is the default for every role, so with an untouched config.json this is exactly the
+    /// spawn that always happened.
     /// </summary>
-    static string Describe_Spawn(string what, string? resumeSessionId)
+    /// <summary>
+    /// Returns null when the kit gate refused, and the callers treat that as "no session exists".
+    /// It used to return the resolved runner either way, so a refusal was followed immediately by
+    /// "Supervisor session spawned" and then, 20 s later, by "pid file never appeared" — three
+    /// contradictory statements about one non-event, in a log whose entire job is telling a person
+    /// what is actually running.
+    /// </summary>
+    ISessionRunner? Start_Session(ISessionLaunch launch)
     {
-        if (resumeSessionId == null)
-            return $"{what} — fresh conversation (no resumable transcript)";
+        var runner = Resolve_Runner(launch.Role, launch.OrchId);
 
-        return $"{what} — resuming conversation {resumeSessionId}";
+        // A ROLE THAT LEFT A BRIDGE-DRIVEN MODE LEAVES ITS REGISTRATION BEHIND, and that file is what tells
+        // the dispatcher to keep running turns and the watchdog that a missing pid file is by
+        // design. Spawning a terminal for this session is the moment we know it is no longer
+        // print-run, so it is the moment to clear it — otherwise the member would have a window AND
+        // headless turns answering the same brief, while nothing would ever respawn the window.
+        if (runner.Kind == SessionRunners.Terminal && PrintSessionState_Store.Delete_IfExists(_paths, launch.Role, launch.OrchId, launch.MemberId))
+            _log.Log_Warning(launch.OrchId, $"'{launch.MemberId}' was registered as print-run but its role is now runner: terminal — the stale registration was cleared and it is spawned in a window");
+
+        // THE KIT GATE. A session started against a kit this host was not built for would follow a
+        // protocol nobody here has read, and would do it silently — so it does not start.
+        //
+        // It REFUSES rather than throwing. The watchdog reaches this on its tick, inside the bridge's
+        // own loop with nothing catching, so an exception here would take the bridge down — and the
+        // bridge staying up is exactly how the owner gets TOLD about the bad kit. Refusing costs a
+        // session that would have been wrong anyway; throwing would cost the message about it.
+        // Unchecked ALLOWS, but never silently: a verdict that was never taken means the host's kit
+        // check did not run, which is a wiring bug and not a bad kit. Said ONCE per host run.
+        if (_pluginGate.Verdict == PluginVerdicts.Unchecked && !_pluginGate.Unchecked_WasReported)
+        {
+            _pluginGate.Unchecked_WasReported = true;
+            _log.Log_Warning(launch.OrchId, "The kit check never recorded a verdict, so sessions are starting UNVERIFIED — this host's startup check did not run. The app works; nothing is confirming which protocols these sessions read.");
+        }
+
+        if (!_pluginGate.Spawning_Allowed)
+        {
+            _log.Log_Error(launch.OrchId, $"REFUSED to start '{launch.MemberId}' ({launch.Role}) — {_pluginGate.Refusal}", null);
+            return null;
+        }
+
+        runner.Start(launch);
+        return runner;
+    }
+
+    ISessionRunner Resolve_Runner(SessionRoles role, string orchId)
+    {
+        var configured = _configProvider.Get_Current().Runners.Get_ForRole(role).Runner;
+
+        if (configured == SessionRunners.Terminal)
+            return Terminal_Runner();
+
+        // Two questions, and both have to be yes: this stage must support the pairing AND the
+        // transport must actually be wired. `bg` is the case that makes the second one real — it is
+        // a word config.json accepts and nothing here can start.
+        if (Runner_Support.Supports(configured, role) && _runners.TryGetValue(configured, out var runner))
+            return runner;
+
+        _log.Log_Warning(orchId, Runner_Support.Describe_Unsupported(configured, role));
+        return Terminal_Runner();
+    }
+
+    ISessionRunner Terminal_Runner()
+    {
+        return _runners.TryGetValue(SessionRunners.Terminal, out var terminal)
+            ? terminal
+            : throw new Exception("No terminal runner was wired — every other runner falls back to it, so it is the one that cannot be optional");
+    }
+
+    static string Describe_Started(ISessionRunner runner)
+    {
+        return runner.Kind switch
+        {
+            SessionRunners.Print => "registered as print-run (no window; one claude -p turn per inbound entry)",
+            SessionRunners.Stream => "registered as stream-run (no window; one living claude -p --input-format stream-json fed on stdin)",
+            _ => "spawned",
+        };
     }
 
     /// <summary>

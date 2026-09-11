@@ -352,14 +352,15 @@ rm -f "$MARKER_FILE"
 check "an undecidable write is ALLOWED" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write nothing_useful 'x')")")"
 check "...and it leaves a MARKER, not silence" PRESENT "$(flag_state "$MARKER_FILE")"
 
-# THE HOOK DROPS A FACT; THE APP WRITES THE RECORD. Three lines, no timestamp, no JSON, no size
+# THE HOOK DROPS A FACT; THE APP WRITES THE RECORD. Five lines — hook, predicate, reason, member,
+# fingerprint — with no timestamp, no JSON and no size
 # ceiling. The app's log panel is fed by an in-process event a separate process can never raise, so a
 # hook-written line stayed invisible until somebody went looking — which preserves the very property
 # this exists to remove. Writing it app-side also means ONE rotation threshold instead of a copy of
 # the 8 MB number living here in shell, unable to honour the low-disk half at all.
 check "the marker names the hook" FOUND "$(grep -q 'supervisor-awaiting-answer-check' "$MARKER_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
 check "the marker names the predicate" FOUND "$(grep -q 'which file is being written' "$MARKER_FILE" 2>/dev/null && printf FOUND || printf MISSING)"
-check "the marker is three lines" 3 "$(wc -l < "$MARKER_FILE" 2>/dev/null | tr -d ' ')"
+check "the marker is five lines" 5 "$(wc -l < "$MARKER_FILE" 2>/dev/null | tr -d ' ')"
 
 # NO TIMESTAMP IN THE SHELL, and this case is why. The previous version stamped it here and got the
 # zone wrong — local time wearing a Z — in the one field a post-mortem record exists to provide.
@@ -919,6 +920,123 @@ check "a permitted target plus a second file is denied" tee "$(deny_reason "$(ru
 
 check "tee with no file writes nothing and is allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'echo x | tee')" reviewer)")"
 check "prose naming tee is still allowed" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'grep -rn "tee -a x" src/')" reviewer)")"
+
+# ── THE SCRATCH FOLDER: THE ONE PLACE A REVIEWER MAY WRITE FREELY ────────────────────────────────
+#
+# WHY IT EXISTS: mutation testing. A reviewer's sharpest instrument is to break the changed line and
+# watch whether the suite notices — it is what caught four tests passing for the wrong reason on
+# these branches when nobody reading the code did. It needs a file to break, and every file this
+# guard could reach was denied, so reviewers fell back to imagining the mutation instead of running
+# it, which is a weaker instrument wearing the same word.
+#
+# The permission is a SUBTREE, not a verb list: `<supervision root>/<orch>/<member>/scratch/` and
+# everything under it, reached by the same two ids the own-channel exemption already resolves. No new
+# environment variable, and nothing outside that subtree moves — a copy INTO scratch may read the
+# repo, but nothing may be written back to it.
+#
+# EVERY ALLOW ROW BELOW HAS ITS DENY TWIN, and the twins are the substance: "allow writes under the
+# member folder" would satisfy every ALLOW here and hand the reviewer its own channel as a scratch
+# file, and "allow anything mentioning scratch" would satisfy them too while letting a mutant be
+# copied back over the source it came from.
+SCRATCH="$SUPERVISION/$MEMBER/scratch"
+WIN_SCRATCH=$(printf '%s' "$SCRATCH" | tr '/' '\\')
+
+# mkdir — including the scratch root itself, which nothing else can create for the reviewer.
+check "mkdir inside the scratch folder" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mkdir $SCRATCH/case1")" reviewer)")"
+check "mkdir -p deeper inside it" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mkdir -p $SCRATCH/case1/obj")" reviewer)")"
+check "mkdir -p the scratch root itself" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mkdir -p $SCRATCH")" reviewer)")"
+check "mkdir elsewhere is still denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mkdir $TEMP_HOME/src/newdir")" reviewer)")"
+
+# THE MEMBER FOLDER IS NOT THE SCRATCH FOLDER. Its own channel lives there and the exemption for it
+# is APPEND-ONLY; a rule written one segment too shallow would hand a reviewer `rm` over its own
+# report — and over the marker files the app reads.
+check "a sibling folder beside scratch is not scratch" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mkdir $SUPERVISION/$MEMBER/notes")" reviewer)")"
+check "another member's scratch is not this one's" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mkdir $SUPERVISION/imp-2/scratch/x")" reviewer)")"
+
+# TRAVERSAL. The path is normalised lexically before it is asked about, exactly as the own-channel
+# rule already does, so a target that satisfies the subtree on the way through cannot walk back out.
+check "a traversal out of scratch is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mkdir $SCRATCH/../../escaped")" reviewer)")"
+check "a traversal out of scratch, through rm" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "rm -rf $SCRATCH/../channel.md")" reviewer)")"
+
+# cp — THE POINT OF THE WHOLE FOLDER. A copy READS its sources, and reading is what a reviewer does;
+# only where it WRITES is a permission question, and that is the last word.
+check "cp a repo file INTO scratch" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cp $TEMP_HOME/src/Foo.cs $SCRATCH/Foo.mutant.cs")" reviewer)")"
+check "cp -r a repo folder into scratch" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cp -r $TEMP_HOME/src $SCRATCH/src")" reviewer)")"
+check "cp OUT of scratch into the repo is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cp $SCRATCH/Foo.mutant.cs $TEMP_HOME/src/Foo.cs")" reviewer)")"
+check "cp repo to repo is still denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cp $TEMP_HOME/src/Foo.cs $TEMP_HOME/src/Bar.cs")" reviewer)")"
+
+# `-t DEST` NAMES THE DESTINATION SOMEWHERE OTHER THAN THE LAST WORD, so the position rule this
+# widening rests on does not hold for it. It is refused rather than parsed: a guard widens only where
+# it can be sure, and `cp -t <repo> <scratch>/mutant` is a write into the repo whose last word is a
+# perfectly contained path.
+check "cp -t into the repo is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cp -t $TEMP_HOME/src $SCRATCH/Foo.mutant.cs")" reviewer)")"
+
+# mv — WITHIN scratch, both ends. A move out of the repo DELETES from the repo, so unlike cp the
+# source side is a permission question too, and this is the row that says so.
+check "mv within scratch" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mv $SCRATCH/a.cs $SCRATCH/b.cs")" reviewer)")"
+check "mv out of scratch into the repo is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mv $SCRATCH/a.cs $TEMP_HOME/src/Foo.cs")" reviewer)")"
+check "mv a REPO file into scratch is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "mv $TEMP_HOME/src/Foo.cs $SCRATCH/Foo.cs")" reviewer)")"
+
+# rm — the cleanup half. Without it the folder fills up and the next reviewer inherits the mess.
+check "rm -rf a case folder inside scratch" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "rm -rf $SCRATCH/case1")" reviewer)")"
+check "rm elsewhere is still denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "rm -rf $TEMP_HOME/src/obj")" reviewer)")"
+check "rm of a scratch file AND a repo file is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "rm $SCRATCH/a.cs $TEMP_HOME/src/Foo.cs")" reviewer)")"
+
+# THE VERBS THAT WERE NOT WIDENED. `truncate` and `dd` write files too and nothing asked for them, so
+# they stay denied wherever they point — a widening is only ever what was ordered.
+check "truncate inside scratch stays denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "truncate -s 0 $SCRATCH/a.cs")" reviewer)")"
+
+# sed -i / perl -i — mutating the COPY in place, which is the whole idiom.
+check "sed -i on a scratch file" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sed -i 's/a/b/' $SCRATCH/Foo.mutant.cs")" reviewer)")"
+check "sed -i with the script in -e" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sed -i -e 's/a/b/' $SCRATCH/Foo.mutant.cs")" reviewer)")"
+check "perl -pi on a scratch file" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "perl -pi -e 's/a/b/' $SCRATCH/Foo.mutant.cs")" reviewer)")"
+check "sed -i on a repo file is still denied" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sed -i 's/a/b/' $TEMP_HOME/src/Foo.cs")" reviewer)")"
+
+# ONE CONTAINED FILE DOES NOT CARRY THE LIST. sed takes as many files as you give it and rewrites
+# every one of them.
+check "sed -i on a scratch file AND a repo file" editor "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "sed -i 's/a/b/' $SCRATCH/Foo.mutant.cs $TEMP_HOME/src/Foo.cs")" reviewer)")"
+
+# REDIRECTS. Inside scratch the TRUNCATING form is allowed too — a mutant is written whole, not
+# appended to — and that is exactly what must not leak back to the own-channel rule two sections up,
+# where append is still the whole of the permission.
+check "a truncating write into scratch" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x > $SCRATCH/notes.txt")" reviewer)")"
+check "an append into scratch" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x >> $SCRATCH/notes.txt")" reviewer)")"
+check "a write into the repo is still denied" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x > $TEMP_HOME/src/Foo.cs")" reviewer)")"
+check "scratch does not make the CHANNEL truncatable" redirect "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x > $REV_CHANNEL")" reviewer)")"
+
+# tee, the same permission in the other spelling — with and without -a, since inside scratch there is
+# nothing to protect from being overwritten.
+check "tee into scratch, no -a" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee $SCRATCH/notes.txt")" reviewer)")"
+check "tee -a into scratch" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee -a $SCRATCH/notes.txt")" reviewer)")"
+check "a scratch target does not carry a second file" tee "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo x | tee $SCRATCH/notes.txt /tmp/other.log")" reviewer)")"
+
+# THE SPELLINGS. A path with spaces has to be quoted, and a Windows session types the other slash —
+# both are ordinary, and both were a whole untested class for the own-channel rule until rev-10.
+check "a quoted scratch path with spaces" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cp $TEMP_HOME/src/Foo.cs \"$SCRATCH/Foo mutant.cs\"")" reviewer)")"
+check "the Windows spelling of a scratch path" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cp $TEMP_HOME/src/Foo.cs \"$WIN_SCRATCH\\Foo.mutant.cs\"")" reviewer)")"
+check "a quoted Windows path outside it is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "cp \"$WIN_SCRATCH\\Foo.mutant.cs\" \"$WIN_ELSEWHERE\"")" reviewer)")"
+
+# THE VARIABLE SPELLING, which is how anyone actually types a path this long — and the reason the
+# own-channel exemption resolves assignments rather than matching tokens.
+check "a scratch path through a variable" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "s=\"$SCRATCH\"
+mkdir \"\$s/case2\"")" reviewer)")"
+check "a variable naming NO scratch folder is denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "s=/tmp/elsewhere
+mkdir \"\$s/case2\"")" reviewer)")"
+
+# INDIRECTION. The reduction follows a command through `bash -c` and `xargs`, and the containment
+# question has to be answered on the far side of it — in both directions.
+check "bash -c carrying a scratch mkdir" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "bash -c \"mkdir $SCRATCH/case3\"")" reviewer)")"
+check "bash -c carrying a repo write is still denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "bash -c \"rm -rf $TEMP_HOME/src\"")" reviewer)")"
+check "xargs carrying a scratch mkdir" ALLOW "$(verdict "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo case4 | xargs -I{} mkdir $SCRATCH/{}")" reviewer)")"
+
+# AND THE HONEST LIMIT OF THAT. With the path arriving on the PIPE the reducer sees `mkdir` and no
+# target at all, so there is nothing to find contained — it stays denied, as it was before this
+# widening. A rule that read "no operand" as "nothing outside scratch" would be an off switch.
+check "xargs with the target only on the pipe stays denied" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command "echo $SCRATCH/case4 | xargs mkdir")" reviewer)")"
+
+# AND THE CONTROL THIS WHOLE SECTION RESTS ON: the repo is still read-only. If this ever allows, the
+# widening has stopped being a subtree and become an off switch.
+check "the repo itself is still read-only" files "$(deny_reason "$(run_hook "$REVIEWER_HOOK" "$(fixture Bash command 'rm -rf build')" reviewer)")"
 
 # ── A LINE CONTINUATION IS DELETED, NOT ESCAPED ──────────────────────────────────────────────────
 #

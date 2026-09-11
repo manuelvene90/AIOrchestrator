@@ -46,30 +46,25 @@ public static class MirrorText_Formatter
         return entry.Author != ChannelAuthors.Owner;
     }
 
-    public static string Format(IDiscoveredChannel channel, IChannelEntry entry)
-    {
-        var (prefix, content) = Format_Parts(channel, entry);
-
-        return prefix + content;
-    }
-
     /// <summary>
-    /// The mirrored text SPLIT at the speaker prefix, so a caller can work on the entry's own words
-    /// without the glyph glued to their first line.
+    /// The same text as <see cref="Format"/>, with the app's own SPEAKER PREFIX kept apart from the
+    /// agent's words.
     ///
-    /// WHY THIS EXISTS: the marker lines (`IMAGE:`, `OPTION:`, `QUESTION:`) are anchored at the
-    /// START of a line, and this formatter had already concatenated "🟠 " onto the first one by the
-    /// time they were read. An entry whose body BEGINS with its picture — the most natural way to
-    /// write "here is the screenshot", and what every role command's `Pictures: IMAGE: &lt;full path&gt;`
-    /// invites — therefore never matched, and the owner was texted the literal path instead of the
-    /// photo. Their words, 2026-09-08, four separate times across one day: *"You keel sending the
-    /// path, not the actual image"*.
-    ///
-    /// The prefix is RETURNED, never re-derived by the caller: reading it back off the formatted
-    /// string is what Split_SpeakerPrefix does for the Italian layer, and its `.{1,18}?: ` pattern
-    /// happily swallows "🟠 IMAGE: " as though the marker were the speaker.
+    /// <para>
+    /// WHY THE SEAM EXISTS. The prefix is glued to the FIRST line of the body, so a marker line the
+    /// agent wrote first — <c>QUESTION:</c>, <c>OPTION:</c>, <c>IMAGE:</c> — stopped being at the
+    /// start of its line and the extractor, which anchors at column 0, could not see it. For
+    /// <c>QUESTION:</c> that was invisible for as long as a derived question stood behind it; for
+    /// <c>OPTION:</c> it meant a question whose first line was an option grew no buttons at all.
+    /// </para>
+    /// <para>
+    /// AND IT IS A SEAM RATHER THAN A SPLITTER: recovering the prefix by looking for the first
+    /// ": " works for "🔴 Sup: " and fails for a solo session, whose prefix is "🟠 " and carries no
+    /// colon — there the splitter would take the agent's own "QUESTION: " as the prefix and eat the
+    /// marker. What is composed here is what can be decomposed here.
+    /// </para>
     /// </summary>
-    public static (string Prefix, string Content) Format_Parts(IDiscoveredChannel channel, IChannelEntry entry)
+    public static (string Speaker, string Content) Format_Parts(IDiscoveredChannel channel, IChannelEntry entry)
     {
         // The spoke's own kind decides the colour — a reviewer must not read as an implementer,
         // since what it is licensed to do is completely different.
@@ -106,6 +101,13 @@ public static class MirrorText_Formatter
             ChannelAuthors.Unknown => ("?: ", Pick_Content(entry)),
             _ => throw new Exception($"Unhandled ChannelAuthors: {entry.Author}"),
         };
+    }
+
+    /// <summary>The mirrored text: the speaker prefix and the content, composed.</summary>
+    public static string Format(IDiscoveredChannel channel, IChannelEntry entry)
+    {
+        var (speaker, content) = Format_Parts(channel, entry);
+        return speaker + content;
     }
 
     /// <summary>Spoke colour by member kind, read off the member id (imp-n / rev-n).</summary>

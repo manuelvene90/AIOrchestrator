@@ -1,0 +1,30 @@
+{
+  "name": "reviewer-without-member-falls-back",
+  "env": {
+    "AIORCH_ROLE": "reviewer",
+    "AIORCH_ID": "strategy-lab-7",
+    "AIORCH_MEMBER": ""
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Opus"
+    },
+    "workspace": {
+      "current_dir": "C:\\repos\\AIOrchestrator"
+    },
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {
+    "strategy-lab-7/session.json": {
+      "displayName": "PB · equity control bug"
+    }
+  },
+  "expected": "\u001b[1;94m IMPLEMENTER \u001b[0m\u001b[34m PB · equity control bug \u001b[0m Opus"
+}

@@ -32,7 +32,7 @@ public class OrchestratorConfigLoaderTests : IDisposable
     [Fact]
     public void Load_StatusScreenshotsKeyAbsent_ReadsAsFalse()
     {
-        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"telegramItalianLayer":true}""");
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[]}""");
 
         Assert.False(OrchestratorConfig_Loader.Load_OrEmpty(_paths).TelegramStatusScreenshots);
     }
@@ -55,12 +55,13 @@ public class OrchestratorConfigLoaderTests : IDisposable
             [RepoEntry_Factory.Create("Arb Studio", @"C:\repos\arb")],
             "opus",
             "fable",
+            null,
+            null,
             "sonnet",
             "haiku",
             -1001234567890,
             42,
             "bot-token",
-            telegramItalianLayer: false,
             telegramStatusScreenshots: true,
             "whisper --file",
             5_000_000);
@@ -71,7 +72,6 @@ public class OrchestratorConfigLoaderTests : IDisposable
         Assert.True(reloaded.TelegramStatusScreenshots);
 
         // The neighbours survived the trip too — a new key must not disturb the existing ones.
-        Assert.False(reloaded.TelegramItalianLayer);
         Assert.Single(reloaded.Repos);
         Assert.Equal("Arb Studio", reloaded.Repos[0].Name);
         Assert.Equal("opus", reloaded.SupervisorModel);

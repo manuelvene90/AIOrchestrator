@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Sessions;
@@ -37,7 +38,7 @@ public class SessionFileDurabilityTests : IDisposable
     /// A write that fails must not destroy the file it was updating (commit 3a0f8a2's rule). Under
     /// the old truncate-then-write, this is the instant the orchestration disappeared.
     /// </summary>
-    [Fact]
+    [RequiresFileShareEnforcementFact]
     public void AFailedSave_LeavesTheExistingSessionFileIntact()
     {
         _store.Create_Orchestration("crm-2", "CRM", @"C:\repos\crm");
@@ -64,7 +65,7 @@ public class SessionFileDurabilityTests : IDisposable
     }
 
     /// <summary>No temp file is left behind to be mistaken for state, on the failure path either.</summary>
-    [Fact]
+    [RequiresFileShareEnforcementFact]
     public void AFailedSave_LeavesNoTemporaryFileBehind()
     {
         _store.Create_Orchestration("crm-2", "CRM", @"C:\repos\crm");

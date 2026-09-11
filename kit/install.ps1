@@ -1,6 +1,11 @@
 ﻿# AI Orchestrator — machine setup.
-# Installs the Claude Code role commands, the status line, and the supervision home with its
-# config. Safe to re-run: existing config values are kept unless you type new ones.
+# Installs the aiorch PLUGIN (role protocols, hooks, channel helper), the status line, and the
+# supervision home with its config. Safe to re-run: existing config values are kept unless you type
+# new ones, and the plugin install is idempotent.
+#
+# THE ROLE PROTOCOLS ARE NOT COPIED ANY MORE. kit\ is a Claude Code plugin, installed once from a
+# local marketplace pointing at this very checkout — which is what ends the four-derived-copies
+# problem of decisions 17, 18 and 23.
 # Run from the repo root:  powershell -ExecutionPolicy Bypass -File kit\install.ps1
 
 $ErrorActionPreference = 'Stop'
@@ -27,34 +32,155 @@ if ($null -eq $wtCmd) {
     Write-Host 'NOTE: Windows Terminal (wt) not found — sessions will open in plain PowerShell windows.' -ForegroundColor Yellow
 }
 
+# jq — CHECKED HERE TOO, since 2026-09-10. install.sh has required it from the start; this file did
+# not, and the asymmetry was invisible because nothing on Windows needed jq until the channel tool
+# started reading its grammar with it. A Windows session runs that tool in msys bash, so a machine
+# set up by THIS installer could pass every check and then refuse every typed entry.
+#
+# A WARNING, NOT AN EXIT, and the difference from install.sh is deliberate: there, jq merges
+# settings.json and the install cannot proceed without it. Here it is the TOOL that needs jq, and a
+# machine without it still gets a working app, working role commands, and untyped appends. Stopping
+# the whole setup over a degraded path would be the harsher failure.
+$jqCmd = Get-Command jq -ErrorAction SilentlyContinue
+if ($null -eq $jqCmd) {
+    Write-Host 'WARNING: jq was not found on PATH. Sessions can still append to channels, but the TYPED' -ForegroundColor Yellow
+    Write-Host '         entries (--question/--option/--state/...) read the channel grammar with jq and will' -ForegroundColor Yellow
+    Write-Host '         refuse until it is installed: winget install jqlang.jq   (or: choco install jq)' -ForegroundColor Yellow
+    Write-Host '         Note that channel-append.sh runs in msys bash, so jq must be on the PATH that bash sees.' -ForegroundColor Yellow
+}
+
 # --- 1. Folders + role commands + status line -------------------------------------------------
 New-Item -ItemType Directory -Force $commandsFolder | Out-Null
 New-Item -ItemType Directory -Force $supervisionFolder | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $supervisionFolder '.requests') | Out-Null
 
-# Every .md in kit\commands is a role command — copy them all, so this bootstrap path cannot
-# disagree with the app's own installer (KitAssets_Installer), which has always globbed the
-# folder. This script named three by hand, so reviewer.md and solo.md were never installed
-# by it.
-$roleCommands = Get-ChildItem (Join-Path $kitFolder 'commands') -Filter *.md -File
-Copy-Item $roleCommands.FullName $commandsFolder -Force
-$installedNames = ($roleCommands | ForEach-Object { '/' + $_.BaseName }) -join ', '
-Write-Host "Installed $($roleCommands.Count) role commands: $installedNames" -ForegroundColor Green
+# The kit is a PLUGIN. Registering this checkout as a local marketplace and installing from it means
+# the installed copy is served from the files you are looking at — so "which copy is running" stops
+# being a question anyone has to investigate (decisions 18 and 23). The version is READ BACK and
+# printed, because the host asserts that exact number at startup.
+if ($null -ne $claudeCmd) {
+    & claude plugin marketplace add $kitFolder *> $null
+    & claude plugin install 'aiorch@aiorch-local' --scope user -y *> $null
 
-# The append helper ships INTO the commands folder, because that is the path every role command
-# tells a session to run. It is not optional decoration: all five mandate it for every channel
-# write, and a session that cannot find it gets exit 127, which is not in the script's own contract.
-#
-# The comment above is about this exact class of miss and did not prevent it: the glob was widened
-# from three hand-named files to every .md, and the helper is a .sh, so the bootstrap path silently
-# went on disagreeing with the app's installer (which globs .md AND .sh). Two delivery paths, one
-# behaviour — check both whenever either changes.
-$appendHelper = Join-Path $kitFolder 'channel-append.sh'
-if (-not (Test-Path -LiteralPath $appendHelper)) {
-    throw "kit\channel-append.sh is missing from the kit at '$appendHelper'. Every role command mandates it for channel writes; installing the instructions without the script would leave every session pointing at a dead path."
+    # $ErrorActionPreference = 'Stop' does NOT stop on a NATIVE command's exit code in Windows
+    # PowerShell 5.1, and the output is swallowed above — so without this check a failed install
+    # still printed "Installed", on exactly the machine most likely to hit it.
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "claude plugin install exited $LASTEXITCODE — the aiorch plugin may NOT be installed. Re-run: claude plugin install aiorch@aiorch-local --scope user" -ForegroundColor Yellow
+    } else {
+        Write-Host 'Installed the aiorch plugin (role protocols, hooks, channel helper).' -ForegroundColor Green
+    }
+
+    $expectedVersion = (Get-Content (Join-Path $kitFolder '.claude-plugin\plugin.json') -Raw | ConvertFrom-Json).version
+    $installed = $null
+    try { $installed = (& claude plugin list --json | ConvertFrom-Json) | Where-Object { $_.id -eq 'aiorch@aiorch-local' } } catch { $installed = $null }
+
+    # THE CONTENT IS COMPARED, NOT THE NUMBER — the twin of the block in install.sh, and the same
+    # measurement behind it (2026-09-07, CLI 2.1.263): `claude plugin update` compares the version
+    # STRING, so a commit that changes a role protocol without bumping plugin.json leaves the cached
+    # copy untouched and reports "already at the latest version". Only uninstall-then-install refreshes
+    # it. Compared by file hash rather than by commit, so UNCOMMITTED edits are caught too.
+    function Get-KitContentSignature([string] $folder) {
+        if ([string]::IsNullOrWhiteSpace($folder) -or -not (Test-Path -LiteralPath $folder)) { return $null }
+
+        $root = (Resolve-Path -LiteralPath $folder).Path
+
+        # Sorted by RELATIVE path so two folders are comparable, and the relative path is hashed with
+        # the bytes: a file moved to another name is a different kit, and a hash of contents alone
+        # would call that identical.
+        $lines = Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
+            $relative = $_.FullName.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+            "$relative $((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+        } | Sort-Object
+
+        return ($lines -join "`n")
+    }
+
+    $checkoutSignature = Get-KitContentSignature $kitFolder
+    $installedSignature = Get-KitContentSignature $installed.installPath
+
+    # THE HOST'S OWN VERIFIER READS gitCommitSha TOO (PluginVersion_Verifier), NOT ONLY THIS
+    # SCRIPT'S file-hash compare — the twin of the block below and of install.sh. On the VPS on
+    # 2026-09-07 a stage that touched no kit file still moved HEAD, the content compare read
+    # identical (correctly — the text had not changed), and the host refused to spawn anyone over a
+    # recorded commit it no longer recognised. So the installed record is compared too, and
+    # reinstalls on its own even when the content compare found nothing.
+    $checkoutSha = $null
+    if ($null -ne (Get-Command git -ErrorAction SilentlyContinue)) {
+        try { $gitSha = (& git -C $kitFolder rev-parse HEAD 2>$null); if ($LASTEXITCODE -eq 0) { $checkoutSha = $gitSha.Trim() } } catch { $checkoutSha = $null }
+    }
+    $installedSha = $null
+    $installedPluginsFile = Join-Path $claudeFolder 'plugins\installed_plugins.json'
+    if (Test-Path -LiteralPath $installedPluginsFile) {
+        try {
+            $installedRecord = (Get-Content -LiteralPath $installedPluginsFile -Raw | ConvertFrom-Json).plugins.'aiorch@aiorch-local'[0]
+            $installedSha = $installedRecord.gitCommitSha
+        } catch { $installedSha = $null }
+    }
+    $shaMismatch = (-not [string]::IsNullOrWhiteSpace($checkoutSha)) -and (-not [string]::IsNullOrWhiteSpace($installedSha)) -and ($installedSha -ne $checkoutSha)
+
+    if ($null -eq $installedSignature -or $installedSignature -ne $checkoutSignature -or $shaMismatch) {
+        $why =
+            if ($null -eq $installedSignature) { 'its install path is missing' }
+            elseif ($installedSignature -ne $checkoutSignature) { 'the installed copy differs from this checkout' }
+            else { "the installed record's commit ($installedSha) differs from this checkout's HEAD ($checkoutSha) — the host's verifier reads this field even when the text compares identical" }
+        Write-Host "aiorch: $why — REINSTALLING (an update would report success and change nothing)." -ForegroundColor Yellow
+
+        & claude plugin uninstall aiorch *> $null
+        & claude plugin install 'aiorch@aiorch-local' --scope user -y *> $null
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'aiorch could NOT be reinstalled — sessions would read the OLD protocols.' -ForegroundColor Yellow
+            Write-Host 'Run by hand: claude plugin uninstall aiorch; claude plugin install aiorch@aiorch-local --scope user -y' -ForegroundColor Yellow
+        } else {
+            Write-Host 'Reinstalled the aiorch plugin from this checkout.' -ForegroundColor Green
+        }
+
+        try { $installed = (& claude plugin list --json | ConvertFrom-Json) | Where-Object { $_.id -eq 'aiorch@aiorch-local' } } catch { $installed = $null }
+        $installedSignature = Get-KitContentSignature $installed.installPath
+    }
+
+    # Re-checked rather than assumed: the reinstall can fail, and "reinstalled" printed over a cache
+    # that did not move is the same lie one turn later.
+    $contentState = if ($installedSignature -eq $checkoutSignature) {
+        'content matches this checkout'
+    } else {
+        'CONTENT STILL DIFFERS from this checkout — sessions would read the old protocols'
+    }
+
+    if ($null -ne $installed -and $installed.version -eq $expectedVersion) {
+        Write-Host "aiorch $($installed.version) is installed and enabled — $contentState." -ForegroundColor Green
+    } else {
+        Write-Host "aiorch reports version '$($installed.version)' but this checkout ships '$expectedVersion' ($contentState)." -ForegroundColor Yellow
+        Write-Host 'Run: claude plugin update aiorch   (the host refuses to start sessions until they match)' -ForegroundColor Yellow
+    }
+} else {
+    Write-Host 'Skipped the plugin install — the "claude" CLI is not on PATH. Sessions will have NO role protocols.' -ForegroundColor Yellow
 }
-Copy-Item $appendHelper $commandsFolder -Force
-Write-Host 'Installed the channel append helper (channel-append.sh).' -ForegroundColor Green
+
+# THE OLD HAND-INSTALLED KIT IS REMOVED, and this is not tidying: a local command in
+# ~\.claude\commands WINS the slash word over a plugin skill (measured on CLI 2.1.263), so a
+# leftover supervisor.md would be read INSTEAD of the plugin while `claude plugin list` reported the
+# new version. Only the exact filenames this project ever shipped are touched.
+$stale = @('supervisor.md','implementer.md','reviewer.md','solo.md','general-supervisor.md',
+           'communicator.md','channel-append.sh','.installed-by.txt') |
+    ForEach-Object { Join-Path $commandsFolder $_ }
+$stale += @('supervisor-ledger-check.sh','run-to-the-end-check.sh','reviewer-readonly-check.sh',
+            'supervisor-awaiting-answer-check.sh','hook-log.sh','hook-behaviour-check.sh',
+            'watcher-behaviour-check.sh') |
+    ForEach-Object { Join-Path (Join-Path $claudeFolder 'hooks') $_ }
+# MOVED ASIDE, NEVER DELETED — the same rule as the app's own sweep (LegacyKit_Remover), and for the
+# same reason: these names are generic, so a reviewer.md somebody wrote for something else can carry
+# one. The rename breaks the shadow while leaving every byte on disk.
+$moved = 0
+foreach ($file in $stale) {
+    if (Test-Path -LiteralPath $file) {
+        Move-Item -LiteralPath $file -Destination "$file.aiorch-removed" -Force
+        Write-Host "  moved aside: $file  ->  $file.aiorch-removed"
+        $moved++
+    }
+}
+if ($moved -gt 0) { Write-Host "Moved $moved hand-installed kit file(s) aside — they would have shadowed the plugin. Nothing was deleted." -ForegroundColor Green }
 
 Copy-Item (Join-Path $kitFolder 'statusline\statusline.ps1') $statusLineTarget -Force
 Write-Host 'Installed status line script.' -ForegroundColor Green

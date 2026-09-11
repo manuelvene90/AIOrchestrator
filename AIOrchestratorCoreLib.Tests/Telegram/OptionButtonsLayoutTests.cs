@@ -1,4 +1,5 @@
 using System.Globalization;
+using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Telegram;
 using Xunit;
 
@@ -340,5 +341,48 @@ public class OptionButtonsLayoutTests
                     $"unpaired low surrogate at {index} in '{text}'");
             }
         }
+    }
+
+    /// <summary>
+    /// A FIFTH OPTION FORCES NUMBERING even when every label is short (owner, brief C/E2). Length was
+    /// the only trigger before, so five short options rendered as five bare buttons — a column of
+    /// five phrases with no numbers, which is exactly the shape the numbered list exists to replace:
+    /// the owner has to re-read all of them to find the one they mean, and has no way to answer in
+    /// one character.
+    ///
+    /// FOUR SHORT ONES ARE UNTOUCHED, asserted here beside it, because a rule that numbered
+    /// everything would satisfy the first half and quietly change every question the owner sees.
+    /// </summary>
+    [Fact]
+    public void FiveShortOptionsAreNumbered_FourAreLeftAlone()
+    {
+        var fiveShort = new[] { "yes", "no", "later", "ask Manu", "skip" };
+
+        var five = OptionButtons_Layout.Build(fiveShort);
+
+        Assert.Equal(["1) yes", "2) no", "3) later", "4) ask Manu", "5) skip"], five.ButtonLabels);
+        Assert.NotNull(five.OptionListText);
+
+        var fourShort = new[] { "yes", "no", "later", "ask Manu" };
+
+        var four = OptionButtons_Layout.Build(fourShort);
+
+        Assert.Equal(fourShort, four.ButtonLabels);
+        Assert.Null(four.OptionListText);
+    }
+
+    /// <summary>
+    /// The trigger reads the ONE option-count constant rather than a 4 of its own, so the layout and
+    /// the coaching cannot come to disagree about what "too many" means — the drift the ceiling in
+    /// OwnerMessage_Contract had already suffered.
+    /// </summary>
+    [Fact]
+    public void TheNumberingTriggerIsTheContractsMaximum()
+    {
+        var atTheMaximum = Enumerable.Range(1, OwnerQuestion_Contract.MAXIMUM_OPTIONS).Select(n => $"opt{n}").ToArray();
+        var oneOver = Enumerable.Range(1, OwnerQuestion_Contract.MAXIMUM_OPTIONS + 1).Select(n => $"opt{n}").ToArray();
+
+        Assert.Null(OptionButtons_Layout.Build(atTheMaximum).OptionListText);
+        Assert.NotNull(OptionButtons_Layout.Build(oneOver).OptionListText);
     }
 }

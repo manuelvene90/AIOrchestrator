@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Storage;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Channels;
@@ -75,7 +76,7 @@ public class ChannelCompactorTests : IDisposable
         Assert.Equal(1, archived[0].Index);
     }
 
-    [Fact]
+    [RequiresFileShareEnforcementFact]
     public void Compact_WhenTheLiveFileCannotBeRewritten_ReturnsNull_AndLosesNoEntries()
     {
         const int TOTAL = 120;
@@ -99,7 +100,7 @@ public class ChannelCompactorTests : IDisposable
         Assert.True(File.Exists(Channel_Compactor.Build_ArchiveFilePath(channelFile)));
     }
 
-    [Fact]
+    [RequiresFileShareEnforcementFact]
     public void Compact_WhenTheLiveFileCannotBeRewritten_LeavesNoTempFileBehind()
     {
         var channelFile = Write_Channel(120);

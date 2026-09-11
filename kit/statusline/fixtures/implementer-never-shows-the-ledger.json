@@ -1,0 +1,50 @@
+{
+  "name": "implementer-never-shows-the-ledger",
+  "env": {
+    "AIORCH_ROLE": "implementer",
+    "AIORCH_ID": "strategy-lab-7",
+    "AIORCH_MEMBER": "imp-2"
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Opus"
+    },
+    "workspace": {
+      "current_dir": "C:\\repos\\AIOrchestrator"
+    },
+    "context_window": {
+      "total_input_tokens": 79558,
+      "total_output_tokens": 230,
+      "context_window_size": 1000000,
+      "current_usage": {
+        "input_tokens": 2,
+        "output_tokens": 230
+      },
+      "used_percentage": 8,
+      "remaining_percentage": 92
+    },
+    "exceeds_200k_tokens": false,
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {
+    "strategy-lab-7/session.json": {
+      "displayName": "PB · equity control bug"
+    },
+    "strategy-lab-7/.progress.json": {
+      "text": "3 of 8 done, 1 running",
+      "done": 3,
+      "total": 8,
+      "percent": 37
+    },
+    "strategy-lab-7/imp-2/.keep": {}
+  },
+  "expected": "\u001b[1;94m IMP-2 \u001b[0m\u001b[34m PB · equity control bug \u001b[0m Opus \u001b[90mctx 8%\u001b[0m",
+  "expectedUsageFile": "strategy-lab-7/imp-2/.usage.json"
+}

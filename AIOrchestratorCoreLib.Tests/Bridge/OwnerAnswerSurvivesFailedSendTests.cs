@@ -8,6 +8,8 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
+using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -27,9 +29,9 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 ///   - `Mirror_Append_Async` returns early when there is no Telegram client, ABOVE the code under
 ///     test. A file-only harness — which every other engine test uses — cannot reach this defect at
 ///     all, so the send must come from a fake client that can be made to fail.
-///   - `Is_MirrorAttemptDue` holds a failed channel back for MIRROR_RETRY_BACKOFF_SECONDS (30), and
+///   - `Is_MirrorAttemptDue` holds a failed channel back for the engine's retry backoff, and
 ///     the waiting flag is per-instance in-memory state. So both attempts must happen on the SAME
-///     engine, 30 s apart. A fresh engine starts with an empty flag set and would go red with or
+///     engine, a whole backoff apart. A fresh engine starts with an empty flag set and would go red with or
 ///     without the fix — a green that pins nothing.
 ///
 /// THE ANSWER TEXT CARRIES NO QUESTION MARK, NO QUESTION:/OPTION: MARKER AND NO BLOCKED MARKER, on
@@ -43,8 +45,24 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
     const long OWNER_USER_ID = 555000111;
     const long TOPIC_ID = 4242;
 
-    /// <summary>The engine holds a failed channel for 30 s; the margin is for a loaded machine.</summary>
-    const int RETRY_BACKOFF_WAIT_MILLISECONDS = 33_000;
+    /// <summary>
+    /// THE ONE FILE THAT SHORTENS THE BACKOFF, because the backoff is its subject. Everything above
+    /// still holds — the two attempts happen on the SAME engine, the second only after the hold has
+    /// expired, and the ORDER is exactly the order the assertions read. What changed is the number:
+    /// this test used to sleep 33 s of wall clock in front of production's 30 s hold, which was 49 s
+    /// of the suite's 98 s all by itself, and it proved nothing that three seconds does not.
+    ///
+    /// <para>
+    /// THREE RATHER THAN ONE, so <see cref="ATimedOutSend_IsNotReadAsShutdown_SoTheChannelStillGetsItsBackoff"/>
+    /// keeps its margin on BOTH sides: its window has to be long enough that the first attempt has
+    /// certainly happened and short enough that the hold has certainly not expired, and squeezing
+    /// the hold squeezes that window from both ends at once.
+    /// </para>
+    /// </summary>
+    const int RETRY_BACKOFF_SECONDS = 3;
+
+    /// <summary>The engine holds a failed channel for the backoff; the margin is for a loaded machine.</summary>
+    const int RETRY_BACKOFF_WAIT_MILLISECONDS = (RETRY_BACKOFF_SECONDS * 1000) + 500;
 
     /// <summary>Distinctive, and deliberately free of anything that would push on its own merits.</summary>
     const string ANSWER_TEXT = "Yes. The rebuild finished and the branch is clean.";
@@ -80,12 +98,11 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        // The inbound loop reads the chat and owner ids and throws without them. The Italian layer is
-        // pinned OFF because it defaults ON and would hand the owner's text to the real translator.
+        // The inbound loop reads the chat and owner ids and throws without them.
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -96,7 +113,7 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast_WithRetryBackoff(RETRY_BACKOFF_SECONDS));
     }
 
     public void Dispose()
@@ -116,14 +133,12 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         // behind the starting offset and is never mirrored at all.
         Seed_OwnerChannel(session.OrchId);
 
-        // 1 — the owner asks. This is the only thing that raises the waiting flag, and it is raised
-        // when the message LANDS in the channel (after the aggregation window), not when it is
-        // buffered — an answer the session wrote before it could have read the message is narration.
+        // 1 — the owner asks. This is the only thing that raises the waiting flag.
         _telegram.Queue_OwnerMessage(Build_OwnerMessageJson("is the rebuild done"));
 
         Assert.True(
-            await Run_Until_Async(() => _log.Has_Info_Containing("Owner message delivered"), 40_000),
-            "the owner's message was never delivered to the channel, so the waiting flag was never raised");
+            await Run_Until_Async(() => _log.Has_Info_Containing("Owner message buffered"), 10_000),
+            "the owner's message never reached the router, so the waiting flag was never raised");
 
         // 2 — the supervisor answers, and the send fails.
         Append_SupervisorEntry(session.OrchId, 1, "the answer", ANSWER_TEXT);
@@ -139,7 +154,7 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         Assert.False(_telegram.Has_Sent_Containing(ANSWER_TEXT), "the send was supposed to fail");
 
         // 3 — the retry. The tailer re-emits the unconfirmed append; the engine holds the channel for
-        // MIRROR_RETRY_BACKOFF_SECONDS first, which is what this wait is buying.
+        // RETRY_BACKOFF_SECONDS first, which is what this wait is buying.
         await Task.Delay(RETRY_BACKOFF_WAIT_MILLISECONDS);
         _telegram.Succeed_All_Sends();
 
@@ -149,16 +164,19 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
             + "re-evaluated as narration and was suppressed — the owner never got the answer to the "
             + "question they asked");
 
-        // 4 — AND THE WAIT IS NOW SPENT. Without this the suite cannot see the opposite regression:
-        // delete the clear entirely and everything above still passes, because a flag that is never
-        // cleared also delivers the answer. It just delivers EVERYTHING afterwards too, which is the
-        // waterfall the push policy exists to stop.
+        // 4 — AND THE PIPELINE KEEPS RUNNING AFTERWARDS. This step used to assert the OPPOSITE: that
+        // a later plain entry was NOT pushed, which is how the suite could see a wait-flag that was
+        // never cleared (it would deliver the answer and then everything else too). That oracle
+        // retired with the narration filter on 2026-09-09 — everything the supervisor writes reaches
+        // the phone now, by the owner's decision, so "narration was pushed" is no longer evidence of
+        // a stuck flag. What is still worth pinning here is that the re-emission did not leave the
+        // channel wedged: the entry after the answer gets through too.
         Append_SupervisorEntry(session.OrchId, 2, "progress", NARRATION_TEXT);
 
-        Assert.False(
-            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 12_000),
-            "the answer was delivered but the owner's wait was never consumed, so ordinary narration "
-            + "is still being pushed to their phone");
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 20_000),
+            "the answer was delivered but the channel stayed wedged afterwards — the entry that "
+            + "followed it never reached the phone");
     }
 
     /// <summary>
@@ -180,9 +198,11 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         Append_SupervisorEntry(orchId, 1, "a question", TIMEOUT_TEXT);
         _telegram.Timeout_Sends_Containing(TIMEOUT_TEXT);
 
-        // Well past several mirror ticks (2 s each) but far short of the 30 s backoff, so a channel
-        // that was settled correctly cannot legitimately attempt twice inside this window.
-        await Run_For_Async(14_000);
+        // Well past several mirror ticks but far short of the backoff, so a channel that was settled
+        // correctly cannot legitimately attempt twice inside this window. BOTH HALVES OF THAT ARE
+        // LOAD-BEARING and both are now computed: Window_ForTicks covers the engine's start-up plus
+        // dozens of ticks, and RETRY_BACKOFF_SECONDS is several times longer than the whole window.
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(30));
 
         var attempts = _telegram.Count_Attempts_Containing(TIMEOUT_TEXT);
 
@@ -248,7 +268,7 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
         Seed_OwnerChannel(session.OrchId);
 
-        await Run_For_Async(4_000);
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(3));
 
         return session.OrchId;
     }
@@ -335,12 +355,23 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
 /// </summary>
 internal sealed class FailableTelegram_Fake : ITelegramApiClient
 {
+
+    // The startup handshake (see ITelegramApiClient): a fake not testing it answers with a name and
+    // a cleared webhook, so the inbound loop starts exactly as it does in production.
+    public Task<string> Get_BotUsername_Async(CancellationToken cancellationToken) => Task.FromResult("test_bot");
+
+    public Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken) => Task.CompletedTask;
+    // The typing bubble is not this probe's subject; it creates no message, so it is not recorded.
+    public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     const string EMPTY_UPDATES = "{\"ok\":true,\"result\":[]}";
 
     readonly object _lock = new();
     readonly List<string> _attemptedTexts = [];
     readonly List<string> _sentTexts = [];
-    readonly List<string> _sentPhotoPaths = [];
     string? _queuedUpdatesJson;
     string? _failFragment;
     string? _timeoutFragment;
@@ -413,18 +444,31 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
             return _sentTexts.Any(text => text.Contains(fragment, StringComparison.Ordinal));
     }
 
-    public async Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public async Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         await Block_IfAsked_Async(text, cancellationToken);
 
         return Record_AndMaybeFail(text);
     }
 
-    public async Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public async Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         await Block_IfAsked_Async(html, cancellationToken);
 
         return Record_AndMaybeFail(html);
+    }
+
+    // THE RENDERED PATH RECORDS EXACTLY LIKE THE PLAIN ONE. Since 2026-09-07 every piece of agent
+    // prose leaves as HTML, so a fake that only watched the plain calls would see an empty topic and
+    // report the traffic it is here to prove as absent.
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
     }
 
     /// <summary>
@@ -452,21 +496,11 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    public Task<long?> Send_MessageWithReplyKeyboard_Async(
-        long? messageThreadId,
-        string text,
-        IReadOnlyList<IReadOnlyList<string>> keyboardRows,
-        CancellationToken cancellationToken)
-    {
-        // The persistent command bar is not this probe's subject. Accept it and hand back no id, so
-        // installing it cannot perturb the sends this test actually counts.
-        return Task.FromResult<long?>(null);
-    }
-
     public Task<long?> Send_MessageWithButtons_Async(
         long? messageThreadId,
         string text,
         IReadOnlyList<(string Data, string Label)> buttons,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(Record_AndMaybeFail(text));
@@ -510,7 +544,7 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
-    public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken)
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
         return Task.FromResult(7777L);
     }
@@ -545,9 +579,9 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Edit_MessageText_Async(messageId, text, cancellationToken);
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
@@ -570,29 +604,14 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// RECORDED, not swallowed. This was a bare `Task.CompletedTask` — the fake accepted photos and
-    /// remembered nothing — so no test in the suite could tell a picture that was uploaded from one
-    /// that was texted as a path, which is exactly the defect PicturesReachTheOwnerTests pins.
-    /// </summary>
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        lock (_lock)
-            _sentPhotoPaths.Add(filePath);
-
         return Task.CompletedTask;
     }
 
-    public bool Has_SentPhoto(string filePath)
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        lock (_lock)
-            return _sentPhotoPaths.Any(path => string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase));
-    }
-
-    public IReadOnlyList<string> Sent_Texts()
-    {
-        lock (_lock)
-            return _sentTexts.ToList();
+        return Task.CompletedTask;
     }
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken)
@@ -604,6 +623,9 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
     {
         return Task.CompletedTask;
     }
+
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken) => Task.CompletedTask;
+
 
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken)
     {

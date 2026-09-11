@@ -3,7 +3,7 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Telegram;
 
 /// <summary>
-/// THE PRODUCER OF THE TYPED EXCEPTION, PINNED — the half `TopicNameSyncGateTests` is blind to.
+/// THE PRODUCER OF THE TYPED EXCEPTION, PINNED — the half `TelegramAttemptGateTests` is blind to.
 ///
 /// `Classify_Failure` is pinned six ways: it is a pure function and the suite hammers it. But it can
 /// only classify what it is HANDED, and nothing asserted that the client hands it a

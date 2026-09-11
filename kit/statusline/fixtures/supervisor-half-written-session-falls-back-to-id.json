@@ -1,0 +1,30 @@
+{
+  "name": "supervisor-half-written-session-falls-back-to-id",
+  "env": {
+    "AIORCH_ROLE": "supervisor",
+    "AIORCH_ID": "strategy-lab-7",
+    "AIORCH_MEMBER": ""
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Opus"
+    },
+    "workspace": {
+      "current_dir": "C:\\repos\\AIOrchestrator"
+    },
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {},
+  "rawFiles": {
+    "strategy-lab-7/session.json": "{\"displayName\":\"PB · equi"
+  },
+  "expected": "\u001b[1;91m SUPERVISOR \u001b[0m\u001b[31m strategy-lab-7 \u001b[0m Opus",
+  "expectedUsageFile": "strategy-lab-7/.usage.json"
+}

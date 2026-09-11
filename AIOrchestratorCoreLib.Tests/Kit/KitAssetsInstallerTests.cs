@@ -4,56 +4,54 @@ using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Kit;
 
+/// <summary>
+/// The installer now installs ONE thing — the status line — because everything else it used to copy
+/// ships inside the plugin. Every test here is one of the eleven this class had; the two that
+/// asserted the copying of role commands and hooks moved to where those properties now live
+/// (<see cref="RoleHooksAreShippedTests"/>), rather than being deleted with the code they watched.
+/// </summary>
 public class KitAssetsInstallerTests : IDisposable
 {
     readonly string _tempRoot;
-    readonly string _kitCommandsFolder;
     readonly string _kitStatuslineFile;
-    readonly string _commandsTargetFolder;
     readonly string _statuslineTargetFile;
 
     public KitAssetsInstallerTests()
     {
         _tempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-kit-tests-{Guid.NewGuid():N}");
-        _kitCommandsFolder = Path.Combine(_tempRoot, "kit", "commands");
-        _kitStatuslineFile = Path.Combine(_tempRoot, "kit", "statusline.ps1");
-        _commandsTargetFolder = Path.Combine(_tempRoot, "claude", "commands");
+        _kitStatuslineFile = Path.Combine(_tempRoot, "kit", "statusline", "statusline.ps1");
         _statuslineTargetFile = Path.Combine(_tempRoot, "supervision", "statusline.ps1");
 
-        Directory.CreateDirectory(_kitCommandsFolder);
-        File.WriteAllText(Path.Combine(_kitCommandsFolder, "supervisor.md"), "supervisor protocol v1");
-        File.WriteAllText(Path.Combine(_kitCommandsFolder, "general-supervisor.md"), "general protocol v1");
+        Directory.CreateDirectory(Path.GetDirectoryName(_kitStatuslineFile)!);
         File.WriteAllText(_kitStatuslineFile, "statusline v1");
     }
 
     public void Dispose()
     {
         Directory.Delete(_tempRoot, recursive: true);
+        GC.SuppressFinalize(this);
     }
 
     IReadOnlyList<string> Run_Installer(string? installerDescription = null)
     {
-        return KitAssets_Installer.Ensure_Installed(
-            _kitCommandsFolder, _kitStatuslineFile, _commandsTargetFolder, _statuslineTargetFile,
-            Path.Combine(_tempRoot, "kit", "hooks"), Path.Combine(_tempRoot, "claude", "hooks"),
-            installerDescription);
+        return KitAssets_Installer.Ensure_Installed(_kitStatuslineFile, _statuslineTargetFile, installerDescription);
     }
+
+    string Provenance_File => Path.Combine(Path.GetDirectoryName(_statuslineTargetFile)!, KitAssets_Installer.PROVENANCE_FILE_NAME);
 
     /// <summary>
     /// SESSIONS READ THE INSTALLED COPY WHILE THEIR AUTHOR EDITS THE BRANCH SOURCE, and telling the
     /// two apart has cost this project whole evenings — an edit is not delivery until an app startup
-    /// has copied it here. The installed folder now carries the identity of the app that filled it,
-    /// so the question stops being answered by comparing mtimes.
+    /// has put it here. The installed side carries the identity of the app that filled it, so the
+    /// question stops being answered by comparing mtimes.
     /// </summary>
     [Fact]
-    public void Ensure_Installed_NamesTheAppThatInstalledTheCommands()
+    public void Ensure_Installed_NamesTheAppThatInstalledTheStatusLine()
     {
         Run_Installer("build 22:43 · bin\\Debug — C:\\repos\\AIOrchestrator\\bin\\Debug\\");
 
-        var provenanceFile = Path.Combine(_commandsTargetFolder, KitAssets_Installer.PROVENANCE_FILE_NAME);
-
-        Assert.True(File.Exists(provenanceFile), "the installed commands do not say which app put them there");
-        Assert.Contains("build 22:43 · bin\\Debug", File.ReadAllText(provenanceFile));
+        Assert.True(File.Exists(Provenance_File), "the installed status line does not say which app put it there");
+        Assert.Contains("build 22:43 · bin\\Debug", File.ReadAllText(Provenance_File));
     }
 
     /// <summary>
@@ -68,7 +66,7 @@ public class KitAssetsInstallerTests : IDisposable
         var installed = Run_Installer("build 22:43 · bin\\Debug");
 
         Assert.Empty(installed);
-        Assert.Contains("build 22:43 · bin\\Debug", File.ReadAllText(Path.Combine(_commandsTargetFolder, KitAssets_Installer.PROVENANCE_FILE_NAME)));
+        Assert.Contains("build 22:43 · bin\\Debug", File.ReadAllText(Provenance_File));
     }
 
     /// <summary>The note is provenance, not a kit asset — counting it would log an install every run.</summary>
@@ -80,33 +78,12 @@ public class KitAssetsInstallerTests : IDisposable
         Assert.DoesNotContain(installed, file => file.EndsWith(KitAssets_Installer.PROVENANCE_FILE_NAME, StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// The append helper lives beside the role commands that tell sessions to run it. If the
-    /// installer does not carry it across, every one of those instructions points at a path that
-    /// does not exist and the sessions fall back to the unlocked appends the helper replaced —
-    /// a protocol that ships as documentation only.
-    /// </summary>
     [Fact]
-    public void Ensure_Installed_CarriesTheAppendHelperAcrossToo_NotOnlyTheMarkdown()
-    {
-        File.WriteAllText(Path.Combine(_kitCommandsFolder, "channel-append.sh"), "#!/bin/bash\necho helper v1\n");
-
-        Run_Installer();
-
-        var installedHelper = Path.Combine(_commandsTargetFolder, "channel-append.sh");
-
-        Assert.True(File.Exists(installedHelper), "the append helper was not installed beside the role commands that call it");
-        Assert.Equal("#!/bin/bash\necho helper v1\n", File.ReadAllText(installedHelper));
-    }
-
-    [Fact]
-    public void Ensure_Installed_FreshMachine_CopiesEverything()
+    public void Ensure_Installed_FreshMachine_InstallsTheStatusLine()
     {
         var installed = Run_Installer();
 
-        Assert.Equal(3, installed.Count);
-        Assert.Equal("supervisor protocol v1", File.ReadAllText(Path.Combine(_commandsTargetFolder, "supervisor.md")));
-        Assert.Equal("general protocol v1", File.ReadAllText(Path.Combine(_commandsTargetFolder, "general-supervisor.md")));
+        Assert.Single(installed);
         Assert.Equal("statusline v1", File.ReadAllText(_statuslineTargetFile));
     }
 
@@ -115,35 +92,29 @@ public class KitAssetsInstallerTests : IDisposable
     {
         Run_Installer();
 
-        var secondRun = Run_Installer();
-
-        Assert.Empty(secondRun);
+        Assert.Empty(Run_Installer());
     }
 
     [Fact]
     public void Ensure_Installed_KitContentChanged_OverwritesTarget()
     {
         Run_Installer();
-        File.WriteAllText(Path.Combine(_kitCommandsFolder, "supervisor.md"), "supervisor protocol v2");
+        File.WriteAllText(_kitStatuslineFile, "statusline v2");
 
         var secondRun = Run_Installer();
 
         Assert.Single(secondRun);
-        Assert.Equal("supervisor protocol v2", File.ReadAllText(Path.Combine(_commandsTargetFolder, "supervisor.md")));
+        Assert.Equal("statusline v2", File.ReadAllText(_statuslineTargetFile));
     }
 
     [Fact]
-    public void Ensure_Installed_MissingKitFolder_ReturnsEmptyWithoutThrowing()
+    public void Ensure_Installed_MissingSourceScript_ReturnsEmptyWithoutThrowing()
     {
-        var installer = KitAssets_Installer.Ensure_Installed(
-            Path.Combine(_tempRoot, "does-not-exist"),
+        var installed = KitAssets_Installer.Ensure_Installed(
             Path.Combine(_tempRoot, "also-missing.ps1"),
-            _commandsTargetFolder,
-            _statuslineTargetFile,
-            Path.Combine(_tempRoot, "no-hooks"),
-            Path.Combine(_tempRoot, "claude", "hooks"));
+            _statuslineTargetFile);
 
-        Assert.Empty(installer);
+        Assert.Empty(installed);
     }
 
     [Fact]
@@ -170,40 +141,18 @@ public class KitAssetsInstallerTests : IDisposable
     [Fact]
     public void Ensure_Installed_SourceHasNoBom_TargetGainsNone()
     {
-        // The same copy path carries the *.sh hooks, where a BOM before the shebang stops the
-        // script being executable. Preserving bytes must mean preserving their absence too.
-        var kitHooksFolder = Path.Combine(_tempRoot, "kit", "hooks");
-        var hooksTargetFolder = Path.Combine(_tempRoot, "claude", "hooks");
+        // The same copy path carries statusline.sh, where a BOM before the shebang stops the script
+        // being executable. Preserving bytes must mean preserving their absence too.
+        var posixSource = Path.Combine(_tempRoot, "kit", "statusline", "statusline.sh");
+        var posixTarget = Path.Combine(_tempRoot, "supervision", "statusline.sh");
         var sourceBytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
             .GetBytes("#!/usr/bin/env bash\nexit 0\n");
         Assert.NotEqual(0xEF, sourceBytes[0]);
 
-        Directory.CreateDirectory(kitHooksFolder);
-        File.WriteAllBytes(Path.Combine(kitHooksFolder, "supervisor-ledger-check.sh"), sourceBytes);
+        File.WriteAllBytes(posixSource, sourceBytes);
 
-        KitAssets_Installer.Ensure_Installed(
-            _kitCommandsFolder, _kitStatuslineFile, _commandsTargetFolder, _statuslineTargetFile,
-            kitHooksFolder, hooksTargetFolder);
+        KitAssets_Installer.Ensure_Installed(posixSource, posixTarget);
 
-        Assert.Equal(
-            sourceBytes,
-            File.ReadAllBytes(Path.Combine(hooksTargetFolder, "supervisor-ledger-check.sh")));
-    }
-
-    [Fact]
-    public void Ensure_Installed_CopiesTheEnforcementHooks()
-    {
-        var kitHooksFolder = Path.Combine(_tempRoot, "kit", "hooks");
-        var hooksTargetFolder = Path.Combine(_tempRoot, "claude", "hooks");
-
-        Directory.CreateDirectory(kitHooksFolder);
-        File.WriteAllText(Path.Combine(kitHooksFolder, "supervisor-ledger-check.sh"), "#!/usr/bin/env bash\nexit 0\n");
-
-        var installed = KitAssets_Installer.Ensure_Installed(
-            _kitCommandsFolder, _kitStatuslineFile, _commandsTargetFolder, _statuslineTargetFile,
-            kitHooksFolder, hooksTargetFolder);
-
-        Assert.Contains(installed, file => file.EndsWith("supervisor-ledger-check.sh", StringComparison.Ordinal));
-        Assert.True(File.Exists(Path.Combine(hooksTargetFolder, "supervisor-ledger-check.sh")));
+        Assert.Equal(sourceBytes, File.ReadAllBytes(posixTarget));
     }
 }

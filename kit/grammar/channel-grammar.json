@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "THE CHANNEL GRAMMAR — one source, two readers.",
+    "The .NET side embeds this file as a resource and parses it in ChannelGrammar; kit/bin/channel-append.sh",
+    "reads this same file with jq. Nothing else may spell a marker word: a test greps for it.",
+    "WHY IT IS DATA AND NOT A C# CLASS OF CONSTANTS: the writer is a bash tool a session invokes, and the",
+    "recognisers are .NET. A constant in either language is unreadable by the other, which is exactly how",
+    "'QUESTION:' came to be written on one side and 'QUESTION' recognised on the other, in three files.",
+    "WHY IT IS NOT GENERATED from either side: a generator puts the truth in a build step, and decision 17",
+    "is this repo's own record of nobody re-running the build step."
+  ],
+
+  "version": 1,
+
+  "header": {
+    "_comment": "The entry header the tool WRITES and the parser reads. The index and the stamp are the tool's to compute — a model writing them is CLAUDE.md decision 12, with two [80]s and a stamp ten hours ahead as the evidence.",
+    "pattern": "^##\\s*\\[(\\d+)\\]\\s*FROM\\s+(\\S+)\\s*(.*)$",
+    "template": "## [{index}] FROM {author} — {stamp} — {subject}",
+    "stamp_format": "yyyy-MM-dd HH:mm",
+    "separator": " — "
+  },
+
+  "type_field": {
+    "_comment": "Requirement 3: the declared type is PERSISTED, so the state pack and the digest read it instead of guessing from the subject's first word. Written on its own line directly under the header; absent on every entry written before this landed, which the parser treats as 'untyped' rather than as an error.",
+    "line_prefix": "type: "
+  },
+
+  "types": {
+    "_comment": "Every entry kind the tool can write. 'brief' and 'review' are what Brief_Finder used to infer from a subject beginning 'BRIEF —' or 'REVIEW'.",
+    "values": ["question", "report", "state", "brief", "review", "note", "attachment"]
+  },
+
+  "markers": {
+    "_comment": "ONE spelling each, colon included where the writer emits one. The three-file drift this closes: OwnerMessage_Contract and OwnerPush_Policy carried 'QUESTION:' while OwnerQuestion_Contract carried 'QUESTION'.",
+    "question": "QUESTION:",
+    "option": "OPTION:",
+    "recommend": "RECOMMEND:",
+    "risk": "RISK:",
+    "row": "ROW:",
+    "deadline": "DEADLINE:",
+    "default": "DEFAULT:",
+    "image": "IMAGE:",
+    "attach": "ATTACH:",
+    "state": "STATE:",
+    "blocked_on_owner": "BLOCKED ON OWNER",
+    "answered": "ANSWERED",
+    "standing_by": "STANDING BY",
+    "writing_window_open": "WRITING WINDOW OPEN",
+    "writing_window_closed": "WRITING WINDOW CLOSED",
+    "mutation_window_open": "MUTATION WINDOW OPEN",
+    "mutation_window_closed": "MUTATION WINDOW CLOSED",
+    "boot_announcement_word": "online",
+    "to": "TO:",
+    "worktree": "WORKTREE:"
+  },
+
+  "ceilings": {
+    "_comment": "The owner's numbers (brief E2). They live here so the TOOL can refuse before the write rather than the app coaching after it — same rule, one moment earlier. Brevity_Policy asserts it agrees with these.",
+    "max_lines": 5,
+    "max_characters": 600,
+    "min_options": 2,
+    "max_options": 4,
+    "option_label_width": 28
+  },
+
+  "deadline": {
+    "_comment": "DEADLINE: takes 2h, 90m, or a bare number of minutes. Past this many hours the app reads it as no deadline at all — QuestionDirectives_Parser.MAXIMUM_DEADLINE_HOURS, asserted equal by ChannelGrammarTests.",
+    "maximum_hours": 168
+  },
+
+  "risk_levels": {
+    "_comment": "RISK: takes one of these and nothing else, so a question cannot declare a risk nobody can compare.",
+    "values": ["low", "medium", "high"]
+  }
+}

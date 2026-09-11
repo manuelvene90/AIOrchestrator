@@ -174,9 +174,6 @@
                 <CheckBox x:Name="SilenceAllCheckBox" Content="🔕 Silence everywhere" FontSize="11"
                           Foreground="{StaticResource TextSecondary}" Margin="14,0,0,0" VerticalAlignment="Center"
                           Checked="SilenceAllCheckBox_Changed" Unchecked="SilenceAllCheckBox_Changed"/>
-                <CheckBox x:Name="ItalianLayerCheckBox" Content="🇮🇹 Italian" FontSize="11"
-                          Foreground="{StaticResource TextSecondary}" Margin="14,0,0,0" VerticalAlignment="Center"
-                          Checked="ItalianLayerCheckBox_Changed" Unchecked="ItalianLayerCheckBox_Changed"/>
                 <TextBlock x:Name="BuildStampText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}"
                            Margin="18,0,0,0" VerticalAlignment="Center"/>
                 <TextBlock x:Name="RootPathText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Right" VerticalAlignment="Center"/>

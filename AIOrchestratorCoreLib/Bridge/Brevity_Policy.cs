@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Channels;
+
 namespace AIOrchestratorCoreLib.Bridge;
 
 /// <summary>
@@ -26,6 +28,23 @@ public static class Brevity_Policy
     /// <summary>Never nag more than once per this window, however chatty the supervisor gets.</summary>
     public const int NUDGE_COOLDOWN_MINUTES = 20;
 
+    /// <summary>
+    /// THE LINES THAT COUNT — prose only, since the owner's ruling of 2026-09-10. A marker line is
+    /// structure: the app turns `OPTION:` into a button and `STATE:` into a PULSE field, and neither
+    /// is a sentence the owner reads.
+    ///
+    /// <para>
+    /// WHY IT CHANGED, MEASURED. A well-formed question is SIX marker lines by construction — ROW,
+    /// RISK, QUESTION, two OPTIONs, RECOMMEND — so a counter that included them coached EVERY question
+    /// as over a five-line ceiling. Brief C asks for "zero coaching entries about format"; this was
+    /// the surface generating them, about entries that were correct.
+    /// </para>
+    /// <para>
+    /// ONE RULE, READ FROM THE GRAMMAR, so this counter and the tool that refuses before the write
+    /// agree by construction. They did not: the tool counted prose and this counted everything, which
+    /// is the same class of split E3 exists to end, one layer up from the marker words themselves.
+    /// </para>
+    /// </summary>
     public static int Count_Lines(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -35,8 +54,10 @@ public static class Brevity_Policy
 
         foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
         {
-            if (!string.IsNullOrWhiteSpace(line))
-                lines++;
+            if (string.IsNullOrWhiteSpace(line) || ChannelGrammar.Is_MarkerLine(line))
+                continue;
+
+            lines++;
         }
 
         return lines;
@@ -50,10 +71,25 @@ public static class Brevity_Policy
         return Count_Lines(text) > MAX_LINES || text.Length > MAX_CHARACTERS;
     }
 
-    /// <summary>The feedback itself — it must carry the NUMBERS, or it is just the rule again.</summary>
-    public static string Build_NudgeBody(string text)
+    /// <summary>
+    /// The feedback itself — it must carry the NUMBERS, or it is just the rule again.
+    ///
+    /// <para>
+    /// <paramref name="deliveredMessages"/> is how many Telegram messages the entry actually became.
+    /// It is stated first, and it is not decoration: on 2026-09-07 this note was read — by a
+    /// supervisor and then by the owner it reported to — as the bridge having REFUSED the message,
+    /// and the supervisor stopped re-sending an answer the owner had in fact received. Nothing here
+    /// ever withholds a message; saying so removes the only reading under which it could.
+    /// </para>
+    /// </summary>
+    public static string Build_NudgeBody(string text, int deliveredMessages = 1)
     {
-        return $"That message was {Count_Lines(text)} lines / {text.Length} characters. The cap is {MAX_LINES} lines "
+        var delivery = deliveredMessages > 1
+            ? $"It WAS delivered, split across {deliveredMessages} phone messages — nothing was dropped. "
+            : "It WAS delivered in full — nothing was dropped. ";
+
+        return delivery
+            + $"That message was {Count_Lines(text)} lines / {text.Length} characters. The cap is {MAX_LINES} lines "
             + $"({TARGET_LINES} is the norm) and {MAX_CHARACTERS} characters, because it lands on a PHONE.\n\n"
             + "Cut it the way a busy person would want it: lead with the decision or the question, drop the reasoning "
             + "unless they asked for it, drop anything restating what they already know, and let the detail live in "

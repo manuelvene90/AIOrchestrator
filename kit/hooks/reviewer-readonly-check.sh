@@ -22,8 +22,9 @@ fi
 # DEFINED FIRST, UNCONDITIONALLY, then overridden by the real one. The stub used to live in an
 # `else`, so it covered a MISSING helper only — a helper that EXISTS but is truncated or empty left
 # the function undefined and the call failed to stderr, the stream this feature's own header says
-# nobody reads. That window is real rather than theoretical: KitAssets_Installer overwrites
-# ~/.claude/hooks at every app start, so a hook firing during that copy sees a partial file.
+# nobody reads. The window is narrower than it was — kit/ ships as a Claude Code plugin and the
+# hooks are loaded from the checkout, not copied into ~/.claude/hooks (kit/install.sh:10-14) — but a
+# truncated or half-written helper still leaves the function undefined, so the stub stays.
 aiorch_log_undecidable() { return 0; }
 
 if [ -f "$(dirname "$0")/hook-log.sh" ]; then
@@ -120,6 +121,28 @@ MEMBER = os.environ.get("AIORCH_MEMBER", "") or "__none__"
 # widening it further was not ordered — it is filed as a finding rather than fixed in passing.
 FILE_VERBS = {"rm", "rmdir", "mv", "cp", "mkdir", "truncate", "dd",
               "remove-item", "set-content", "add-content", "out-file", "new-item"}
+
+# THE SUBSET A CONTAINMENT QUESTION CAN BE ASKED ABOUT. Every verb here names the files it touches
+# as ordinary words, so "is this inside the scratch folder" has an answer. `truncate` and `dd` write
+# files too and nobody asked for them there — a widening is what was ordered and no more — and the
+# PowerShell spellings are left alone for the same reason.
+SCRATCH_FILE_VERBS = {"rm", "rmdir", "mkdir", "cp", "mv"}
+
+# A COPY READS ITS SOURCES AND WRITES ITS DESTINATION, and only the write is a permission question:
+# copying the repo INTO scratch is the whole point of the folder. Every other verb here destroys or
+# removes what it names, so a `mv` out of the repo is a repo mutation and both ends must be contained.
+DESTINATION_ONLY_VERBS = {"cp"}
+
+# `-t DEST` NAMES THE DESTINATION SOMEWHERE OTHER THAN THE LAST WORD, so the position rule the
+# widening rests on does not hold. Refused rather than parsed: this guard widens only where it is
+# sure, and `cp -t <repo> <scratch>/mutant` is a write into the repo whose last word is contained.
+DESTINATION_FLAGS = {"-t", "--target-directory"}
+
+# WHERE sed TAKES ITS SCRIPT FROM. Given none of these it reads the script as its first bare word,
+# and a script is not a file it rewrites — `sed -i 's/a/b/' <scratch>/Foo.cs` names one file, not two.
+# perl always takes its script from a flag, so it needs no such subtraction.
+SCRIPT_FLAG_LETTERS = "ef"
+SCRIPT_FLAG_LONG = ("--expression", "--file")
 
 # Same eighteen as before plus the two a previous rewrite dropped.
 GIT_DENIED = {"commit", "add", "rm", "mv", "push", "merge", "rebase", "reset", "checkout", "switch",
@@ -410,12 +433,20 @@ def tokenize(s):
         if c == "\\" and i + 1 < n:
             buf.append(s[i + 1]); has_word = True; i += 2; continue
 
+        # DOLLAR IS SPELLED chr(36) BECAUSE THIS FILE IS A HEREDOC INSIDE A COMMAND SUBSTITUTION.
+        # bash 3.2 (the /bin/bash macOS ships) re-scans the body of `$( … )` looking for the closing
+        # paren and does not leave a quoted heredoc alone: the two bytes `$` `"` read as a
+        # locale-translation opener and the dollar is DELETED. Written literally, the comparison
+        # below arrived at python as `buf[-1] == ""` — always false — so ANSI-C quoting stopped
+        # being stripped and `$'rm' -rf build` was ALLOWED, on a machine where the harness case for
+        # it fails and every other case passes. Silent, and it looks fine: exactly the class this
+        # file keeps paying for. The character is written as its code point so no such pair exists.
         # `$'…'` IS ANSI-C QUOTING AND `$"…"` IS LOCALE TRANSLATION: in both the `$` is syntax, and
         # the word is what the quotes contain. Keeping it made `$'rm' -rf build` reduce to a command
         # called `$rm`, which is in no denied set — the guard was answering about a word the shell
         # never sees. The `$` is dropped here rather than in the stripper because this is where words
         # are built; the stripper only needs to know where the quoted span ends.
-        if c in "'\"" and buf and buf[-1] == "$":
+        if c in "'\"" and buf and buf[-1] == chr(36):
             buf.pop()
 
         if c == "'":
@@ -558,11 +589,13 @@ def classify_words(words, depth, assignments):
     args = words[index + 1:]
     first = args[0] if args else ""
 
+    # TARGET-AWARE ONLY INSIDE THE SCRATCH FOLDER. Everywhere else this is the flat denial it always
+    # was — the containment predicate is the only thing that can turn one of these into an allow.
     if command in FILE_VERBS:
-        return "files"
+        return None if file_verb_allowed(command, args, assignments) else "files"
 
     if command in ("sed", "perl") and is_in_place_edit(command, args):
-        return "editor"
+        return None if in_place_edit_allowed(command, args, assignments) else "editor"
 
     if command == "git":
         if first == "worktree":
@@ -733,6 +766,153 @@ def is_file_in_own_folder(resolved):
     return False
 
 
+def is_in_own_scratch(resolved):
+    """Is this path the reviewer's own scratch folder, or anything under it, at any depth?
+
+    THE TWIN OF is_file_in_own_folder, and deliberately its shape rather than its wording: the same
+    segment identity test, the same two ids, one segment deeper. A reviewer needs somewhere to write
+    a MUTANT of a source file and run the suite against it — mutation testing is the detector that
+    caught four tests passing for the wrong reason on these branches when nobody reading the code
+    did, and with every writable path denied it degraded into imagining what a mutation would do.
+
+    TWO DIFFERENCES FROM THE OWN-FOLDER RULE, both intended. It is RECURSIVE, because a mutant comes
+    with an obj/ folder and a copy of its neighbours; and it admits the folder ITSELF, because
+    nothing else can create it for the reviewer and nothing else will clean it up.
+
+    What it does NOT change: the member folder one segment above stays append-only, so the channel a
+    reviewer files into cannot be truncated, moved or deleted through here.
+    """
+    segments = resolved.split("/")
+
+    for index in range(len(segments) - 3):
+        if (segments[index] == "supervision"
+                and segments[index + 1] == ORCH
+                and segments[index + 2] == MEMBER
+                and segments[index + 3] == "scratch"):
+            return True
+
+    return False
+
+
+def resolve_target(text, assignments):
+    """The two steps every containment question needs, in one place: expand, then normalise."""
+    return normalise_path(expand_variables(text, assignments))
+
+
+def operands_of(command, args):
+    """The words a command ACTS ON: flags dropped, and the values those flags take dropped with them.
+
+    Written off the same per-command flag tables `is_in_place_edit` uses, because the same letter is
+    a different flag in each: without them `sed -i -e 's/a/b/' <scratch>/Foo.cs` reads its script as
+    a second file and the whole command is refused for naming a path that is not one.
+
+    Unknown shapes fall through as operands, which DENIES — the safe direction for a rule whose
+    answer only ever widens a permission.
+    """
+    value_letters = VALUE_CLUSTER_FLAGS.get(command, "")
+    digit_letters = DIGIT_VALUE_CLUSTER_FLAGS.get(command, "")
+    operands = []
+    index = 0
+
+    while index < len(args):
+        word = args[index]
+
+        # `--` ends the options; everything after it is an operand however it is spelled.
+        if word == "--":
+            operands.extend(args[index + 1:])
+            break
+
+        if not word.startswith("-") or word == "-":
+            operands.append(word)
+            index += 1
+            continue
+
+        # A long option carries its value with an `=` or not at all, as far as this reader goes.
+        if word.startswith("--"):
+            index += 1
+            continue
+
+        cluster = word[1:]
+        position = 0
+        takes_next = False
+
+        while position < len(cluster):
+            letter = cluster[position]
+
+            # The rest of the cluster is this flag's value; if there is no rest, the next word is.
+            if letter in value_letters:
+                takes_next = position == len(cluster) - 1
+                break
+
+            if letter in digit_letters:
+                position += 1
+                while position < len(cluster) and cluster[position].isdigit():
+                    position += 1
+                continue
+
+            position += 1
+
+        index += 2 if takes_next else 1
+
+    return operands
+
+
+def file_verb_allowed(command, args, assignments):
+    """Is this file verb contained by the reviewer's own scratch folder?"""
+    if command not in SCRATCH_FILE_VERBS:
+        return False
+
+    for word in args:
+        if word.split("=")[0] in DESTINATION_FLAGS:
+            return False
+
+    operands = [resolve_target(word, assignments) for word in operands_of(command, args)]
+
+    # NO OPERAND IS NOT CONTAINMENT. `all()` over an empty list is True, which would have turned a
+    # bare verb into a permission.
+    if not operands:
+        return False
+
+    if command in DESTINATION_ONLY_VERBS:
+        return len(operands) > 1 and is_in_own_scratch(operands[-1])
+
+    return all(is_in_own_scratch(operand) for operand in operands)
+
+
+def in_place_edit_allowed(command, args, assignments):
+    """Does this in-place edit rewrite ONLY files inside the scratch folder?
+
+    Every file operand, not just the last: sed takes as many as you give it and rewrites each one.
+    """
+    operands = operands_of(command, args)
+
+    if command == "sed" and not sed_takes_script_from_a_flag(args):
+        operands = operands[1:]
+
+    if not operands:
+        return False
+
+    return all(is_in_own_scratch(resolve_target(word, assignments)) for word in operands)
+
+
+def sed_takes_script_from_a_flag(args):
+    """Was sed handed its script by -e/-f rather than as a bare first word?
+
+    Deliberately generous: a cluster that merely CONTAINS one of the letters counts. Being wrong here
+    keeps the script in the operand list, which denies — and denying an edit is the direction this
+    rule is allowed to be wrong in.
+    """
+    for word in args:
+        if word.split("=")[0] in SCRIPT_FLAG_LONG:
+            return True
+        if word.startswith("--") or not word.startswith("-"):
+            continue
+        if any(letter in SCRIPT_FLAG_LETTERS for letter in word[1:]):
+            return True
+
+    return False
+
+
 def write_target_allowed(operator, target, assignments):
     """THE one write a reviewer may make, in one place because two rules need to agree on it.
 
@@ -758,7 +938,14 @@ def write_target_allowed(operator, target, assignments):
     #
     # What this does NOT cover: a variable assigned in an earlier tool call. There is nothing in the
     # payload to resolve it from, so it denies — as both master and the pre-fix branch already did.
-    resolved = normalise_path(expand_variables(target, assignments))
+    resolved = resolve_target(target, assignments)
+
+    # THE SCRATCH FOLDER TAKES ANY WRITING OPERATOR, and the truncating one is the point: a mutant is
+    # written whole, not appended to. This sits ABOVE the append gate on purpose — that gate is the
+    # own-channel rule, where append really is the whole of the permission, and the two must not be
+    # confused for one another.
+    if is_in_own_scratch(resolved):
+        return True
 
     if operator != ">>":
         # Append is the whole of the permission. Nothing below needs to say so again.

@@ -91,6 +91,29 @@ public class OrchestrationRequestsReaderTests : IDisposable
         Assert.Empty(pending.MalformedRequests);
     }
 
+    /// <summary>
+    /// The supervisor sizes the model to the task (owner, 2026-09-07: "a fixed model for all makes no
+    /// sense"). Optional — absent means the role's default — and Fable is refused by the app, not
+    /// only by the manual: only the owner picks that one, through set-model.
+    /// </summary>
+    [Fact]
+    public void Read_Pending_AddImplementer_CarriesThePerTaskModel_AndRefusesFable()
+    {
+        Write_Request("sized.json", """{"action":"add-implementer","orchId":"skel-work","reason":"rename pass, mechanical","model":" sonnet "}""");
+        Write_Request("default.json", """{"action":"add-reviewer","orchId":"skel-work","reason":"deep review of the money path"}""");
+        Write_Request("fable.json", """{"action":"add-implementer","orchId":"skel-work","reason":"hard redesign","model":"Fable"}""");
+
+        var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
+
+        Assert.Equal(2, pending.AddImplementerRequests.Count);
+        Assert.Equal("sonnet", pending.AddImplementerRequests.Single(r => r.Reason.Contains("rename")).Model);
+        Assert.Null(pending.AddImplementerRequests.Single(r => r.Reason.Contains("review")).Model);
+
+        var refused = Assert.Single(pending.MalformedRequests);
+        Assert.Contains("fable", refused.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("set-model", refused.Reason);
+    }
+
     [Fact]
     public void Read_Pending_AddReviewerWithoutAReason_IsRejectedToo()
     {

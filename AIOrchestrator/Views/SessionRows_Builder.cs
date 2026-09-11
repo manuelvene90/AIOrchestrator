@@ -62,8 +62,8 @@ public static class SessionRows_Builder
 
         // Same three states as a member row: a supervisor that has asked the owner something is
         // waiting on THEM, not idle. Read from the owner channel, which is where that exchange lives.
-        var ownerOwesReply = isOpen && AIOrchestratorCoreLib.Status.OwnerOwesReply_Decider.Decide(
-            ChannelHistory_Counter.Read_AllEntries(ownerChannel));
+        var ownerOwesReply = isOpen && AIOrchestratorCoreLib.Status.OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
+            ChannelHistory_Counter.Read_AllEntries(ownerChannel)) != null;
 
         return new MemberRowView
         {
@@ -134,7 +134,7 @@ public static class SessionRows_Builder
         // is not theirs. For a solo the entries above ARE the owner channel, so no second read.
         var ownerOwesReply = !isClosed
             && kind == MemberKinds.Solo
-            && AIOrchestratorCoreLib.Status.OwnerOwesReply_Decider.Decide(entries);
+            && AIOrchestratorCoreLib.Status.OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(entries) != null;
 
         return new MemberRowView
         {

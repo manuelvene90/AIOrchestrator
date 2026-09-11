@@ -45,11 +45,11 @@ public class EverySpawnableRoleIsInTheKitTests
 
         foreach (var role in roles)
         {
-            var path = Find_RepoPath(Path.Combine("kit", "commands", $"{role}.md"));
+            var path = KitRepoFiles.Find_RoleProtocol(role);
 
             Assert.True(
                 path != null,
-                $"the app spawns '/{role}' but kit/commands/{role}.md is not in the repo — it exists only on whichever machine happens to have it, and a fresh install boots that session on an unknown command");
+                $"the app spawns '/{role}' but kit/skills/{role}/SKILL.md is not in the repo — it exists only on whichever machine happens to have it, and a fresh install boots that session on an unknown command");
         }
     }
 

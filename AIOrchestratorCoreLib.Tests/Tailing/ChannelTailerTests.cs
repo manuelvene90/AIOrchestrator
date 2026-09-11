@@ -2,6 +2,7 @@ using System.Text;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Tailing.TailerPollResult;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Tailing;
@@ -29,7 +30,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_FirstSighting_SkipsExistingHistory()
     {
         File.WriteAllText(_channelFile, "## [1] FROM supervisor — d — old entry\n\nold body\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
 
         var result = tailer.Poll([_channel]);
         var quietResult1 = tailer.Poll([_channel]);
@@ -44,7 +45,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_AppendedEntry_EmittedAfterQuietPolls()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green\n");
@@ -66,7 +67,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_NextHeaderArrives_CompletesPreviousEntryImmediately()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile,
@@ -85,7 +86,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_ConfirmedEntry_EmittedOnce_NeverDuplicated()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
@@ -110,7 +111,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_UnconfirmedEntry_KeepsBeingReEmittedUntilConfirmed()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
@@ -135,7 +136,7 @@ public class ChannelTailerTests : IDisposable
         File.WriteAllText(_channelFile, "seed\n");
         File.WriteAllText(otherFile, "seed\n");
 
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel, otherChannel]);
 
         // Grown but unopenable: the tailer sees new bytes it cannot read. Before the per-channel
@@ -171,19 +172,19 @@ public class ChannelTailerTests : IDisposable
                 return pollResult;
         }
 
-        throw new Exception("The tailer emitted nothing within 5 polls — the quiet-poll flush never happened.");
+        throw new Exception("The tailer emitted nothing within 5 polls — the trailing entry never cleared its quiet period.");
     }
 
     [Fact]
     public void OwedEntry_ReadButNotYetEmitted_IsDeclaredUndelivered()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
 
-        // The poll that READS the entry emits nothing: it is the trailing entry and the quiet-poll
+        // The poll that READS the entry emits nothing: it is the trailing entry and the quiet
         // window has not elapsed. Those bytes are owed to Telegram all the same, and this is the
         // window in which the bridge used to ask "does this channel owe anything?" and be told no.
         var readPoll = tailer.Poll([_channel]);
@@ -197,7 +198,7 @@ public class ChannelTailerTests : IDisposable
     public void Set_Offset_DiscardsTheBytesThatBelongedToThePreRewriteFile()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
@@ -220,7 +221,7 @@ public class ChannelTailerTests : IDisposable
     public void Set_Offset_DiscardsUNCONFIRMEDBytesToo_SoAPreRewriteEntryIsNotReSent()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
@@ -241,18 +242,18 @@ public class ChannelTailerTests : IDisposable
     public void Get_OffsetsSnapshot_BytesReadButNeverEmitted_AreReReadAfterARestart()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
 
-        // ONE poll: the bytes are in Pending and the quiet-poll window has not elapsed, so nothing
+        // ONE poll: the bytes are in Pending and the quiet period has not elapsed, so nothing
         // has been emitted. The process dies here — the persisted cursor must therefore point BEFORE
         // them, or the next process starts past an entry the owner never saw. The unconfirmed case
         // has its own test; this is the other half, and it is the window this branch is about.
         tailer.Poll([_channel]);
 
-        var restarted = ChannelTailer_Factory.Create(tailer.Get_OffsetsSnapshot());
+        var restarted = New_Tailer(tailer.Get_OffsetsSnapshot());
         var afterRestart = Collect_Entries(restarted, polls: 4);
 
         Assert.Equal("report", Assert.Single(afterRestart).Subject);
@@ -278,7 +279,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_TruncatedFile_ReportsAnomalyAndRecovers()
     {
         File.WriteAllText(_channelFile, "some long seed content here\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.WriteAllText(_channelFile, "short\n");
@@ -292,7 +293,7 @@ public class ChannelTailerTests : IDisposable
     public void Get_OffsetsSnapshot_RestartWithPersistedOffsets_DoesNotReMirrorOldEntries()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
@@ -303,7 +304,7 @@ public class ChannelTailerTests : IDisposable
         // The entry was delivered, which is what lets the persisted cursor move past it.
         tailer.Confirm_Append(_channelFile);
 
-        var restartedTailer = ChannelTailer_Factory.Create(tailer.Get_OffsetsSnapshot());
+        var restartedTailer = New_Tailer(tailer.Get_OffsetsSnapshot());
 
         var afterRestart1 = restartedTailer.Poll([_channel]);
         var afterRestart2 = restartedTailer.Poll([_channel]);
@@ -318,7 +319,7 @@ public class ChannelTailerTests : IDisposable
     public void Get_OffsetsSnapshot_EntryNeverConfirmed_IsMirroredAgainAfterARestart()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nbody\n");
@@ -327,7 +328,7 @@ public class ChannelTailerTests : IDisposable
         // No Confirm_Append: the send failed, and the process dies still owing this entry. The
         // persisted cursor must therefore point BEFORE it, so the next process re-sends it — an
         // entry the owner never saw is not "already mirrored".
-        var restartedTailer = ChannelTailer_Factory.Create(tailer.Get_OffsetsSnapshot());
+        var restartedTailer = New_Tailer(tailer.Get_OffsetsSnapshot());
 
         var afterRestart1 = restartedTailer.Poll([_channel]);
         var afterRestart2 = restartedTailer.Poll([_channel]);
@@ -350,7 +351,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_LastEntryWithoutATrailingNewline_IsNeverEmitted()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         // No terminating newline — the whole defect is that one absent character.
@@ -373,7 +374,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_AHeldTrailingEntry_IsREPORTED_SoTheSilenceIsVisible()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green");
@@ -394,7 +395,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_ATerminatedChannel_IsNotReportedAsHeld()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green\n");
@@ -416,7 +417,7 @@ public class ChannelTailerTests : IDisposable
     public void Poll_AHeldEntry_EmitsIntactAsSoonAsAHeaderFollowsIt()
     {
         File.WriteAllText(_channelFile, "seed\n");
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        var tailer = New_Tailer();
         tailer.Poll([_channel]);
 
         File.AppendAllText(_channelFile, "## [1] FROM implementer — d — report\n\nall green");
@@ -432,4 +433,31 @@ public class ChannelTailerTests : IDisposable
         Assert.Equal("report", append.Entries[0].Subject);
         Assert.Equal("all green", append.Entries[0].Body);
     }
+
+    /// <summary>
+    /// THE TAILER THESE TESTS DRIVE, and it is not <c>Create_Fresh()</c> for one reason: since
+    /// 2026-09-09 the trailing entry is released after a DURATION of no growth rather than after two
+    /// polls (<c>ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS</c> — the count silently meant
+    /// "two times the poll interval" and the mirror loop's new 200 ms cadence cut it 12×). Every
+    /// assertion below polls synchronously, so the clock has to come from somewhere; a step of one
+    /// mirror tick per poll reproduces exactly the cadence the old count was written against, which is
+    /// why not one of these tests had to change its expectations.
+    /// </summary>
+    static IChannelTailer New_Tailer() => New_Tailer(new Dictionary<string, long>());
+
+    /// <inheritdoc cref="New_Tailer()"/>
+    static IChannelTailer New_Tailer(IReadOnlyDictionary<string, long> persistedOffsets)
+    {
+        return ChannelTailer_Factory.Create(
+            persistedOffsets,
+            TimeSpan.FromMilliseconds(ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS),
+            new SteppingClock_Fake(TimeSpan.FromMilliseconds(PRE_WAKER_MIRROR_TICK_MILLISECONDS)));
+    }
+
+    /// <summary>
+    /// The mirror loop's tick, which was the tailer's poll interval before the waker existed. Written
+    /// here rather than borrowed so that a change to the loop's cadence cannot quietly change what
+    /// these tests mean — the whole defect was one number moving another.
+    /// </summary>
+    const int PRE_WAKER_MIRROR_TICK_MILLISECONDS = 2000;
 }

@@ -17,22 +17,22 @@ namespace AIOrchestratorCoreLib.Tests.Kit;
 public class EveryOwnerFacingRoleCanCloseTests
 {
     /// <summary>The roles that take instructions straight from the owner, so both can be told to close.</summary>
-    static readonly string[] OWNER_FACING_COMMANDS = ["solo.md", "supervisor.md"];
+    static readonly string[] OWNER_FACING_ROLES = ["solo", "supervisor"];
 
     [Fact]
     public void BothOwnerFacingRolesAreTaughtToCloseTheirOwnOrchestration()
     {
-        var files = Find_RoleCommandFiles();
+        var files = Find_RoleProtocols();
 
         // The harness proves itself before asserting a presence: a scan that found nothing would be
         // the strongest possible pass and would mean nothing at all.
         Assert.NotEmpty(files);
 
-        foreach (var expected in OWNER_FACING_COMMANDS)
+        foreach (var expected in OWNER_FACING_ROLES)
         {
-            var path = files.FirstOrDefault(file => Path.GetFileName(file) == expected);
+            var path = files.FirstOrDefault(entry => entry.Role == expected).Path;
 
-            Assert.True(path != null, $"{expected} is not in kit/commands — this test is not reading what it claims to");
+            Assert.True(path != null, $"{expected} is not in kit/skills — this test is not reading what it claims to");
 
             var text = File.ReadAllText(path!);
 
@@ -53,35 +53,20 @@ public class EveryOwnerFacingRoleCanCloseTests
     [Fact]
     public void SoloIsToldNotToSendTheOwnerToTheApp()
     {
-        var solo = Find_RoleCommandFiles().FirstOrDefault(file => Path.GetFileName(file) == "solo.md");
+        var solo = Find_RoleProtocols().FirstOrDefault(entry => entry.Role == "solo").Path;
 
-        Assert.True(solo != null, "solo.md is not in kit/commands");
+        Assert.True(solo != null, "the solo protocol is not in kit/skills");
 
         Assert.Contains("Never answer a close request by telling them to do it from the app", File.ReadAllText(solo!));
     }
 
-    static IReadOnlyList<string> Find_RoleCommandFiles()
+    /// <summary>
+    /// Every role protocol, keyed by ROLE — which is the folder name now that the kit is a plugin
+    /// (kit/skills/&lt;role&gt;/SKILL.md), where it used to be the file name (kit/commands/&lt;role&gt;.md).
+    /// Empty when the kit cannot be found; the callers refuse on that before asserting anything.
+    /// </summary>
+    static IReadOnlyList<(string Role, string Path)> Find_RoleProtocols()
     {
-        var folder = AppContext.BaseDirectory;
-
-        for (var depth = 0; depth < 8; depth++)
-        {
-            var candidate = Path.Combine(folder, "kit", "commands");
-
-            if (Directory.Exists(candidate))
-                return [.. Directory.GetFiles(candidate, "*.md")];
-
-            var parent = Directory.GetParent(folder);
-
-            if (parent == null)
-                break;
-
-            folder = parent.FullName;
-        }
-
-        // A harness that cannot find its subject must fail loudly rather than certify an absence.
-        Assert.Fail($"kit/commands was not found walking up from {AppContext.BaseDirectory}");
-
-        return [];
+        return KitRepoFiles.Find_AllRoleProtocols();
     }
 }

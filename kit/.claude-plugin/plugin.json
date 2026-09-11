@@ -1,0 +1,6 @@
+{
+  "name": "aiorch",
+  "version": "1.0.0",
+  "description": "AI Orchestrator — the six role protocols (supervisor, implementer, reviewer, solo, general supervisor, communicator), the enforcement hooks that hold them, and the locked channel append helper.",
+  "author": { "name": "AI Orchestrator" }
+}

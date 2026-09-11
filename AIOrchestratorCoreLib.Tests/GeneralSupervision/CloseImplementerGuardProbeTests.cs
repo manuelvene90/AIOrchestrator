@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.GeneralSupervision;
 
@@ -63,12 +64,15 @@ public class CloseImplementerGuardProbeTests : IDisposable
         var log = OrchestrationLog_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), log);
-        _engine = BridgeEngine_Factory.Create(_paths, configProvider, _store, _launcher, log);
+        _engine = BridgeEngine_Factory.Create_WithTiming(_paths, configProvider, _store, _launcher, log, BridgeTestTiming.Fast());
     }
 
     public void Dispose()
     {
-        Directory.Delete(_tempRoot, recursive: true);
+        // Best-effort, not Directory.Delete: on 2026-09-10 this teardown raised
+        // IOException("Directory not empty") on macOS in one run of three and failed a test whose
+        // assertions had all passed. See TempTree for the race and why swallowing it is correct.
+        TempTree.Delete_BestEffort(_tempRoot);
     }
 
     /// <summary>

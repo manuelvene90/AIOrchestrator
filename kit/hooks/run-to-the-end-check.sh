@@ -35,7 +35,9 @@ if [ -z "${AIORCH_ID:-}" ]; then
   exit 0
 fi
 
-ORCH_FOLDER="$HOME/.claude/supervision/$AIORCH_ID"
+SUPERVISION_ROOT="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"
+
+ORCH_FOLDER="$SUPERVISION_ROOT/$AIORCH_ID"
 PLAN_FILE="$ORCH_FOLDER/PLAN.md"
 CHANNEL_FILE="$ORCH_FOLDER/owner-channel.md"
 

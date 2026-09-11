@@ -107,4 +107,70 @@ public class GeneralDashboardTests
     {
         Assert.Null(GeneralDashboard_Store.Parse_MessageId_OrNull(json));
     }
+
+    /// <summary>One orchestration's progress line, for the header tests below.</summary>
+    const string A_BODY = "arb-fix: 3/7 done (42%)";
+
+    /// <summary>
+    /// 📸 IS ON THE DASHBOARD'S HEADER, not on the General topic's name — the owner's ruling of
+    /// 2026-09-10, closing the one glyph point 2 missed. It is a mode glyph, and a mode glyph on a
+    /// name costs a rename plus a service message every time the owner flips the setting they had
+    /// just flipped themselves.
+    ///
+    /// Both directions asserted, because "the glyph appears" alone is satisfied by a header that
+    /// always carries it — which would tell the owner screenshots are on when they are off.
+    /// </summary>
+    [Fact]
+    public void TheHeaderCarriesTheCameraWhileStatusScreenshotsAreOn()
+    {
+        Assert.StartsWith(
+            $"{TelegramDeliveryMode_Glyphs.STATUS_SCREENSHOTS} {GeneralDashboard_Composer.HEADING}",
+            GeneralDashboard_Composer.Compose(A_BODY, statusScreenshotsOn: true));
+
+        Assert.StartsWith(
+            GeneralDashboard_Composer.HEADING,
+            GeneralDashboard_Composer.Compose(A_BODY, statusScreenshotsOn: false));
+
+        Assert.DoesNotContain(
+            TelegramDeliveryMode_Glyphs.STATUS_SCREENSHOTS,
+            GeneralDashboard_Composer.Compose(A_BODY, statusScreenshotsOn: false));
+    }
+
+    /// <summary>
+    /// THE HEADING STILL IDENTIFIES THE MESSAGE BY SUBSTRING with the glyph in front of it. The
+    /// decider's memo and the engine probes find this message by looking for the heading, so a header
+    /// that had absorbed the glyph INTO the constant would have quietly broken both.
+    /// </summary>
+    [Fact]
+    public void TheHeadingIsStillFindableWithTheCameraInFrontOfIt()
+    {
+        Assert.Contains(
+            GeneralDashboard_Composer.HEADING,
+            GeneralDashboard_Composer.Compose(A_BODY, statusScreenshotsOn: true));
+    }
+
+    /// <summary>
+    /// FLIPPING THE SETTING IS A CONTENT CHANGE, so the shared decider writes it — which is the whole
+    /// delivery path for this glyph now that no rename carries it. Without this the move would be
+    /// silent in the wrong sense: correct text that never reaches the phone.
+    /// </summary>
+    [Fact]
+    public void TurningScreenshotsOn_IsSomethingTheDeciderWrites()
+    {
+        var off = GeneralDashboard_Composer.Compose(A_BODY, statusScreenshotsOn: false);
+        var on = GeneralDashboard_Composer.Compose(A_BODY, statusScreenshotsOn: true);
+
+        Assert.Equal(TopicStatusActions.Edit, TopicStatusLine_Decider.Decide(on, off, 4242L));
+    }
+
+    /// <summary>
+    /// AND STRIP_GLYPH LEARNS IT (owner, same ruling). Every existing supergroup's General topic is
+    /// named "📸 General" right now, so a build that stopped DRAWING the camera without teaching the
+    /// stripper to REMOVE it would leave the old glyph on the name for as long as the topic lives.
+    /// </summary>
+    [Fact]
+    public void StripGlyph_TakesTheCameraOffANameAnOlderBuildWrote()
+    {
+        Assert.Equal("General", TelegramDeliveryMode_Glyphs.Strip_Glyph("📸 General"));
+    }
 }

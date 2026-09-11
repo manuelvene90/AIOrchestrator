@@ -14,3 +14,6 @@ x86/
 # Local machine config (bot tokens, chat ids) — never committed
 *.local.json
 secrets.json
+
+# Contract-test evidence (raw CLI output of the Live runs) — never committed
+tools/claude-contract/last-run/

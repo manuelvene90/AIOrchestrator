@@ -1,0 +1,12 @@
+[Unit]
+Description=AIOrchestrator ledger sampler — records what the orchestrations delivered
+Documentation=file:%h/AIOrchestrator/tools/ledger-sampler/sample_ledger.py
+
+[Service]
+Type=oneshot
+# Read-only against the supervision root; appends one JSONL line per orchestration per run to
+# ~/.aiorch-ledger-samples/. It never writes inside the supervision root — the bridge reads a new
+# directory there as a new orchestration (decision 3), and the script refuses to do it anyway.
+ExecStart=/usr/bin/python3 %h/.local/bin/sample_ledger.py
+Nice=10
+IOSchedulingClass=idle

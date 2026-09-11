@@ -8,6 +8,8 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
+using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestratorCoreLib.Tests.GeneralSupervision;
 
@@ -56,7 +58,7 @@ public class CloseTapArchiveProbeTests : IDisposable
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         _store = OrchestrationSessionStore_Factory.Create(_paths);
 
@@ -64,7 +66,12 @@ public class CloseTapArchiveProbeTests : IDisposable
         var log = OrchestrationLog_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, log, _telegram);
+        // THE ONE ENGINE TEST THAT KEEPS THE SHIPPED TICK. It no longer has to for correctness — the
+        // two cases below read the DECISION PROMPT's own edits, so the general dashboard's tick can
+        // land inside the drive window without being mistaken for the outcome (it did, one full run in
+        // six, 2026-09-09, and shrinking the tick is what made it likely). The shipped period stays
+        // because this class costs under a second at it, so there was never anything to buy here.
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, log, _telegram, BridgeEngineTiming_Factory.Create_Production());
     }
 
     public void Dispose()
@@ -127,13 +134,17 @@ public class CloseTapArchiveProbeTests : IDisposable
     {
         await Drive_ToTheTap_Async(
             beforeTap: Break_TheGeneralChannel,
-            until: () => _telegram.EditedTexts.Count > 0);
+            until: () => _telegram.DecisionPromptEdits.Count > 0);
 
-        var decision = Assert.Single(_telegram.EditedTexts);
+        var decision = Assert.Single(_telegram.DecisionPromptEdits);
 
         Assert.Contains("did not complete", decision);
         Assert.DoesNotContain("✅", decision);
         Assert.DoesNotContain("Closed — you confirmed", decision);
+
+        // And nowhere else either: an outcome written to some other message would still be a claim of
+        // success the owner reads, and matching on the prompt alone would no longer see it.
+        Assert.DoesNotContain(_telegram.EditedTexts, text => text.Contains("Closed — you confirmed"));
     }
 
     [Fact]
@@ -141,9 +152,9 @@ public class CloseTapArchiveProbeTests : IDisposable
     {
         await Drive_ToTheTap_Async(
             beforeTap: null,
-            until: () => _telegram.EditedTexts.Count > 0);
+            until: () => _telegram.DecisionPromptEdits.Count > 0);
 
-        Assert.Contains("✅ Closed — you confirmed.", Assert.Single(_telegram.EditedTexts));
+        Assert.Contains("✅ Closed — you confirmed.", Assert.Single(_telegram.DecisionPromptEdits));
     }
 
     /// <summary>
@@ -265,7 +276,11 @@ public class CloseTapArchiveProbeTests : IDisposable
         _telegram.Queue_Updates(
             "{\"ok\":true,\"result\":[{\"update_id\":2001,\"callback_query\":{\"id\":\"cbq-1\","
             + $"\"data\":\"{data}\",\"from\":{{\"id\":{OWNER_USER_ID}}},"
-            + $"\"message\":{{\"message_id\":9100,\"message_thread_id\":{TOPIC_ID}}}}}}}]}}");
+            // THE CHAT IS PART OF A REAL callback_query.message, and since brief F6 the parser
+            // requires it: a tap is now fenced to the supervision supergroup, not merely to the
+            // owner. Without it this synthetic update is one Telegram never sends, and the probe
+            // times out waiting for a tap that was correctly discarded.
+            + $"\"message\":{{\"message_id\":9100,\"message_thread_id\":{TOPIC_ID},\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}}}}}}}}]}}");
     }
 
     /// <summary>
@@ -293,10 +308,23 @@ public class CloseTapArchiveProbeTests : IDisposable
 /// </summary>
 internal sealed class TappableTelegram_Fake : ITelegramApiClient
 {
+
+    // The startup handshake (see ITelegramApiClient): a fake not testing it answers with a name and
+    // a cleared webhook, so the inbound loop starts exactly as it does in production.
+    public Task<string> Get_BotUsername_Async(CancellationToken cancellationToken) => Task.FromResult("test_bot");
+
+    public Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken) => Task.CompletedTask;
+    // The typing bubble is not this probe's subject; it creates no message, so it is not recorded.
+    public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     const string EMPTY_UPDATES = "{\"ok\":true,\"result\":[]}";
 
     readonly object _lock = new();
-    readonly List<string> _editedTexts = [];
+    readonly List<(long MessageId, string Text)> _edits = [];
+    long? _decisionPromptMessageId;
     string? _queuedUpdatesJson;
     long _nextMessageId = 9100;
 
@@ -313,7 +341,33 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         get
         {
             lock (_lock)
-                return _editedTexts.ToList();
+                return _edits.Select(edit => edit.Text).ToList();
+        }
+    }
+
+    /// <summary>
+    /// What the DECISION PROMPT was replaced with — the edits addressed to the message that carried
+    /// the Close button, and nothing else.
+    /// <para>
+    /// It exists because <see cref="EditedTexts"/> is every edit the engine made, and the general
+    /// dashboard edits its own message on a tick of its own. Under parallel load that tick lands
+    /// inside the drive window, a second text appears, and an <c>Assert.Single(EditedTexts)</c> fails
+    /// with two items — measured on this branch 2026-09-09, one full run in six. The cause is
+    /// unrelated to the process-wide lock sink fixed in the same commit: this fake is per-instance and
+    /// nothing outside the class can reach it. Reading the prompt's own edits asserts MORE than the
+    /// count did, since it also pins that the outcome was written to the message the owner tapped.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> DecisionPromptEdits
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _decisionPromptMessageId == null
+                    ? []
+                    : _edits.Where(edit => edit.MessageId == _decisionPromptMessageId).Select(edit => edit.Text).ToList();
+            }
         }
     }
 
@@ -330,37 +384,36 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    public Task<long?> Send_MessageWithReplyKeyboard_Async(
-        long? messageThreadId,
-        string text,
-        IReadOnlyList<IReadOnlyList<string>> keyboardRows,
-        CancellationToken cancellationToken)
-    {
-        // The persistent command bar is not this probe's subject. Accept it and hand back no id, so
-        // installing it cannot perturb the sends this test actually counts.
-        return Task.FromResult<long?>(null);
-    }
-
     public Task<long?> Send_MessageWithButtons_Async(
         long? messageThreadId,
         string text,
         IReadOnlyList<(string Data, string Label)> buttons,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         lock (_lock)
         {
+            var messageId = _nextMessageId++;
+
             // The confirming button, by its label rather than its position: a prompt that reordered
             // its buttons would otherwise silently make this test tap "keep it open" and pass.
             foreach (var button in buttons)
             {
                 if (button.Label.Contains("Close", StringComparison.OrdinalIgnoreCase))
+                {
                     ConfirmData = button.Data;
+
+                    // The id is what the outcome edit is later matched against. Recorded off the
+                    // SEND that carried the Close button, so it is the decision prompt by definition
+                    // rather than by position among whatever else the engine happens to send.
+                    _decisionPromptMessageId = messageId;
+                }
 
                 if (button.Label.Contains("Keep", StringComparison.OrdinalIgnoreCase))
                     DeclineData = button.Data;
             }
 
-            return Task.FromResult<long?>(_nextMessageId++);
+            return Task.FromResult<long?>(messageId);
         }
     }
 
@@ -383,17 +436,29 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(_nextMessageId++);
     }
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Task.FromResult<long?>(_nextMessageId++);
+        return Send_Message_Async(messageThreadId, html, sound, cancellationToken);
     }
 
-    public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken)
+    // The confirming button is read off the SEND, so the rendered send has to reach the same reader
+    // or this probe taps nothing at all.
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
+    }
+
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
         return Task.FromResult(7777L);
     }
@@ -407,7 +472,7 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
     public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
     {
         lock (_lock)
-            _editedTexts.Add(text);
+            _edits.Add((messageId, text));
 
         return Task.CompletedTask;
     }
@@ -423,15 +488,15 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         return Edit_MessageText_Async(messageId, text, cancellationToken);
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
         lock (_lock)
-            _editedTexts.Add(text);
+            _edits.Add((messageId, text));
 
         return Task.CompletedTask;
     }
@@ -442,10 +507,15 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
 
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken) => Task.CompletedTask;
+
 
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<byte>());
 }

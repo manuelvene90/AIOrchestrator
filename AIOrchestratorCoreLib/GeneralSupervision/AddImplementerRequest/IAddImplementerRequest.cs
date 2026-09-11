@@ -21,4 +21,7 @@ public interface IAddImplementerRequest
     string Reason { get; }
 
     string SourceFilePath { get; }
+
+    /// <summary>The model the requester chose for this member's task, or null for the role's default.</summary>
+    string? Model { get; }
 }

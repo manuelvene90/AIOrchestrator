@@ -29,7 +29,7 @@ public class EveryTopicButtonIsWiredTests
     {
         var engineSource = Read_EngineSource();
 
-        foreach (var command in TopicCommandButtons.Commands)
+        foreach (var command in Every_RenderedCommand())
         {
             Assert.True(
                 engineSource.Contains($"case \"{command}\":", StringComparison.Ordinal),
@@ -39,22 +39,56 @@ public class EveryTopicButtonIsWiredTests
     }
 
     /// <summary>
-    /// The REPLY keyboard sends the button's TEXT as an ordinary message, so that route needs the
-    /// command LEXER to know the verb. Same list, different mechanism, and either one missing leaves
-    /// half the button working — which is worse than none of it, because it works when tested one way.
+    /// The SAME verbs also arrive as ordinary TEXT — the "/" menu sends the literal "/show", and so
+    /// does the owner typing it — so that route needs the command LEXER to know the verb. Same list,
+    /// different mechanism, and either one missing leaves half the command working, which is worse
+    /// than none of it because it works when tested one way.
     /// </summary>
     [Fact]
     public void EveryButton_IsKnownToTheCommandLexer()
     {
         var engineSource = Read_EngineSource();
 
-        foreach (var command in TopicCommandButtons.Commands)
+        foreach (var command in Every_RenderedCommand())
         {
+            // A MULTI-WORD BAR VERB LEXES AS ITS FIRST WORD, and that is not a loophole — it is how a
+            // typed command works. `Get_BotCommand_OrNull` reads the verb after the slash, so the
+            // owner typing "/tail sup" arrives as command "tail" with "sup" still in the message
+            // text, which the handler parses as its argument. Demanding the literal
+            // `command == "tail sup"` here would only be satisfiable by dead code that can never be
+            // true, and the branch that genuinely serves it would still be the one for "tail".
+            var lexedVerb = command.Split(' ')[0];
+
             Assert.True(
-                engineSource.Contains($"command == \"{command}\"", StringComparison.Ordinal),
-                $"the reply keyboard sends '/{command}' as a message, but no branch dispatches that verb — "
+                engineSource.Contains($"command == \"{lexedVerb}\"", StringComparison.Ordinal)
+                || engineSource.Contains($"command is \"{lexedVerb}\"", StringComparison.Ordinal),
+                $"'/{command}' can arrive as plain text (the \"/\" menu, or the owner typing it), but no "
+                + $"branch dispatches the verb '{lexedVerb}' — "
                 + "so the text is routed to the session as chat instead of running the command.");
         }
+    }
+
+    /// <summary>
+    /// BOTH BARS, and the omission of the second one is why this guard reported everything wired
+    /// while three buttons were not.
+    ///
+    /// <para>
+    /// The guard walked <see cref="TopicCommandButtons.Commands"/> only. `GeneralCommands` — the
+    /// General topic's own bar — was never walked, so `/summary`, `/resume` and `/dnd_all` sat with
+    /// no case in the switch and a green suite above them from 2026-09-09 to 2026-09-10. The bar had
+    /// also never been rendered, which is what hid it: nobody could tap a button that was not drawn,
+    /// so the dead arm cost nothing until the bar landed. A guard that covers one of two lists is
+    /// decision 20's harness again — it certified the absence of what it never read.
+    /// </para>
+    /// <para>
+    /// CONCATENATED RATHER THAN A SECOND PAIR OF TESTS. The property is the same property for both
+    /// bars, and two copies of it would be the next thing to fall out of step when a third bar
+    /// appears.
+    /// </para>
+    /// </summary>
+    static IEnumerable<string> Every_RenderedCommand()
+    {
+        return TopicCommandButtons.Commands.Concat(TopicCommandButtons.GeneralCommands).Distinct();
     }
 
     /// <summary>

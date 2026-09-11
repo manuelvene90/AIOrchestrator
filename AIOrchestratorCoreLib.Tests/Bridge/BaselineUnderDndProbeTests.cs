@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -68,12 +69,11 @@ public class BaselineUnderDndProbeTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        // The inbound loop reads the chat and owner ids and throws without them. The Italian layer is
-        // pinned OFF because it defaults ON and would reach the real translator.
+        // The inbound loop reads the chat and owner ids and throws without them.
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -83,7 +83,8 @@ public class BaselineUnderDndProbeTests : IDisposable
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, store, new RecordingSpawner_Fake(), log);
         _engine = BridgeEngine_Factory.Create_WithTelegramClient(
-            _paths, configProvider, store, _launcher, log, new FailableTelegram_Fake());
+            _paths, configProvider, store, _launcher, log, new FailableTelegram_Fake(),
+            BridgeTestTiming.Fast());
     }
 
     public void Dispose()

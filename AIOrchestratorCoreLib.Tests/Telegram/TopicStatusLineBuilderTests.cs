@@ -24,17 +24,31 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// a glance — this one, edited constantly and never notifying, against the half-hourly digest that
 /// opens with STATUS. That is why every expectation below reads `PULSE · …` where it used to name a
 /// topic, and why the builder no longer takes a title at all.
+///
+/// REWRITTEN 2026-09-10 for the owner's 2026-09-09 six-field decision (Brief C): the periodic STATUS
+/// message is gone, so PULSE is now the ONLY status surface and carries six fields in order —
+/// `⏳ waiting on you`, `sup · …`, the member rows, `last`, `<merged>/<total> merged · NN %`, and
+/// `updated HH:MM` — each its OWN LINE rather than one long header. Tests below that pinned the old
+/// single-line lead ("PULSE · 72/113 · 63%") are rewritten for the field that replaced them; tests
+/// whose subject survives (idle vs. not, the future-stamp guard, the row budget, no padding, the
+/// bullet convention) keep testing it against the new shape.
 /// </summary>
 public class TopicStatusLineBuilderTests
 {
     static readonly DateTime NOW = new(2026, 8, 12, 12, 30, 0);
 
+    /// <summary>
+    /// REPLACES TheLeadLineCarriesTheLedgerCountAndPercent. The ledger figures moved OFF the lead
+    /// line and onto field 5, their own line, worded "merged" rather than a bare fraction (owner,
+    /// 2026-09-09: "the honest word — merged, not done"). The lead line is now the bare word PULSE,
+    /// possibly decorated with a mode glyph, and nothing else.
+    /// </summary>
     [Fact]
-    public void TheLeadLineCarriesTheLedgerCountAndPercent()
+    public void TheMergedFieldCarriesTheLedgerCountAndPercent()
     {
         var line = TopicStatusLine_Builder.Build(Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Equal("PULSE · 72/113 · 63%", line);
+        Assert.Equal("PULSE\n72/113 merged · 63 %\nupdated 12:30", line);
     }
 
     /// <summary>
@@ -48,39 +62,46 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("", TopicStatusLine_Builder.Build(null, [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
-    /// <summary>But a lead line with a REAL ledger is substance, and it still stands alone.</summary>
+    /// <summary>
+    /// REPLACES ALeadLineWithALedgerIsWorthWriting. A real ledger is still substance worth writing —
+    /// it just prints on the merged field's own line rather than beside the lead word.
+    /// </summary>
     [Fact]
-    public void ALeadLineWithALedgerIsWorthWriting()
+    public void TheMergedFieldAloneIsWorthWriting()
     {
-        Assert.Equal("PULSE · 3/4 · 75%", TopicStatusLine_Builder.Build(Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false));
+        Assert.Equal(
+            "PULSE\n3/4 merged · 75 %\nupdated 12:30",
+            TopicStatusLine_Builder.Build(Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
-    /// The owner asked for this line to say how long the figures have STOOD STILL, rather than carry
-    /// a delta: it refreshes constantly, so a difference "would go back to 0" (2026-08-19).
+    /// REPLACES TheLeadLineSaysHowLongTheFiguresHaveNotMoved. The owner asked for this line to say
+    /// how long the figures have STOOD STILL, rather than carry a delta: it refreshes constantly, so
+    /// a difference "would go back to 0" (2026-08-19). That clause now rides on the MERGED field,
+    /// beside the figures it is about, rather than on the lead line that no longer carries figures.
     /// </summary>
     [Fact]
-    public void TheLeadLineSaysHowLongTheFiguresHaveNotMoved()
+    public void TheMergedFieldSaysHowLongTheFiguresHaveNotMoved()
     {
         Assert.Equal(
-            "PULSE · 3/4 · 75% · unchanged 25 min",
+            "PULSE\n3/4 merged · 75 % · unchanged 25 min\nupdated 12:30",
             TopicStatusLine_Builder.Build(
                 Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
                 figuresUnchangedFor: TimeSpan.FromMinutes(27)));
     }
 
-    /// <summary>Figures that JUST moved say nothing — and neither does an unknown span.</summary>
+    /// <summary>Figures that JUST moved say nothing on the merged field — and neither does an unknown span.</summary>
     [Fact]
-    public void TheLeadLineSaysNothingWhileTheFiguresAreStillMoving()
+    public void TheMergedFieldSaysNothingWhileTheFiguresAreStillMoving()
     {
         Assert.Equal(
-            "PULSE · 3/4 · 75%",
+            "PULSE\n3/4 merged · 75 %\nupdated 12:30",
             TopicStatusLine_Builder.Build(
                 Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
                 figuresUnchangedFor: TimeSpan.FromMinutes(2)));
 
         Assert.Equal(
-            "PULSE · 3/4 · 75%",
+            "PULSE\n3/4 merged · 75 %\nupdated 12:30",
             TopicStatusLine_Builder.Build(
                 Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
                 figuresUnchangedFor: null));
@@ -133,8 +154,14 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("", TopicStatusLine_Builder.Build(null, [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
+    /// <summary>
+    /// ADAPTED, not weakened: a member row now carries a STATE WORD too (owner, 2026-09-09 — "the
+    /// state field is new … it sits between the task and the duration"), so the row reads
+    /// who · what · state · how long rather than who · what · how long. Asserted as the exact row,
+    /// which is what "who, what, state, and how long" actually means.
+    /// </summary>
     [Fact]
-    public void AMemberRowIsWhoWhatAndHowLong()
+    public void AMemberRowIsWhoWhatStateAndHowLong()
     {
         var line = TopicStatusLine_Builder.Build(
             null,
@@ -142,11 +169,12 @@ public class TopicStatusLineBuilderTests
             null,
             NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Contains("imp-1", line);
-        Assert.Contains("committing the marker fix", line);
-        // "4 min", not the mock's "4m": the ONE duration formatter this repo has renders it that way,
-        // and item 12 forbids a second one just to shorten a column.
-        Assert.Contains("4 min", line);
+        // "under 5 min", not "4 min": the duration STEPS to five minutes since 2026-09-10 (owner's
+        // ruling), because a per-minute reading made PULSE's text differ on every tick and the repost
+        // gate compares that text. Rendered by the ONE duration formatter this repo has — item 12
+        // forbids a second one just to shorten a column — with the floor applied before it, so
+        // "1 h 5 min" is still spelled in exactly one place.
+        Assert.Equal("• imp-1 · committing the marker fix · working · under 5 min", line.Split('\n')[1]);
     }
 
     /// <summary>
@@ -255,9 +283,12 @@ public class TopicStatusLineBuilderTests
     /// A FUTURE stamp yields no duration rather than a confident wrong number — the one formatter
     /// this repo has returns null for it, and this line must not invent one. A supervisor really did
     /// stamp an entry 10 hours ahead.
+    ///
+    /// ADAPTED: the row still carries its new STATE WORD even with no duration to append — only the
+    /// duration field drops, not the state beside it.
     /// </summary>
     [Fact]
-    public void AFutureStampShowsTheTaskWithoutADuration()
+    public void AFutureStampShowsTheTaskAndStateWithoutADuration()
     {
         var line = TopicStatusLine_Builder.Build(
             null,
@@ -267,29 +298,28 @@ public class TopicStatusLineBuilderTests
 
         // Asserted as the WHOLE member ROW, not as "contains the task": a duration appended after it
         // is exactly what must not happen, and a Contains check cannot see a trailing anything.
-        Assert.Equal("• imp-1 · the task", line.Split('\n')[1]);
+        Assert.Equal("• imp-1 · the task · working", line.Split('\n')[1]);
     }
 
     [Fact]
     public void TheLastLineIsAddedOnlyWhenThereIsSomethingToSay()
     {
-        Assert.Contains("last", TopicStatusLine_Builder.Build(null, [], "gate cleared on 34e5515", NOW, aMessageIsAlreadyPosted: false));
+        Assert.Contains("last", TopicStatusLine_Builder.Build(null, [], Last("gate cleared on 34e5515"), NOW, aMessageIsAlreadyPosted: false));
         Assert.DoesNotContain("last", TopicStatusLine_Builder.Build(null, [], null, NOW, aMessageIsAlreadyPosted: false));
-        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build(null, [], "   ", NOW, aMessageIsAlreadyPosted: false));
+        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build(null, [], Last("   "), NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
-    /// THE WHOLE SHAPE, as the owner approved it. Pinned here because the individual assertions above
-    /// can all pass while the line reads as something nobody would want on their phone.
+    /// THE WHOLE SHAPE, as the owner approved it 2026-09-09 (Brief C): six fields, each its OWN LINE
+    /// — the lead word, the member rows (now carrying a state word each), `last`, the merged count
+    /// (worded "merged", not a bare fraction) and the heartbeat. Pinned here because the individual
+    /// assertions above can all pass while the line reads as something nobody would want on their
+    /// phone.
     ///
-    /// RESTYLED 2026-08-13 on the owner's directive, from a screenshot: the old shape padded its
-    /// columns with runs of spaces, and Telegram renders the body in a PROPORTIONAL font where
-    /// columns cannot align — so the runs bought nothing and pushed every row past a phone's width.
-    /// `rev-1 · audit R2–R8 against current master · 2 min` wrapped onto THREE visual lines and the
-    /// 28-dash divider wrapped onto a second line of its own.
-    ///
-    /// The bullet is what divides the rows now, which is also why the divider could go: a wrapped
-    /// bullet still reads as one row, because the `•` marks where it started.
+    /// SUPERSEDES the 2026-08-13 restyle this test used to pin (5 lines, ledger folded into the lead
+    /// line, no state word, no heartbeat). The bullet convention, the absence of padding and the
+    /// divider being gone all survive from that restyle unchanged; what moved is which fields share a
+    /// line.
     /// </summary>
     [Fact]
     public void TheApprovedShape()
@@ -301,17 +331,21 @@ public class TopicStatusLineBuilderTests
                 Member("rev-2", Brief("reviewing the hooks branch", "2026-08-12 12:18")),
                 Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
             ],
-            "gate cleared on 34e5515",
+            Last("gate cleared on 34e5515"),
             NOW, aMessageIsAlreadyPosted: false);
 
         var lines = line.Split('\n');
 
-        Assert.Equal(5, lines.Length);
-        Assert.Equal("PULSE · 72/113 · 63%", lines[0]);
-        Assert.Equal("• imp-1 · committing the marker fix · 4 min", lines[1]);
-        Assert.Equal("• rev-2 · reviewing the hooks branch · 12 min", lines[2]);
+        Assert.Equal(7, lines.Length);
+        Assert.Equal("PULSE", lines[0]);
+        // Both durations STEPPED to five minutes (2026-09-10): four minutes is below the first step
+        // and twelve floors to ten. The floor never overstates — the row says less than the truth.
+        Assert.Equal("• imp-1 · committing the marker fix · working · under 5 min", lines[1]);
+        Assert.Equal("• rev-2 · reviewing the hooks branch · working · 10 min", lines[2]);
         Assert.Equal("• rev-3 · standing by", lines[3]);
         Assert.Equal("last · gate cleared on 34e5515", lines[4]);
+        Assert.Equal("72/113 merged · 63 %", lines[5]);
+        Assert.Equal("updated 12:30", lines[6]);
     }
 
     /// <summary>
@@ -336,10 +370,10 @@ public class TopicStatusLineBuilderTests
         var lines = TopicStatusLine_Builder.Build(
             null,
             [Member("imp-9", Brief(sevenWords, "2026-08-12 12:26"))],
-            sevenWords,
+            Last(sevenWords),
             NOW, aMessageIsAlreadyPosted: false).Split('\n');
 
-        Assert.Equal("• imp-9 · migrate every supervisor session · 4 min", lines[1]);
+        Assert.Equal("• imp-9 · migrate every supervisor session · working · under 5 min", lines[1]);
         Assert.Equal("last · migrate every supervisor session onto worktree", lines[2]);
     }
 
@@ -362,7 +396,7 @@ public class TopicStatusLineBuilderTests
                 Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
                 Member("imp-4", Brief("the task", "2026-08-13 23:00")),
             ],
-            "gate cleared on 34e5515",
+            Last("gate cleared on 34e5515"),
             NOW, aMessageIsAlreadyPosted: false);
 
         Assert.DoesNotContain("  ", line);
@@ -382,7 +416,7 @@ public class TopicStatusLineBuilderTests
                 Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26")),
                 Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
             ],
-            "gate cleared on 34e5515",
+            Last("gate cleared on 34e5515"),
             NOW, aMessageIsAlreadyPosted: false).Split('\n');
 
         Assert.StartsWith("• imp-1", lines[1]);
@@ -402,7 +436,7 @@ public class TopicStatusLineBuilderTests
         var line = TopicStatusLine_Builder.Build(
             Progress(3, 4),
             [Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26"))],
-            "gate cleared on 34e5515",
+            Last("gate cleared on 34e5515"),
             NOW, aMessageIsAlreadyPosted: false);
 
         Assert.DoesNotContain("─", line);
@@ -435,11 +469,12 @@ public class TopicStatusLineBuilderTests
     /// structurally always null and the row printed "standing by" 100% of the time, for every solo,
     /// in every state. This test builds exactly that channel shape.
     ///
-    /// WHAT THE ROW SHOWS INSTEAD IS THE SOLO'S OWN LAST ENTRY, not a state word: a solo is never
-    /// briefed and never will be, so its own last subject is the only answer to "what is this member
-    /// working on" — summarised to the same MEMBER_TASK_WORDS budget every other member row uses, and
-    /// dated from the same stamp. Asserted as the WHOLE ROW rather than as "contains the subject",
-    /// because the duration now dates from that entry too and a Contains check cannot see it.
+    /// WHAT THE ROW SHOWS INSTEAD IS THE SOLO'S OWN LAST ENTRY, not a state word alone: a solo is
+    /// never briefed and never will be, so its own last subject is the only answer to "what is this
+    /// member working on" — summarised to the same MEMBER_TASK_WORDS budget every other member row
+    /// uses, dated from the same stamp, and now carrying the same STATE WORD every other filled row
+    /// does. Asserted as the WHOLE ROW rather than as "contains the subject", because the duration
+    /// and the state word both ride on it and a Contains check cannot see either.
     /// </summary>
     [Fact]
     public void ASolosRow_WithNoSupervisorToBriefIt_ShowsItsOwnLastEntryInsteadOfStandingBy()
@@ -455,7 +490,7 @@ public class TopicStatusLineBuilderTests
         var line = TopicStatusLine_Builder.Build(
             Progress(1, 4), [Member("solo-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Equal("• solo-1 · tab shifting fix · 4 min", line.Split('\n')[1]);
+        Assert.Equal("• solo-1 · tab shifting fix · working · under 5 min", line.Split('\n')[1]);
         Assert.DoesNotContain("standing by", line);
     }
 
@@ -506,9 +541,242 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("• solo-1 · standing by", line.Split('\n')[1]);
     }
 
+    /// <summary>
+    /// ADDED, 2026-09-10: the mode glyph moved OFF the Telegram topic NAME and onto PULSE's own
+    /// header line (owner, 2026-09-09 — "fewer renames, fewer service messages"). This is genuinely
+    /// new surface with no other coverage in this file, since every test above uses the default
+    /// (Normal) mode.
+    /// </summary>
+    [Fact]
+    public void TheHeaderCarriesTheDeliveryModeGlyph()
+    {
+        var deferred = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+            fields: new TopicStatusFields(Mode: TelegramDeliveryModes.Deferred));
+
+        var silenced = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+            fields: new TopicStatusFields(Mode: TelegramDeliveryModes.Silenced));
+
+        Assert.Equal("🌙 PULSE", deferred.Split('\n')[0]);
+        Assert.Equal("🔕 PULSE", silenced.Split('\n')[0]);
+    }
+
+    /// <summary>
+    /// AWAY ARRIVED HERE ON 2026-09-10, from the topic name — the claim
+    /// AwayModePolicyTests.AwayAndMode_ShowTogether used to make about a title. Away is app-wide, so
+    /// on a name one toggle renamed every open topic at once and Telegram wrote a service message
+    /// into each thread: the owner was told, once per orchestration, something they had just done
+    /// themselves. Here it is one character in a message that is being edited anyway.
+    /// </summary>
+    [Fact]
+    public void TheHeaderCarriesTheAwayGlyph()
+    {
+        Assert.Equal("✈ PULSE", Header(new TopicStatusFields(IsAway: true)));
+    }
+
+    /// <summary>
+    /// QUIET, likewise moved from the name (AwayModePolicyTests.Quiet_ShowsOnItsOwnTopic). Unlike
+    /// away it is PER TOPIC — this one orchestration stopped asking after three unanswered messages,
+    /// which may simply mean the owner is working in another topic.
+    /// </summary>
+    [Fact]
+    public void TheHeaderCarriesTheQuietGlyph()
+    {
+        Assert.Equal("🤐 PULSE", Header(new TopicStatusFields(IsQuiet: true)));
+    }
+
+    /// <summary>
+    /// TERMINAL, the third glyph to arrive from the name: the owner is sitting in THIS
+    /// orchestration's terminal, so nothing is pushed and nothing blocks on a tap.
+    /// </summary>
+    [Fact]
+    public void TheHeaderCarriesTheTerminalGlyph()
+    {
+        Assert.Equal("💻 PULSE", Header(new TopicStatusFields(Presence: OwnerPresenceModes.Terminal)));
+    }
+
+    /// <summary>
+    /// AWAY SUPERSEDES QUIET — the rule kept verbatim from the topic name it moved off, and the
+    /// reason is unchanged: away already means every orchestration has stopped asking, so drawing
+    /// both states says one fact twice on the one line the owner reads at a glance.
+    /// </summary>
+    [Fact]
+    public void AwaySupersedesQuietOnTheHeader()
+    {
+        Assert.Equal("✈ PULSE", Header(new TopicStatusFields(IsAway: true, IsQuiet: true)));
+    }
+
+    /// <summary>
+    /// TERMINAL REPLACES THE DELIVERY GLYPH rather than joining it — also moved verbatim. Sitting in
+    /// the terminal is WHAT silences the topic, so 💻 🔕 would state one fact twice: the
+    /// presence/delivery conflation this mode exists to remove, rendered.
+    /// </summary>
+    [Fact]
+    public void TerminalPresenceReplacesTheDeliveryGlyph()
+    {
+        var header = Header(new TopicStatusFields(
+            Mode: TelegramDeliveryModes.Silenced,
+            Presence: OwnerPresenceModes.Terminal));
+
+        Assert.Equal("💻 PULSE", header);
+    }
+
+    /// <summary>
+    /// AWAY STILL SHOWS BESIDE TERMINAL, and the distinction is the whole reason both exist: away is
+    /// about the owner's PHONE and is app-wide, terminal is about where they are sitting for THIS one
+    /// endeavour. Neither implies the other, so collapsing them would lose a fact.
+    /// </summary>
+    [Fact]
+    public void AwayStillShowsBesideTerminal()
+    {
+        var header = Header(new TopicStatusFields(
+            IsAway: true,
+            Presence: OwnerPresenceModes.Terminal));
+
+        Assert.Equal("✈ 💻 PULSE", header);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // FIELD 2 — "sup · …": the supervisor's own declared state, plus a usage-limit pause the app
+    // adds on its own. Untested anywhere before this rewrite: the old lead-line-only builder had no
+    // such field, and ContextOnTheStatusLineTests exercises only the context half of this row.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// CONTENT PROBE (a) from Brief C's "Done when": a session paused for a usage limit renders the
+    /// pause AND its resume time. This is the ONE thing the app adds to the supervisor's own words —
+    /// what the false stall alerts of 2026-09-09 were actually looking at.
+    /// </summary>
+    [Fact]
+    public void ASupervisorPausedForAUsageLimitRendersThePauseAndItsResumeTime()
+    {
+        var fields = new TopicStatusFields(UsageLimitResumeAt: new DateTime(2026, 8, 12, 14, 0, 0));
+
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false, fields: fields);
+
+        Assert.Contains("sup · paused for usage limit until 14:00", line);
+    }
+
+    /// <summary>
+    /// The other half of field 2: the supervisor's own one-line state, in its own words, with its
+    /// declared clock — the skill's new `STATE:` line (Brief C) is what feeds this.
+    /// </summary>
+    [Fact]
+    public void TheSupervisorsDeclaredStateRendersWithADeclaredClock()
+    {
+        var fields = new TopicStatusFields(
+            SupervisorDeclaredState: "waiting for imp-2's review, then I hand you the merge",
+            SupervisorDeclaredAt: new DateTime(2026, 8, 12, 12, 12, 0));
+
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false, fields: fields);
+
+        Assert.Contains("sup · waiting for imp-2's review, then I hand you the merge · declared 12:12", line);
+    }
+
+    /// <summary>
+    /// CLAUDE.md decision 12, applied to this new clock: a declaration stamped in the FUTURE must not
+    /// print a confident "declared HH:MM" — the state itself still shows, only the clock is refused.
+    /// </summary>
+    [Fact]
+    public void AFutureDeclaredAtIsNotPrintedButTheStateStillShows()
+    {
+        var fields = new TopicStatusFields(
+            SupervisorDeclaredState: "on it",
+            SupervisorDeclaredAt: NOW.AddHours(10));
+
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false, fields: fields);
+
+        Assert.Contains("sup · on it", line);
+        Assert.DoesNotContain("declared", line);
+    }
+
+    /// <summary>
+    /// NULL DEGRADES, IT DOES NOT INVENT (builder's own docstring): with nothing declared and no
+    /// pause, field 2 is OMITTED rather than filled with a placeholder row.
+    /// </summary>
+    [Fact]
+    public void WithNothingDeclaredAndNoPauseTheSupervisorRowIsOmitted()
+    {
+        var line = TopicStatusLine_Builder.Build(Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false);
+
+        Assert.DoesNotContain("sup ·", line);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // FIELD 1 — "⏳ waiting on you": open questions AND ledger lines blocked on the owner.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// CONTENT PROBE (b) from Brief C's "Done when": a ledger `[?]` line renders under
+    /// `⏳ waiting on you`, WITH ITS ID — the owner's own example is "your browser pass on
+    /// FIN-D-277", and the id is the part that makes the row actionable rather than merely present.
+    /// </summary>
+    [Fact]
+    public void ALedgerLineBlockedOnTheOwnerRendersUnderWaitingOnYouWithItsId()
+    {
+        var progress = ProgressWithLedgerLine(1, 4, "?", "your browser pass on FIN-D-277");
+
+        var line = TopicStatusLine_Builder.Build(progress, [], null, NOW, aMessageIsAlreadyPosted: false);
+
+        Assert.Equal("⏳ waiting on you · ledger: your browser pass on FIN-D-277", line.Split('\n')[1]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // FIELD 3 — the member roster: up to 4 live rows, a closed COUNT rather than a roster.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// CONTENT PROBE (c) from Brief C's "Done when": 9 members of which 7 are closed render TWO live
+    /// rows plus "7 closed" — never a closed roster (Out: "the closed roster").
+    /// </summary>
+    [Fact]
+    public void NineMembersOfWhichSevenAreClosedRenderTwoLiveRowsAndASevenClosedCount()
+    {
+        List<ITopicStatusMember> members =
+        [
+            Member("imp-1", Brief("fix the parser", "2026-08-12 12:26")),
+            Member("rev-2", [Entry(1, ChannelAuthors.Reviewer, "STANDING BY", "2026-08-12 12:00")]),
+        ];
+
+        for (var i = 1; i <= 7; i++)
+            members.Add(Member($"closed-{i}", [], isClosed: true));
+
+        var line = TopicStatusLine_Builder.Build(null, members, null, NOW, aMessageIsAlreadyPosted: false);
+        var lines = line.Split('\n');
+
+        Assert.StartsWith("• imp-1", lines[1]);
+        Assert.StartsWith("• rev-2", lines[2]);
+        Assert.Equal("7 closed", lines[3]);
+        Assert.DoesNotContain("closed-", line);
+    }
+
     static IPlanProgress Progress(int done, int total)
     {
         return PlanProgress_Factory.Create(done, 0, 0, 0, total, null, [], [], []);
+    }
+
+    /// <summary>
+    /// PULSE's first line only, for the glyph tests. A ledger is passed so the line has substance and
+    /// is written at all — the header is not a message on its own — and no member, so the assertion
+    /// is about the header and nothing below it.
+    /// </summary>
+    static string Header(TopicStatusFields fields)
+    {
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false, fields: fields);
+
+        return line.Split('\n')[0];
+    }
+
+    /// <summary>A ledger that carries one line, for field 1's ledger-derived-ask probe.</summary>
+    static IPlanProgress ProgressWithLedgerLine(int done, int total, string marker, string text)
+    {
+        return PlanProgress_Factory.Create(
+            done, 0, 0, 0, total, null, [], [], [], null, [new PlanLedgerLine(marker, text)]);
     }
 
     static IReadOnlyList<IChannelEntry> Brief(string subject, string stamp)
@@ -526,5 +794,15 @@ public class TopicStatusLineBuilderTests
         return ChannelEntry_Factory.Create(
             index, author, stamp, subject, "body",
             $"## [{index}] FROM {author} — {stamp} — {subject}\nbody");
+    }
+
+    /// <summary>
+    /// Field 4's value as ONE argument, which is what it became on 2026-09-10. The clock defaults to
+    /// null so every test that only ever cared about the subject reads as it did — and a test that
+    /// wants the clock now has to name the event it belongs to, which is the whole point.
+    /// </summary>
+    static TopicLastEvent? Last(string subject, DateTime? at = null)
+    {
+        return new TopicLastEvent(subject, at);
     }
 }

@@ -9,20 +9,52 @@ namespace AIOrchestratorCoreLib.Status;
 /// </summary>
 public static class MemberState_Resolver
 {
-    public const string WRITING_WINDOW_OPEN_MARKER = "WRITING WINDOW OPEN";
-    public const string WRITING_WINDOW_CLOSED_MARKER = "WRITING WINDOW CLOSED";
-    public const string MUTATION_WINDOW_OPEN_MARKER = "MUTATION WINDOW OPEN";
-    public const string MUTATION_WINDOW_CLOSED_MARKER = "MUTATION WINDOW CLOSED";
-    public const string BLOCKED_ON_OWNER_MARKER = "BLOCKED ON OWNER";
+    // FROM THE GRAMMAR, and `static readonly` rather than `const` because of it: the grammar is a
+    // FILE both this app and the bash tool read, so its values arrive at runtime. A `const` would
+    // have to be a literal here, which is the ninth copy E3 removes.
+    public static readonly string WRITING_WINDOW_OPEN_MARKER = ChannelGrammar.WRITING_WINDOW_OPEN;
+    public static readonly string WRITING_WINDOW_CLOSED_MARKER = ChannelGrammar.WRITING_WINDOW_CLOSED;
+    public static readonly string MUTATION_WINDOW_OPEN_MARKER = ChannelGrammar.MUTATION_WINDOW_OPEN;
+    public static readonly string MUTATION_WINDOW_CLOSED_MARKER = ChannelGrammar.MUTATION_WINDOW_CLOSED;
+    public static readonly string BLOCKED_ON_OWNER_MARKER = ChannelGrammar.BLOCKED_ON_OWNER;
+
+    /// <summary>
+    /// A session asking for a decision it cannot take itself. THE SHARED LITERAL, read by the mirror
+    /// (<c>Bridge.OwnerPush_Policy.QUESTION_MARKER</c> is an alias of this field) to raise buttons on
+    /// the owner's phone and by the dispatcher (<c>Running.PendingTraffic.WakeUp_Policy</c>) to refuse
+    /// to hold an entry that is a session asking for help. It lives here because both sides need it
+    /// and neither may own it.
+    ///
+    /// <para>
+    /// TWO COPIES REMAIN AND THIS FIELD IS NOT THEM, which is worth stating plainly because the first
+    /// version of this docstring claimed to be "THE ONE LITERAL for this word in the tree" and a
+    /// review disproved it in one grep on 2026-09-10.
+    /// <c>Bridge/OwnerMessage_Contract.cs</c> carries a private <c>"QUESTION:"</c> for counting
+    /// question markers in a supervisor's outbound message, and
+    /// <c>Bridge/Decisions/OwnerQuestion_Contract.cs</c> carries a public <c>"QUESTION"</c> — the
+    /// colon-less form, which is the one the paragraph below names as the danger, though there it is
+    /// safe because it is used as a LINE-LEADING marker name and the colon is added by the extractor.
+    /// Collapsing both onto this field is the right change and it is one line each in <c>Bridge/</c>,
+    /// outside the file set of the stage that found this, so it is reported rather than done.
+    /// </para>
+    /// <para>
+    /// WHY THE COLON IS PART OF THE WORD. The digest added a fourth spelling on 2026-09-09 in the bare
+    /// colon-less form, and <see cref="Contains_Marker"/> matches a whole token ANYWHERE in a subject
+    /// — so a report reading "the open question about the parser is settled" declared itself a
+    /// question and defeated the hold. The colon is what makes the marker a DECLARATION rather than a
+    /// word (decision 12: never a second copy, and never a broader one).
+    /// </para>
+    /// </summary>
+    public static readonly string QUESTION_MARKER = ChannelGrammar.QUESTION;
 
     /// <summary>The second word of the boot subject every member is required to write: "imp-1 online".</summary>
-    public const string BOOT_ANNOUNCEMENT_WORD = "online";
+    public static readonly string BOOT_ANNOUNCEMENT_WORD = ChannelGrammar.BOOT_ANNOUNCEMENT_WORD;
 
     /// <summary>
     /// The member declaring it has nothing owed and nothing running. Protocol vocabulary: the role
     /// commands instruct members to write this exact phrase when they go quiet on purpose.
     /// </summary>
-    public const string STANDING_BY_MARKER = "STANDING BY";
+    public static readonly string STANDING_BY_MARKER = ChannelGrammar.STANDING_BY;
 
     /// <summary>
     /// Every phrase this resolver acts on. Exists so a test can walk the vocabulary instead of a

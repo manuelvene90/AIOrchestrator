@@ -1,0 +1,35 @@
+# The WPF app cannot be built where most of this repo is written.
+#
+# AIOrchestrator/ targets net10.0-windows with UseWPF, so `dotnet build` on macOS or Linux cannot
+# even restore it — and on 2026-09-09 four files in it (the language checkbox, the settings section
+# and their handlers) were edited blind for exactly that reason, with "a Windows build is still
+# owed" written into the commit. This is that build, standing permanently instead of being owed.
+#
+# It builds ONLY the two things the other machines cannot: the WPF app, and the solution as a whole
+# (which includes it). CoreLib, the daemon and the suite are built and run continuously on the
+# machines people work from, so repeating them here would buy nothing and slow the signal down.
+name: windows-build
+
+on:
+  push:
+    branches: [ours/integration, 'stage/**', master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  wpf:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # The app first, alone, so a failure names the project that cannot be built anywhere else.
+      - name: Build the WPF app
+        run: dotnet build AIOrchestrator/AIOrchestrator.csproj -c Debug -warnaserror:CS
+
+      # Then the whole solution, which is the only place every project is buildable at once.
+      - name: Build the solution
+        run: dotnet build AIOrchestrator.slnx -c Debug

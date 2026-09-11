@@ -1,0 +1,29 @@
+{
+  "name": "unorchestrated-posix-path-full-context",
+  "env": {
+    "AIORCH_ROLE": "",
+    "AIORCH_ID": "",
+    "AIORCH_MEMBER": ""
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Haiku"
+    },
+    "workspace": {
+      "current_dir": "/Users/owner/repo"
+    },
+    "context_window": {
+      "used_percentage": 100
+    },
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {},
+  "expected": "Haiku · repo \u001b[90mctx 100%\u001b[0m"
+}

@@ -15,7 +15,20 @@ public static class LedgerTransition_Wording
 {
     public const string FINISHED_GLYPH = "✔";
     public const string STARTED_GLYPH = "▶";
-    public const string RECAP_GLYPH = "🏁";
+    /// <summary>
+    /// THE WHOLE ENDEAVOUR IS COMPLETE — every asked-for line done.
+    ///
+    /// IT WAS 🏁 UNTIL 2026-09-10 and gave the character up to the topic name, where 🏁 now means a
+    /// CLOSED orchestration (owner's ruling: "the recap takes another glyph, 🏁 stays for closed").
+    /// Two different finished-somethings sharing one symbol is the collision
+    /// <c>TelegramDeliveryMode_Glyphs.DONE</c>'s own summary refused when ✅ was chosen over 🏁 for
+    /// /done; keeping it here would have been the same clash from the other side.
+    ///
+    /// 🎯 rather than another tick: ✔ already means one LINE finished, immediately below, and ✅ is
+    /// the owner's own hand-set /done marker. This says the target the endeavour was set is met,
+    /// which is a different statement from either.
+    /// </summary>
+    public const string RECAP_GLYPH = "🎯";
 
     public static string Describe(LedgerTransition transition)
     {
@@ -41,8 +54,8 @@ public static class LedgerTransition_Wording
     /// </summary>
     public static string Describe_Recap(string displayName, IPlanProgress progress)
     {
-        var delivered = progress.Lines
-            .Where(line => !line.IsSubTask && line.Marker == "x")
+        var delivered = PlanLedger_Lines.Top_Level(progress)
+            .Where(line => line.Marker == "x")
             .Select(line => $"{FINISHED_GLYPH} {line.Text}")
             .ToList();
 

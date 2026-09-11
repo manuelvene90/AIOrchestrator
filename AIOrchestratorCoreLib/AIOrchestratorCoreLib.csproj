@@ -6,4 +6,47 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!--
+    WHICH COMMIT THIS BINARY WAS BUILT FROM, baked into AssemblyInformationalVersion as "1.0.0+<sha>"
+    by the SDK once SourceRevisionId is set. Read back by Build/BuildCommit_Reader and compared, at
+    startup, with the gitCommitSha the CLI recorded for the installed aiorch plugin.
+
+    WHY: measured 2026-09-07 on CLI 2.1.263, `claude plugin update` compares the VERSION STRING only.
+    A commit that changes a role protocol without bumping kit/.claude-plugin/plugin.json leaves the
+    cached copy untouched and reports "already at the latest version (1.0.0)" — so the host's version
+    assertion certified a kit whose text it had never seen. The number cannot answer that question;
+    the commit can.
+
+    ContinueOnError AND IgnoreExitCode, deliberately: a build made where git is unavailable (a
+    tarball, an offline image, a source drop) must still build. It then carries no stamp, the reader
+    returns null, and the startup check SAYS the content could not be verified instead of refusing to
+    spawn — decision 21, not a silent pass and not a refusal over a question nobody could ask.
+
+    Guarded on SourceRevisionId being empty so a CI that sets it explicitly wins over this.
+  -->
+  <Target Name="StampSourceRevisionFromGit"
+          BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo"
+          Condition="'$(SourceRevisionId)' == ''">
+    <Exec Command="git -C &quot;$(MSBuildThisFileDirectory)&quot; rev-parse HEAD"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="low"
+          ContinueOnError="true"
+          IgnoreExitCode="true"
+          EchoOff="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitHeadSha" />
+      <Output TaskParameter="ExitCode" PropertyName="_GitExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(_GitExitCode)' == '0' and '$(_GitHeadSha)' != ''">
+      <SourceRevisionId>$(_GitHeadSha.Trim())</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
+
+
+  <ItemGroup>
+    <!-- THE CHANNEL GRAMMAR IS EMBEDDED, not copied: ChannelGrammar reads it as a resource, so a
+         missing grammar is a broken BUILD rather than a runtime surprise on the owner's machine.
+         The same file also ships in the kit (AIOrchestrator.csproj) because kit/bin/channel-append.sh
+         reads it with jq — one file, two readers, and ChannelGrammarTests fails if they differ. -->
+    <EmbeddedResource Include="..\kit\grammar\channel-grammar.json" LogicalName="AIOrchestratorCoreLib.kit.grammar.channel-grammar.json" />
+  </ItemGroup>
 </Project>

@@ -1,7 +1,12 @@
 using System.Diagnostics;
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.SessionLaunch;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
@@ -9,6 +14,7 @@ namespace AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 
 internal sealed class SessionWatchdogModel(
     ISupervisionPaths paths,
+    IOrchestratorConfigProvider configProvider,
     IOrchestrationSessionStore store,
     IOrchestrationLauncher launcher,
     IOrchestrationLog log) : ISessionWatchdog
@@ -26,6 +32,7 @@ internal sealed class SessionWatchdogModel(
     static readonly IReadOnlySet<string> SHELL_PROCESS_NAMES = new HashSet<string> { "powershell", "pwsh" };
 
     readonly ISupervisionPaths _paths = paths;
+    readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
     readonly IOrchestrationLauncher _launcher = launcher;
     readonly IOrchestrationLog _log = log;
@@ -36,6 +43,21 @@ internal sealed class SessionWatchdogModel(
     readonly Dictionary<string, int> _consecutiveRespawns = [];
     readonly List<(string OrchId, string AlertText)> _pendingCrashLoopAlerts = [];
 
+    public IReadOnlyDictionary<string, int> Get_ConsecutiveRespawns()
+    {
+        return new Dictionary<string, int>(_consecutiveRespawns);
+    }
+
+    public void Restore_ConsecutiveRespawns(IReadOnlyDictionary<string, int> consecutiveRespawns)
+    {
+        foreach (var pair in consecutiveRespawns)
+        {
+            // A zero carries no information and would only keep a spent key alive in the file.
+            if (pair.Value > 0)
+                _consecutiveRespawns[pair.Key] = pair.Value;
+        }
+    }
+
     public void Check_AndRestart_DeadSessions()
     {
         Check_GeneralSupervisor();
@@ -43,14 +65,6 @@ internal sealed class SessionWatchdogModel(
         foreach (var session in _store.Load_All())
         {
             if (session.ClosedUtc != null)
-                continue;
-
-            // PAUSED: the owner put this orchestration to sleep without closing it, so a dead
-            // terminal here is not a fault to repair. Respawning would boot a session that reads its
-            // role command, arms a watcher and starts working — the pause silently over, with
-            // nothing on screen saying so. It comes back the moment they lift it, because that is
-            // when this loop starts looking at it again.
-            if (session.Paused)
                 continue;
 
             // A BASIC orchestration never had a supervisor — checking for one would respawn a
@@ -76,6 +90,26 @@ internal sealed class SessionWatchdogModel(
         }
     }
 
+    /// <summary>
+    /// A session that has no pid file BECAUSE IT IS SUPPOSED TO HAVE NONE — both halves asked, and
+    /// the config half is the one that was missing. The state file alone says a session WAS
+    /// registered as print-run; nothing deletes it when the owner flips the role back to terminal,
+    /// so answering from the file alone made the watchdog skip that slot for ever and the member's
+    /// window was never respawned after it died. The launcher clears the stale file at the next
+    /// spawn — which only happens because this returns false and lets the respawn through.
+    /// </summary>
+    bool Is_PrintRun(SessionRoles role, string orchId, string memberId)
+    {
+        var runner = _configProvider.Get_Current().Runners.Get_ForRole(role).Runner;
+
+        // A STREAM session has a real process but still no pid FILE — the file is written by a
+        // spawned shell, and there is none. Both bridge-driven runners are exempt for the same
+        // reason and through the same question, so a third one cannot be forgotten here.
+        return Runner_Support.Is_BridgeDriven(runner)
+            && Runner_Support.Supports(runner, role)
+            && PrintSessionState_Store.Exists(_paths, role, orchId, memberId);
+    }
+
     static bool Is_WithinSpawnGrace(DateTime? spawnedUtc)
     {
         return spawnedUtc != null && (DateTime.UtcNow - spawnedUtc.Value).TotalSeconds < SPAWN_GRACE_SECONDS;
@@ -93,6 +127,15 @@ internal sealed class SessionWatchdogModel(
 
     void Check_GeneralSupervisor()
     {
+        // A print-run session has no process to be alive: its state file is the registration, and
+        // its turns run on demand. Without this the watchdog would "respawn" it every 45 s and
+        // declare a crash loop on the third.
+        if (Is_PrintRun(SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch_Factory.GENERAL_MEMBER_ID))
+        {
+            _consecutiveRespawns.Remove("general");
+            return;
+        }
+
         if (Is_SessionAlive(_paths.GeneralPidFile))
         {
             _consecutiveRespawns.Remove("general");
@@ -109,6 +152,14 @@ internal sealed class SessionWatchdogModel(
 
     void Check_OrchestrationSupervisor(Sessions.OrchestrationSession.IOrchestrationSession session)
     {
+        // A BRIDGE-DRIVEN supervisor has no pid file BY DESIGN — the same exemption the general
+        // supervisor and the members have had since the print runner landed, and it was missing here
+        // for the honest reason that a supervisor could not be bridge-driven until the stream runner
+        // existed. Without it a perfectly healthy stream supervisor is "respawned" every tick past
+        // the 90 s grace, which also drives the crash-loop counter into an alert on the owner's phone.
+        if (Is_PrintRun(SessionRoles.Supervisor, session.OrchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID))
+            return;
+
         if (Is_WithinSpawnGrace(session.SupervisorSpawnedUtc))
             return;
 
@@ -179,6 +230,13 @@ internal sealed class SessionWatchdogModel(
     {
         if (Is_WithinSpawnGrace(spawnedUtc))
             return;
+
+        // Print-run: no pid file by design (see Check_GeneralSupervisor).
+        if (Is_PrintRun(SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId)), orchId, memberId))
+        {
+            _consecutiveRespawns.Remove($"imp:{orchId}/{memberId}");
+            return;
+        }
 
         if (Is_SessionAlive(_paths.Get_ImplementerPidFile(orchId, memberId)))
         {

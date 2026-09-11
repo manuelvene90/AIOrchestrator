@@ -40,6 +40,21 @@ public static class ChannelAppender
         return Append_Entry(channelFilePath, "app", AppEntryAudience_Tag.Apply(subject, audience), body, nowLocal);
     }
 
+    /// <summary>
+    /// An entry written ON BEHALF OF a session — the print runner appending a member's final
+    /// message under the member's own author word. The session never touches the file: the bridge
+    /// writes the header, the index and the time, which is what makes CLAUDE.md decision 12 (agent-
+    /// written headers are untrusted) moot for print-run sessions. Only session authors are
+    /// accepted; the owner and the app have their own methods above.
+    /// </summary>
+    public static bool Append_SessionEntry(string channelFilePath, ChannelAuthors author, string subject, string body, DateTime nowLocal)
+    {
+        if (!ChannelAuthor_Kinds.Is_Session(author))
+            throw new ArgumentException($"Append_SessionEntry is for session authors, not {author} (subject '{subject}')");
+
+        return Append_Entry(channelFilePath, ChannelAuthor_Words.Get_Word(author), subject, body, nowLocal);
+    }
+
     static bool Append_Entry(string channelFilePath, string authorWord, string subject, string body, DateTime nowLocal)
     {
         // The index comes from a read, so the read and the append have to be one indivisible step:

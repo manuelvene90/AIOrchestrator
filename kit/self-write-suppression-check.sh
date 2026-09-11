@@ -16,10 +16,10 @@
 # failures about hooks it never invoked.
 set -u
 
-HELPER="$(dirname "$0")/channel-append.sh"
+HELPER="$(dirname "$0")/bin/channel-append.sh"
 
 if [ ! -f "$HELPER" ]; then
-  echo "self-write-suppression-check.sh: cannot find channel-append.sh next to this script ($HELPER)." >&2
+  echo "self-write-suppression-check.sh: cannot find bin/channel-append.sh beside this script ($HELPER)." >&2
   echo "REFUSING TO RUN — a pass from here would be about nothing." >&2
   exit 2
 fi

@@ -42,7 +42,9 @@ if [ -z "${AIORCH_ID:-}" ]; then
   exit 0
 fi
 
-FLAG_FILE="$HOME/.claude/supervision/$AIORCH_ID/.ledger-behind"
+SUPERVISION_ROOT="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"
+
+FLAG_FILE="$SUPERVISION_ROOT/$AIORCH_ID/.ledger-behind"
 
 if [ ! -f "$FLAG_FILE" ]; then
   exit 0
@@ -58,11 +60,11 @@ fi
 #
 # Deferring costs nothing: the flag stays raised, and the ledger is enforced at the next turn end,
 # once compliance is possible again. The enforcement is delayed, never skipped.
-if [ -f "$HOME/.claude/supervision/$AIORCH_ID/.awaiting-answer" ]; then
+if [ -f "$SUPERVISION_ROOT/$AIORCH_ID/.awaiting-answer" ]; then
   exit 0
 fi
 
-PLAN_FILE="$HOME/.claude/supervision/$AIORCH_ID/PLAN.md"
+PLAN_FILE="$SUPERVISION_ROOT/$AIORCH_ID/PLAN.md"
 
 # THE REASON NAMES BOTH DEBTS, because the hook cannot tell them apart and guessing would send a
 # solo — which posts no verdicts — hunting for an implementer channel it does not have.

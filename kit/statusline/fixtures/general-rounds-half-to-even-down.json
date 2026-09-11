@@ -1,0 +1,32 @@
+{
+  "name": "general-rounds-half-to-even-down",
+  "env": {
+    "AIORCH_ROLE": "general",
+    "AIORCH_ID": "",
+    "AIORCH_MEMBER": ""
+  },
+  "stdin": {
+    "model": {
+      "display_name": "Sonnet"
+    },
+    "workspace": {
+      "current_dir": "C:\\repos\\AIOrchestrator"
+    },
+    "context_window": {
+      "used_percentage": 8.5
+    },
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 91.0
+      },
+      "seven_day": {
+        "used_percentage": 0.42
+      }
+    }
+  },
+  "files": {
+    "general/.keep": {}
+  },
+  "expected": "\u001b[1;93m GENERAL SUPERVISOR \u001b[0m Sonnet \u001b[90mctx 8%\u001b[0m",
+  "expectedUsageFile": "general/.usage.json"
+}

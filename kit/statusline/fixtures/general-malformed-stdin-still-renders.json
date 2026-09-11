@@ -1,0 +1,14 @@
+{
+  "name": "general-malformed-stdin-still-renders",
+  "env": {
+    "AIORCH_ROLE": "general",
+    "AIORCH_ID": "",
+    "AIORCH_MEMBER": ""
+  },
+  "stdinText": "not json",
+  "files": {
+    "general/.keep": {}
+  },
+  "expected": "\u001b[1;93m GENERAL SUPERVISOR \u001b[0m ",
+  "expectedUsageFile": "general/.usage.json"
+}

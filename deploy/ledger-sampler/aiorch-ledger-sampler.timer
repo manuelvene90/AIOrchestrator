@@ -1,0 +1,12 @@
+[Unit]
+Description=Sample the orchestration ledgers hourly
+
+[Timer]
+# Hourly is the resolution cost-per-delivered-item needs; the app is not touched, so a missed run
+# costs one hour of resolution and nothing else. Persistent=true catches up after a reboot.
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

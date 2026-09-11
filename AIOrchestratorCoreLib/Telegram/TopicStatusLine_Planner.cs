@@ -4,7 +4,6 @@ using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
-using AIOrchestratorCoreLib.Status.SessionModelReading;
 
 namespace AIOrchestratorCoreLib.Telegram;
 
@@ -82,23 +81,54 @@ public static class TopicStatusLine_Planner
         bool repostIsImpossible,
         TimeSpan? figuresUnchangedFor = null,
         ISessionContextUsage? supervisorContext = null,
-        ISessionModelReading? supervisorModel = null)
+
+        // WHAT ONLY THE ENGINE CAN KNOW — the supervisor's declared state, what the owner is being
+        // waited on for, a usage-limit pause, when the last event happened. The builder is handed
+        // per-member channels and cannot read owner-channel.md or a member's state file, so these
+        // arrive as data rather than being fetched. See TopicStatusFields.
+        TopicStatusFields fields = default)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
         // The `last` line is chosen HERE, not handed in. Gate C — the trusted reading of an
         // agent-written stamp — was the one gate that never left the engine, so it could be reverted
         // to a raw parse with 630 tests staying green.
-        var text = TopicStatusLine_Builder.Build(progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null, figuresUnchangedFor, supervisorContext, supervisorModel);
+        // THE MODE IS FILLED IN HERE rather than by the caller: the planner already takes it for its
+        // own repost gate, and asking the engine to pass the same value twice is how two surfaces
+        // come to disagree about whether a topic is muted.
+        var text = TopicStatusLine_Builder.Build(
+            progress, members, Pick_LastEvent_OrNull(members, now), now, existingMessageId != null,
+            figuresUnchangedFor, supervisorContext, fields with { Mode = mode });
 
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 
-        // THE REPOST OVERRIDES THE DECIDER, and it has to. A buried line is USUALLY unchanged text —
-        // a quiet orchestration says the same thing minute after minute — and the identical-text rule
-        // answers None to exactly that. Behind that rule the repost would fire only for a topic that
-        // happened to change something in the same tick, which is never the quiet topic it was asked
-        // for. Emptiness is still refused: the builder emits the bare lead word whenever a message is up,
-        // so blank text here would mean sending nothing at all.
+        // THE REPOST RIDES ON THE DECIDER — it no longer overrides it. Owner, 2026-09-09: PULSE is
+        // "deleted and re-posted (silently) only when it is buried by later traffic AND its content
+        // changed". Burial alone used to be enough, and the cost was the surface's own promise: a
+        // quiet orchestration says the same thing minute after minute, so every pause in a talkative
+        // topic bought a delete plus a post that carried no news — the waterfall decision 14 exists to
+        // prevent, arriving one message at a time instead of all at once.
+        //
+        // "SOMETHING NEW TO SAY" IS THE DECIDER'S ANSWER, NOT A SECOND COMPARISON. `Decide` already
+        // answers None for both cases that must not move the line — text identical to what is up, and
+        // text that is blank — so asking it is the whole predicate; writing `lastWrittenText != text`
+        // here would be a second spelling of the same rule, free to disagree with the first.
+        //
+        // AFTER A RESTART the remembered text is null (it lives in memory) and `Decide` reads that as
+        // Edit, which counts as news here. That does NOT produce a restart repost: the newest-message
+        // map is in memory too, so `Find_NewestTopicMessage_OrNull` answers null until the app observes
+        // real traffic, and `Is_RepostDue` refuses a topic it knows nothing about. The two blind spots
+        // cover each other, and the test at the bottom of this file pins the pair.
+        //
+        // AND THE HEARTBEAT IS NOT NEWS. Field 6 is `updated HH:MM`, emitted unconditionally, so
+        // PULSE's raw text differs from the previous one at every minute boundary however still the
+        // orchestration is — which would have degraded the owner's rule to "buried, then within sixty
+        // seconds". The repost asks the substance question through `Strip_Heartbeat`; the EDIT still
+        // compares the raw text, because keeping the clock ticking in place is the heartbeat's whole
+        // job and an edit notifies nobody.
+        var somethingNewToSay = decided != TopicStatusActions.None
+            && TopicStatusLine_Builder.Strip_Heartbeat(text) != TopicStatusLine_Builder.Strip_Heartbeat(lastWrittenText);
+
         // THE LATCH COMES FIRST, and it is a fallback rather than a failure. Telegram REFUSES some
         // deletes permanently — a message past its 48-hour window, or a bot without
         // `can_delete_messages` — and a refusal is not a gone message, so nothing clears the id and
@@ -108,29 +138,40 @@ public static class TopicStatusLine_Planner
         //
         // Latched, the topic stops trying to MOVE its line and goes on updating it in place. That is
         // master's behaviour, which is the right floor to degrade to.
-        var action = !repostIsImpossible
-                     && !string.IsNullOrWhiteSpace(text)
+        var action = somethingNewToSay
+                     && !repostIsImpossible
                      && Is_RepostDue(existingMessageId, newestTopicMessage, now, REPOST_AFTER_QUIET_SECONDS)
             ? TopicStatusActions.Repost
             : decided;
 
-        // THE DELIVERY GATE IS ON THE MESSAGES THAT NOTIFY — the POST, and now the REPOST, which is a
-        // delete followed by a send and so pushes to the phone exactly as a first post does. An edit
-        // notifies nobody, so silencing it buys nothing and costs a line frozen at pre-DND content for
-        // the whole period; a topic the owner silenced must not be the thing that wakes them.
+        // THE DELIVERY GATE IS ON SILENCED ONLY — it used to be on everything but Normal, and the
+        // reason it could be is gone. Every one of these writes is `TelegramSendSounds.Silent` now
+        // (brief C), so a post and a repost wake nobody; the gate was reasoning about a post that
+        // notified, and it outlived that post.
         //
-        // A BLOCKED REPOST FALLS BACK TO WHAT THE DECIDER SAID rather than to silence. The content
-        // still updates in place — Deferred's contract is that nothing is lost — and only the MOVE
-        // waits for the unmute. Falling back to a blanket Edit instead would rewrite identical text
-        // every tick for the whole DND period, which is the wasted-call spin the identical-text rule
-        // exists to stop.
-        if (action == TopicStatusActions.Repost && mode != TelegramDeliveryModes.Normal)
+        // DEFERRED (🌙) AND SILENCED (🔕) PART COMPANY HERE, on the owner's ruling of 2026-09-09:
+        // "DND holds only what rings; PULSE and the dashboard keep updating silently". The two modes
+        // mean opposite things about content — Deferred KEEPS everything and replays it, because the
+        // owner is away and will come back to it; Silenced DROPS it, because they are reading the
+        // same thing live in the terminal and do not want it twice.
+        //
+        // WHAT "OUT OF THE WAY UNDER SILENCED" MEANS EXACTLY, because the looser wording contradicted
+        // the code two lines below it: 🔕 refuses to PUT A MESSAGE THERE and refuses to MOVE one. It
+        // does not stop the EDIT — an edit notifies nobody and appears nowhere new, and a line left
+        // frozen for the length of a terminal session would be wrong on the owner's next glance. So
+        // Silenced adds no message to the topic and Deferred keeps its line current AND at the bottom.
+        //
+        // A BLOCKED REPOST FALLS BACK TO WHAT THE DECIDER SAID rather than to silence: the content
+        // still updates in place and only the MOVE waits. Falling back to a blanket Edit instead
+        // would rewrite identical text every tick, which is the wasted-call spin the identical-text
+        // rule exists to stop.
+        if (action == TopicStatusActions.Repost && mode == TelegramDeliveryModes.Silenced)
             action = decided;
 
         if (action == TopicStatusActions.None)
             return new TopicStatusPlan(TopicStatusActions.None, text);
 
-        if (action == TopicStatusActions.Post && mode != TelegramDeliveryModes.Normal)
+        if (action == TopicStatusActions.Post && mode == TelegramDeliveryModes.Silenced)
             return new TopicStatusPlan(TopicStatusActions.None, text);
 
         // THE BACKOFF, last: a 429 answered at the tick rate inverts the cadence from once a minute
@@ -143,14 +184,22 @@ public static class TopicStatusLine_Planner
 
 
     /// <summary>
-    /// The most recent real entry across the LIVE members, by the stamp the agent wrote. A closed
-    /// member does not feed this: one message must not disagree with itself about whether a member
-    /// exists.
+    /// The most recent real entry across the LIVE members, by the stamp the agent wrote — AND ITS
+    /// STAMP, which is the change of 2026-09-10. A closed member does not feed this: one message
+    /// must not disagree with itself about whether a member exists.
     ///
     /// App entries are not conversation — without that, /resume appends to every member channel in
     /// every orchestration and every topic simultaneously reads `last GO AHEAD`.
+    ///
+    /// <para>
+    /// IT USED TO RETURN THE SUBJECT ALONE and throw the winning entry away, so the clock beside it
+    /// had to come from somewhere else — and it came from another file. The entry it already holds
+    /// carries both, so returning both is not new work; it is stopping the discard. The stamp goes
+    /// through the same trusted reader that decides which entry WINS, so a future or unparseable
+    /// stamp reads as null here exactly as it loses there — one rule, not two.
+    /// </para>
     /// </summary>
-    public static string? Pick_LastSubject_OrNull(IReadOnlyList<ITopicStatusMember> members, DateTime now)
+    public static TopicLastEvent? Pick_LastEvent_OrNull(IReadOnlyList<ITopicStatusMember> members, DateTime now)
     {
         IChannelEntry? latest = null;
 
@@ -169,7 +218,12 @@ public static class TopicStatusLine_Planner
                 latest = candidate;
         }
 
-        return latest?.Subject;
+        if (latest == null)
+            return null;
+
+        return new TopicLastEvent(
+            latest.Subject,
+            SessionDuration_Formatter.Try_ReadTrustedStamp(latest.DateText, now, out var stamp) ? stamp : null);
     }
 
     /// <summary>

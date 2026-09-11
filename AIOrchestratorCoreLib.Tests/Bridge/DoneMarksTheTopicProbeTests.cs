@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
 using Xunit.Abstractions;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -57,7 +58,7 @@ public class DoneMarksTheTopicProbeTests : IDisposable
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -68,7 +69,7 @@ public class DoneMarksTheTopicProbeTests : IDisposable
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
     public void Dispose()
@@ -153,7 +154,7 @@ public class DoneMarksTheTopicProbeTests : IDisposable
             $"the second /done was never acknowledged.{Environment.NewLine}{_log.Dump()}");
 
         // THE POINT OF THE WHOLE TEST. Give the old toggle every chance to fire before asserting.
-        await Run_Until_Async(() => !Last_NameHasTick(), 3_000);
+        await Run_Until_Async(() => !Last_NameHasTick(), BridgeTestTiming.Window_ForTicks(10));
 
         Assert.True(
             Last_NameHasTick(),
@@ -215,7 +216,7 @@ public class DoneMarksTheTopicProbeTests : IDisposable
         _store.Set_DisplayName(session.OrchId, DISPLAY_NAME);
         Seed_OwnerChannel(session.OrchId);
 
-        await Run_For_Async(4_000);
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(3));
 
         return session.OrchId;
     }

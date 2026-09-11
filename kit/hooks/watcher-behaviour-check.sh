@@ -29,7 +29,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMMANDS_DIR="$(cd "$SCRIPT_DIR/../commands" 2>/dev/null && pwd || true)"
+SKILLS_DIR="$(cd "$SCRIPT_DIR/../skills" 2>/dev/null && pwd || true)"
 
 FAILURES=0
 CHECKS=0
@@ -47,8 +47,8 @@ check() {
   fi
 }
 
-[ -n "$COMMANDS_DIR" ] && [ -d "$COMMANDS_DIR" ] \
-  || die "no kit/commands beside this script (looked next to $SCRIPT_DIR) — the role commands are the subject, and without them every check below would pass by finding nothing"
+[ -n "$SKILLS_DIR" ] && [ -d "$SKILLS_DIR" ] \
+  || die "no kit/skills beside this script (looked next to $SCRIPT_DIR) — the role protocols are the subject, and without them every check below would pass by finding nothing"
 
 # ---------------------------------------------------------------------------------------------
 # Per-role facts. Only paths differ: which channel file the loop watches, which folder receives the
@@ -84,9 +84,11 @@ extract_block() {
 
 run_role() {
   local role="$1" channel_rel="$2" orch_rel="$3" phrase="$4"
-  local src="$COMMANDS_DIR/$role.md"
+  # The watcher loop lives in the role's reference file since the protocols were split; the
+  # SKILL.md that owns it only carries the imperative pointer to read it.
+  local src="$SKILLS_DIR/$role/reference/watcher.md"
 
-  [ -f "$src" ] || die "$role.md is not in $COMMANDS_DIR — cannot test the loop it ships"
+  [ -f "$src" ] || die "$role/reference/watcher.md is not in $SKILLS_DIR — cannot test the loop it ships"
 
   local block
   block="$(extract_block "$src")"
@@ -193,7 +195,7 @@ PREAMBLE
   rm -rf "$home"
 }
 
-printf 'watcher behaviour — running the loop shipped in %s\n\n' "$COMMANDS_DIR"
+printf 'watcher behaviour — running the loop shipped in %s\n\n' "$SKILLS_DIR"
 
 # A herestring, never a pipe: a piped `while` runs in a subshell and its FAILURES count would be
 # discarded, which is this harness certifying itself green by losing the evidence.

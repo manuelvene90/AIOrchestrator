@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Channels;
 
@@ -55,7 +56,7 @@ public class AppendFailureDoesNotMarkWorkDoneTests : IDisposable
         var log = OrchestrationLog_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), log);
-        _engine = BridgeEngine_Factory.Create(_paths, configProvider, _store, _launcher, log);
+        _engine = BridgeEngine_Factory.Create_WithTiming(_paths, configProvider, _store, _launcher, log, BridgeTestTiming.Fast());
     }
 
     public void Dispose()
@@ -94,9 +95,10 @@ public class AppendFailureDoesNotMarkWorkDoneTests : IDisposable
 
         try
         {
-            // Long enough for several ticks. Each blocked append waits out the lock budget, so this
-            // is deliberately not tight.
-            await Task.Delay(TimeSpan.FromSeconds(6));
+            // Long enough for several ticks. Each blocked append waits out the tick's lock allowance,
+            // so this is deliberately not tight — and it is COMPUTED from that allowance rather than
+            // typed, because a literal stops meaning "several ticks" the moment either number moves.
+            await Task.Delay(TimeSpan.FromMilliseconds(BridgeTestTiming.Window_ForBlockedTicks(3)));
 
             Assert.True(
                 File.Exists(markerFile),

@@ -6,10 +6,12 @@ internal sealed class AddImplementerRequestModel(
     string orchId,
     MemberKinds kind,
     string reason,
-    string sourceFilePath) : IAddImplementerRequest
+    string sourceFilePath,
+    string? model) : IAddImplementerRequest
 {
     public string OrchId { get; } = orchId;
     public MemberKinds Kind { get; } = kind;
     public string Reason { get; } = reason;
     public string SourceFilePath { get; } = sourceFilePath;
+    public string? Model { get; } = model;
 }

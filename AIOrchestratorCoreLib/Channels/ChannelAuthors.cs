@@ -26,6 +26,30 @@ public enum ChannelAuthors
     Unknown,
 }
 
+/// <summary>
+/// The author WORD a session signs with, for the one writer that signs on a session's behalf: the
+/// print runner appends a member's entry from its JSON result. The inverse of the parser's
+/// word→author switch, kept beside it in spirit — a word written here must parse back to the same
+/// author, and <c>ChannelAppender</c> tests pin that round trip.
+/// </summary>
+public static class ChannelAuthor_Words
+{
+    public static string Get_Word(ChannelAuthors author)
+    {
+        return author switch
+        {
+            ChannelAuthors.Supervisor => "supervisor",
+            ChannelAuthors.Implementer => "implementer",
+            ChannelAuthors.Reviewer => "reviewer",
+            ChannelAuthors.Solo => "solo",
+            ChannelAuthors.Communicator => "communicator",
+            ChannelAuthors.Owner => "owner",
+            ChannelAuthors.App => "app",
+            _ => throw new Exception($"No author word for {author} — an unknown author cannot sign an entry"),
+        };
+    }
+}
+
 public static class ChannelAuthor_Kinds
 {
     /// <summary>

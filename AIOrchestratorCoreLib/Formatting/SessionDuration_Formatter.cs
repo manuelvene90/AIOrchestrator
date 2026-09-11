@@ -61,4 +61,49 @@ public static class SessionDuration_Formatter
 
         return Describe(elapsed);
     }
+
+    /// <summary>
+    /// The same reading, ROUNDED DOWN to a step — for a surface that is rewritten whenever its text
+    /// changes, where a duration ticking by the minute makes the quietest orchestration the busiest
+    /// one.
+    ///
+    /// <para>
+    /// THE OWNER'S RULING, 2026-09-10: PULSE's member durations round to five minutes, "shown and
+    /// compared", so the line moves only on a real change. Shown and compared are the same thing
+    /// here and that is the point — PULSE's repost gate compares the RENDERED text, so rounding what
+    /// the owner reads is what stops the message being deleted and re-posted for a minute hand. A
+    /// second, comparison-only rounding would be a rule the reader could not see.
+    /// </para>
+    /// <para>
+    /// IT IS NOT A SECOND COPY OF <see cref="Describe"/> — it floors the span and hands it to that
+    /// one renderer, so "1 h 5 min" is spelled in exactly one place. This is the same construction
+    /// <see cref="UnchangedFor_Formatter"/> already used for the other ticking field on that line,
+    /// and its summary carries the reasoning in full.
+    /// </para>
+    /// <para>
+    /// BELOW THE FIRST STEP IT SAYS "under N min" rather than flooring to zero, which
+    /// <see cref="Describe"/> would render as "under a minute" — a member four minutes into a task
+    /// would have been described as having just started. Never overstates: the floor means the row
+    /// says less than the truth, never more.
+    /// </para>
+    /// </summary>
+    public static string? Describe_SinceStamp_Stepped_OrNull(string stampText, DateTime now, int stepMinutes)
+    {
+        if (stepMinutes < 1)
+            throw new ArgumentOutOfRangeException(nameof(stepMinutes), stepMinutes, "A duration step is a number of minutes, at least one.");
+
+        if (!Try_ReadTrustedStamp(stampText, now, out var stamp))
+            return null;
+
+        var elapsed = now - stamp;
+
+        if (elapsed < TimeSpan.Zero)
+            elapsed = TimeSpan.Zero;
+
+        var steppedMinutes = (int)(elapsed.TotalMinutes / stepMinutes) * stepMinutes;
+
+        return steppedMinutes == 0
+            ? $"under {stepMinutes} min"
+            : Describe(TimeSpan.FromMinutes(steppedMinutes));
+    }
 }

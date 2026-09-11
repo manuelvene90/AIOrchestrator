@@ -84,4 +84,22 @@ public class StatusLineSettingsWirerTests : IDisposable
 
         Assert.Throws<Exception>(() => StatusLineSettings_Wirer.Ensure_Wired(_settingsFile, _scriptPath));
     }
+
+    /// <summary>
+    /// The bash twin is wired through bash, decided by the script's extension — the installer
+    /// picks the script per OS, and the command must agree with it by construction.
+    /// </summary>
+    [Fact]
+    public void ABashScript_IsWiredThroughBash_AndAPowerShellOneThroughPowerShell()
+    {
+        Assert.Equal("bash \"/home/o/.claude/supervision/statusline.sh\"", StatusLineSettings_Wirer.Build_Command("/home/o/.claude/supervision/statusline.sh"));
+        Assert.Equal("bash \"C:/Users/o/.claude/supervision/statusline.sh\"", StatusLineSettings_Wirer.Build_Command("C:\\Users\\o\\.claude\\supervision\\statusline.sh"));
+        Assert.StartsWith("powershell -NoProfile", StatusLineSettings_Wirer.Build_Command("C:\\Users\\o\\.claude\\supervision\\statusline.ps1"));
+
+        var shScript = Path.Combine(_tempRoot, "statusline.sh");
+        StatusLineSettings_Wirer.Ensure_Wired(_settingsFile, shScript);
+        var root = JsonNode.Parse(File.ReadAllText(_settingsFile)) as JsonObject
+            ?? throw new Exception("settings.json should be a JSON object");
+        Assert.StartsWith("bash \"", root["statusLine"]?["command"]?.GetValue<string>());
+    }
 }

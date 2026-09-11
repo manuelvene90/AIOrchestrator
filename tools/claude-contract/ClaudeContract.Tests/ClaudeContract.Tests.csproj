@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The contract between the bridge and the `claude` CLI, pinned twice: the Stub category runs
+       FakeClaude offline in seconds and proves the fake honours the flags the bridge sends; the
+       Live category (CLAUDE_CONTRACT_LIVE=1) repeats MEASUREMENTS.md §M1-M7 against the real binary
+       and is the first thing to run after a CLI upgrade. See README.md. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ClaudeContract.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Builds the fake and lands FakeClaude.dll beside the test assembly, which is where
+         FakeClaude_Locator looks first. -->
+    <ProjectReference Include="..\FakeClaude\FakeClaude.csproj" />
+  </ItemGroup>
+
+</Project>

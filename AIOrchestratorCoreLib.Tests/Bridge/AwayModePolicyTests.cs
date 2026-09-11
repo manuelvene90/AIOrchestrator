@@ -152,6 +152,14 @@ public class AwayModePolicyTests
 /// <summary>
 /// Away is app-wide and the per-topic delivery mode is not, so a topic can be in both states at
 /// once and the title has to survive being re-decorated on every tick.
+///
+/// NEITHER STATE TOUCHES A TOPIC NAME ANY MORE (owner, 2026-09-10): ✈ and 🤐 moved to PULSE's header
+/// line, because both are app-wide and a name carrying them renamed every open topic the moment the
+/// owner toggled one — and every rename writes a service message into the thread it renames. Three
+/// tests here asserted them in a name and are replaced below by one asserting they are absent; the
+/// claims themselves — away beside the mode glyph, quiet on its own topic, away superseding quiet —
+/// are now pinned on the header in TopicStatusLineBuilderTests. What stays here is what did not
+/// move: the glyph constants, the quiet notice, and the strip that keeps old names clean.
 /// </summary>
 public class AwayTopicGlyphTests
 {
@@ -171,26 +179,31 @@ public class AwayTopicGlyphTests
         Assert.Equal(TelegramDeliveryMode_Glyphs.QUIET, AwayMode_Policy.QUIET_GLYPH);
     }
 
+    /// <summary>
+    /// REPLACES AwayAndMode_ShowTogether ("✈ crm bug", "✈ 🔕 crm bug", "🌙 crm bug"),
+    /// Quiet_ShowsOnItsOwnTopic ("🤐 crm bug", "🤐 🌙 crm bug") and Away_SupersedesQuiet ("✈ crm bug"
+    /// with both set). All three were right until 2026-09-10 and all three claims survive — on
+    /// PULSE's header line, where TopicStatusLineBuilderTests now pins them. What they can no longer
+    /// claim is that a topic NAME says any of it.
+    ///
+    /// THE COST WAS THE POINT: away and quiet are app-wide, so a single toggle renamed every open
+    /// topic at once, and Telegram writes a service message into each thread it renames — one state
+    /// change the owner had just made themselves, announced back to them once per orchestration. On
+    /// the header the same fact costs one silent edit of a message that was being edited anyway.
+    /// </summary>
     [Fact]
-    public void AwayAndMode_ShowTogether()
+    public void AwayAndQuietNoLongerReachATopicName()
     {
-        Assert.Equal("✈ crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Normal, isAway: true));
-        Assert.Equal("✈ 🔕 crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Silenced, isAway: true));
-        Assert.Equal("🌙 crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Deferred, isAway: false));
-    }
+        var name = TelegramDeliveryMode_Glyphs.Compose_TopicName(
+            "crm bug",
+            new TelegramDeliveryMode_Glyphs.TopicNameFlags(OwnerReply: OwnerReplyStates.Blocking, IsAwaitingTest: true));
 
-    [Fact]
-    public void Quiet_ShowsOnItsOwnTopic()
-    {
-        Assert.Equal("🤐 crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Normal, isAway: false, isQuiet: true));
-        Assert.Equal("🤐 🌙 crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Deferred, isAway: false, isQuiet: true));
-    }
+        Assert.DoesNotContain(TelegramDeliveryMode_Glyphs.AWAY, name);
+        Assert.DoesNotContain(TelegramDeliveryMode_Glyphs.QUIET, name);
 
-    /// <summary>Away already means every orchestration stopped asking — showing both is noise.</summary>
-    [Fact]
-    public void Away_SupersedesQuiet()
-    {
-        Assert.Equal("✈ crm bug", TelegramDeliveryMode_Glyphs.Decorate_TopicName("crm bug", TelegramDeliveryModes.Normal, isAway: true, isQuiet: true));
+        // And the name still says everything it IS responsible for, so the absence above is a
+        // narrowed surface rather than a broken one.
+        Assert.Equal("❓ 🧪 crm bug", name);
     }
 
     [Fact]

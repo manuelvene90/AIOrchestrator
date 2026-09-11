@@ -92,6 +92,12 @@ public class TelegramUpdatesParserTests
         Assert.Empty(batch.OwnerMessages);
     }
 
+    /// <summary>
+    /// The subject is unchanged — only the owner's taps come through. The FIXTURE gained the
+    /// <c>chat</c> object that every real <c>callback_query.message</c> carries: it was left out
+    /// when nothing read it, and brief F6 now fences taps to the supervision supergroup, so a
+    /// fixture without a chat describes an update Telegram does not send.
+    /// </summary>
     [Fact]
     public void Parse_CallbackTaps_OwnerTapsOnly_WithThreadAndData()
     {
@@ -105,7 +111,7 @@ public class TelegramUpdatesParserTests
                     "id": "cbq-1",
                     "from": { "id": 42 },
                     "data": "opt-7",
-                    "message": { "message_id": 9, "message_thread_id": 7 }
+                    "message": { "message_id": 9, "message_thread_id": 7, "chat": { "id": -1001234567890 } }
                   }
                 },
                 {
@@ -114,7 +120,7 @@ public class TelegramUpdatesParserTests
                     "id": "cbq-2",
                     "from": { "id": 999 },
                     "data": "opt-8",
-                    "message": { "message_id": 10 }
+                    "message": { "message_id": 10, "chat": { "id": -1001234567890 } }
                   }
                 }
               ]

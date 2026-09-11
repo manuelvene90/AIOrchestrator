@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Channels;
+
 namespace AIOrchestratorCoreLib.Status;
 
 /// <summary>
@@ -24,7 +26,7 @@ public static class MemberState_Descriptor
             MemberStates.ImplementerWorking => "briefed — not started yet",
             MemberStates.AwaitingSupervisorReview => "awaiting review",
             MemberStates.WritingWindowOpen => "idle — writing window left open",
-            MemberStates.BlockedOnOwner => "BLOCKED ON OWNER",
+            MemberStates.BlockedOnOwner => ChannelGrammar.BLOCKED_ON_OWNER,
             MemberStates.StandingBy => "standing by — nothing owed",
             _ => throw new Exception($"Unhandled MemberStates: {state}"),
         };

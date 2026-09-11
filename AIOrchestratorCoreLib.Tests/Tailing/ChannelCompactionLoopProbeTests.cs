@@ -10,6 +10,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using System.Text;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Tailing;
 
@@ -60,7 +61,7 @@ public class ChannelCompactionLoopProbeTests : IDisposable
         var log = OrchestrationLog_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, store, new RecordingSpawner_Fake(), log);
-        _engine = BridgeEngine_Factory.Create(_paths, configProvider, store, _launcher, log);
+        _engine = BridgeEngine_Factory.Create_WithTiming(_paths, configProvider, store, _launcher, log, BridgeTestTiming.Fast());
     }
 
     public void Dispose()

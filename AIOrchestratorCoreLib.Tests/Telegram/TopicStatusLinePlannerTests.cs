@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 using Xunit;
+using AIOrchestratorCoreLib.Formatting;
 
 namespace AIOrchestratorCoreLib.Tests.Telegram;
 
@@ -34,21 +35,38 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// THE DELIVERY GATE, on the POST. A topic the owner silenced must not be the thing that pushes
-    /// to their phone.
+    /// THE DELIVERY GATE, on the POST — and SILENCED ONLY since 2026-09-10. 🔕 means the owner is
+    /// reading the same content live in a terminal and asked not to have it twice; dropping is the
+    /// mode's whole contract, so a first PULSE is not posted into it.
     /// </summary>
-    [Theory]
-    [InlineData(TelegramDeliveryModes.Silenced)]
-    [InlineData(TelegramDeliveryModes.Deferred)]
-    public void ASilencedTopicIsNotPostedInto(TelegramDeliveryModes mode)
+    [Fact]
+    public void ASilencedTopicIsNotPostedInto()
     {
-        Assert.Equal(TopicStatusActions.None, Plan(mode: mode).Action);
+        Assert.Equal(TopicStatusActions.None, Plan(mode: TelegramDeliveryModes.Silenced).Action);
     }
 
     /// <summary>
-    /// And NOT on the edit. An edit notifies nobody, so gating it buys nothing and costs a line
-    /// frozen at pre-DND content for the whole period — Deferred's contract is that nothing is lost.
-    /// Asserted separately from the POST case so neither can pass for the other's reason.
+    /// AND DEFERRED IS NOT SILENCED — the other half of the owner's ruling of 2026-09-09: "🌙 holds
+    /// only what rings; PULSE and the dashboard keep updating silently". This case asserted None
+    /// until 2026-09-10, sharing a Theory with the Silenced one, and the shared assertion was the
+    /// mistake: the two modes mean OPPOSITE things about content. Deferred keeps everything and
+    /// replays it because the owner is coming back to it; Silenced throws it away.
+    ///
+    /// The gate could treat them alike while a post NOTIFIED. Every write here is silent now, so
+    /// under 🌙 there is nothing left to protect the owner from — and refusing the first post cost
+    /// them a topic with NO status surface at all for the length of the mute, which is what their
+    /// check-in ritual reads when they come back.
+    /// </summary>
+    [Fact]
+    public void ADeferredTopicIsStillPostedInto_Silently()
+    {
+        Assert.Equal(TopicStatusActions.Post, Plan(mode: TelegramDeliveryModes.Deferred).Action);
+    }
+
+    /// <summary>
+    /// And NOT on the edit, under either mode. An edit notifies nobody, so gating it buys nothing and
+    /// costs a line frozen at pre-DND content for the whole period — Deferred's contract is that
+    /// nothing is lost. Asserted separately from the POST cases so none can pass for another's reason.
     /// </summary>
     [Theory]
     [InlineData(TelegramDeliveryModes.Silenced)]
@@ -128,7 +146,7 @@ public class TopicStatusLinePlannerTests
             Member("imp-2", "stamped in the future", "2026-08-13 23:00"),
         };
 
-        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
+        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastEvent_OrNull(members, NOW)?.Subject);
     }
 
     /// <summary>An unparseable stamp loses rather than winning by accident.</summary>
@@ -141,7 +159,7 @@ public class TopicStatusLinePlannerTests
             Member("imp-2", "no date at all", "not a date"),
         };
 
-        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
+        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastEvent_OrNull(members, NOW)?.Subject);
     }
 
     /// <summary>And the ordinary case still picks the genuinely most recent.</summary>
@@ -154,11 +172,11 @@ public class TopicStatusLinePlannerTests
             Member("imp-2", "newer", "2026-08-12 14:55"),
         };
 
-        Assert.Equal("newer", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
+        Assert.Equal("newer", TopicStatusLine_Planner.Pick_LastEvent_OrNull(members, NOW)?.Subject);
     }
 
     /// <summary>
-    /// PINS THE CALL, not the callee. Replacing Pick_LastSubject_OrNull(...) with a plain null at the
+    /// PINS THE CALL, not the callee. Replacing Pick_LastEvent_OrNull(...) with a plain null at the
     /// planner's own call site left 634 green, because the only two assertions on Plan(...).Text used
     /// an EMPTY roster — where the picker returns null anyway — and every other Plan assertion looks
     /// at .Action.
@@ -169,6 +187,12 @@ public class TopicStatusLinePlannerTests
     ///
     /// In production that mutation removes the `last` row from every topic message, and where the
     /// subject is the only substance it reduces the message to the bare title or to nothing.
+    ///
+    /// ADAPTED 2026-09-10: `[^1]` stopped being the `last` line once PULSE grew a trailing
+    /// `updated HH:MM` heartbeat (Brief C, field 6) — the array's last element is now always that
+    /// line when there is anything to say at all. Picking the line by its own `last ` prefix instead
+    /// of by position keeps the claim ("the picker's answer lands in the text") true regardless of
+    /// which other fields are present.
     /// </summary>
     [Fact]
     public void ThePlanActuallyCallsThePickerAndPutsTheWinnerInTheText()
@@ -179,14 +203,88 @@ public class TopicStatusLinePlannerTests
             Member("imp-2", "the winning subject", "2026-08-12 14:55"),
         ]);
 
-        // Asserted on the LAST LINE, not on the whole text: every member's brief also appears as its
-        // own row, so "contains the subject" is satisfied by the row and says nothing about the
+        // Asserted on the `last` LINE, not on the whole text: every member's brief also appears as
+        // its own row, so "contains the subject" is satisfied by the row and says nothing about the
         // picker. The `last` line is the only place the picker's answer shows up.
-        var lastLine = plan.Text.Split('\n')[^1];
+        var lastFieldLine = plan.Text.Split('\n').Single(line => line.StartsWith("last "));
 
-        Assert.StartsWith("last", lastLine);
-        Assert.Contains("the winning subject", lastLine);
-        Assert.DoesNotContain("older thing", lastLine);
+        Assert.Contains("the winning subject", lastFieldLine);
+        Assert.DoesNotContain("older thing", lastFieldLine);
+    }
+
+    /// <summary>
+    /// FIELD 4'S CLOCK AND ITS SUBJECT COME FROM THE SAME EVENT — the owner's ruling of 2026-09-10,
+    /// and a defect nothing could have caught before it.
+    ///
+    /// <para>
+    /// What it was: the subject was the newest session entry across the live member SPOKES, and the
+    /// clock was the stamp on the supervisor's last entry in `owner-channel.md` — the same value that
+    /// fills "declared HH:MM" one field above. So a topic where the supervisor spoke at 10:00 and an
+    /// implementer reported at 14:55 rendered `last · 10:00 · &lt;the implementer's subject&gt;`. Two true
+    /// facts, one false sentence, in the field the owner reads to know when something last moved.
+    /// </para>
+    /// <para>
+    /// It survived because the two halves were never asserted TOGETHER: no test in the suite ever
+    /// set the clock at all. This asserts the pair — the winner's own stamp is printed, and the
+    /// loser's is absent — and the pair is now structural: the builder takes one
+    /// &lt;see cref="TopicLastEvent"/&gt;, so there is no second argument left to fill from a second file.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheLastFieldsClockIsTheClockOfTheEventItNames()
+    {
+        var plan = Plan(members:
+        [
+            Member("imp-1", "older thing", "2026-08-12 10:00"),
+            Member("imp-2", "the winning subject", "2026-08-12 14:55"),
+        ]);
+
+        var lastFieldLine = plan.Text.Split('\n').Single(line => line.StartsWith("last "));
+
+        Assert.Equal("last · 14:55 · the winning subject", lastFieldLine);
+        Assert.DoesNotContain("10:00", lastFieldLine);
+    }
+
+    /// <summary>
+    /// AND AN UNTRUSTWORTHY STAMP PRINTS NO CLOCK rather than a plausible one. The entry still WINS
+    /// the field on the rule that already governed the pick — this fixture has only one member, so
+    /// there is nothing to lose to — and its unreadable stamp simply prints nothing, which is
+    /// decision 12: a time is shown only when it was read from something an agent actually wrote in
+    /// a form that could be read.
+    /// </summary>
+    [Fact]
+    public void AnEventWhoseStampCannotBeReadPrintsNoClock()
+    {
+        var plan = Plan(members: [Member("imp-1", "the only subject", "not a date")]);
+
+        var lastFieldLine = plan.Text.Split('\n').Single(line => line.StartsWith("last "));
+
+        Assert.Equal("last · the only subject", lastFieldLine);
+    }
+
+    /// <summary>
+    /// CONTENT PROBE (d) from Brief C's "Done when": the `last` field is the latest SUPERVISOR
+    /// subject, never the first `[>]` ledger line — the old STATUS message's defect ("now: FIN-D-293a
+    /// step 6 and step 7" repeated identically for hours after the work merged). PULSE's `last` field
+    /// never reads the ledger at all: it is Pick_LastEvent_OrNull's answer and nothing else, so this
+    /// pins that a ledger with a same-named in-progress line cannot leak into it.
+    /// </summary>
+    [Fact]
+    public void TheLastFieldIsTheLatestSupervisorSubjectNeverTheFirstInProgressLedgerLine()
+    {
+        var progress = PlanProgress_Factory.Create(
+            0, 1, 0, 0, 1, "the first in-progress ledger line",
+            ["the first in-progress ledger line"], [], [], null,
+            [new PlanLedgerLine(">", "the first in-progress ledger line")]);
+
+        var plan = Plan(
+            progress: progress,
+            members: [Member("imp-1", "the real latest supervisor subject", "2026-08-12 14:55")]);
+
+        var lastFieldLine = plan.Text.Split('\n').Single(line => line.StartsWith("last "));
+
+        Assert.Contains("the real latest supervisor subject", lastFieldLine);
+        Assert.DoesNotContain("first in-progress ledger line", lastFieldLine);
     }
 
     // ── THE REPOST, owner directive 2026-08-13 ────────────────────────────────────────────────────
@@ -339,16 +437,27 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// THE ONE THAT DECIDES WHETHER THE FEATURE WORKS AT ALL. A buried status line is USUALLY
-    /// unchanged text — a quiet orchestration says the same thing minute after minute — and the
-    /// identical-text rule answers None to exactly that. If the repost sat behind that rule it would
-    /// fire only for orchestrations that happened to change something in the same tick, which is the
-    /// quiet topic it was asked for, never reached.
+    /// THE RULE REVERSED, ON THE OWNER'S OWN WORDS (2026-09-09, brief C): PULSE is re-posted "only
+    /// when it is buried by later traffic AND its content changed". This test ASSERTED THE OPPOSITE
+    /// until 2026-09-10 and it was not wrong then — burial alone was the rule, and the summary above
+    /// it argued the case for it: a quiet topic never changes its text, so a content-gated repost
+    /// would never move a quiet topic's line.
     ///
-    /// Both sides, from the SAME text: unchanged and not buried is still silence.
+    /// The owner read that trade and took the other side. Their complaint is the one this whole brief
+    /// answers — half of what reaches the phone is not for them — and a repost that carries no news
+    /// is the surface breaking its own promise: PULSE exists so that status costs no notifications,
+    /// and every pause in a talkative topic was buying a delete plus a post that said the same thing.
+    /// A buried unchanged line is a cosmetic loss (it is above some traffic); a repost of it is
+    /// traffic. Cosmetics lose.
+    ///
+    /// KEPT UNDER ITS OLD NAME INVERTED RATHER THAN DELETED, so the reversal is visible in the diff
+    /// of the file that carried the old claim, and nobody re-derives the old rule from the argument
+    /// still written above it.
+    ///
+    /// Both sides, from the SAME text: unchanged is silence whether or not it is buried.
     /// </summary>
     [Fact]
-    public void TheRepostFiresEvenWhenTheTextHasNotChanged()
+    public void TheRepostDoesNotFireWhenTheTextHasNotChanged()
     {
         var current = Plan(existingMessageId: STATUS_ID).Text;
 
@@ -358,9 +467,270 @@ public class TopicStatusLinePlannerTests
                  newestTopicMessage: Newest(STATUS_ID - 20, NOW.AddHours(-1))).Action);
 
         Assert.Equal(
-            TopicStatusActions.Repost,
+            TopicStatusActions.None,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
                  newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// THE BRIEF'S OWN PROBE, both halves in one place: "PULSE buried under 3 later messages with
+    /// unchanged content → not re-posted; content changes → one silent re-post at the bottom".
+    ///
+    /// The three messages are modelled the way the planner sees burial — by the newest id the app
+    /// knows of, which is the third of them — because that is the only thing `Is_RepostDue` reads.
+    /// Asserting on a count of intermediate messages would test a counter this feature does not have.
+    ///
+    /// ONE repost, not two: the second call re-runs the same tick with the line now carrying the new
+    /// text, which is the state the engine is in immediately after a successful repost. It must go
+    /// quiet — otherwise a changed line reposts on every tick for as long as it stays buried, which
+    /// is the waterfall by another door.
+    /// </summary>
+    [Fact]
+    public void BuriedAndUnchangedStaysPut_BuriedAndChangedMovesOnce()
+    {
+        var buriedUnderThree = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var current = Plan(existingMessageId: STATUS_ID).Text;
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
+                 newestTopicMessage: buriedUnderThree).Action);
+
+        var afterAChange = Plan(
+            existingMessageId: STATUS_ID,
+            lastWrittenText: "what PULSE said before anything moved",
+            newestTopicMessage: buriedUnderThree);
+
+        Assert.Equal(TopicStatusActions.Repost, afterAChange.Action);
+        Assert.False(string.IsNullOrWhiteSpace(afterAChange.Text));
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: afterAChange.Text,
+                 newestTopicMessage: buriedUnderThree).Action);
+    }
+
+    /// <summary>
+    /// THE RESTART, which is where a content-gated repost could have gone wrong and does not. The
+    /// remembered text lives in memory, so after a restart every topic has an id and no last text —
+    /// `Decide` reads that as Edit, which this planner counts as news. On its own that would repost
+    /// every buried line at every startup, all at once: a notification storm on the one event the
+    /// owner did not ask for.
+    ///
+    /// It cannot happen, because the NEWEST-MESSAGE map is in memory as well: until the app observes
+    /// real traffic in a topic it knows of no message that could have buried the line, and
+    /// `Is_RepostDue` refuses a topic it knows nothing about. This test pins the PAIR — the two blind
+    /// spots cover each other, and either one made durable alone would open the storm.
+    /// </summary>
+    // ── RETIRED 2026-09-10, AFTER THE DEPLOY ──────────────────────────────────────────────────────
+    //
+    // Two tests lived here and both asserted that PULSE's text CHANGES every minute and is edited in
+    // place: `TheMinuteRollingOverIsNotSomethingNewToSay` (the text differs, but the line must not
+    // MOVE) and `TheMinuteRollingOverStillEditsTheLineInPlace` (and it must still be edited). They
+    // were written in stage 8d against the heartbeat's per-minute clock, on the reasoning that "an
+    // edit notifies nobody, so silencing it buys nothing".
+    //
+    // TRUE OF THE OWNER'S PHONE, FALSE OF THE API. In production on 2026-09-10, three minutes after
+    // the deploy, that per-minute edit drew 429s with `retry_after` 20, then 22, then 32 seconds —
+    // once a minute, per live topic. Telegram throttles edits of ONE message far harder than calls to
+    // the group, which is the ceiling the control bucket was sized from. The heartbeat steps to five
+    // minutes now, so from one minute to the next the text does not change and there is NO call at
+    // all — which those two tests would have forbidden.
+    //
+    // Their surviving claim — a heartbeat must never MOVE the line — belongs to `Strip_Heartbeat` and
+    // is still asserted by the repost cases above. What replaced them is
+    // `OneMinuteLaterPulseSaysTheSameThing_SoNothingIsEdited` and its two neighbours, which pin the
+    // stronger property: not "the edit is harmless" but "there is no edit".
+
+    /// <summary>One merged line of four, so the surface has substance without a member on it.</summary>
+    static IPlanProgress A_Ledger()
+    {
+        return PlanProgress_Factory.Create(1, 0, 0, 0, 4, null, [], [], [], null, []);
+    }
+
+    /// <summary>
+    /// The same call as <see cref="Plan"/> but with the clock as an argument — the fixture's `Plan`
+    /// hard-codes `NOW`, and the two tests above exist precisely to move it. No members and a ledger,
+    /// so the heartbeat is the only line that reads the clock.
+    /// </summary>
+    static TopicStatusLine_Planner.TopicStatusPlan Plan_At(
+        DateTime now, string? lastWrittenText, TopicStatusLine_Planner.TopicNewestMessage newestTopicMessage)
+    {
+        return TopicStatusLine_Planner.Plan(
+            A_Ledger(),
+            [],
+            now,
+            STATUS_ID,
+            lastWrittenText,
+            TelegramDeliveryModes.Normal,
+            null,
+            BACKOFF,
+            newestTopicMessage,
+            repostIsImpossible: false);
+    }
+
+    /// <summary>
+    /// A LIVE MEMBER NO LONGER MOVES THE LINE FOR THE MINUTE HAND — the owner's ruling of 2026-09-10,
+    /// and the second half of the same defect the heartbeat had.
+    ///
+    /// <para>
+    /// Stage 8d fixed the heartbeat and reported the member row as the remaining case: a row ends in
+    /// "for how long", read from a live clock, so a buried topic with anybody working in it reposted
+    /// about once a minute — carrying no news, which is the exact thing PULSE exists not to do. The
+    /// duration now steps to five minutes, and because the repost gate compares the RENDERED text,
+    /// rounding what the owner reads is what stops the message moving.
+    /// </para>
+    /// <para>
+    /// FOUR MINUTES APART, INSIDE ONE STEP: the two renderings must be identical, so there is nothing
+    /// to repost. Then across the step boundary it moves once — asserted here too, because "it never
+    /// reposts" would also be satisfied by a surface that had stopped reporting durations at all.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AWorkingMemberDoesNotMoveTheLineUntilItsDurationStepsOver()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+        var working = Member("imp-1", "fix the parser", NOW.AddMinutes(-1).ToString("yyyy-MM-dd HH:mm"));
+
+        // The ledger matches Plan_At's, so the ONLY thing that can differ between the two renderings
+        // is the member's duration.
+        var first = Plan(members: [working], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+
+        // +3 minutes: the member is 4 minutes in, still below the first step, so the row reads the same.
+        var insideTheStep = Plan_At(NOW.AddMinutes(3), [working], first.Text, buried);
+
+        // COMPARED WITHOUT THE HEARTBEAT, because field 6 carries a wall clock and always differs
+        // across a clock move — that is stage 8d's rule, and asserting on the raw text here would
+        // measure the heartbeat instead of the duration.
+        Assert.Equal(
+            TopicStatusLine_Builder.Strip_Heartbeat(first.Text),
+            TopicStatusLine_Builder.Strip_Heartbeat(insideTheStep.Text));
+
+        // NONE, since 2026-09-10 — and it was Edit until then, for a reason that has gone. The
+        // heartbeat used to change every minute, so SOMETHING always differed and the line was
+        // rewritten in place; that per-minute edit is what drew 429s from Telegram in production.
+        // With the heartbeat stepped to five minutes as well, four minutes apart inside one step
+        // means nothing on the surface has changed, and the cheapest correct answer is no call.
+        Assert.Equal(TopicStatusActions.None, insideTheStep.Action);
+
+        // +5 minutes: 6 minutes in, over the step, so the row genuinely changed and the line moves.
+        var pastTheStep = Plan_At(NOW.AddMinutes(5), [working], first.Text, buried);
+
+        Assert.NotEqual(
+            TopicStatusLine_Builder.Strip_Heartbeat(first.Text),
+            TopicStatusLine_Builder.Strip_Heartbeat(pastTheStep.Text));
+
+        Assert.Equal(TopicStatusActions.Repost, pastTheStep.Action);
+    }
+
+    /// <summary>As <see cref="Plan_At"/>, with members — the duration cases need one on the line.</summary>
+    static TopicStatusLine_Planner.TopicStatusPlan Plan_At(
+        DateTime now,
+        IReadOnlyList<ITopicStatusMember> members,
+        string? lastWrittenText,
+        TopicStatusLine_Planner.TopicNewestMessage newestTopicMessage)
+    {
+        return TopicStatusLine_Planner.Plan(
+            A_Ledger(),
+            members,
+            now,
+            STATUS_ID,
+            lastWrittenText,
+            TelegramDeliveryModes.Normal,
+            null,
+            BACKOFF,
+            newestTopicMessage,
+            repostIsImpossible: false);
+    }
+
+    /// <summary>
+    /// THE PROBE THAT WOULD HAVE CAUGHT THE 429s. PULSE's text must not change from one MINUTE to
+    /// the next when nothing has happened — because the app EDITS the message whenever the text
+    /// changes, and Telegram throttles edits of one message far harder than calls to the group.
+    ///
+    /// <para>
+    /// PRODUCTION, 2026-09-10 20:57-20:59, three minutes after the deploy: `editMessageText` fired
+    /// once a minute per live topic and Telegram answered 429 with `retry_after` 20, then 22, then 32
+    /// seconds, per topic. Nothing was lost — the retry lands — but that is a throttle being hit
+    /// continuously, and it was hit because field 6 carried a per-minute clock.
+    /// </para>
+    /// <para>
+    /// STAGE 8d EXCLUDED THE HEARTBEAT FROM THE REPOST AND LEFT THE EDIT, on the reasoning that "an
+    /// edit notifies nobody". True of the owner's phone, false of the API — silence is not the only
+    /// cost of a write. The test that pinned the repost said nothing about the edit, which is exactly
+    /// the gap this fills.
+    /// </para>
+    /// <para>
+    /// The clock still moves: across a five-minute step the text changes and the line is edited, and
+    /// that half is asserted too, or a heartbeat that had simply stopped would satisfy the first.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void OneMinuteLaterPulseSaysTheSameThing_SoNothingIsEdited()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var atTheStart = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+
+        var aMinuteLater = Plan_At(NOW.AddMinutes(1), atTheStart.Text, buried);
+
+        // The TEXT is identical, which is what stops the edit: the decider answers None to identical
+        // text, and None is no API call at all.
+        Assert.Equal(atTheStart.Text, aMinuteLater.Text);
+        Assert.Equal(TopicStatusActions.None, aMinuteLater.Action);
+    }
+
+    /// <summary>
+    /// AND THE HEARTBEAT HAS NOT SIMPLY STOPPED. Across the five-minute step the text changes and the
+    /// line is edited in place — which is the field's whole job, telling a quiet orchestration apart
+    /// from a dead app. Without this, a heartbeat deleted outright would pass the test above.
+    /// </summary>
+    [Fact]
+    public void FiveMinutesLaterTheHeartbeatHasMoved()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var atTheStart = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+
+        // NOW is 15:00 in this fixture, so +5 crosses a step boundary whatever the minute happens to be.
+        var laterStill = Plan_At(NOW.AddMinutes(5), atTheStart.Text, buried);
+
+        Assert.NotEqual(atTheStart.Text, laterStill.Text);
+        Assert.Equal(TopicStatusActions.Edit, laterStill.Action);
+    }
+
+    /// <summary>
+    /// THE STEP IS THE MEMBER DURATION'S STEP, read from the one constant. Two ticking fields on one
+    /// line tuned apart by accident would put the surface back to changing every minute through
+    /// whichever of them was left finer.
+    /// </summary>
+    [Fact]
+    public void EveryMinuteInsideOneStepRendersTheSameHeartbeat()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+        var step = UnchangedFor_Formatter.STEP_MINUTES;
+
+        // From a moment floored to a step, every minute up to the next boundary must read alike.
+        var start = NOW.AddMinutes(-(NOW.Minute % step));
+        var atTheStart = Plan_At(start, null, buried);
+
+        for (var minute = 1; minute < step; minute++)
+        {
+            Assert.Equal(
+                atTheStart.Text,
+                Plan_At(start.AddMinutes(minute), null, buried).Text);
+        }
+
+        Assert.NotEqual(atTheStart.Text, Plan_At(start.AddMinutes(step), null, buried).Text);
+    }
+
+    [Fact]
+    public void AfterARestartNothingIsRepostedUntilRealTrafficIsSeen()
+    {
+        Assert.Equal(
+            TopicStatusActions.Edit,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: null, newestTopicMessage: null).Action);
     }
 
     /// <summary>
@@ -390,21 +760,33 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// THE DELIVERY GATE APPLIES, because a repost NOTIFIES and a topic the owner silenced must not
-    /// be the thing that pushes to their phone — the same rule the POST already obeys.
-    ///
-    /// It falls back to the EDIT rather than to silence: the edit notifies nobody, so Deferred's
-    /// contract that nothing is lost survives, and the line stays current instead of freezing at
-    /// pre-DND content for the whole period. The move to the bottom is what waits for the unmute.
+    /// THE DELIVERY GATE APPLIES TO SILENCED, and it falls back to the EDIT rather than to silence:
+    /// the edit notifies nobody, so the line stays current instead of freezing, and only the MOVE to
+    /// the bottom waits.
     /// </summary>
-    [Theory]
-    [InlineData(TelegramDeliveryModes.Silenced)]
-    [InlineData(TelegramDeliveryModes.Deferred)]
-    public void ASilencedTopicIsNotRepostedIntoAndFallsBackToTheEdit(TelegramDeliveryModes mode)
+    [Fact]
+    public void ASilencedTopicIsNotRepostedIntoAndFallsBackToTheEdit()
     {
         Assert.Equal(
             TopicStatusActions.Edit,
-            Plan(mode: mode, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+            Plan(mode: TelegramDeliveryModes.Silenced, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// A DEFERRED TOPIC STILL MOVES ITS LINE, silently — the repost half of the same ruling. It
+    /// shared a Theory with the Silenced case until 2026-09-10 on the strength of one sentence, "a
+    /// repost NOTIFIES", which stopped being true when every send in this surface became silent.
+    ///
+    /// Under 🌙 the owner is away and will read this topic when they return; a PULSE stranded above
+    /// an hour of later traffic is the one thing they then have to scroll for.
+    /// </summary>
+    [Fact]
+    public void ADeferredTopicStillMovesItsLine_Silently()
+    {
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(mode: TelegramDeliveryModes.Deferred, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
                  newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
     }
 
@@ -417,7 +799,13 @@ public class TopicStatusLinePlannerTests
     [Fact]
     public void ASilencedTopicWithNothingNewToSayStaysSilent()
     {
-        var current = Plan(existingMessageId: STATUS_ID).Text;
+        // `current` is captured under the SAME mode the second call uses. The header now carries the
+        // mode glyph (the planner fills `fields.Mode` in from `mode` before calling the builder — see
+        // TopicStatusLine_Planner.Plan's own comment, "THE MODE IS FILLED IN HERE"), so a "previously
+        // written" text for an ALREADY-silenced topic would itself read `🔕 PULSE`, never bare `PULSE`.
+        // Building `current` under Normal and comparing it against a Silenced computation was
+        // comparing two different topics' text, not the same topic on two ticks.
+        var current = Plan(mode: TelegramDeliveryModes.Silenced, existingMessageId: STATUS_ID).Text;
 
         Assert.Equal(
             TopicStatusActions.None,
@@ -611,7 +999,7 @@ public class TopicStatusLinePlannerTests
 
         Assert.Equal(
             "fix landed — 1316 green",
-            TopicStatusLine_Planner.Pick_LastSubject_OrNull([solo], NOW));
+            TopicStatusLine_Planner.Pick_LastEvent_OrNull([solo], NOW)?.Subject);
     }
 
     /// <summary>The app was already excluded, and still is — this pins that the new filter kept it out.</summary>
@@ -626,7 +1014,7 @@ public class TopicStatusLinePlannerTests
             ],
             isClosed: false);
 
-        Assert.Equal("fix landed", TopicStatusLine_Planner.Pick_LastSubject_OrNull([solo], NOW));
+        Assert.Equal("fix landed", TopicStatusLine_Planner.Pick_LastEvent_OrNull([solo], NOW)?.Subject);
     }
 
     /// <summary>
@@ -645,7 +1033,7 @@ public class TopicStatusLinePlannerTests
             ],
             isClosed: false);
 
-        Assert.Equal("brief — TASK 2", TopicStatusLine_Planner.Pick_LastSubject_OrNull([imp], NOW));
+        Assert.Equal("brief — TASK 2", TopicStatusLine_Planner.Pick_LastEvent_OrNull([imp], NOW)?.Subject);
     }
 
     static IChannelEntry Entry(int index, ChannelAuthors author, string stamp, string subject)

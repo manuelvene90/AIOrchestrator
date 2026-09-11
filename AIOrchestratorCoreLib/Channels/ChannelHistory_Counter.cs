@@ -59,8 +59,7 @@ public static class ChannelHistory_Counter
     /// </summary>
     public static IReadOnlyList<IChannelEntry> Read_ArchivedEntries(string channelFilePath)
     {
-        return ChannelEntry_Parser.Parse_All(
-            UsageTotals_Reader.Read_Text_Safe(Channel_Compactor.Build_ArchiveFilePath(channelFilePath)));
+        return Parse_In(Channel_Compactor.Build_ArchiveFilePath(channelFilePath));
     }
 
     /// <summary>
@@ -97,7 +96,7 @@ public static class ChannelHistory_Counter
     public static ChannelHistory Read_AllEntries(string channelFilePath)
     {
         var archived = Read_ArchivedEntries(channelFilePath);
-        var live = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFilePath));
+        var live = Parse_In(channelFilePath);
 
         if (archived.Count == 0)
             return new ChannelHistory(live, 0);
@@ -142,9 +141,15 @@ public static class ChannelHistory_Counter
         return count;
     }
 
-    /// <summary>One read of one file, so the count and the entries can never disagree about it.</summary>
+    /// <summary>
+    /// One read of one file, so the count and the entries can never disagree about it.
+    ///
+    /// THROUGH <see cref="ChannelHistory_Cache"/>, which makes that "one read per CHANGE of the file"
+    /// rather than one read per asker. Every method above funnels here, and a mirror tick calls them
+    /// from a dozen places about the same channels — see the cache for the measurement.
+    /// </summary>
     static IReadOnlyList<IChannelEntry> Parse_In(string filePath)
     {
-        return ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(filePath));
+        return ChannelHistory_Cache.Read_Entries(filePath);
     }
 }

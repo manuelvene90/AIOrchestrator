@@ -17,7 +17,6 @@ public class EffectiveModeResolverTests
         var mode = EffectiveMode_Resolver.Resolve(
             OwnerPresenceModes.Terminal,
             isGeneral: true,
-            paused: false,
             topicMode: TelegramDeliveryModes.Normal,
             appWideDeferred: false,
             appWideSilenced: false);
@@ -31,7 +30,6 @@ public class EffectiveModeResolverTests
         var mode = EffectiveMode_Resolver.Resolve(
             OwnerPresenceModes.Terminal,
             isGeneral: false,
-            paused: false,
             topicMode: TelegramDeliveryModes.Normal,
             appWideDeferred: false,
             appWideSilenced: false);
@@ -50,7 +48,6 @@ public class EffectiveModeResolverTests
         var mode = EffectiveMode_Resolver.Resolve(
             OwnerPresenceModes.Terminal,
             isGeneral: false,
-            paused: false,
             topicMode: TelegramDeliveryModes.Normal,
             appWideDeferred: true,
             appWideSilenced: false);
@@ -68,7 +65,6 @@ public class EffectiveModeResolverTests
         var mode = EffectiveMode_Resolver.Resolve(
             OwnerPresenceModes.Remote,
             isGeneral: false,
-            paused: false,
             topicMode: TelegramDeliveryModes.Deferred,
             appWideDeferred: false,
             appWideSilenced: false);
@@ -82,7 +78,6 @@ public class EffectiveModeResolverTests
         var mode = EffectiveMode_Resolver.Resolve(
             OwnerPresenceModes.Remote,
             isGeneral: false,
-            paused: false,
             topicMode: TelegramDeliveryModes.Silenced,
             appWideDeferred: true,
             appWideSilenced: false);
@@ -100,7 +95,6 @@ public class EffectiveModeResolverTests
         var mode = EffectiveMode_Resolver.Resolve(
             OwnerPresenceModes.Remote,
             isGeneral: true,
-            paused: false,
             topicMode: TelegramDeliveryModes.Silenced,
             appWideDeferred: true,
             appWideSilenced: false);
@@ -149,81 +143,10 @@ public class EffectiveModeResolverTests
         var mode = EffectiveMode_Resolver.Resolve(
             OwnerPresenceModes.Remote,
             isGeneral: false,
-            paused: false,
             topicMode: TelegramDeliveryModes.Normal,
             appWideDeferred: false,
             appWideSilenced: false);
 
         Assert.Equal(TelegramDeliveryModes.Normal, mode);
-    }
-
-    /// <summary>
-    /// PAUSE OUTRANKS EVERYTHING, and it must resolve to DEFERRED rather than Silenced: Silenced
-    /// drops, and the licence to drop rests on the owner reading the same content live in a
-    /// terminal. A paused orchestration is one they walked away from, so nothing written while it
-    /// slept may be thrown away — it is held, and it replays when they lift the pause.
-    /// </summary>
-    [Fact]
-    public void APausedTopic_IsDeferred_SoNothingWrittenWhileItSleptIsLost()
-    {
-        var mode = EffectiveMode_Resolver.Resolve(
-            OwnerPresenceModes.Remote,
-            isGeneral: false,
-            paused: true,
-            topicMode: TelegramDeliveryModes.Normal,
-            appWideDeferred: false,
-            appWideSilenced: false);
-
-        Assert.Equal(TelegramDeliveryModes.Deferred, mode);
-    }
-
-    /// <summary>
-    /// The composition that would otherwise eat the backlog: presence outranks a topic's own mode,
-    /// and Silenced topics ARE polled. If presence still won here, sitting down at the terminal of a
-    /// paused orchestration would read its held entries and drop them — the exact defect
-    /// Freezes_Offsets was written for, arriving by a new route.
-    /// </summary>
-    [Fact]
-    public void APausedTopic_StaysDeferred_EvenWhenTheOwnerIsAtItsTerminal()
-    {
-        var mode = EffectiveMode_Resolver.Resolve(
-            OwnerPresenceModes.Terminal,
-            isGeneral: false,
-            paused: true,
-            topicMode: TelegramDeliveryModes.Normal,
-            appWideDeferred: false,
-            appWideSilenced: false);
-
-        Assert.Equal(TelegramDeliveryModes.Deferred, mode);
-        Assert.True(EffectiveMode_Resolver.Freezes_Offsets(mode, TelegramDeliveryModes.Normal));
-    }
-
-    [Fact]
-    public void APausedTopic_StaysDeferred_EvenWhenItsOwnModeSaysSilenced()
-    {
-        var mode = EffectiveMode_Resolver.Resolve(
-            OwnerPresenceModes.Remote,
-            isGeneral: false,
-            paused: true,
-            topicMode: TelegramDeliveryModes.Silenced,
-            appWideDeferred: false,
-            appWideSilenced: true);
-
-        Assert.Equal(TelegramDeliveryModes.Deferred, mode);
-    }
-
-    /// <summary>An unpaused topic must be exactly what it was before pause existed.</summary>
-    [Fact]
-    public void NotPaused_ChangesNothing()
-    {
-        var mode = EffectiveMode_Resolver.Resolve(
-            OwnerPresenceModes.Remote,
-            isGeneral: false,
-            paused: false,
-            topicMode: TelegramDeliveryModes.Silenced,
-            appWideDeferred: false,
-            appWideSilenced: false);
-
-        Assert.Equal(TelegramDeliveryModes.Silenced, mode);
     }
 }

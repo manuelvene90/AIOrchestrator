@@ -26,54 +26,36 @@ public class AwaySuppressesAppAlertsScanTests
     const string ENGINE_FILE = "BridgeEngineModel.cs";
     const string AWAY_GATE = "Is_AwayMode()";
 
-    /// <summary>Below this the extraction grabbed a fragment, not a method, and proves nothing.</summary>
+    /// <summary>A body shorter than this is an extraction that went wrong, not a method.</summary>
     const int PLAUSIBLE_BODY_FLOOR = 200;
 
-    [Fact]
-    public void TheStallAlertIsSilentWhileTheOwnerIsAway()
-    {
-        var body = Extract_Method("async Task Send_StallAlerts_Async");
-
-        // THE HARNESS PROVES IT FOUND THE RIGHT METHOD FIRST — this assertion is about a presence in
-        // a region, and a region extracted from the wrong place would be judged just as confidently.
-        Assert.Contains("waiting on your reply", body);
-
-        Assert.Contains(AWAY_GATE, body);
-    }
-
-    [Fact]
-    public void TheSilentDeadlockReleaseIsHeldWhileTheOwnerIsAway()
-    {
-        var body = Extract_Method("async Task Break_SilentDeadlock_Async");
-
-        Assert.Contains("nothing has moved for", body);
-
-        Assert.Contains(AWAY_GATE, body);
-    }
-
     /// <summary>
-    /// THE LOAD-BEARING HALF, and the one a careless edit would lose: the away gate sits ABOVE the
-    /// removal, so a held entry is KEPT and released on the first tick after the owner returns.
-    /// Below the removal it would still stop the message and would silently destroy it instead —
-    /// the same outcome the owner is complaining about, arrived at from the opposite direction.
+    /// THE SILENT-DEADLOCK NET IS GONE, and these two tests pinned its away-mode behaviour: that the
+    /// release was HELD while the owner was away, and that the held entry was kept rather than
+    /// consumed. Both were right about a net that existed to rescue entries
+    /// <c>OwnerPush_Policy</c> had suppressed as narration.
+    ///
+    /// <para>
+    /// Nothing is suppressed since 2026-09-09 (the owner's ruling: everything the supervisor writes
+    /// reaches the phone), so nothing could ever feed the net again — and its one remaining input
+    /// was an EMPTY entry, which it would have released five minutes later, ringing, wearing
+    /// "nothing has moved". The machinery was removed rather than left as a net under a filled hole.
+    /// </para>
+    /// <para>
+    /// What replaces the coverage is the absence itself: if any of it comes back, the entry it would
+    /// rescue is one the owner has already read.
+    /// </para>
     /// </summary>
     [Fact]
-    public void TheHeldEntryIsKeptRatherThanConsumed()
+    public void TheSilentDeadlockNet_IsGone_NowThatNothingIsEverSuppressed()
     {
-        var body = Extract_Method("async Task Break_SilentDeadlock_Async");
+        var source = Read_EngineSource();
 
-        var gate = body.IndexOf(AWAY_GATE, StringComparison.Ordinal);
-        var removal = body.IndexOf("_suppressedEntries.Remove", StringComparison.Ordinal);
-
-        Assert.True(gate >= 0, "no away gate in the deadlock release");
-        Assert.True(removal >= 0, "the deadlock release no longer removes the suppressed entry — this test is reading a method it does not understand");
-
-        Assert.True(
-            gate < removal,
-            "the away gate sits BELOW the removal: while away the suppressed entry is consumed and never released, so the owner loses it instead of receiving it late");
+        Assert.DoesNotContain("Break_SilentDeadlock_Async", source);
+        Assert.DoesNotContain("_lastSuppressedEntry", source);
+        Assert.DoesNotContain("SILENT_DEADLOCK_MINUTES", source);
     }
 
-    /// <summary>The digest is change-gated in exactly one place — a second copy is the defect CLAUDE.md decision 12 names.</summary>
     [Fact]
     public void TheAwayDigestIsChangeGatedExactlyOnce()
     {
@@ -95,7 +77,7 @@ public class AwaySuppressesAppAlertsScanTests
     [Fact]
     public void TheAwayDigestIsRememberedOnlyAfterAConfirmedWrite()
     {
-        var body = Extract_Method("async Task Push_PeriodicStatus_Async");
+        var body = Extract_Method("async Task Push_AwayDigests_Async");
 
         Assert.Contains("AwayDigest_Decider.Should_Send", body);
 
@@ -138,15 +120,24 @@ public class AwaySuppressesAppAlertsScanTests
 
     /// <summary>
     /// AND THE PREDICATE HAS TO SEE GENERAL. It answers "is the owner at a terminal ANYWHERE", but
-    /// it walks the session store and General keeps no session.json — so a `/pc` held only in
+    /// it walks the session roster and General keeps no session.json — so a `/pc` held only in
     /// General, the topic the owner talks to most, used to read as nobody being at a keyboard.
+    ///
+    /// <para>
+    /// THE ROSTER IS READ THROUGH <c>Sessions_ThisTick()</c>, which is the tick's own snapshot while a
+    /// tick is running and a fresh <c>Load_All()</c> otherwise. This assertion named <c>Load_All()</c>
+    /// until 2026-09-09; what it is actually about is that EVERY orchestration is consulted and not
+    /// only General, and the accessor is that. Both callers of this predicate are the tick's own
+    /// (<c>Check_AwayMode_Async</c> and the status push), so there is no flow here that could be
+    /// handed a roster belonging to somebody else's tick.
+    /// </para>
     /// </summary>
     [Fact]
     public void BeingAtAPc_CountsTheGeneralTopicToo()
     {
         var body = Extract_Method("bool Is_OwnerAtThePc()");
 
-        Assert.Contains("Load_All()", body);
+        Assert.Contains("Sessions_ThisTick()", body);
 
         Assert.Contains("GENERAL_ORCH_ID", body);
     }

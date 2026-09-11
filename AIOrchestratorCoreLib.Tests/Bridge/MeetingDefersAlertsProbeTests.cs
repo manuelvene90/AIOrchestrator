@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -64,7 +65,7 @@ public class MeetingDefersAlertsProbeTests : IDisposable
         var log = OrchestrationLog_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), log);
-        _engine = BridgeEngine_Factory.Create(_paths, configProvider, _store, _launcher, log);
+        _engine = BridgeEngine_Factory.Create_WithTiming(_paths, configProvider, _store, _launcher, log, BridgeTestTiming.Fast());
     }
 
     public void Dispose()

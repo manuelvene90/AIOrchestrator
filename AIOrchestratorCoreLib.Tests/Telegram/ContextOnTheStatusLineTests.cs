@@ -13,10 +13,13 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// 2026-08-21: the session they talk to always, implementers and reviewers only once they are
 /// nearly full — so the line stays glanceable and a member appearing on it MEANS something.
 ///
-/// The supervisor rides on the LEAD LINE rather than a row of its own, because this line lists
-/// members and a crew's supervisor is not one. That line opened with the topic's name until
-/// 2026-08-24 and opens with the literal word `PULSE` now, which is why the expectations here read
-/// `PULSE · …` — the owner did not want the topic name repeated back at them.
+/// THE SUPERVISOR'S OWN READING RODE ON THE LEAD LINE UNTIL 2026-09-09, for want of a row of its
+/// own. Brief C gave field 2 ("sup · …") to the supervisor, so its context figure moved there with
+/// everything else the supervisor's row now carries — a usage-limit pause, a declared state — rather
+/// than staying a decoration on the lead word. The lead line opened with the topic's name until
+/// 2026-08-24 and opens with the literal word `PULSE` now, which is why the expectations here still
+/// read `PULSE` on their own first line — the owner did not want the topic name repeated back at
+/// them, and that has not changed.
 /// </summary>
 public class ContextOnTheStatusLineTests
 {
@@ -30,7 +33,10 @@ public class ContextOnTheStatusLineTests
             Progress(1, 5), [Member("solo-1", Briefed(), Reading(52))], null, NOW,
             aMessageIsAlreadyPosted: false);
 
-        Assert.Contains("• solo-1 · wiring the context field · 30 min · ctx 52%", line);
+        // The row also carries its STATE WORD now (owner, 2026-09-09) between the task and the
+        // duration — this test is about WHERE the context figure lands, not that field, so it is
+        // included in the expected substring rather than routed around with a second Contains.
+        Assert.Contains("• solo-1 · wiring the context field · working · 30 min · ctx 52%", line);
     }
 
     /// <summary>
@@ -55,28 +61,34 @@ public class ContextOnTheStatusLineTests
         Assert.DoesNotContain("ctx", line);
     }
 
+    /// <summary>
+    /// REPLACES TheSupervisorsOwnWindowRidesOnTheTitle. Field 2 exists now, so the supervisor's
+    /// context reading rides ON IT — its own line, "sup · ctx 41%" — rather than tacked onto the lead
+    /// word. The class docstring records why.
+    /// </summary>
     [Fact]
-    public void TheSupervisorsOwnWindowRidesOnTheTitle()
+    public void TheSupervisorsOwnWindowRidesOnItsOwnSupRow()
     {
         var line = TopicStatusLine_Builder.Build(
             Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false,
             figuresUnchangedFor: null, supervisorContext: Reading(41));
 
-        Assert.Equal("PULSE · 72/113 · 63% · sup ctx 41%", line);
+        Assert.Equal("PULSE\nsup · ctx 41%\n72/113 merged · 63 %\nupdated 20:30", line);
     }
 
     /// <summary>
-    /// A BASIC ORCHESTRATION HAS NO SUPERVISOR, so nothing is added to its title — the figure the
-    /// owner wants is on the solo's own row instead, and a "sup ctx" on a topic with no supervisor
+    /// A BASIC ORCHESTRATION HAS NO SUPERVISOR, so field 2 does not appear at all — the figure the
+    /// owner wants is on the solo's own row instead, and a "sup" row on a topic with no supervisor
     /// would name a session that does not exist.
     /// </summary>
     [Fact]
-    public void NoSupervisorMeansNothingOnTheTitle()
+    public void NoSupervisorMeansNoSupRowAtAll()
     {
         var line = TopicStatusLine_Builder.Build(
             Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Equal("PULSE · 3/4 · 75%", line);
+        Assert.Equal("PULSE\n3/4 merged · 75 %\nupdated 20:30", line);
+        Assert.DoesNotContain("sup ·", line);
     }
 
     /// <summary>
@@ -94,15 +106,21 @@ public class ContextOnTheStatusLineTests
                 figuresUnchangedFor: null, supervisorContext: Reading(41)));
     }
 
-    /// <summary>It sits AFTER the unchanged-for clause, so the ledger reading stays together.</summary>
+    /// <summary>
+    /// REPLACES ItComesAfterTheFiguresHaveNotMovedClause. Field 2 now sits BEFORE the merged field
+    /// rather than trailing it on one shared lead line — the owner's own field order (2026-09-09):
+    /// what is waiting, what the supervisor says, who is live, the last event, the merge count, the
+    /// heartbeat. The "unchanged" clause still rides beside the figures it is about, on the merged
+    /// field's own line.
+    /// </summary>
     [Fact]
-    public void ItComesAfterTheFiguresHaveNotMovedClause()
+    public void TheSupRowComesBeforeTheMergedFieldWhichStillCarriesTheUnchangedClause()
     {
         var line = TopicStatusLine_Builder.Build(
             Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
             figuresUnchangedFor: TimeSpan.FromMinutes(25), supervisorContext: Reading(41));
 
-        Assert.Equal("PULSE · 3/4 · 75% · unchanged 25 min · sup ctx 41%", line);
+        Assert.Equal("PULSE\nsup · ctx 41%\n3/4 merged · 75 % · unchanged 25 min\nupdated 20:30", line);
     }
 
     [Fact]
@@ -111,7 +129,7 @@ public class ContextOnTheStatusLineTests
         var line = TopicStatusLine_Builder.Build(
             Progress(1, 5), [Member("solo-1", Briefed(), null)], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Contains("• solo-1 · wiring the context field · 30 min", line);
+        Assert.Contains("• solo-1 · wiring the context field · working · 30 min", line);
         Assert.DoesNotContain("ctx", line);
     }
 

@@ -86,15 +86,6 @@ public partial class MainWindow : Window
                 SilenceAllCheckBox.IsChecked = silenced;
         });
 
-        // Persisted, unlike the two modes above — so it starts from config rather than from off.
-        ItalianLayerCheckBox.IsChecked = configProvider.Get_Current().TelegramItalianLayer;
-
-        engine.ItalianLayerChanged += enabled => Dispatcher.BeginInvoke(() =>
-        {
-            if (ItalianLayerCheckBox.IsChecked != enabled)
-                ItalianLayerCheckBox.IsChecked = enabled;
-        });
-
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(REFRESH_INTERVAL_SECONDS) };
         _refreshTimer.Tick += (_, _) => Refresh_Orchestrations();
         _refreshTimer.Start();
@@ -339,8 +330,8 @@ public partial class MainWindow : Window
             ClosedLabel = session.ClosedUtc == null ? "" : $"CLOSED {session.ClosedUtc.Value.ToLocalTime():dd/MM HH:mm}",
             CardOpacity = session.ClosedUtc == null ? 1.0 : 0.5,
             Members = rows,
-            SilenceGlyph = Describe_CardGlyph(session),
-            SilenceTooltip = Describe_CardTooltip(session),
+            SilenceGlyph = Describe_ModeGlyph(session.TelegramMode),
+            SilenceTooltip = Describe_ModeTooltip(session.TelegramMode),
             ProgressVisibility = progress == null ? Visibility.Collapsed : Visibility.Visible,
             ProgressText = progress == null ? "" : Build_ProgressText(progress),
             ProgressDoneStar = new GridLength(progress?.Done ?? 0, GridUnitType.Star),
@@ -459,11 +450,6 @@ public partial class MainWindow : Window
         _engine.Set_SilenceAllTopics(SilenceAllCheckBox.IsChecked == true);
     }
 
-    void ItalianLayerCheckBox_Changed(object sender, RoutedEventArgs e)
-    {
-        _engine.Set_ItalianLayer(ItalianLayerCheckBox.IsChecked == true);
-    }
-
     void ShowSessionButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button || button.Tag is not MemberRowView row)
@@ -535,26 +521,6 @@ public partial class MainWindow : Window
             return;
 
         Open_DetailWindow(card);
-    }
-
-    /// <summary>
-    /// A PAUSED ORCHESTRATION MUST NOT READ AS "messages ON" HERE. The card shows the topic's own
-    /// delivery mode, which pause deliberately leaves alone (it outranks the mode rather than
-    /// overwriting it, so the owner's setting survives the pause) — so without this the app would
-    /// contradict the topic list, showing 🔔 beside an orchestration whose Telegram title says 💤.
-    /// </summary>
-    static string Describe_CardGlyph(IOrchestrationSession session)
-    {
-        return session.Paused
-            ? TelegramDeliveryMode_Glyphs.PAUSED
-            : Describe_ModeGlyph(session.TelegramMode);
-    }
-
-    static string Describe_CardTooltip(IOrchestrationSession session)
-    {
-        return session.Paused
-            ? "PAUSED: nothing is texted, nothing pushes the session, and it stays dormant until you lift it. Clicking still sets the delivery mode UNDERNEATH the pause, which is what comes back when you lift it."
-            : Describe_ModeTooltip(session.TelegramMode);
     }
 
     static string Describe_ModeGlyph(TelegramDeliveryModes mode)

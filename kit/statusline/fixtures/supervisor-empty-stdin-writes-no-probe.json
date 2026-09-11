@@ -1,0 +1,14 @@
+{
+  "name": "supervisor-empty-stdin-writes-no-probe",
+  "env": {
+    "AIORCH_ROLE": "supervisor",
+    "AIORCH_ID": "strategy-lab-7",
+    "AIORCH_MEMBER": ""
+  },
+  "stdinText": "",
+  "files": {
+    "strategy-lab-7/.keep": {}
+  },
+  "expected": "\u001b[1;91m SUPERVISOR \u001b[0m\u001b[31m strategy-lab-7 \u001b[0m ",
+  "forbiddenUsageFile": "strategy-lab-7/.usage.json"
+}

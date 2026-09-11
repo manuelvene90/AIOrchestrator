@@ -6,7 +6,8 @@ internal sealed class ChannelEntryModel(
     string dateText,
     string subject,
     string body,
-    string rawText) : IChannelEntry
+    string rawText,
+    string? type) : IChannelEntry
 {
     public int Index { get; } = index;
     public ChannelAuthors Author { get; } = author;
@@ -14,4 +15,5 @@ internal sealed class ChannelEntryModel(
     public string Subject { get; } = subject;
     public string Body { get; } = body;
     public string RawText { get; } = rawText;
+    public string? Type { get; } = type;
 }

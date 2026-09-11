@@ -1,0 +1,59 @@
+# AI Orchestrator bridge daemon — systemd unit (Linux).
+#
+# Install (as root), with the daemon published to /opt/aiorchestrator and the owner user OWNER:
+#   dotnet publish AIOrchestrator.Daemon -c Release -r linux-x64 --self-contained -o /opt/aiorchestrator
+#   sed -e 's/^User=.*/User=OWNER/' -e 's#^Environment=HOME=.*#Environment=HOME=/home/OWNER#' \
+#       deploy/systemd/aiorchestrator.service > /etc/systemd/system/aiorchestrator.service
+#   systemctl daemon-reload && systemctl enable --now aiorchestrator
+#   journalctl -u aiorchestrator -f          # the daemon's stdout, with <n> priorities
+#   systemctl stop aiorchestrator            # SIGTERM -> engine cancelled, sessions killed
+#
+# The user is configurable and MATTERS: the sessions the bridge spawns run `claude` as this user,
+# with this user's Claude Code login and ~/.claude. Never root.
+
+[Unit]
+Description=AI Orchestrator — Telegram bridge and session watchdog
+Documentation=file:///opt/aiorchestrator/README-daemon.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Type=notify: the daemon sends READY=1 only once the bridge engine is running (not when the
+# process merely exists), and WATCHDOG=1 from its main loop while the engine is alive. NotifyAccess
+# stays at the default (main) — only the daemon's own process may report for it.
+Type=notify
+User=aiorch
+Environment=HOME=/home/aiorch
+# The supervision root defaults to $HOME/.claude/supervision and the kit installs into
+# $HOME/.claude; override either with AIORCH_SUPERVISION_ROOT / AIORCH_CLAUDE_HOME if needed.
+# Environment=AIORCH_SUPERVISION_ROOT=/srv/aiorchestrator/supervision
+ExecStart=/opt/aiorchestrator/aiorchestrator-daemon
+WorkingDirectory=/opt/aiorchestrator
+
+# A ping missed for 60 s restarts the service; the daemon pings every 30 s from its main loop and
+# STOPS pinging the moment the engine task ends — an engine that died inside a live process is
+# exactly what this catches.
+WatchdogSec=60
+Restart=on-failure
+RestartSec=5
+
+# Decision 8: the sessions die with the host — but the daemon's own order is engine cancelled and
+# drained FIRST, sessions killed second. control-group (systemd's default) SIGTERMs every process in
+# the cgroup at once, so the claude sessions would be torn down while the engine is still inside its
+# drain. mixed sends the signal to the main process alone and leaves the rest to the daemon, which
+# is what makes the documented order true on Linux; anything still alive after TimeoutStopSec is
+# SIGKILLed cgroup-wide, so nothing can survive the stop either way.
+KillMode=mixed
+# The daemon DRAINS in-flight turns before it exits — up to the configured turn timeout (30 min by
+# default) plus a minute — so a deploy stops killing work mid-turn. systemd must not SIGKILL it
+# first: this is that drain plus the engine's own margin. Measured 2026-09-06→08: 17 turns died
+# within four minutes of a stop under the old 30 s.
+# 2026-09-09: the .NET host's own ShutdownTimeout is now 39 min (ShutdownGrace_Rule: turn 30 + closing 5 + margins); systemd must SIGKILL LAST, so this stays above it.
+TimeoutStopSec=2400
+
+# The bot token lives in $HOME/.claude/supervision/secrets.json, read by the bridge alone — never
+# in this unit, never in the journal.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

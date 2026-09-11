@@ -260,6 +260,12 @@ public static partial class UsageTotals_Reader
             if (!File.Exists(filePath))
                 return string.Empty;
 
+            // COUNTED HERE AND NOT AT THE TOP OF THE METHOD, because the counter's contract is one
+            // increment per real read: a call for a file that does not exist opens nothing, and
+            // counting it would inflate every before/after number with the absent-file probes the
+            // tick makes by design (a member that has no archive, a session with no PLAN.md).
+            Diagnostics.TickIo_Counters.Count_TextFileRead();
+
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = new StreamReader(stream);
             return reader.ReadToEnd();

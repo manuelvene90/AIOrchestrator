@@ -19,6 +19,9 @@ public interface IOrchestrationSessionStore
     /// <summary>Adds a member of the given KIND (imp-N or rev-N); the id carries the kind everywhere.</summary>
     IOrchestrationSession Add_Member(string orchId, MemberKinds kind);
 
+    /// <summary>Same, with the model the requester chose for this member's task (null = the role's default).</summary>
+    IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model);
+
     void Set_TelegramTopicId(string orchId, long topicId);
 
     /// <summary>Remembers the topic's one status message, so a restart edits rather than re-posts.</summary>
@@ -43,9 +46,6 @@ public interface IOrchestrationSessionStore
     /// <summary>Finished, and kept open on purpose — see IOrchestrationSession.Done.</summary>
     void Set_Done(string orchId, bool done);
 
-    /// <summary>Asleep for now, and reversibly — see IOrchestrationSession.Paused.</summary>
-    void Set_Paused(string orchId, bool paused);
-
     /// <summary>Where the owner is for this orchestration — see IOrchestrationSession.OwnerPresence.</summary>
     void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence);
     void Set_MemberPid(string orchId, string memberId, int? pid);
@@ -53,9 +53,18 @@ public interface IOrchestrationSessionStore
     void Set_SupervisorModelOverride(string orchId, string? model);
     void Set_ImplementerModelOverride(string orchId, string? model);
 
-    /// <summary>Per-orchestration --effort level; null resets to "no flag" (the CLI's own default).</summary>
-    void Set_SupervisorEffortOverride(string orchId, string? effort);
-    void Set_ImplementerEffortOverride(string orchId, string? effort);
+    /// <summary>
+    /// Records that a <c>deleteForumTopic</c> has been asked for and not yet confirmed. Written
+    /// BEFORE the first attempt, so a process killed mid-retry still leaves the record the start-up
+    /// sweep reads — see Bridge.TopicDeletion.TopicDeleteSweep_Planner.
+    /// </summary>
+    void Mark_TopicDeletePending(string orchId);
+
+    /// <summary>The topic is gone (deleted, or Telegram says no such thread). Ends the retry for good.</summary>
+    void Mark_TopicDeleted(string orchId);
+
+    /// <summary>The owner has been told once that this topic will not delete; never unset.</summary>
+    void Mark_TopicDeleteFailureReported(string orchId);
 
     void Close_Member(string orchId, string memberId);
     void Close_Orchestration(string orchId);

@@ -1,0 +1,12 @@
+{
+  "name": "aiorch-local",
+  "owner": { "name": "AI Orchestrator" },
+  "description": "The AI Orchestrator kit, served from this checkout. kit/ is both the marketplace root and the plugin root, so nothing is added outside it.",
+  "plugins": [
+    {
+      "name": "aiorch",
+      "source": "./",
+      "description": "AI Orchestrator role protocols, enforcement hooks and channel helper"
+    }
+  ]
+}

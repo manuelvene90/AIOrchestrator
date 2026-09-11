@@ -1,7 +1,8 @@
 namespace AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 
 /// <summary>
-/// The text the owner taps on, for either kind of close.
+/// Every sentence this prompt produces: the text the owner taps on, the outcome it is replaced with,
+/// and the line the JOURNAL keeps about having asked.
 ///
 /// It lives out here rather than in the engine because <c>BridgeEngineModel</c> is
 /// <c>internal sealed</c> with no <c>InternalsVisibleTo</c>: anything decided in there is unreachable
@@ -124,6 +125,60 @@ public static class CloseConfirmationPrompt_Builder
     /// engine is unreachable from the suite, and the sentence the owner reads at the one moment they
     /// decide is not something to leave untestable.
     /// </summary>
+    /// <summary>
+    /// THE LINE THE JOURNAL KEEPS, and the reason it is not one line any more.
+    ///
+    /// <para>
+    /// On the VPS on 2026-09-06 the journal said <c>Asked the owner to confirm closing 'sandbox-1'</c>
+    /// twice, for two different events: the first prompt, and the fresh prompt the sweep posted after a
+    /// <c>kill -9</c> had killed the first one's buttons. Reading the journal afterwards, there was no
+    /// way to tell which was which — so the tap that eventually closed the orchestration could not be
+    /// attributed to either keyboard, and a whole claim in the VPS report ("the pre-restart keyboard
+    /// still worked") rested on that ambiguity.
+    /// </para>
+    /// <para>
+    /// THREE STATES, EACH FROM SOMETHING ACTUALLY MEASURED, never inferred from age alone. Age alone
+    /// is not enough and would produce a false sentence: a request parked while Telegram was
+    /// unreachable, or before the orchestration had a topic, waits for hours and is then asked for the
+    /// FIRST time. So the caller supplies what it knows — whether a prompt for this request was live
+    /// in the snapshot the host restored (a restart), and whether this host has already asked in this
+    /// run (a prompt dropped underneath it, e.g. a cleared topic) — and the age is reported rather
+    /// than interpreted.
+    /// </para>
+    /// </summary>
+    /// <param name="parkedFor">
+    /// How long the request has been sitting in <c>awaiting-owner/</c>, from the file's own write
+    /// time — which is when the AGENT asked, not when this host noticed.
+    /// </param>
+    /// <param name="promptFromABygoneProcessUtc">
+    /// When the previous process posted a prompt for this same request, from the restored snapshot,
+    /// or null if there was none. That keyboard is dead: its payloads died with the registry.
+    /// </param>
+    /// <param name="alreadyAskedInThisRun">
+    /// This host posted a prompt for this request earlier in this run and then dropped its
+    /// registration — a topic that was cleared. That keyboard is dead too, for a different reason.
+    /// </param>
+    public static string Describe_AskForTheJournal(
+        IParkedCloseRequest request,
+        TimeSpan parkedFor,
+        DateTime? promptFromABygoneProcessUtc,
+        bool alreadyAskedInThisRun)
+    {
+        var what = $"{Describe_AskedFor(request)} in '{request.OrchId}' (asked by {request.Requester})";
+        var age = Formatting.SessionDuration_Formatter.Describe(parkedFor);
+
+        if (promptFromABygoneProcessUtc != null)
+        {
+            return $"Asked the owner AGAIN to confirm {what} — parked {age} ago; a prompt was already live at "
+                + $"{promptFromABygoneProcessUtc.Value:yyyy-MM-dd HH:mm} UTC when this host last stopped, and ITS buttons are dead";
+        }
+
+        if (alreadyAskedInThisRun)
+            return $"Asked the owner AGAIN to confirm {what} — parked {age} ago; this host's earlier prompt was dropped, and its buttons are dead";
+
+        return $"Asked the owner to confirm {what} — first prompt for this request, parked {age} ago";
+    }
+
     public static (string Confirm, string Decline) Build_ButtonLabels(ParkedCloseKinds kind)
     {
         return kind switch

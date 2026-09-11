@@ -1,14 +1,11 @@
-using System.Text;
-using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
-using AIOrchestratorCoreLib.Spawning;
 using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.Spawning.SpawnCommand;
 using AIOrchestratorCoreLib.SupervisionPaths;
-using AIOrchestratorCoreLib.Usage;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Launching;
@@ -49,6 +46,118 @@ public class OrchestrationLauncherTests : IDisposable
     public void Dispose()
     {
         Directory.Delete(_tempRoot, recursive: true);
+    }
+
+    /// <summary>
+    /// Three tiers: the owner's set-model for the orchestration, then the model the supervisor asked
+    /// for when it requested the member, then the config default. The member's model is on the
+    /// record, so a respawn keeps the size the task was given; the owner's override still wins.
+    /// </summary>
+    [Fact]
+    public void Add_Member_SpawnsOnTheRequestedModel_KeepsItAcrossRespawn_AndYieldsToTheOwnersOverride()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _spawner.SpawnedCommands.Clear();
+
+        var withMember = _launcher.Add_Member(session.OrchId, MemberKinds.Implementer, "sonnet");
+        var memberId = withMember.Members[^1].MemberId;
+
+        Assert.Equal("sonnet", withMember.Members[^1].Model);
+        Assert.Contains("sonnet", Join(_spawner.SpawnedCommands[^1]));
+
+        // Reloaded from disk, not from memory: the model survives the session file.
+        Assert.Equal("sonnet", _store.Get_Session(session.OrchId).Members.Single(m => m.MemberId == memberId).Model);
+
+        _spawner.SpawnedCommands.Clear();
+        _launcher.Respawn_Implementer(session.OrchId, memberId);
+        Assert.Contains("sonnet", Join(_spawner.SpawnedCommands[^1]));
+
+        _store.Set_ImplementerModelOverride(session.OrchId, "opus");
+        _spawner.SpawnedCommands.Clear();
+        _launcher.Respawn_Implementer(session.OrchId, memberId);
+
+        var command = Join(_spawner.SpawnedCommands[^1]);
+        Assert.Contains("opus", command);
+        Assert.DoesNotContain("sonnet", command);
+    }
+
+    /// <summary>
+    /// THE REVIEWER NO LONGER RIDES THE IMPLEMENTER'S DEFAULT (owner 2026-09-09). Pinned at the
+    /// launcher because that is the point of effect: the config split is worth nothing if the spawn
+    /// still reaches for one key for every member that is not a supervisor. Three distinct models so
+    /// no assertion can pass by coincidence.
+    /// </summary>
+    [Fact]
+    public void Start_Orchestration_SpawnsTheReviewerOnTheReviewerModel_NotTheImplementersOne()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"supervisorModel":"opus","implementerModel":"sonnet","reviewerModel":"haiku"}""");
+
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        // Spawn order is supervisor, imp-1, rev-1 (Start_Orchestration).
+        Assert.Equal(3, _spawner.SpawnedCommands.Count);
+
+        var implementer = Join(_spawner.SpawnedCommands[1]);
+        var reviewer = Join(_spawner.SpawnedCommands[2]);
+
+        Assert.Contains("--model sonnet", implementer);
+        Assert.Contains("--model haiku", reviewer);
+
+        Assert.Equal("rev-1", session.Members[^1].MemberId);
+    }
+
+    /// <summary>
+    /// ...and with no reviewerModel key, the reviewer keeps taking the implementer's — the ladder
+    /// that makes this change invisible on an existing box. A solo takes the same route, through the
+    /// same call, which is why one config covers both.
+    /// </summary>
+    [Fact]
+    public void WithNoReviewerModelKey_TheReviewerStillTakesTheImplementerModel()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"haiku"}""");
+
+        _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        Assert.Contains("--model haiku", Join(_spawner.SpawnedCommands[2]));
+    }
+
+    /// <summary>
+    /// AN EMPTY KEY IS ABSENT AT THE POINT OF EFFECT, which is where it had to be pinned: the defect
+    /// was invisible in the config object and only showed on the command line. Proven 2026-09-10,
+    /// before the fix, on <c>{"implementerModel":"sonnet","reviewerModel":""}</c> — <c>??</c> does not
+    /// catch the empty string, and <see cref="Spawning.SpawnCommand_Builder"/> adds <c>--model</c>
+    /// only for a non-whitespace value, so the reviewer was spawned with NO model flag at all: the
+    /// CLI's own default, neither the ladder's answer nor the app's, and nothing anywhere said so.
+    /// After the fix, the empty key is absent everywhere in the ladder, so the reviewer takes the
+    /// implementer's model exactly as an unset reviewerModel would.
+    /// </summary>
+    [Fact]
+    public void WithAnEmptyReviewerModel_TheReviewerTakesTheLadder_RatherThanNoModelFlagAtAll()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"sonnet","reviewerModel":""}""");
+
+        _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        var reviewer = Join(_spawner.SpawnedCommands[2]);
+
+        Assert.Contains("--model sonnet", reviewer);
+    }
+
+    /// <summary>A basic orchestration's one session takes the solo default, by the same one reader.</summary>
+    [Fact]
+    public void Start_BasicOrchestration_SpawnsTheSoloOnTheSoloModel()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"sonnet","soloModel":"opus"}""");
+
+        _launcher.Start_BasicOrchestration("Repo", _tempRepo);
+
+        Assert.Contains("--model opus", Join(_spawner.SpawnedCommands[^1]));
+    }
+
+    /// <summary>The claude invocation travels base64-encoded inside the terminal script; read it decoded.</summary>
+    static string Join(ISpawnCommand command)
+    {
+        return AIOrchestratorCoreLib.Spawning.SpawnCommand_Builder.Decode_SessionScript(command);
     }
 
     [Fact]
@@ -97,158 +206,6 @@ public class OrchestrationLauncherTests : IDisposable
 
         Assert.False(File.Exists(pidFile));
         Assert.Null(_store.Get_Session(session.OrchId).SupervisorPid);
-    }
-
-    /// <summary>
-    /// The stored effort override is the ONLY source of `--effort` — there is no config default,
-    /// so a fresh orchestration spawns without the flag and a respawn after the owner set one
-    /// carries it: the supervisor's own, and the implementer-side one for every member kind.
-    /// </summary>
-    [Fact]
-    public void Respawn_PassesTheStoredEffortOverride_ToTheSupervisorAndToEveryMemberKind()
-    {
-        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
-        var orchId = session.OrchId;
-
-        // Supervisor + imp-1 + rev-1, none with an override yet: the supervisor gets its ROLE
-        // DEFAULT (xhigh, owner directive 2026-09-09), the members no flag at all.
-        Assert.Equal(3, _spawner.SpawnedCommands.Count);
-        Assert.Contains($"--effort {SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL} ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
-        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
-        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]));
-
-        _store.Set_SupervisorEffortOverride(orchId, "medium");
-        _store.Set_ImplementerEffortOverride(orchId, "low");
-        _spawner.SpawnedCommands.Clear();
-
-        _launcher.Respawn_Supervisor(orchId);
-        _launcher.Respawn_Implementer(orchId, "imp-1");
-        _launcher.Respawn_Implementer(orchId, "rev-1");
-
-        var supervisorScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
-        var implementerScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]);
-        var reviewerScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]);
-
-        Assert.Contains($"--effort medium {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", supervisorScript);
-        Assert.Contains($"--effort low {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/implementer {orchId}/imp-1'", implementerScript);
-        Assert.Contains($"--effort low {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} {SpawnCommand_Builder.REVIEWER_LAUNCH_FLAGS} -- '/reviewer {orchId}/rev-1'", reviewerScript);
-
-        // And a reset goes back to the ROLE DEFAULT, rather than leaving the last value baked in.
-        _store.Set_SupervisorEffortOverride(orchId, null);
-        _spawner.SpawnedCommands.Clear();
-
-        _launcher.Respawn_Supervisor(orchId);
-
-        var resetScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
-        Assert.Contains($"--effort {SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL} ", resetScript);
-        Assert.DoesNotContain("medium", resetScript);
-    }
-
-    const string SUPERVISOR_SESSION_ID = "11111111-2222-4333-8444-555555555555";
-    const string SOLO_SESSION_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa";
-
-    /// <summary>
-    /// Owner request 2026-09-10: a restarted supervisor continues its OWN conversation. The first
-    /// spawn has no probe file (the statusline has never rendered) and starts fresh; once the
-    /// session's probe names a transcript that exists, every respawn — watchdog, /model, /effort,
-    /// app restart — passes that id to `claude --resume`. The id is read BEFORE the spawn: the new
-    /// process overwrites the probe on its first render.
-    /// </summary>
-    [Fact]
-    public void Respawn_Supervisor_ResumesItsOwnConversation_OnceItsProbeFileNamesALiveTranscript()
-    {
-        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
-        var orchId = session.OrchId;
-
-        Assert.DoesNotContain("--resume", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
-
-        Write_ProbeFile(
-            Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE),
-            SUPERVISOR_SESSION_ID,
-            Write_Transcript(SUPERVISOR_SESSION_ID));
-        _spawner.SpawnedCommands.Clear();
-
-        _launcher.Respawn_Supervisor(orchId);
-
-        var script = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
-        Assert.Contains($"claude --resume {SUPERVISOR_SESSION_ID} ", script);
-        Assert.Contains($"{SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", script);
-    }
-
-    /// <summary>
-    /// The solo is the other role the owner named, and its probe lives in ITS member folder. An
-    /// implementer is NOT resumed even when its probe names a live transcript: the owner asked for
-    /// solo and supervisor, and implementers keep re-entering through their role command.
-    /// </summary>
-    [Fact]
-    public void Respawn_Solo_ResumesItsOwnConversation_AndAnImplementerNeverDoes()
-    {
-        var basic = _launcher.Start_BasicOrchestration("Repo", _tempRepo);
-        var crew = _launcher.Start_Orchestration("Repo", _tempRepo);
-
-        Write_ProbeFile(
-            Path.Combine(_paths.Get_ImplementerFolder(basic.OrchId, "solo-1"), UsageTotals_Reader.SESSION_USAGE_FILE),
-            SOLO_SESSION_ID,
-            Write_Transcript(SOLO_SESSION_ID));
-        Write_ProbeFile(
-            Path.Combine(_paths.Get_ImplementerFolder(crew.OrchId, "imp-1"), UsageTotals_Reader.SESSION_USAGE_FILE),
-            SUPERVISOR_SESSION_ID,
-            Write_Transcript(SUPERVISOR_SESSION_ID));
-        _spawner.SpawnedCommands.Clear();
-
-        _launcher.Respawn_Implementer(basic.OrchId, "solo-1");
-        _launcher.Respawn_Implementer(crew.OrchId, "imp-1");
-
-        var soloScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
-        var implementerScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]);
-
-        Assert.Contains($"claude --resume {SOLO_SESSION_ID} ", soloScript);
-        Assert.Contains($"{SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/solo {basic.OrchId}'", soloScript);
-        Assert.DoesNotContain("--resume", implementerScript);
-    }
-
-    /// <summary>
-    /// `claude --resume` of an id whose transcript is gone prints "No conversation found" and exits,
-    /// and the watchdog would respawn it into the same wall. A stale probe therefore means FRESH.
-    /// </summary>
-    [Fact]
-    public void Respawn_Supervisor_StartsFresh_WhenTheTranscriptTheProbeNamesIsGone()
-    {
-        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
-        var orchId = session.OrchId;
-
-        Write_ProbeFile(
-            Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE),
-            SUPERVISOR_SESSION_ID,
-            Path.Combine(_tempRoot, "projects", "gone.jsonl"));
-        _spawner.SpawnedCommands.Clear();
-
-        _launcher.Respawn_Supervisor(orchId);
-
-        var script = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
-        Assert.DoesNotContain("--resume", script);
-        Assert.Contains($"{SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", script);
-    }
-
-    string Write_Transcript(string sessionId)
-    {
-        var transcript = Path.Combine(_tempRoot, "projects", $"{sessionId}.jsonl");
-        Directory.CreateDirectory(Path.GetDirectoryName(transcript) ?? throw new Exception($"Transcript path '{transcript}' has no directory"));
-        File.WriteAllText(transcript, """{"type":"summary","summary":"a conversation"}""" + "\n");
-        return transcript;
-    }
-
-    /// <summary>The live probe shape trimmed to what the respawn reads, written with the BOM the statusline's Set-Content leaves.</summary>
-    static void Write_ProbeFile(string probeFile, string sessionId, string transcriptPath)
-    {
-        var payload = new JsonObject
-        {
-            ["session_id"] = sessionId,
-            ["transcript_path"] = transcriptPath,
-            ["model"] = new JsonObject { ["id"] = "claude-fable-5-1", ["display_name"] = "Fable 5.1" },
-        };
-
-        File.WriteAllText(probeFile, payload.ToJsonString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
     }
 
     static bool Wait_Until(Func<bool> condition)
