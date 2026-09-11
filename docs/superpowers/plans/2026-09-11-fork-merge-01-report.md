@@ -11,11 +11,11 @@ regression the owner will meet on the phone.
 | effort flag + role default xhigh for supervisor/solo (60671ac, 39fc6b3) | SpawnCommand_Builder, session model/serializer/store | Task 3, Task 4 | [ ] |
 | `/model` `/effort` from the phone, Apply_Dial, role picker (7bdc55e, 81038e4, 7f658e0) | BridgeEngineModel, Telegram/ModelEffort*, BotCommandMenu | Task 4 | [ ] |
 | owner `/pause` and 💤 (a2c9a3d) | session model/serializer/store, PausedFlag_Marker, TelegramDeliveryModes, run-to-the-end hook | Task 5 | [ ] |
-| question hold in the mirror loop (e637cb2) | BridgeEngineModel (MirrorOutcomes, heldChannels), QuestionHold_Policy, awaiting-answer hook (solo) | Task 6 | [ ] |
+| question hold in the mirror loop (e637cb2) | BridgeEngineModel (MirrorOutcomes, heldChannels), QuestionHold_Policy, awaiting-answer hook (solo). **The PROSE is already in the tree and the WIRING is not:** `kit/skills/solo/SKILL.md` promises the solo *"the app HOLDS this channel"* (it came in with this merge, §"The one file resolved by hand") while `QuestionHold_Policy` has no production caller. They must land together — a role command that promises a hold nobody performs is worse than silence. | Task 6 | [ ] |
 | owner-answer credit: Raise_OwnerWait, Is_TurnEndDeclaration, /merge opens the tracker (58ff547) | BridgeEngineModel, OwnerPush_Policy | Task 7 | [ ] |
-| model + effort reading types and formatter (7f658e0, 411fa21) | Status/SessionModelReading, Formatting/ModelReading_Formatter, statusline effort | Task 8 | [ ] |
+| model + effort reading types and formatter (7f658e0, 411fa21) | Status/SessionModelReading, Formatting/ModelReading_Formatter · **statusline effort is ALREADY IN THE TREE via rename-detected auto-merge — `kit/statusline/statusline.ps1` carries master's whole effort block (`$effort` at line 20, `$json.effort.level` at 24, `$effortSuffix` at 168-170 and every role line that uses it). VERIFY, DO NOT RE-ADD.** | Task 8 | [ ] |
 | reply keyboard markup (65107e9) | ReplyKeyboard_Markup, TopicCommandButtons rows | Task 9 (compiles, not wired — spec §7.6) | [ ] |
-| kit prose: ONE QUESTION (solo, general-supervisor), "the app holds the channel" (supervisor), RESUMED paragraphs (supervisor, solo) | kit/skills | Task 10 | [ ] |
+| kit prose. **Only ONE of these was inserted by hand and the rest ALREADY LANDED via rename-detected auto-merge (`kit/commands/*.md` -> `kit/skills/*/SKILL.md`) — VERIFY, DO NOT RE-ADD:** ONE OPEN QUESTION in `solo/SKILL.md` = the hand-inserted one (Task 2); ONE OPEN QUESTION AT A TIME in `general-supervisor/SKILL.md` (line 324) = already there; the RESUMED paragraph in `supervisor/SKILL.md` (lines 79-80) and in `solo/SKILL.md` (auto-merged) = already there; *"And now the APP HOLDS THE CHANNEL as well"* in `supervisor/SKILL.md` (line 436) = already there. That last one describes the hold Task 6 wires, so Task 10 should not tick it before Task 6 is in. | kit/skills | Task 10 | [ ] |
 | pictures as pictures (da8f66c) | superseded by the fork's EntryAttachment_Policy; master's tests re-homed | Task 11 | [ ] |
 | Fable 5.1 default (60671ac) | moved into the `classic` preset by plan 02; the shipped default is Opus (spec §11.4) | plan 02 | n/a |
 | collapsing command bar / button catalogue (65107e9) | superseded by `pulse.buttons` in plan 03 | plan 03 | n/a |
@@ -54,11 +54,26 @@ own files back**; Task 14 deletes the folder and the item.
 | `QuestionWaterfallProbeTests.cs` | the nine-questions-in-five-minutes waterfall probe (its own `WaterfallTelegram_Fake` no longer satisfies the fork's larger `ITelegramApiClient`) | Task 6 / Task 7 |
 | `PicturesReachTheOwnerTests.cs` | pictures as pictures — superseded by the fork's `EntryAttachment_Policy`; re-home what still applies | Task 11 |
 
-### Shared test files RESET to the fork's version (Task 2, Step 7)
+### Test files that took the FORK'S VERSION and dropped master coverage (twelve)
 
-These exist on both sides; the auto-merge stacked master's cases on top of a fork API that no longer
-has them, so the fork's version was taken whole. Nothing is parked here — **the dropped cases are
-recovered with `git show master:<path>`** by the task that re-ports the feature.
+Two routes to the same place, and both lose master's cases. The first five were **CONFLICTED** and
+took `--theirs` at Step 3, by the spec's rule. The other seven auto-merged, stacked master's cases on
+a fork API that no longer has them, and were reset at Step 7. Nothing is parked in either group —
+**every dropped case is recovered with `git show master:<path>`**, and the NAMES below are what to
+look for. Regenerate a list with
+`git diff 50a6d8d..master -- <file> | grep '^+.*public void'`.
+
+**A — conflicted, resolved to the fork at Step 3:**
+
+| file | master cases dropped (vs base `50a6d8d`) | the case names | restored by |
+|---|---|---|---|
+| `Spawning/SpawnCommandBuilderTests.cs` | +181 / -9 | `Build_SupervisorAndSolo_ThinkAtXHighEffort_ByDefault`, `Build_RolesTheOwnerDidNotName_CarryNoEffortFlag`, `Build_ForSupervisor_WithEffortOverride_EmitsEffortRightAfterTheModel`, `Build_EveryOverridableRole_WithEffort_CarriesTheFlagBeforeTheLaunchFlags`, `Build_WithoutEffortOverride_TheRoleDefaultDecides`, `Build_SupervisorAndSolo_AnOverrideBeatsTheRoleDefault`, `Build_ForImplementer_EffortWithoutModel_StillEmitsTheEffortFlag`, `Build_SupervisorAndSolo_WithAResumableConversation_ResumeIt_AheadOfEveryOtherFlag`, `Build_SupervisorAndSolo_WithNothingToResume_StartFresh_ExactlyAsBefore`, `Build_WithAResumeIdThatIsNotAUuid_Throws` | Task 3 |
+| `Telegram/TopicCommandButtonsTests.cs` | +35 / -3 | `TheCommandCount_StaysEven_SoNoRowIsLeftHalfEmpty`, `PauseAndProgress_AreTheLastRow_AndPauseComesFirst`, plus an `[InlineData("cmd:defenestrate:5")]` unknown-verb case | Task 9 / plan 03 |
+| `Bridge/OwnerAnswerSurvivesFailedSendTests.cs` | +26 / -3 | no new `[Fact]` — master (a) moved the assertion from `"Owner message buffered"` to `"Owner message delivered"` with a 40 s budget, because the credit is raised at DELIVERY (decision 25), and (b) **gave `FailableTelegram_Fake` its `_sentPhotoPaths`, `Has_SentPhoto(...)` and `Sent_Texts()` members.** Those three are a HARD DEPENDENCY of the parked `PicturesReachTheOwnerTests`, `AStatusLineDoesNotSpendTheOwnersWaitTests` and `MergeCommandOpensTheReplyTrackerTests` — their compile errors were exactly `FailableTelegram_Fake` has no `Sent_Texts` / `Has_SentPhoto`. **Restore the fake here BEFORE un-parking any of those three.** | Task 7 (fake + delivery assertion); Task 11 consumes the fake |
+| `Configuration/OrchestratorConfigFactoryTests.cs` | +15 | `Create_Empty_UsesTheOwnersModelLadder` (asserts the Fable ladder) | plan 02 |
+| `Bridge/AwaySuppressesAppAlertsScanTests.cs` | +1 / -1 | a one-line SOURCE-SCAN string: master looks for `_suppressedEntries.Remove`, the fork's file looks for `_lastSuppressedEntry.Remove`. It is the `_suppressedEntries` LIST of decision 25, so it belongs to Task 7 — **verify at Task 7**, and if the fork's engine keeps a single-slot field the row is satisfied by the fork's wording, not master's. | Task 7 (verify) |
+
+**B — auto-merged, reset at Step 7:**
 
 | file | master cases dropped (lines added vs base `50a6d8d`) | why they stopped compiling | restored by |
 |---|---|---|---|
@@ -84,6 +99,67 @@ which only master changed) · `Status/PausedFlag_Marker.cs` (Task 5) ·
 `Telegram/EffortLevels.cs`, `Telegram/ModelChoices.cs`, `Telegram/ModelEffortButton_Data.cs`,
 `Telegram/ModelEffortCommand_Parser.cs`, `Telegram/ModelEffortPrompt_Builder.cs` (Task 4) ·
 `Telegram/ReplyKeyboard_Markup.cs` (Task 9).
+
+### Master changes that auto-merged into SHARED files and SURVIVED — do NOT re-port these
+
+The counterpart of the section above, and the more dangerous one: a task that re-adds something
+already in the tree produces a duplicate, not a fix. Every file here already carries master's change
+in `91d3402`.
+
+**Regenerate this list** (it is cheap, and a later task should re-run it rather than trust this
+paragraph):
+
+```bash
+cd /c/Users/Gianpiero/source/repos/AIOrchestrator-merge
+for f in $(git diff --name-only 50a6d8d..master); do
+  [ -e "$f" ] || { echo "GONE (renamed/parked)  $f"; continue; }
+  m=$(git diff --name-only master..91d3402 -- "$f")      # empty  => identical to master
+  k=$(git diff --name-only dbb6e4e..91d3402 -- "$f")     # non-empty => differs from the fork
+  if   [ -z "$m" ] && [ -n "$k" ]; then echo "MASTER-WHOLE  $f"
+  elif [ -n "$m" ] && [ -n "$k" ]; then echo "BLENDED       $f"
+  elif [ -z "$m" ] && [ -z "$k" ]; then echo "IDENTICAL-BOTH $f"
+  else                                  echo "FORK-WHOLE    $f"; fi
+done | sort
+```
+
+**IDENTICAL TO MASTER** (master's file won outright — the fork never touched it):
+
+- `AIOrchestratorCoreLib/Tailing/Channel_CompactionStep.cs` — **half of Task 7's row is already
+  landed.** This is the compaction-guard-inside-the-gate step (decision 25); the C-group red
+  `CompactionAsksItsGuardInsideTheGateTests` fails on the OTHER half, which lives in the fork's
+  `BridgeEngineModel`.
+- `AIOrchestratorCoreLib/Limits/RateLimits_Reader.cs` + `AIOrchestratorCoreLib.Tests/Limits/RateLimitsReaderTests.cs`
+  — including `Read_SessionId_OrNull`, which is why `ResumableSession_Resolver` still compiles (Task 3).
+- `AIOrchestratorCoreLib/Telegram/TopicStatusMember/` — all three files (`ITopicStatusMember.cs`,
+  `TopicStatusMemberModel.cs`, `TopicStatusMember_Factory.cs`): master's model-reading members are
+  on the type already (Task 4 / Task 8 wire them, they do not re-declare them).
+- every master-only production type and its tests (the UNWIRED list above), plus
+  `docs/superpowers/specs/2026-08-06-ai-orchestrator-design.md`.
+
+**BLENDED — both sides' changes are in the file** (so neither side's diff is the whole story; read
+the file, not a diff against either parent):
+
+- `kit/statusline/statusline.ps1` — master's whole effort block on the fork's script (Task 8 row).
+- `kit/skills/supervisor/SKILL.md` — via RENAME DETECTION from master's `kit/commands/supervisor.md`:
+  master's RESUMED paragraph (lines 79-80) and *"And now the APP HOLDS THE CHANNEL as well"* (436)
+  are already in the fork's file (Task 10 row).
+- `kit/skills/general-supervisor/SKILL.md` — same route: master's `## ONE OPEN QUESTION AT A TIME`
+  section (line 324) is already there (Task 10 row).
+- `AIOrchestratorCoreLib/Channels/Channel_Compactor.cs` — master's `Compact_IfNeeded(path, mayRewrite)`
+  overload alongside the fork's fast path.
+- `AIOrchestratorCoreLib/Usage/UsageTotals_Reader.cs` and
+  `AIOrchestratorCoreLib/Watchdog/SessionWatchdog/ISessionWatchdog.cs`.
+- `AIOrchestratorCoreLib.Tests/Kit/RunToTheEndHookTests.cs` — master's `.paused` cases on the fork's
+  file, which is why Task 5 must check this file rather than write it fresh.
+- `AIOrchestratorCoreLib/Configuration/OrchestratorConfig/OrchestratorConfig_Factory.cs` — master's
+  `claude-fable-5-1` constants on the fork's factory (the four group-B reds).
+- `kit/hooks/run-to-the-end-check.sh`, `kit/hooks/supervisor-awaiting-answer-check.sh`, `CLAUDE.md`,
+  and `AIOrchestratorCoreLib/Watchdog/SessionWatchdog/SessionWatchdogModel.cs` (master's `--resume`
+  log wording kept, the `Paused` guard removed — see the corrections table).
+
+`AIOrchestrator/MainWindow.xaml.cs` was BLENDED and is now **byte-identical to the fork**: master's
+only other change there was the stripped UTF-8 BOM, restored in this round, so the paused card glyph
+(Task 5) is the single thing that file is missing.
 
 ### The one file resolved by hand rather than taken whole
 
@@ -113,6 +189,12 @@ macOS file-lock cases RUN, which is most of the difference in the skip count. Th
 the three live smokes that self-skip without `CLAUDE_CONTRACT_LIVE=1`, plus
 `PrintTurnLimitResetTests.AStateFileThatCannotBeWritten_CostsOneSession_NotTheWholeResume`.)
 
+**22 recorded in this run; expect 21 in a clean shell** — one of them
+(`ChannelAppendTypedEntriesTests.TheOldUntypedCallStillWrites_AndParsesAsUntyped`, group E) is the
+`AIORCH_*` leak of the session that ran the merge, proven by re-running the class with those
+variables unset. The groups below hold 2 + 4 + 7 + 7 + 2 = 22 names, and they are `comm`-equal to
+`../merge-baseline-red.txt`.
+
 **This is the list every later task compares against. Compare the NAMES, never the count.**
 
 ### A. Master-only tests of features this merge dropped — expected red, they go green when re-ported
@@ -138,12 +220,23 @@ AIOrchestratorCoreLib.Tests.Configuration.PerRoleModelDefaultsTests.AnEmptyImple
 AIOrchestratorCoreLib.Tests.Configuration.PerRoleModelDefaultsTests.WithNoConfigFileAtAll_EveryRoleGetsItsShippedDefault
 ```
 
+**RULING (coordinator, 2026-09-11) — these four stay red for the whole of plan 01, by decision.**
+`OrchestratorConfig_Factory` ships master's auto-merged `claude-fable-5-1` and the fork's factory
+tests expect `opus`. Nobody in plan 01 changes the constant: plan 02 delivers the model catalogue
+with Opus shipped and the `classic` preset carrying Fable, and the constant moves THEN. Changing it
+now would move the owner's live default before the preset that gives Fable back to him exists. A
+later task seeing these four must leave them alone, not "fix" them.
+
 ### C. Statusline PowerShell-vs-C# parity, Windows only — seven fixtures
 
 Every one differs on the same thing: the `·` separator and the accented run come back mangled from
-the PowerShell reference under this machine's console code page. Not a merge effect (the fixtures and
-`statusline.ps1` are the fork's), but it is in the baseline and must stay in it until someone fixes
-the encoding.
+the PowerShell reference under this machine's console code page.
+
+**Precisely: `kit/statusline/statusline.ps1` is NOT the fork's file — it auto-merged and carries
+master's whole effort block (Task 8 row).** The parity reds are still not a merge effect, and the
+reason is checkable rather than assumed: **no fixture under `kit/statusline/fixtures/` contains
+`effort`** (15 fixtures, `grep -rli effort` returns nothing), so master's block never executes on any
+parity path. What differs is the encoding, and it stays in the baseline until someone fixes that.
 
 ```
 AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "communicator-green")
@@ -155,21 +248,38 @@ AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReferen
 AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "unorchestrated-windows-path")
 ```
 
-### D. Print-runner and watcher, Windows file-lock and wall-clock deadlines — six
+### D. Print-runner and watcher — seven, of which THREE are diagnosed and FOUR are unattributed
 
-The fork's own `.claude/rules/code-conventions.md` names this class exactly: `Drive_Until` polls a
-wall-clock deadline while every tick spawns a fake-CLI process, and Windows file-lock semantics are
-the reason six cases are honest skips on macOS. Two of these six failed with a raw
-`System.IO.IOException ... cannot access the file`, one with a `Win32Exception` inside the watcher.
+**Three carry an exception class that says what happened**, and they are the class the fork's own
+`.claude/rules/code-conventions.md` documents (`Drive_Until` polls a wall-clock deadline while every
+tick spawns a fake-CLI process; Windows file-lock semantics are why six cases are honest skips on
+macOS):
 
 ```
 AIOrchestratorCoreLib.Tests.Bridge.ChannelChangeWakerTests.ARootDeletedAndRecreated_IsNoticedOnceAndTheWatchComesBack
+AIOrchestratorCoreLib.Tests.Running.PrintTurnDispatcherTests.SecondTurn_ResumesTheTranscript_WithThePromptOnStdin
+AIOrchestratorCoreLib.Tests.Running.WakeUpDigestReviewFixTests.AHeldReport_IsNotDeliveredOnceItsMemberIsClosed
+```
+
+`ChannelChangeWakerTests` = a `Win32Exception` reported by the watcher; the other two =
+`System.IO.IOException : The process cannot access the file` on
+`…\repo-1\im…` and on `…\repo-1\.supervisor.print-session.json`.
+
+**Four are ORDINARY ASSERTION FAILURES and are NOT attributed to anything.** No exception class
+excuses them and nobody has diagnosed them — they are recorded as ground state, and **the first task
+to touch `Running/` (Task 12) diagnoses them**:
+
+```
 AIOrchestratorCoreLib.Tests.Running.ClosingTurnReviewFixTests.AClosingTurnThatSaysNothing_IsAFailedClosingTurn_AndTheBriefIsStillPending
 AIOrchestratorCoreLib.Tests.Running.MemberTrafficRidesOneDigestedTurnTests.TwoMembersReportingInsideTheWindow_BuyOneSupervisorTurn
 AIOrchestratorCoreLib.Tests.Running.MultiSourceSupervisorTests.AfterABridgeRestart_NoEntryIsDeliveredTwice_AndNoneIsLost
-AIOrchestratorCoreLib.Tests.Running.PrintTurnDispatcherTests.SecondTurn_ResumesTheTranscript_WithThePromptOnStdin
 AIOrchestratorCoreLib.Tests.Running.PrintTurnLimitResetTests.ResumeClear_LeavesANonDeferredSessions_StateFileUntouched_AndLogsNothingForIt
 ```
+
+What each actually said: `MultiSourceSupervisorTests` — `Assert.Contains() … Not found: "REPORT — two"`;
+`PrintTurnLimitResetTests` — `Assert.Equal() … Expected: 1 / Actual: 0`; `ClosingTurnReviewFixTests` —
+`Assert.Empty() Failure: Collection was not empty`; `MemberTrafficRidesOneDigestedTurnTests` — its own
+message, *"the supervisor never took its boot turn, so nothing below is measuring the digest"*.
 
 ### E. The channel-append tool — two, and ONE of them is this session's own environment
 
