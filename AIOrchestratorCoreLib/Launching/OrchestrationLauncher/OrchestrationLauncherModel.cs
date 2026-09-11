@@ -11,6 +11,7 @@ using AIOrchestratorCoreLib.Running.SessionRunner;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using AIOrchestratorCoreLib.Spawning;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -312,6 +313,17 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_SupervisorPidFile(orchId);
 
+        // THE RUNNER IS RESOLVED ONE STEP EARLY because the --resume decision below is made of it.
+        // Start_Session is handed the answer rather than asking again: Resolve_Runner WARNS when it
+        // falls back, and asking twice for one spawn would log that warning twice.
+        var runner = Resolve_Runner(SessionRoles.Supervisor, orchId);
+
+        // Its own previous conversation, when the probe file names a transcript that still exists
+        // (owner request 2026-09-10). Read BEFORE anything is deleted or spawned: the probe is the
+        // previous process's last word, and the new process overwrites it on its first render.
+        var resumes = Resumes_ItsOwnConversation(runner, SessionRoles.Supervisor);
+        var resumeSessionId = resumes ? ResumableSession_Resolver.Resolve_ForSupervisor_OrNull(_paths, orchId) : null;
+
         var launch = SessionLaunch_Factory.Create(
             SessionRoles.Supervisor,
             orchId,
@@ -319,7 +331,12 @@ internal sealed class OrchestrationLauncherModel(
             session.RepoPath,
             session.SupervisorModelOverride ?? _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Supervisor),
             pidFile,
-            session.DisplayName);
+            session.DisplayName,
+            // NO EFFORT FROM HERE, and null is not the same as a default: it emits no --effort flag,
+            // which leaves the ROLE default inside SpawnCommand_Builder to decide (xhigh for this
+            // role). The orchestration carries no effort of its own yet, so there is nothing to pass.
+            effort: null,
+            resumeSessionId);
 
         // Stamp the spawn (watchdog grace) BEFORE deleting the stale pid file, so no tick can see
         // "no pid file + no grace" and double-spawn. The stale file must go: the sync below must
@@ -327,15 +344,17 @@ internal sealed class OrchestrationLauncherModel(
         _store.Set_SupervisorPid(orchId, null);
         Delete_StalePidFile_BestEffort(pidFile);
 
-        var runner = Start_Session(launch);
+        var started = Start_Session(launch, runner);
 
-        if (runner == null)
+        if (started == null)
             return;
 
-        if (runner.Kind == SessionRunners.Terminal)
+        if (started.Kind == SessionRunners.Terminal)
             Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
 
-        _log.Log_Info(orchId, $"Supervisor session {Describe_Started(runner)}");
+        var what = $"Supervisor session {Describe_Started(started)}";
+
+        _log.Log_Info(orchId, resumes ? Describe_Spawn(what, resumeSessionId) : what);
     }
 
     public void Respawn_Communicator(string orchId)
@@ -409,20 +428,36 @@ internal sealed class OrchestrationLauncherModel(
         // reviewer the owner had just used it on — a separate decision, and theirs, not this stage's.
         var model = session.ImplementerModelOverride ?? member?.Model ?? _configProvider.Get_Current().Get_ModelForRole(role);
 
-        var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName);
+        // Resolved before the launch is built, and handed to Start_Session, for the reason given in
+        // Respawn_Supervisor: the resume decision is made of the runner, and Resolve_Runner warns.
+        var runner = Resolve_Runner(role, orchId);
+
+        // ONLY THE SOLO continues its own conversation (owner request 2026-09-10, for solo and
+        // supervisor): implementers and reviewers re-enter through their role command, because the
+        // channel is their durable state. Read BEFORE anything is deleted or spawned — the new
+        // process overwrites the probe on its first render.
+        var resumes = kind == MemberKinds.Solo && Resumes_ItsOwnConversation(runner, role);
+        var resumeSessionId = resumes ? ResumableSession_Resolver.Resolve_ForMember_OrNull(_paths, orchId, memberId) : null;
+
+        // NO EFFORT FROM HERE either, and for a different reason than the supervisor's: no member role
+        // has a default at all, so null is the whole answer — it emits no --effort flag and the CLI
+        // applies its own. Effort is billed thinking, and the owner named two roles for it.
+        var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName, effort: null, resumeSessionId);
 
         _store.Set_MemberPid(orchId, memberId, null);
         Delete_StalePidFile_BestEffort(pidFile);
 
-        var runner = Start_Session(launch);
+        var started = Start_Session(launch, runner);
 
-        if (runner == null)
+        if (started == null)
             return;
 
-        if (runner.Kind == SessionRunners.Terminal)
+        if (started.Kind == SessionRunners.Terminal)
             Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
 
-        _log.Log_Info(orchId, $"{kind} '{memberId}' session {Describe_Started(runner)}");
+        var what = $"{kind} '{memberId}' session {Describe_Started(started)}";
+
+        _log.Log_Info(orchId, resumes ? Describe_Spawn(what, resumeSessionId) : what);
     }
 
     public void Spawn_GeneralSupervisor()
@@ -460,9 +495,15 @@ internal sealed class OrchestrationLauncherModel(
     /// contradictory statements about one non-event, in a log whose entire job is telling a person
     /// what is actually running.
     /// </summary>
-    ISessionRunner? Start_Session(ISessionLaunch launch)
+    /// <param name="resolvedRunner">
+    /// The runner a caller has ALREADY resolved, when it needed the answer to build the launch (the
+    /// --resume decision is the only such case). Null means resolve it here, which is what the
+    /// callers that do not care still do. It is passed rather than re-asked because Resolve_Runner
+    /// logs a warning on every fallback, and one spawn must not produce two of them.
+    /// </param>
+    ISessionRunner? Start_Session(ISessionLaunch launch, ISessionRunner? resolvedRunner = null)
     {
-        var runner = Resolve_Runner(launch.Role, launch.OrchId);
+        var runner = resolvedRunner ?? Resolve_Runner(launch.Role, launch.OrchId);
 
         // A ROLE THAT LEFT A BRIDGE-DRIVEN MODE LEAVES ITS REGISTRATION BEHIND, and that file is what tells
         // the dispatcher to keep running turns and the watchdog that a missing pid file is by
@@ -497,6 +538,27 @@ internal sealed class OrchestrationLauncherModel(
         return runner;
     }
 
+    /// <summary>
+    /// WHOSE `--resume` THIS IS. The launcher's is the TERMINAL runner's ONLY: a bridge-driven
+    /// session keeps its own transcript in its print-session state file and the dispatcher resumes it
+    /// from there, so an id read from the statusline probe would name a conversation that runner does
+    /// not drive — and the probe is written by a session that is not the one being resumed.
+    ///
+    /// <para>
+    /// THE RUNNER IS ASKED, NOT THE CONFIG KEY, because a role configured for a transport this stage
+    /// cannot run is launched in a terminal anyway (<see cref="Resolve_Runner"/>) — and a session that
+    /// ends up in a window is a session that can pick its window's conversation back up. The resume
+    /// MODE still comes from the role's configuration: <c>fresh</c> is the owner saying this role
+    /// starts empty, which is how the general supervisor stays stateless by configuration rather than
+    /// by a special case written here.
+    /// </para>
+    /// </summary>
+    bool Resumes_ItsOwnConversation(ISessionRunner runner, SessionRoles role)
+    {
+        return runner.Kind == SessionRunners.Terminal
+            && _configProvider.Get_Current().Runners.Get_ForRole(role).Resume == ResumeModes.Transcript;
+    }
+
     ISessionRunner Resolve_Runner(SessionRoles role, string orchId)
     {
         var configured = _configProvider.Get_Current().Runners.Get_ForRole(role).Runner;
@@ -519,6 +581,20 @@ internal sealed class OrchestrationLauncherModel(
         return _runners.TryGetValue(SessionRunners.Terminal, out var terminal)
             ? terminal
             : throw new Exception("No terminal runner was wired — every other runner falls back to it, so it is the one that cannot be optional");
+    }
+
+    /// <summary>
+    /// The log line says WHICH conversation a spawn is, so a respawn that came back empty-headed is
+    /// visible in the log panel rather than discovered when the session asks what it was doing. Only
+    /// said of a session that could have resumed: for the roles that never do, "fresh conversation"
+    /// would read as a finding about this spawn rather than as the design.
+    /// </summary>
+    static string Describe_Spawn(string what, string? resumeSessionId)
+    {
+        if (resumeSessionId == null)
+            return $"{what} — fresh conversation (no resumable transcript)";
+
+        return $"{what} — resuming conversation {resumeSessionId}";
     }
 
     static string Describe_Started(ISessionRunner runner)

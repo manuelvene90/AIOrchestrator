@@ -7,7 +7,9 @@ internal sealed class SessionLaunchModel(
     string workingDirectory,
     string? model,
     string pidFilePath,
-    string? displayName) : ISessionLaunch
+    string? displayName,
+    string? effort,
+    string? resumeSessionId) : ISessionLaunch
 {
     public SessionRoles Role { get; } = role;
     public string OrchId { get; } = orchId;
@@ -16,4 +18,6 @@ internal sealed class SessionLaunchModel(
     public string? Model { get; } = model;
     public string PidFilePath { get; } = pidFilePath;
     public string? DisplayName { get; } = displayName;
+    public string? Effort { get; } = effort;
+    public string? ResumeSessionId { get; } = resumeSessionId;
 }

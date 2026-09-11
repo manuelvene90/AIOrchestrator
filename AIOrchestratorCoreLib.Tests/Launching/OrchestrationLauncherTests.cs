@@ -1,11 +1,18 @@
+using System.Text;
+using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.SessionLaunch;
+using AIOrchestratorCoreLib.Running.SessionRunner;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using AIOrchestratorCoreLib.Spawning;
 using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.Spawning.SpawnCommand;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Usage;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Launching;
@@ -208,6 +215,164 @@ public class OrchestrationLauncherTests : IDisposable
         Assert.Null(_store.Get_Session(session.OrchId).SupervisorPid);
     }
 
+    const string SUPERVISOR_SESSION_ID = "11111111-2222-4333-8444-555555555555";
+    const string SOLO_SESSION_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+
+    /// <summary>
+    /// Owner request 2026-09-10: a restarted supervisor continues its OWN conversation. The first
+    /// spawn has no probe file (the statusline has never rendered) and starts fresh; once the
+    /// session's probe names a transcript that exists, every respawn — watchdog, /model, /effort,
+    /// app restart — passes that id to `claude --resume`. The id is read BEFORE the spawn: the new
+    /// process overwrites the probe on its first render.
+    /// </summary>
+    [Fact]
+    public void Respawn_Supervisor_ResumesItsOwnConversation_OnceItsProbeFileNamesALiveTranscript()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var orchId = session.OrchId;
+
+        Assert.DoesNotContain("--resume", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+
+        Write_ProbeFile(
+            Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE),
+            SUPERVISOR_SESSION_ID,
+            Write_Transcript(SUPERVISOR_SESSION_ID));
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Supervisor(orchId);
+
+        var script = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
+        Assert.Contains($"claude --resume {SUPERVISOR_SESSION_ID} ", script);
+        Assert.Contains($"{SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", script);
+    }
+
+    /// <summary>
+    /// The solo is the other role the owner named, and its probe lives in ITS member folder. An
+    /// implementer is NOT resumed even when its probe names a live transcript: the owner asked for
+    /// solo and supervisor, and implementers keep re-entering through their role command.
+    /// </summary>
+    [Fact]
+    public void Respawn_Solo_ResumesItsOwnConversation_AndAnImplementerNeverDoes()
+    {
+        var basic = _launcher.Start_BasicOrchestration("Repo", _tempRepo);
+        var crew = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        Write_ProbeFile(
+            Path.Combine(_paths.Get_ImplementerFolder(basic.OrchId, "solo-1"), UsageTotals_Reader.SESSION_USAGE_FILE),
+            SOLO_SESSION_ID,
+            Write_Transcript(SOLO_SESSION_ID));
+        Write_ProbeFile(
+            Path.Combine(_paths.Get_ImplementerFolder(crew.OrchId, "imp-1"), UsageTotals_Reader.SESSION_USAGE_FILE),
+            SUPERVISOR_SESSION_ID,
+            Write_Transcript(SUPERVISOR_SESSION_ID));
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Implementer(basic.OrchId, "solo-1");
+        _launcher.Respawn_Implementer(crew.OrchId, "imp-1");
+
+        var soloScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
+        var implementerScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]);
+
+        Assert.Contains($"claude --resume {SOLO_SESSION_ID} ", soloScript);
+        Assert.Contains($"{SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/solo {basic.OrchId}'", soloScript);
+        Assert.DoesNotContain("--resume", implementerScript);
+    }
+
+    /// <summary>
+    /// `claude --resume` of an id whose transcript is gone prints "No conversation found" and exits,
+    /// and the watchdog would respawn it into the same wall. A stale probe therefore means FRESH.
+    /// </summary>
+    [Fact]
+    public void Respawn_Supervisor_StartsFresh_WhenTheTranscriptTheProbeNamesIsGone()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var orchId = session.OrchId;
+
+        Write_ProbeFile(
+            Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE),
+            SUPERVISOR_SESSION_ID,
+            Path.Combine(_tempRoot, "projects", "gone.jsonl"));
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Supervisor(orchId);
+
+        var script = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
+        Assert.DoesNotContain("--resume", script);
+        Assert.Contains($"{SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", script);
+    }
+
+    [Fact]
+    public void ASupervisorConfiguredForThePrintRunner_IsNeverResumedByTheLauncher()
+    {
+        // The bridge-driven runners keep their own ResumeModes (print-session.json); the launcher's
+        // --resume is the TERMINAL runner's only. Writing a probe file for a print supervisor must not
+        // make the launcher hand a resume id to a runner that ignores it.
+        var (launcher, runner) = Launcher_WithRunnerFor(SessionRoles.Supervisor, SessionRunners.Print);
+        var session = launcher.Start_Orchestration("Repo", _tempRepo);
+
+        Write_ProbeFile(
+            Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE),
+            SUPERVISOR_SESSION_ID,
+            Write_Transcript(SUPERVISOR_SESSION_ID));
+
+        launcher.Respawn_Supervisor(session.OrchId);
+
+        Assert.Equal(SessionRoles.Supervisor, runner.Launches[^1].Role);
+        Assert.Null(runner.Launches[^1].ResumeSessionId);
+    }
+
+    /// <summary>
+    /// A launcher whose <paramref name="role"/> is configured for <paramref name="kind"/>, over a
+    /// runner that RECORDS the launch instead of starting anything. The launch is where a
+    /// bridge-driven decision becomes observable at all: that runner never builds a command line, so
+    /// there is no script to decode and the assertion has to be on what the runner was handed.
+    /// </summary>
+    (IOrchestrationLauncher Launcher, RecordingRunner_Fake Runner) Launcher_WithRunnerFor(SessionRoles role, SessionRunners kind)
+    {
+        var config = new JsonObject
+        {
+            ["repos"] = new JsonArray(),
+            ["runners"] = new JsonObject
+            {
+                [SessionRole_Names.Get_ConfigKey(role)] = new JsonObject { ["runner"] = SessionRunner_Names.Get_Word(kind) },
+            },
+        };
+
+        File.WriteAllText(_paths.ConfigFile, config.ToJsonString());
+
+        var runner = new RecordingRunner_Fake(kind);
+
+        var launcher = OrchestrationLauncher_Factory.Create(
+            _paths,
+            OrchestratorConfigProvider_Factory.Create(_paths),
+            _store,
+            [SessionRunner_Factory.Create_Terminal(_spawner), runner],
+            OrchestrationLog_Factory.Create(_paths));
+
+        return (launcher, runner);
+    }
+
+    string Write_Transcript(string sessionId)
+    {
+        var transcript = Path.Combine(_tempRoot, "projects", $"{sessionId}.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(transcript) ?? throw new Exception($"Transcript path '{transcript}' has no directory"));
+        File.WriteAllText(transcript, """{"type":"summary","summary":"a conversation"}""" + "\n");
+        return transcript;
+    }
+
+    /// <summary>The live probe shape trimmed to what the respawn reads, written with the BOM the statusline's Set-Content leaves.</summary>
+    static void Write_ProbeFile(string probeFile, string sessionId, string transcriptPath)
+    {
+        var payload = new JsonObject
+        {
+            ["session_id"] = sessionId,
+            ["transcript_path"] = transcriptPath,
+            ["model"] = new JsonObject { ["id"] = "claude-fable-5-1", ["display_name"] = "Fable 5.1" },
+        };
+
+        File.WriteAllText(probeFile, payload.ToJsonString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+    }
+
     static bool Wait_Until(Func<bool> condition)
     {
         for (var attempt = 0; attempt < 100; attempt++)
@@ -219,6 +384,22 @@ public class OrchestrationLauncherTests : IDisposable
         }
 
         return false;
+    }
+}
+
+/// <summary>
+/// Records the launch it is handed instead of starting anything. The SEAM's own input is what a
+/// bridge-driven decision can be asserted on: those runners build no command line, so the script
+/// the other cases decode does not exist for them.
+/// </summary>
+internal sealed class RecordingRunner_Fake(SessionRunners kind) : ISessionRunner
+{
+    public SessionRunners Kind { get; } = kind;
+    public List<ISessionLaunch> Launches { get; } = [];
+
+    public void Start(ISessionLaunch launch)
+    {
+        Launches.Add(launch);
     }
 }
 
