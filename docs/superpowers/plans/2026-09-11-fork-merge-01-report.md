@@ -95,3 +95,93 @@ and `kit/hooks/supervisor-awaiting-answer-check.sh` auto-merged carrying BOTH si
 `SUPERVISION_ROOT="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"` and master's `.paused`
 exit and `case "$AIORCH_ROLE" in supervisor|solo)`) — Tasks 5 and 6 verify them. `CLAUDE.md`
 auto-merged; Task 13 rewrites the merged decisions.
+
+## Red after the merge commit (Windows, 2026-09-11)
+
+One run, on the merge commit **plus** the Task 1 cherry-pick (`40c8b2d`) — the cherry-pick was taken
+BEFORE this run on purpose, because its fixture scrubs `AIORCH_*` and the session running the merge
+carries `AIORCH_ROLE=solo`; without it the baseline would have carried eleven
+`ChannelAppendHelperInteropTests` refusals that no later task will ever see. Command:
+
+```
+dotnet test AIOrchestratorCoreLib.Tests --no-build -c Debug   # full log: ../merge-baseline-tests.log
+```
+
+**Non superati: 22 · Superati: 3428 · Ignorati: 4 · Totale: 3454 · 6 m 9 s.**
+(The fork's own convention note claims 0 red / 9 skipped — that is its author's macOS. Here the six
+macOS file-lock cases RUN, which is most of the difference in the skip count. The four skipped are
+the three live smokes that self-skip without `CLAUDE_CONTRACT_LIVE=1`, plus
+`PrintTurnLimitResetTests.AStateFileThatCannotBeWritten_CostsOneSession_NotTheWholeResume`.)
+
+**This is the list every later task compares against. Compare the NAMES, never the count.**
+
+### A. Master-only tests of features this merge dropped — expected red, they go green when re-ported
+
+```
+AIOrchestratorCoreLib.Tests.Bridge.BusyNoticeRespectsAnAnswerScanTests.TheBusyNotice_IsGuardedByTheAnsweredFlag
+AIOrchestratorCoreLib.Tests.Tailing.CompactionAsksItsGuardInsideTheGateTests.AnEntryAppendedWhileCompactionWaitsForTheGate_IsStillMirrored
+```
+
+Both belong to the owner-answer-credit row (58ff547) — **Task 7**. The first is a SOURCE SCAN: it
+greps `BridgeEngineModel.cs` for `!pending.Answered`, which the fork's engine does not contain.
+
+### B. The Fable-5.1-vs-Opus default — the ledger's `plan 02` row, seen as four reds
+
+`Configuration/OrchestratorConfig/OrchestratorConfig_Factory.cs` auto-merged and kept master's
+`DEFAULT_SUPERVISOR_MODEL = DEFAULT_IMPLEMENTER_MODEL = "claude-fable-5-1"`; the fork's tests expect
+`"opus"` (spec §11.4 keeps Opus as the shipped default and moves Fable into the `classic` preset).
+
+```
+AIOrchestratorCoreLib.Tests.Configuration.OrchestratorConfigLoaderGuardrailsTests.Save_OverACorruptConfigJson_StillSucceeds_AndWritesTheKnownKeys
+AIOrchestratorCoreLib.Tests.Configuration.PerRoleModelDefaultsTests.AMistypedModelValue_DoesNotTakeDownTheProviderOnTheStartupPath
+AIOrchestratorCoreLib.Tests.Configuration.PerRoleModelDefaultsTests.AnEmptyImplementerModel_IsAbsentForEveryRoleThatRidesIt
+AIOrchestratorCoreLib.Tests.Configuration.PerRoleModelDefaultsTests.WithNoConfigFileAtAll_EveryRoleGetsItsShippedDefault
+```
+
+### C. Statusline PowerShell-vs-C# parity, Windows only — seven fixtures
+
+Every one differs on the same thing: the `·` separator and the accented run come back mangled from
+the PowerShell reference under this machine's console code page. Not a merge effect (the fixtures and
+`statusline.ps1` are the fork's), but it is in the baseline and must stay in it until someone fixes
+the encoding.
+
+```
+AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "communicator-green")
+AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "implementer-never-shows-the-ledger")
+AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "reviewer-without-member-falls-back")
+AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "supervisor-named-short-progress")
+AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "supervisor-stale-progress-hidden")
+AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "unorchestrated-posix-path-full-context")
+AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "unorchestrated-windows-path")
+```
+
+### D. Print-runner and watcher, Windows file-lock and wall-clock deadlines — six
+
+The fork's own `.claude/rules/code-conventions.md` names this class exactly: `Drive_Until` polls a
+wall-clock deadline while every tick spawns a fake-CLI process, and Windows file-lock semantics are
+the reason six cases are honest skips on macOS. Two of these six failed with a raw
+`System.IO.IOException ... cannot access the file`, one with a `Win32Exception` inside the watcher.
+
+```
+AIOrchestratorCoreLib.Tests.Bridge.ChannelChangeWakerTests.ARootDeletedAndRecreated_IsNoticedOnceAndTheWatchComesBack
+AIOrchestratorCoreLib.Tests.Running.ClosingTurnReviewFixTests.AClosingTurnThatSaysNothing_IsAFailedClosingTurn_AndTheBriefIsStillPending
+AIOrchestratorCoreLib.Tests.Running.MemberTrafficRidesOneDigestedTurnTests.TwoMembersReportingInsideTheWindow_BuyOneSupervisorTurn
+AIOrchestratorCoreLib.Tests.Running.MultiSourceSupervisorTests.AfterABridgeRestart_NoEntryIsDeliveredTwice_AndNoneIsLost
+AIOrchestratorCoreLib.Tests.Running.PrintTurnDispatcherTests.SecondTurn_ResumesTheTranscript_WithThePromptOnStdin
+AIOrchestratorCoreLib.Tests.Running.PrintTurnLimitResetTests.ResumeClear_LeavesANonDeferredSessions_StateFileUntouched_AndLogsNothingForIt
+```
+
+### E. The channel-append tool — two, and ONE of them is this session's own environment
+
+```
+AIOrchestratorCoreLib.Tests.Kit.ChannelAppendTypedEntriesTests.AWellFormedQuestionIsWritten_WithTheToolsOwnIndexAndStamp
+AIOrchestratorCoreLib.Tests.Kit.ChannelAppendTypedEntriesTests.TheOldUntypedCallStillWrites_AndParsesAsUntyped
+```
+
+**Verified, not guessed:** re-run alone with `AIORCH_ROLE`/`AIORCH_ID`/`AIORCH_MEMBER` unset, the
+class goes 12 passed / 1 failed — `TheOldUntypedCallStillWrites_AndParsesAsUntyped` is GREEN and only
+`AWellFormedQuestionIsWritten_WithTheToolsOwnIndexAndStamp` remains. So the second name above is an
+environment leak from the session that ran the merge, not a property of the tree. **Task 1's fixture
+scrub covers `ChannelAppendHelperInteropTests` only; `ChannelAppendTypedEntriesTests` sets
+`AIORCH_ROLE` per case but lets `AIORCH_ID` and `AIORCH_MEMBER` through from the parent process.** A
+later task running from a clean shell should expect 21 red here, not 22.
