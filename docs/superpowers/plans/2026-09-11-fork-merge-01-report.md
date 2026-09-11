@@ -8,8 +8,8 @@ regression the owner will meet on the phone.
 | master change (commit) | file(s) | restored by | done |
 |---|---|---|---|
 | `--resume` on respawn for terminal supervisor/solo (5e7ed6b) | SpawnCommand_Builder, OrchestrationLauncherModel, ResumableSession_Resolver | Task 3 | [x] 27a83c7 |
-| effort flag + role default xhigh for supervisor/solo (60671ac, 39fc6b3) | SpawnCommand_Builder, session model/serializer/store | Task 3, Task 4 | [ ] — **Task 3's half is in 27a83c7**: `SUPERVISION_EFFORT_LEVEL`, the `--effort` flag on every builder, `ISessionLaunch.Effort` carried by the terminal runner, and master's seven effort cases back in `SpawnCommandBuilderTests`. Both launcher call sites pass `effort: null`, so nothing but the role default reaches a command line. **Task 4 owes the other half** — `Supervisor/ImplementerEffortOverride` on the session model, serializer and store, the two `Resolve_Effort` reads at those call sites, and master's `Respawn_PassesTheStoredEffortOverride_ToTheSupervisorAndToEveryMemberKind` (which is why `OrchestrationLauncherTests` is not fully restored either). |
-| `/model` `/effort` from the phone, Apply_Dial, role picker (7bdc55e, 81038e4, 7f658e0) | BridgeEngineModel, Telegram/ModelEffort*, BotCommandMenu | Task 4 | [ ] |
+| effort flag + role default xhigh for supervisor/solo (60671ac, 39fc6b3) | SpawnCommand_Builder, session model/serializer/store | Task 3, Task 4 | [x] 27a83c7 (Task 3) + f392567 (Task 4) — `SUPERVISION_EFFORT_LEVEL`, the `--effort` flag on every builder and `ISessionLaunch.Effort` came with Task 3; `Supervisor/ImplementerEffortOverride` on the session triple, serializer and store, the two reads at the launcher call sites (`session.SupervisorEffortOverride` / `session.ImplementerEffortOverride`, no longer `effort: null`) and master's `Respawn_PassesTheStoredEffortOverride_ToTheSupervisorAndToEveryMemberKind` came with Task 4. `SessionJsonSerializerTests` un-parked with it — **it carries no `Paused` case**, so the brief's `!~Paused` filter was never needed and Task 5 inherits nothing here. |
+| `/model` `/effort` from the phone, Apply_Dial, role picker (7bdc55e, 81038e4, 7f658e0) | BridgeEngineModel, Telegram/ModelEffort*, BotCommandMenu | Task 4 | [x] TASK4_ENGINE_COMMIT — the five `Telegram/ModelEffort*` types were in the tree and UNWIRED (they were never parked); they are now reached from the engine's dispatch chain, `Handle_CallbackTap_Async` (after the topic bar, before the generic `opt-` path) and the `set-model` request branch, which now goes through the same `Apply_Dial`. **One deliberate difference from master:** `Apply_Dial` asks `_launcher.Resolve_RunnerKind(role, orchId)` and SKIPS the kill+respawn for a bridge-driven session — master predates the runner seam and killed unconditionally. `Send_DialPrompt_Async` keeps master's `now:` line (`UsageTotals_Reader.Read_ModelReading_OrNull` + `ModelReading_Formatter`, both already in the tree) but drops master's Italian-layer translate: the fork abolished that layer on 2026-09-09. Master's `/italian` command is NOT re-ported for the same reason. |
 | owner `/pause` and 💤 (a2c9a3d) | session model/serializer/store, PausedFlag_Marker, TelegramDeliveryModes, run-to-the-end hook | Task 5 | [ ] |
 | question hold in the mirror loop (e637cb2) | BridgeEngineModel (MirrorOutcomes, heldChannels), QuestionHold_Policy, awaiting-answer hook (solo). **The PROSE is already in the tree and the WIRING is not:** `kit/skills/solo/SKILL.md` promises the solo *"the app HOLDS this channel"* (it came in with this merge, §"The one file resolved by hand") while `QuestionHold_Policy` has no production caller. They must land together — a role command that promises a hold nobody performs is worse than silence. | Task 6 | [ ] |
 | owner-answer credit: Raise_OwnerWait, Is_TurnEndDeclaration, /merge opens the tracker (58ff547) | BridgeEngineModel, OwnerPush_Policy | Task 7 | [ ] |
@@ -47,7 +47,7 @@ own files back**; Task 14 deletes the folder and the item.
 
 | parked file | covers | un-parked by |
 |---|---|---|
-| `SessionJsonSerializerTests.cs` | effort overrides through `session.json` (`CreateFrom_Existing_With*EffortOverride`) | Task 3 / Task 4 |
+| ~~`SessionJsonSerializerTests.cs`~~ **UN-PARKED (Task 4, f392567)** → `Sessions/SessionJsonSerializerTests.cs` | effort overrides through `session.json` (`CreateFrom_Existing_With*EffortOverride`) — three cases, and **no `Paused` case at all**, contrary to the brief | Task 4 — done |
 | `ModelOnTheStatusLineTests.cs` | `supervisorModel` on the topic status line (`TopicStatusLine_Builder.Build` / `_Planner.Plan`) | Task 4 / Task 8 |
 | `AStatusLineDoesNotSpendTheOwnersWaitTests.cs` | the owner-answer credit vs a `STATUS`/`WAITING ON` line | Task 7 |
 | `MergeCommandOpensTheReplyTrackerTests.cs` | `/merge` opens `Track_OwnerReply` and its turn end is announced | Task 7 |
@@ -96,8 +96,8 @@ already there still has to wire it.**
 `Spawning/ResumableSession_Resolver.cs` (Task 3 — still reached from `Limits/RateLimits_Reader.cs`,
 which only master changed) · `Status/PausedFlag_Marker.cs` (Task 5) ·
 `Status/SessionModelReading/*` (Task 8 — still reached from `Usage/UsageTotals_Reader.cs`) ·
-`Telegram/EffortLevels.cs`, `Telegram/ModelChoices.cs`, `Telegram/ModelEffortButton_Data.cs`,
-`Telegram/ModelEffortCommand_Parser.cs`, `Telegram/ModelEffortPrompt_Builder.cs` (Task 4) ·
+~~`Telegram/EffortLevels.cs`, `Telegram/ModelChoices.cs`, `Telegram/ModelEffortButton_Data.cs`,
+`Telegram/ModelEffortCommand_Parser.cs`, `Telegram/ModelEffortPrompt_Builder.cs`~~ **WIRED (Task 4)** ·
 `Telegram/ReplyKeyboard_Markup.cs` (Task 9).
 
 ### Master changes that auto-merged into SHARED files and SURVIVED — do NOT re-port these

@@ -4713,29 +4713,13 @@ internal sealed class BridgeEngineModel(
                         continue;
                     }
 
-                    _store.Set_SupervisorModelOverride(request.OrchId, request.Model);
-                    SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_SupervisorPidFile(request.OrchId));
-                    _launcher.Respawn_Supervisor(request.OrchId);
+                    // The same apply path the phone's /model uses, so the two cannot drift.
+                    Apply_Dial(request.OrchId, Telegram.ModelEffortKinds.Model, Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE, request.Model, request.Reason);
                 }
                 else
                 {
-                    _store.Set_ImplementerModelOverride(request.OrchId, request.Model);
-                    var session = _store.Get_Session(request.OrchId);
-
-                    foreach (var member in session.Members)
-                    {
-                        if (member.ClosedUtc != null)
-                            continue;
-
-                        SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(request.OrchId, member.MemberId));
-                        _launcher.Respawn_Implementer(request.OrchId, member.MemberId);
-                    }
+                    Apply_Dial(request.OrchId, Telegram.ModelEffortKinds.Model, Telegram.ModelEffortButton_Data.IMPLEMENTER_ROLE, request.Model, request.Reason);
                 }
-
-                Append_OrchestrationAppEntry(
-                    request.OrchId, AppEntryAudiences.Owner,
-                    $"model set: {request.Role} → {request.Model} — {request.Reason}",
-                    "Affected sessions respawned on the new model; they resume from their channels.");
             }
             catch (Exception ex)
             {
@@ -6861,6 +6845,17 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_CostReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command != null && Telegram.ModelEffortCommand_Parser.Is_Command(command, MODEL_COMMAND))
+                    {
+                        // Takes an argument, so it is matched on its leading word — the lexer hands back
+                        // the whole remainder ("model fable 5.1"), and equality would only ever see the
+                        // bare form.
+                        await Handle_DialCommand_Async(client, message.MessageThreadId, command, Telegram.ModelEffortKinds.Model, cancellationToken);
+                    }
+                    else if (command != null && Telegram.ModelEffortCommand_Parser.Is_Command(command, EFFORT_COMMAND))
+                    {
+                        await Handle_DialCommand_Async(client, message.MessageThreadId, command, Telegram.ModelEffortKinds.Effort, cancellationToken);
+                    }
                     else if (command == "limits")
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
@@ -7744,6 +7739,357 @@ internal sealed class BridgeEngineModel(
             : "📸 Status screenshots OFF — the half-hourly status is text only from here on.";
 
         await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
+    }
+
+    const string MODEL_COMMAND = "model";
+    const string EFFORT_COMMAND = "effort";
+
+    /// <summary>
+    /// /model and /effort from the phone (owner request, 2026-09-09). Bare → buttons. A typed value
+    /// resolves through the catalogue and is applied; one that does not resolve is answered with the
+    /// buttons rather than a guess — "even better if I just write the command and then I get
+    /// prompted with the possible options so I don't have to worry about spelling mistakes." In a
+    /// crew a typed value with no role asks which role with two buttons, because applying it to
+    /// both would respawn an implementer the owner may not have meant.
+    /// </summary>
+    async Task Handle_DialCommand_Async(
+        ITelegramApiClient client, long? messageThreadId, string command, Telegram.ModelEffortKinds kind, CancellationToken cancellationToken)
+    {
+        var verb = Dial_Verb(kind);
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                $"/{verb} works inside an orchestration's own topic — there is no session here to set it on.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var (role, argument) = Telegram.ModelEffortCommand_Parser.Parse_Argument(command, verb);
+            var hasSupervisor = !Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc);
+
+            // The same guard the set-model request has: spawning a supervisor into a basic
+            // orchestration flips its shape for good.
+            if (role == Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE && !hasSupervisor)
+            {
+                await Send_DirectReply_BestEffort_Async(
+                    client, messageThreadId,
+                    $"This is a basic orchestration — there is no supervisor to set. Its one session sits on the implementer slot: /{verb} imp <value>, or just /{verb} for the buttons.",
+                    cancellationToken);
+
+                return;
+            }
+
+            if (argument.Length == 0)
+            {
+                await Send_DialPrompt_Async(client, messageThreadId, session, Build_DialPrompt(kind, session.OrchId, hasSupervisor, role), cancellationToken);
+                return;
+            }
+
+            var value = Resolve_DialValue_OrNull(kind, argument);
+
+            if (value == null)
+            {
+                var prompt = Build_DialPrompt(kind, session.OrchId, hasSupervisor, role);
+
+                await Send_DialPrompt_Async(
+                    client, messageThreadId, session, ($"I don't know a {verb} called '{argument}'. {prompt.Text}", prompt.Rows), cancellationToken);
+
+                return;
+            }
+
+            if (role == null && hasSupervisor)
+            {
+                await Send_DialPrompt_Async(
+                    client, messageThreadId, session, Telegram.ModelEffortPrompt_Builder.Build_RolePickPrompt(kind, session.OrchId, value), cancellationToken);
+
+                return;
+            }
+
+            Apply_Dial(session.OrchId, kind, role ?? Telegram.ModelEffortButton_Data.IMPLEMENTER_ROLE, value, $"/{verb} from the phone");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, $"/{verb} failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"/{verb} failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// A /model or /effort button. The payload is stateless (orchestration, role, value), so the
+    /// tap is applied here directly and never reaches an agent as a synthetic owner message.
+    /// </summary>
+    async Task<bool> Try_HandleModelEffortTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
+    {
+        var parsed = Telegram.ModelEffortButton_Data.Parse_OrNull(tap.Data);
+
+        if (parsed == null)
+            return false;
+
+        var (kind, orchId, role, value) = parsed.Value;
+        var verb = Dial_Verb(kind);
+
+        // Answered before the work: a respawn takes seconds, and an unanswered callback leaves the
+        // button spinning on the owner's phone for the whole of it.
+        await Answer_CallbackTap_BestEffort_Async(client, tap.CallbackQueryId, "✓", cancellationToken);
+
+        if (Note_OwnerSpoke_AndWasAway())
+            await Exit_AwayMode_Async(cancellationToken);
+
+        try
+        {
+            var session = _store.Get_Session(orchId);
+
+            if (session.ClosedUtc != null)
+            {
+                await Send_DirectReply_BestEffort_Async(client, tap.MessageThreadId, $"{orchId} is closed — nothing to set the {verb} on.", cancellationToken);
+                return true;
+            }
+
+            if (role == Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE && Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc))
+            {
+                await Send_DirectReply_BestEffort_Async(
+                    client, tap.MessageThreadId, $"{orchId} is a basic orchestration — there is no supervisor to set. Tap an imp button instead.", cancellationToken);
+
+                return true;
+            }
+
+            Apply_Dial(orchId, kind, role, value, "tapped on the phone");
+            await Record_DialTap_BestEffort_Async(client, tap.MessageId, $"✓ {verb} → {Describe_DialValue(kind, value)} for {role}", cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(orchId, $"{verb} tap failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, tap.MessageThreadId, $"{verb} change failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+
+        return true;
+    }
+
+    /// <summary>Rewrites the prompt into a record of what was tapped; a failure here costs nothing but the record.</summary>
+    async Task Record_DialTap_BestEffort_Async(ITelegramApiClient client, long? messageId, string text, CancellationToken cancellationToken)
+    {
+        if (messageId == null)
+            return;
+
+        try
+        {
+            await client.Edit_MessageText_Async(messageId.Value, text, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"could not rewrite the tapped prompt: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Stores the override and respawns the sessions it applies to; they pick up from their
+    /// channels. ONE implementation for the phone (/model, /effort, their buttons) and for the
+    /// agents' set-model request, so the two can never disagree about what "apply" means.
+    ///
+    /// <para>
+    /// A BRIDGE-DRIVEN SESSION IS STORED-AND-LEFT, and that is the only difference. It has no pid
+    /// file to kill and no `claude` command line to re-flag — the dispatcher runs its turns — so
+    /// respawning it would open a terminal window beside a session the app is already driving, and
+    /// killing a pid file that was never written would be luck rather than design. (The turn command
+    /// does not carry the effort flag yet; plan 02 adds it to PrintTurnCommand_Builder, and until
+    /// then a stored effort reaches a bridge-driven session at its next SPAWN, not its next turn.)
+    /// </para>
+    /// </summary>
+    void Apply_Dial(string orchId, Telegram.ModelEffortKinds kind, string role, string value, string reason)
+    {
+        var verb = Dial_Verb(kind);
+
+        if (role == Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE)
+        {
+            Store_SupervisorDial(orchId, kind, value);
+            Restart_ForDial_IfItHasAShell(orchId, Running.SessionRoles.Supervisor, verb, _paths.Get_SupervisorPidFile(orchId), () => _launcher.Respawn_Supervisor(orchId));
+        }
+        else if (role == Telegram.ModelEffortButton_Data.IMPLEMENTER_ROLE)
+        {
+            Store_ImplementerDial(orchId, kind, value);
+            var session = _store.Get_Session(orchId);
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc != null)
+                    continue;
+
+                var memberId = member.MemberId;
+                var memberRole = Running.SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId));
+
+                Restart_ForDial_IfItHasAShell(
+                    orchId, memberRole, verb, _paths.Get_ImplementerPidFile(orchId, memberId), () => _launcher.Respawn_Implementer(orchId, memberId));
+            }
+        }
+        else
+        {
+            throw new Exception($"Unhandled dial role '{role}' for {verb} → {value} on {orchId}");
+        }
+
+        _log.Log_Info(orchId, $"{verb} set: {role} → {value} — {reason}");
+
+        Append_OrchestrationAppEntry(
+            orchId, AppEntryAudiences.Owner,
+            $"{verb} set: {role} → {Describe_DialValue(kind, value)} — {reason}",
+            $"Affected sessions respawned on the new {verb}; they resume from their channels.");
+    }
+
+    /// <summary>
+    /// The kill-and-respawn half of a dial, SKIPPED for a session the bridge drives. The runner is
+    /// asked of the launcher rather than of the config key, because a role configured for a
+    /// transport this stage cannot run is started in a terminal anyway — and a session that ended up
+    /// in a window is a session whose flag only ever changes at spawn.
+    /// </summary>
+    void Restart_ForDial_IfItHasAShell(string orchId, Running.SessionRoles role, string verb, string pidFile, Action respawn)
+    {
+        if (Running.Runner_Support.Is_BridgeDriven(_launcher.Resolve_RunnerKind(role, orchId)))
+        {
+            _log.Log_Info(orchId, $"{verb} override stored for {Running.SessionRole_Names.Get_ConfigKey(role)} — a bridge-driven session has no window to restart, so it picks the flag up at its next spawn (the turn command does not carry it yet)");
+            return;
+        }
+
+        SessionTerminator.Kill_SessionTree_ByPidFile(pidFile);
+        respawn();
+    }
+
+    void Store_SupervisorDial(string orchId, Telegram.ModelEffortKinds kind, string value)
+    {
+        switch (kind)
+        {
+            case Telegram.ModelEffortKinds.Model:
+                _store.Set_SupervisorModelOverride(orchId, value);
+                break;
+            case Telegram.ModelEffortKinds.Effort:
+                _store.Set_SupervisorEffortOverride(orchId, value);
+                break;
+            default:
+                throw new Exception($"Unhandled ModelEffortKinds: {kind}");
+        }
+    }
+
+    void Store_ImplementerDial(string orchId, Telegram.ModelEffortKinds kind, string value)
+    {
+        switch (kind)
+        {
+            case Telegram.ModelEffortKinds.Model:
+                _store.Set_ImplementerModelOverride(orchId, value);
+                break;
+            case Telegram.ModelEffortKinds.Effort:
+                _store.Set_ImplementerEffortOverride(orchId, value);
+                break;
+            default:
+                throw new Exception($"Unhandled ModelEffortKinds: {kind}");
+        }
+    }
+
+    /// <summary>
+    /// The buttons, headed by what each live session currently reports — the same probe the pulse
+    /// reads, never the override, because a session respawned before an override landed still runs
+    /// the old one.
+    ///
+    /// <para>
+    /// SENT STRAIGHT THROUGH THE CLIENT, silent, like the other two button-ROW senders in this file:
+    /// the prose sender has no button-rows overload, because there is no HTML-with-rows call on
+    /// <see cref="ITelegramApiClient"/> to fall back from — and the text here is the app's own, not
+    /// an agent's Markdown.
+    /// </para>
+    /// </summary>
+    async Task Send_DialPrompt_Async(
+        ITelegramApiClient client, long? messageThreadId, IOrchestrationSession session,
+        (string Text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Rows) prompt, CancellationToken cancellationToken)
+    {
+        var now = Describe_CurrentDials_OrNull(session);
+        var text = now == null ? prompt.Text : $"now: {now}\n{prompt.Text}";
+
+        var messageId = await client.Send_MessageWithButtonRows_Async(messageThreadId, text, prompt.Rows, TelegramSendSounds.Silent, cancellationToken);
+        Remember_TopicMessage(messageThreadId, messageId);
+    }
+
+    /// <summary>"sup Fable 5.1 xhigh · imp-1 Sonnet 5 high" — what each live session reports, or null when nothing has reported yet.</summary>
+    string? Describe_CurrentDials_OrNull(IOrchestrationSession session)
+    {
+        List<string> parts = [];
+
+        var supervisorReading = UsageTotals_Reader.Read_ModelReading_OrNull(
+            Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE));
+
+        if (supervisorReading != null)
+            parts.Add($"sup {ModelReading_Formatter.Describe(supervisorReading)}");
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+                continue;
+
+            var reading = UsageTotals_Reader.Read_ModelReading_OrNull(
+                Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE));
+
+            if (reading != null)
+                parts.Add($"{member.MemberId} {ModelReading_Formatter.Describe(reading)}");
+        }
+
+        return parts.Count == 0 ? null : string.Join(" · ", parts);
+    }
+
+    static string Dial_Verb(Telegram.ModelEffortKinds kind)
+    {
+        return kind switch
+        {
+            Telegram.ModelEffortKinds.Model => MODEL_COMMAND,
+            Telegram.ModelEffortKinds.Effort => EFFORT_COMMAND,
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
+    }
+
+    static string? Resolve_DialValue_OrNull(Telegram.ModelEffortKinds kind, string argument)
+    {
+        return kind switch
+        {
+            Telegram.ModelEffortKinds.Model => Telegram.ModelChoices.Resolve_OrNull(argument),
+            Telegram.ModelEffortKinds.Effort => Telegram.EffortLevels.Resolve_OrNull(argument),
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
+    }
+
+    static string Describe_DialValue(Telegram.ModelEffortKinds kind, string value)
+    {
+        return kind switch
+        {
+            Telegram.ModelEffortKinds.Model => Telegram.ModelChoices.Describe(value),
+            Telegram.ModelEffortKinds.Effort => value,
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
+    }
+
+    static (string Text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Rows) Build_DialPrompt(
+        Telegram.ModelEffortKinds kind, string orchId, bool hasSupervisor, string? role)
+    {
+        return (kind, role) switch
+        {
+            (Telegram.ModelEffortKinds.Model, null) => Telegram.ModelEffortPrompt_Builder.Build_ModelPrompt(orchId, hasSupervisor),
+            (Telegram.ModelEffortKinds.Model, { } wantedRole) => Telegram.ModelEffortPrompt_Builder.Build_ModelPrompt_ForRole(orchId, wantedRole),
+            (Telegram.ModelEffortKinds.Effort, null) => Telegram.ModelEffortPrompt_Builder.Build_EffortPrompt(orchId, hasSupervisor),
+            (Telegram.ModelEffortKinds.Effort, { } wantedRole) => Telegram.ModelEffortPrompt_Builder.Build_EffortPrompt_ForRole(orchId, wantedRole),
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
     }
 
     /// <summary>
@@ -10413,6 +10759,13 @@ internal sealed class BridgeEngineModel(
         // generic path below, which does not recognise the data and would answer the owner "expired"
         // for a button that is meant to work every time they press it.
         if (await Try_HandleTopicCommandTap_Async(client, tap, cancellationToken))
+            return;
+
+        // A /model or /effort choice is the app's own decision as well, and it lands here for the
+        // same reason the bar does: the payload names the orchestration, the role and the value, so
+        // the tap is applied directly. Through the generic path below it would become a synthetic
+        // owner message and land in an agent's channel.
+        if (await Try_HandleModelEffortTap_Async(client, tap, cancellationToken))
             return;
 
         PendingButtonRecord? registered;
