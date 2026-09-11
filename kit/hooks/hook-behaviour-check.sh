@@ -1245,11 +1245,11 @@ printf '%s
 ' '- [ ] a line nobody is blocked on' > "$RUNEND_PLAN"
 printf '%s
 ' '## [1] FROM solo - d - s' 'QUESTION: merge or hold?' > "$RUNEND_CHANNEL"
-check "the last entry is a question" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "the last entry is a question" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 printf '%s
 ' '## [1] FROM solo - d - s' 'QUESTION: merge or hold?' '' '## [2] FROM solo - d - s' 'carried on regardless' > "$RUNEND_CHANNEL"
-check "an OLDER question does not exempt" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "an OLDER question does not exempt" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 # WAITING ON SOMETHING ALREADY RUNNING. The owner, 2026-08-21: the hook "keeps intervening
 # constantly, essentially preventing solo from responding to me". The session it happened to had one
@@ -1266,29 +1266,29 @@ printf '%s
 
 printf '%s
 ' '## [1] FROM solo - d - suite running, WAITING ON the full suite' 'body text' > "$RUNEND_CHANNEL"
-check "the marker in the subject" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "the marker in the subject" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 printf '%s
 ' '## [1] FROM solo - d - suite running' 'WAITING ON the full suite (52 projects)' > "$RUNEND_CHANNEL"
-check "the marker starting a body line" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "the marker starting a body line" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 printf '%s
 ' '## [1] FROM solo - d - suite running' 'I am waiting on the full suite' > "$RUNEND_CHANNEL"
-check "lowercase prose is not a declaration" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "lowercase prose is not a declaration" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 printf '%s
 ' '## [1] FROM solo - d - suite running' 'Right now I am WAITING ON the suite' > "$RUNEND_CHANNEL"
-check "mid-line is discussion, not a marker" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "mid-line is discussion, not a marker" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 # SELF-CLEARING, and this is what makes the escape safe to hand out: it lasts exactly as long as it
 # is the newest entry. The moment the session says anything else, the wait is over by its own account.
 printf '%s
 ' '## [1] FROM solo - d - WAITING ON the suite' '' '## [2] FROM solo - d - suite done' 'all green' > "$RUNEND_CHANNEL"
-check "a superseded wait does not exempt" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "a superseded wait does not exempt" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 printf '%s
 ' '## [1] FROM solo - d - suite done' 'all green' '' '## [2] FROM solo - d - WAITING ON the deploy' '' > "$RUNEND_CHANNEL"
-check "the newest entry declares the wait" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "the newest entry declares the wait" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 # "WAITING ONLY" CONTAINS "WAITING ON", and an escape that a near-miss can take is not an escape.
 # Exactly the shape of "MUTATION WINDOW CLOSED" containing "WINDOW CLOSED" -- the collision this kit
@@ -1296,15 +1296,38 @@ check "the newest entry declares the wait" ALLOW "$(verdict "$(run_hook "$RUNEND
 # a colon and a dash, or the marker becomes fussy in a way nobody will remember.
 printf '%s
 ' '## [1] FROM solo - d - s' 'WAITING ONLY for the reviewer to come back' > "$RUNEND_CHANNEL"
-check "WAITING ONLY is a near miss, not the marker" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "WAITING ONLY is a near miss, not the marker" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 printf '%s
 ' '## [1] FROM solo - d - s' 'WAITING ON: the full suite' > "$RUNEND_CHANNEL"
-check "a colon after the marker still counts" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "a colon after the marker still counts" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 printf '%s
 ' '## [1] FROM solo - d - WAITING ON - the full suite' 'body' > "$RUNEND_CHANNEL"
-check "a dash after the marker still counts" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+check "a dash after the marker still counts" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
+
+# AN APP ENTRY MUST NOT VOID A SESSION'S WAITING ON, and must not resurrect an ANSWERED QUESTION
+# either. The app writes into this same channel on its own schedule too (a STATUS digest every 30
+# minutes, an "[agent]" nudge), and reading "the file's last entry" let one of those silently
+# displace or revive a session's own declaration within minutes. Observed 2026-09-11 in
+# ai-orchestrator-24: a solo wrote WAITING ON as entries 41, 42 and 43, app entries 44, 39 and 40
+# (STATUS, STATUS, a nudge) landed right after each one in turn, and the hook fired again every
+# single time though nothing the SESSION had done had changed -- the owner, 2026-08-21 and again
+# 2026-09-11: "it keeps firing constantly, there's definitely something wrong with it".
+#
+# THIS IS ALSO WHY EVERY CASE ABOVE NOW PASSES `solo` EXPLICITLY to run_hook: they relied on the
+# coincidence that the OLD code read whichever entry was literally last, ignoring who wrote it, so
+# the harness's default role (`supervisor`, see run_hook's own default) never had to match the
+# channel's "FROM solo" fixtures. Reading SESSION_LAST_ENTRY made authorship load-bearing -- left on
+# the default role, six of the ALLOW cases above this comment would have gone DENY, a regression this
+# change would otherwise have shipped silently in a harness nothing here can run end to end.
+printf '%s
+' '## [1] FROM solo - d - WAITING ON the suite' 'kicked off the full suite in the background' '' '## [2] FROM app - d - STATUS' 'an automatic status digest, not a session turn' > "$RUNEND_CHANNEL"
+check "an app STATUS does not void a WAITING ON" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
+
+printf '%s
+' '## [1] FROM solo - d - asked' 'QUESTION: which way?' 'OPTION: a' 'OPTION: b' '' '## [2] FROM owner - d - via Telegram' 'go with a' '' '## [3] FROM app - d - STATUS' 'an automatic status digest' > "$RUNEND_CHANNEL"
+check "an app STATUS does not resurrect an answered question" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}' solo)")"
 
 printf '%s
 ' '## [1] FROM solo - d - s' 'a plain report' > "$RUNEND_CHANNEL"

@@ -87,6 +87,10 @@ public class RunToTheEndHookTests : IDisposable
     /// <summary>
     /// ONLY THE LAST ENTRY COUNTS. An old question further up the channel was answered long ago, and
     /// honouring it would let one ancient QUESTION exempt every turn for the rest of the orchestration.
+    ///
+    /// Both entries here are authored by "solo" — the session's own last entry and the file's last
+    /// entry are the same line in this fixture, so it is unaffected by reading SESSION_LAST_ENTRY
+    /// instead of the file's last line (below) and needed no change.
     /// </summary>
     [Fact]
     public void OnlyAQuestionInTheLASTEntryLetsTheTurnEnd()
@@ -98,6 +102,49 @@ public class RunToTheEndHookTests : IDisposable
 
         Write_Channel("## [1] FROM solo - x - asking\nbody\nQUESTION: which way?\nOPTION: a\nOPTION: b\n");
         Assert.False(Blocks("solo"));
+    }
+
+    /// <summary>
+    /// AN APP ENTRY MUST NOT VOID A SESSION'S WAITING ON. The app writes into the same channel on
+    /// its own schedule — a STATUS digest every 30 minutes, an "[agent]" nudge — and reading "the
+    /// file's last entry" let one of those silently displace an honest declaration within minutes.
+    ///
+    /// Observed 2026-09-11 in ai-orchestrator-24: a solo wrote WAITING ON as entries 41, 42 and 43,
+    /// and app entries 44, 39 and 40 (STATUS, STATUS, a nudge) landed right after each one in turn —
+    /// the hook fired again every single time, on a turn where nothing the SESSION had done had
+    /// changed. The owner: "it keeps firing constantly, there's definitely something wrong with it".
+    /// </summary>
+    [Fact]
+    public void AWaitingOnDeclaration_SurvivesALaterAppEntry()
+    {
+        Write_Plan("- [ ] still to do\n");
+
+        Write_Channel(
+            "## [2] FROM solo - x - WAITING ON the suite\nkicked off the full suite in the background\n\n"
+            + "## [3] FROM app - x - STATUS\nan automatic status digest, not a session turn\n");
+
+        Assert.False(Blocks("solo"), "an app STATUS entry landing after the session's own WAITING ON voided the escape");
+    }
+
+    /// <summary>
+    /// THE QUESTION ESCAPE IS NOT WIDENED BY THIS CHANGE. Reading the session's OWN last entry must
+    /// not resurrect a question the owner has already answered — that is exactly the old "only the
+    /// LAST entry counts" protection above, now anchored to the session's entry instead of the
+    /// file's last line: if a `## [n] FROM owner` header appears anywhere after the session's
+    /// question, the owner has written since, and the question is no longer open. An app STATUS
+    /// after the owner's answer must not change that.
+    /// </summary>
+    [Fact]
+    public void AQuestionTheOwnerAlreadyAnswered_DoesNotExemptTheTurn()
+    {
+        Write_Plan("- [ ] still to do\n");
+
+        Write_Channel(
+            "## [2] FROM solo - x - asked\nQUESTION: which way?\nOPTION: a\nOPTION: b\n\n"
+            + "## [3] FROM owner - x - via Telegram\ngo with a\n\n"
+            + "## [4] FROM app - x - STATUS\nan automatic status digest\n");
+
+        Assert.True(Blocks("solo"), "an answered question, read via the session's own last entry, still exempted the turn");
     }
 
     /// <summary>
