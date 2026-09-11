@@ -57,5 +57,4 @@ internal sealed class LaunchWitness_Fake(IOrchestrationLauncher inner, ISupervis
     public void Respawn_Communicator(string orchId) => inner.Respawn_Communicator(orchId);
     public void Respawn_Implementer(string orchId, string memberId) => inner.Respawn_Implementer(orchId, memberId);
     public void Spawn_GeneralSupervisor() => inner.Spawn_GeneralSupervisor();
-    public AIOrchestratorCoreLib.Running.SessionRunners Resolve_RunnerKind(AIOrchestratorCoreLib.Running.SessionRoles role, string orchId) => inner.Resolve_RunnerKind(role, orchId);
 }

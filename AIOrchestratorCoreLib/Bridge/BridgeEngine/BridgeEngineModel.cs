@@ -7922,7 +7922,9 @@ internal sealed class BridgeEngineModel(
         {
             Store_SupervisorDial(orchId, kind, value);
 
-            if (Restart_ForDial_IfItHasAShell(orchId, Running.SessionRoles.Supervisor, verb, _paths.Get_SupervisorPidFile(orchId), () => _launcher.Respawn_Supervisor(orchId)))
+            if (Restart_ForDial_IfItHasAShell(
+                    orchId, Running.SessionRoles.Supervisor, Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
+                    verb, _paths.Get_SupervisorPidFile(orchId), () => _launcher.Respawn_Supervisor(orchId)))
                 restarted++;
         }
         else if (role == Telegram.ModelEffortButton_Data.IMPLEMENTER_ROLE)
@@ -7939,7 +7941,7 @@ internal sealed class BridgeEngineModel(
                 var memberRole = Running.SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId));
 
                 if (Restart_ForDial_IfItHasAShell(
-                        orchId, memberRole, verb, _paths.Get_ImplementerPidFile(orchId, memberId), () => _launcher.Respawn_Implementer(orchId, memberId)))
+                        orchId, memberRole, memberId, verb, _paths.Get_ImplementerPidFile(orchId, memberId), () => _launcher.Respawn_Implementer(orchId, memberId)))
                 {
                     restarted++;
                 }
@@ -7965,14 +7967,22 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// The kill-and-respawn half of a dial, SKIPPED for a session the bridge drives. The runner is
-    /// asked of the launcher rather than of the config key, because a role configured for a
-    /// transport this stage cannot run is started in a terminal anyway — and a session that ended up
-    /// in a window is a session whose flag only ever changes at spawn.
+    /// The kill-and-respawn half of a dial, SKIPPED for a session the bridge drives.
+    ///
+    /// <para>
+    /// THE QUESTION IS THIS FILE'S OWN <see cref="Is_BridgeDriven(Running.SessionRoles, string, string)"/>,
+    /// registration included, and NOT the config runner alone. The two disagree for as long as a
+    /// runner flip takes to land: the owner sets the supervisor to <c>print</c> while its terminal
+    /// session is still alive in its window, and until that session dies the config says
+    /// bridge-driven and the world says otherwise. Deciding from the config there would store the
+    /// override, restart nothing, and tell the owner "nothing was restarted — this role's sessions
+    /// are driven by the app", about a session sitting in a window on their screen whose model never
+    /// changes. A fourth copy of this predicate is also how the three that exist would drift.
+    /// </para>
     /// </summary>
-    bool Restart_ForDial_IfItHasAShell(string orchId, Running.SessionRoles role, string verb, string pidFile, Action respawn)
+    bool Restart_ForDial_IfItHasAShell(string orchId, Running.SessionRoles role, string memberId, string verb, string pidFile, Action respawn)
     {
-        if (Running.Runner_Support.Is_BridgeDriven(_launcher.Resolve_RunnerKind(role, orchId)))
+        if (Is_BridgeDriven(role, orchId, memberId))
         {
             _log.Log_Info(orchId, $"{verb} override stored for {Running.SessionRole_Names.Get_ConfigKey(role)} — a bridge-driven session has no window to restart, so it picks the flag up at its next spawn (the turn command does not carry it yet)");
             return false;

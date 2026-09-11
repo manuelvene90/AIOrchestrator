@@ -562,8 +562,6 @@ internal sealed class OrchestrationLauncherModel(
             && _configProvider.Get_Current().Runners.Get_ForRole(role).Resume == ResumeModes.Transcript;
     }
 
-    public SessionRunners Resolve_RunnerKind(SessionRoles role, string orchId) => Resolve_Runner(role, orchId).Kind;
-
     ISessionRunner Resolve_Runner(SessionRoles role, string orchId)
     {
         var configured = _configProvider.Get_Current().Runners.Get_ForRole(role).Runner;
