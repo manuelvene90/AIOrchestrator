@@ -6,8 +6,8 @@
 # owed" written into the commit. This is that build, standing permanently instead of being owed.
 #
 # It builds ONLY the two things the other machines cannot: the WPF app, and the solution as a whole
-# (which includes it). CoreLib, the daemon and the suite are built and run continuously on the
-# machines people work from, so repeating them here would buy nothing and slow the signal down.
+# (which includes it). The suite runs here on both OSes because a suite that runs on one OS
+# certifies one OS (2026-09-11: 42 red on the first Windows run).
 name: windows-build
 
 on:
@@ -21,15 +21,42 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-
       # The app first, alone, so a failure names the project that cannot be built anywhere else.
       - name: Build the WPF app
         run: dotnet build AIOrchestrator/AIOrchestrator.csproj -c Debug -warnaserror:CS
-
-      # Then the whole solution, which is the only place every project is buildable at once.
       - name: Build the solution
         run: dotnet build AIOrchestrator.slnx -c Debug
+
+  # The suite on both OSes. Until 2026-09-11 it had never run on Windows in CI and the first local
+  # run there was 42 red; a suite that runs on one OS certifies one OS.
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install jq (Windows)
+        if: runner.os == 'Windows'
+        run: choco install jq -y --no-progress
+      - name: Install jq (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Build
+        run: dotnet build AIOrchestrator.slnx -c Debug
+      - name: Test CoreLib
+        run: dotnet test AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj --no-build -c Debug --logger "trx;LogFileName=corelib-${{ matrix.os }}.trx"
+      - name: Test claude-contract
+        run: dotnet test tools/claude-contract/ClaudeContract.Tests/ClaudeContract.Tests.csproj --no-build -c Debug
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.os }}
+          path: '**/TestResults/*.trx'
