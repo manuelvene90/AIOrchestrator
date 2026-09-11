@@ -7916,11 +7916,14 @@ internal sealed class BridgeEngineModel(
     void Apply_Dial(string orchId, Telegram.ModelEffortKinds kind, string role, string value, string reason)
     {
         var verb = Dial_Verb(kind);
+        var restarted = 0;
 
         if (role == Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE)
         {
             Store_SupervisorDial(orchId, kind, value);
-            Restart_ForDial_IfItHasAShell(orchId, Running.SessionRoles.Supervisor, verb, _paths.Get_SupervisorPidFile(orchId), () => _launcher.Respawn_Supervisor(orchId));
+
+            if (Restart_ForDial_IfItHasAShell(orchId, Running.SessionRoles.Supervisor, verb, _paths.Get_SupervisorPidFile(orchId), () => _launcher.Respawn_Supervisor(orchId)))
+                restarted++;
         }
         else if (role == Telegram.ModelEffortButton_Data.IMPLEMENTER_ROLE)
         {
@@ -7935,8 +7938,11 @@ internal sealed class BridgeEngineModel(
                 var memberId = member.MemberId;
                 var memberRole = Running.SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId));
 
-                Restart_ForDial_IfItHasAShell(
-                    orchId, memberRole, verb, _paths.Get_ImplementerPidFile(orchId, memberId), () => _launcher.Respawn_Implementer(orchId, memberId));
+                if (Restart_ForDial_IfItHasAShell(
+                        orchId, memberRole, verb, _paths.Get_ImplementerPidFile(orchId, memberId), () => _launcher.Respawn_Implementer(orchId, memberId)))
+                {
+                    restarted++;
+                }
             }
         }
         else
@@ -7946,10 +7952,16 @@ internal sealed class BridgeEngineModel(
 
         _log.Log_Info(orchId, $"{verb} set: {role} → {value} — {reason}");
 
+        // THE BODY SAYS WHAT ACTUALLY HAPPENED. Master's sentence — "affected sessions respawned" —
+        // was true of every session in a world where the dial always killed and respawned. It is not
+        // true of a bridge-driven one, and an owner-facing line that describes a restart nobody
+        // performed is the class of thing the log exists to prevent.
         Append_OrchestrationAppEntry(
             orchId, AppEntryAudiences.Owner,
             $"{verb} set: {role} → {Describe_DialValue(kind, value)} — {reason}",
-            $"Affected sessions respawned on the new {verb}; they resume from their channels.");
+            restarted == 0
+                ? $"Nothing was restarted — this role's sessions are driven by the app, not by a window. The new {verb} applies at their next spawn."
+                : $"{restarted} session(s) respawned on the new {verb}; they resume from their channels.");
     }
 
     /// <summary>
@@ -7958,16 +7970,17 @@ internal sealed class BridgeEngineModel(
     /// transport this stage cannot run is started in a terminal anyway — and a session that ended up
     /// in a window is a session whose flag only ever changes at spawn.
     /// </summary>
-    void Restart_ForDial_IfItHasAShell(string orchId, Running.SessionRoles role, string verb, string pidFile, Action respawn)
+    bool Restart_ForDial_IfItHasAShell(string orchId, Running.SessionRoles role, string verb, string pidFile, Action respawn)
     {
         if (Running.Runner_Support.Is_BridgeDriven(_launcher.Resolve_RunnerKind(role, orchId)))
         {
             _log.Log_Info(orchId, $"{verb} override stored for {Running.SessionRole_Names.Get_ConfigKey(role)} — a bridge-driven session has no window to restart, so it picks the flag up at its next spawn (the turn command does not carry it yet)");
-            return;
+            return false;
         }
 
         SessionTerminator.Kill_SessionTree_ByPidFile(pidFile);
         respawn();
+        return true;
     }
 
     void Store_SupervisorDial(string orchId, Telegram.ModelEffortKinds kind, string value)
