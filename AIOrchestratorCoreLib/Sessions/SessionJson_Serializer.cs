@@ -45,6 +45,7 @@ public static class SessionJson_Serializer
             ["ownerPresence"] = session.OwnerPresence.ToString(),
             ["awaitingTest"] = session.AwaitingTest,
             ["done"] = session.Done,
+            ["paused"] = session.Paused,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicDeletePendingUtc"] = session.TelegramTopicDeletePendingUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicDeletedUtc"] = session.TelegramTopicDeletedUtc?.ToString("O", CultureInfo.InvariantCulture),
@@ -122,7 +123,12 @@ public static class SessionJson_Serializer
             // Absent in every session written before the effort override existed, and null is the
             // right reading: no override means no --effort flag, so the CLI keeps its own default.
             Get_String_OrNull(root, "supervisorEffortOverride"),
-            Get_String_OrNull(root, "implementerEffortOverride"));
+            Get_String_OrNull(root, "implementerEffortOverride"),
+
+            // Absent in every session written before today, and false is the only safe reading of
+            // absence: an orchestration nobody paused is not paused. Reading a missing key as true
+            // would put every pre-existing orchestration to sleep on the first load.
+            root["paused"]?.GetValue<bool>() ?? false);
     }
 
     /// <summary>

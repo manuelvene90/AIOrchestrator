@@ -151,12 +151,51 @@ public class RunToTheEndHookTests : IDisposable
         Assert.True(Blocks("solo"), "the exemption outlived the flag — a pause that cannot be taken back is a session that never works again");
     }
 
+    /// <summary>
+    /// THE LEDGER HOOK HONOURS THE SAME FLAG — and it is asserted HERE, in this class, because the
+    /// fork has no SupervisorLedgerHookTests to put it in. The two hooks are the pair that decide
+    /// whether a turn may end, and pause has to reach BOTH: the run-to-the-end hook defers to
+    /// `.ledger-behind`, so a ledger debt raised a minute before the pause would keep refusing the
+    /// turn of a session the owner told to sleep, and dormancy would be a word.
+    ///
+    /// The app-side gate on Check_LedgerHealth_Async stops a NEW debt being raised while paused; it
+    /// cannot clear one already on disk, which is why the exit belongs in the script as well.
+    /// </summary>
+    [Fact]
+    public void APausedOrchestrationEndsItsTurn_ForTheLedgerHookToo()
+    {
+        Write_Plan("- [ ] still to do\n");
+        File.WriteAllText(Path.Combine(_orch, ".ledger-behind"), "the ledger fell behind\n");
+
+        Assert.True(Blocks_LedgerHook("solo"), "the fixture is wrong: a ledger debt with no pause must block");
+
+        var flag = Path.Combine(_orch, ".paused");
+        File.WriteAllText(flag, "paused by the owner\n");
+
+        Assert.False(Blocks_LedgerHook("solo"), "a paused orchestration was refused its turn end by the ledger hook");
+        Assert.False(Blocks_LedgerHook("supervisor"));
+
+        File.Delete(flag);
+
+        Assert.True(Blocks_LedgerHook("solo"), "the exemption outlived the flag — enforcement is delayed by a pause, never dropped");
+    }
+
+    bool Blocks_LedgerHook(string role)
+    {
+        return Blocks(role, Find_Hook_OrFail("supervisor-ledger-check.sh"));
+    }
+
     bool Blocks(string role)
+    {
+        return Blocks(role, Find_Hook_OrFail("run-to-the-end-check.sh"));
+    }
+
+    bool Blocks(string role, string hookFile)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = Find_Bash_OrFail(),
-            Arguments = $"\"{Find_Hook_OrFail().Replace('\\', '/')}\"",
+            Arguments = $"\"{hookFile.Replace('\\', '/')}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -176,13 +215,17 @@ public class RunToTheEndHookTests : IDisposable
         return output.Contains("\"decision\":\"block\"", StringComparison.Ordinal);
     }
 
-    static string Find_Hook_OrFail()
+    /// <summary>
+    /// A harness that cannot find what it tests must REFUSE TO RUN (CLAUDE.md decision 20): a
+    /// missing hook is not an allowed turn, it is a test that certified nothing.
+    /// </summary>
+    static string Find_Hook_OrFail(string hookFileName)
     {
         var folder = AppContext.BaseDirectory;
 
         for (var depth = 0; depth < 8; depth++)
         {
-            var candidate = Path.Combine(folder, "kit", "hooks", "run-to-the-end-check.sh");
+            var candidate = Path.Combine(folder, "kit", "hooks", hookFileName);
 
             if (File.Exists(candidate))
                 return candidate;
@@ -195,7 +238,7 @@ public class RunToTheEndHookTests : IDisposable
             folder = parent.FullName;
         }
 
-        throw new Exception($"kit/hooks/run-to-the-end-check.sh not found walking up from {AppContext.BaseDirectory}");
+        throw new Exception($"kit/hooks/{hookFileName} not found walking up from {AppContext.BaseDirectory}");
     }
 
     /// <summary>One locator for every kit test — Windows paths first, then the POSIX ones, so this runs on every OS the kit ships to.</summary>

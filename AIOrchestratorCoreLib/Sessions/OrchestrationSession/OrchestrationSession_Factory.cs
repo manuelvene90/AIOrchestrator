@@ -40,7 +40,8 @@ public static class OrchestrationSession_Factory
         DateTime? telegramTopicDeletedUtc = null,
         bool telegramTopicDeleteFailureReported = false,
         string? supervisorEffortOverride = null,
-        string? implementerEffortOverride = null)
+        string? implementerEffortOverride = null,
+        bool paused = false)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -50,7 +51,7 @@ public static class OrchestrationSession_Factory
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
             telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done,
             telegramTopicDeletePendingUtc, telegramTopicDeletedUtc, telegramTopicDeleteFailureReported,
-            supervisorEffortOverride, implementerEffortOverride);
+            supervisorEffortOverride, implementerEffortOverride, paused);
     }
 
     /// <summary>
@@ -175,6 +176,17 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, done: done, doneWasSet: true);
     }
 
+    /// <summary>
+    /// ASLEEP FOR NOW, and reversibly so — see IOrchestrationSession.Paused. A flag beside the
+    /// delivery mode rather than a mode of its own, exactly like /test and /done: it says the owner
+    /// has stepped away from this endeavour, not how its messages travel, so lifting the pause
+    /// gives them back the audibility they had chosen rather than a guess at it.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithPaused(IOrchestrationSession existing, bool paused)
+    {
+        return CreateFrom_Existing(existing, paused: paused, pausedWasSet: true);
+    }
+
     /// <summary>Where the owner IS — orthogonal to the delivery mode, which stays as they set it.</summary>
     public static IOrchestrationSession CreateFrom_Existing_WithOwnerPresence(IOrchestrationSession existing, OwnerPresenceModes presence)
     {
@@ -253,6 +265,11 @@ public static class OrchestrationSession_Factory
         // Same wasSet dance as awaitingTest, and for the same reason: a bare bool cannot say
         // "leave this alone", so without it every unrelated copy would quietly un-finish the topic.
         bool doneWasSet = false,
+        bool paused = false,
+
+        // Same wasSet dance as `done` beside it: a bare bool cannot say "leave this alone", so
+        // without it every unrelated copy would quietly wake an orchestration the owner put to sleep.
+        bool pausedWasSet = false,
         DateTime? telegramTopicDeletePendingUtc = null,
         DateTime? telegramTopicDeletedUtc = null,
         bool telegramTopicDeleteFailureReported = false,
@@ -285,6 +302,7 @@ public static class OrchestrationSession_Factory
             telegramTopicDeletedUtc ?? existing.TelegramTopicDeletedUtc,
             telegramTopicDeleteFailureReportedWasSet ? telegramTopicDeleteFailureReported : existing.TelegramTopicDeleteFailureReported,
             supervisorEffortWasSet ? supervisorEffortOverride : existing.SupervisorEffortOverride,
-            implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride);
+            implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride,
+            pausedWasSet ? paused : existing.Paused);
     }
 }

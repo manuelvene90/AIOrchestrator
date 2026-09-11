@@ -108,6 +108,20 @@ public static class TelegramDeliveryMode_Glyphs
     public const string REPLY_BLOCKING = "⛔";
 
     /// <summary>
+    /// PAUSED — the owner paused this orchestration: outbound is HELD and the session is dormant
+    /// until they lift it. Nothing is being delivered and nobody is working, which is why it wins
+    /// the title over every glyph that describes a live topic.
+    ///
+    /// 💤 AND NOT ⏸, for two reasons. ⏸ is already the hold BUTTON's label, and one symbol meaning
+    /// both "tap me" and "this is the state" is the conflation the topic-list vocabulary exists to
+    /// avoid. And ⏸ is a SINGLE UTF-16 unit — the exact shape that breaks the hand-written
+    /// <see cref="Leading_GlyphLength"/> table, where every emoji glyph here is TWO units: a glyph
+    /// whose length is guessed wrong chops the wrong number of units off the name, silently. 💤 is
+    /// a surrogate pair like the rest, so it measures like the rest.
+    /// </summary>
+    public const string PAUSED_BY_OWNER = "💤";
+
+    /// <summary>
     /// PAUSED FOR A USAGE LIMIT — the endeavour has not stopped, it is waiting for a window to
     /// reset, and there is nothing for the owner to do but know.
     ///
@@ -190,12 +204,19 @@ public static class TelegramDeliveryMode_Glyphs
     /// Whether someone is waiting on the owner. Both non-None values draw ❓ — see
     /// <see cref="TelegramDeliveryMode_Glyphs.REPLY_BLOCKING"/> for why the second character retired.
     /// </param>
+    /// <param name="IsPausedByOwner">
+    /// /pause — the owner walked away from this endeavour without closing it. A DIFFERENT FACT from
+    /// <paramref name="IsPausedForUsageLimit"/>, which is a limit the app detected: this one says
+    /// nobody is working because the owner said so, that one says nobody is working because the
+    /// account is full. They used to compete for one slot; two facts get two fields.
+    /// </param>
     /// <param name="IsPausedForUsageLimit">The endeavour is waiting for a usage window, not stalled.</param>
     /// <param name="IsClosed">The orchestration is over and its topic has outlived it.</param>
     /// <param name="IsAwaitingTest">/test — the owner's own "finished, but I have not checked it".</param>
     /// <param name="IsDone">/done — the owner's own "I have checked it, leave the topic open".</param>
     public readonly record struct TopicNameFlags(
         OwnerReplyStates OwnerReply = OwnerReplyStates.None,
+        bool IsPausedByOwner = false,
         bool IsPausedForUsageLimit = false,
         bool IsClosed = false,
         bool IsAwaitingTest = false,
@@ -211,7 +232,8 @@ public static class TelegramDeliveryMode_Glyphs
     /// </para>
     /// <para>
     /// EXACTLY ONE STATE GLYPH FOLLOWS IT, never a row of them, and the order is most-final-first:
-    /// 🏁 closed, then ✅ done, then 🧪 awaiting-test, then ⏸ paused. A closed endeavour is not also
+    /// 🏁 closed, then 💤 paused by the owner, then ✅ done, then 🧪 awaiting-test, then ⏸ paused for a
+    /// usage limit. A closed endeavour is not also
     /// awaiting a test; a signed-off one is not also asking to be tested (the owner's own rule of
     /// 2026-08-21, kept); and a topic the owner has finished with does not need to say why the
     /// machine stopped. Each one REPLACES the ones below it for the same reason 💻 used to replace the
@@ -233,6 +255,14 @@ public static class TelegramDeliveryMode_Glyphs
         var stateGlyph = flags switch
         {
             { IsClosed: true } => $"{CLOSED} ",
+
+            // 💤 SITS BELOW 🏁 AND ABOVE THE TWO FINISHED MARKS. Closing is the end of an endeavour
+            // and pause is not, so the chequered flag still leads; but ✅ and 🧪 both describe work
+            // that is OVER, and this describes work that is merely asleep and expected back — a
+            // topic the owner will come looking for. And it outranks ⏸ for the reason decision 15
+            // gives: this is a state they chose and can lift, that one is one they can do nothing
+            // about.
+            { IsPausedByOwner: true } => $"{PAUSED_BY_OWNER} ",
             { IsDone: true } => $"{DONE} ",
             { IsAwaitingTest: true } => $"{AWAITING_TEST} ",
             { IsPausedForUsageLimit: true } => $"{PAUSED_FOR_LIMIT} ",
@@ -272,6 +302,7 @@ public static class TelegramDeliveryMode_Glyphs
             || topicName.StartsWith(REPLY_BLOCKING, StringComparison.Ordinal)
             || topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal)
             || topicName.StartsWith(SILENCED, StringComparison.Ordinal)
+            || topicName.StartsWith(PAUSED_BY_OWNER, StringComparison.Ordinal)
             || topicName.StartsWith(PAUSED_FOR_LIMIT, StringComparison.Ordinal)
             || topicName.StartsWith(CLOSED, StringComparison.Ordinal)
             || topicName.StartsWith(STATUS_SCREENSHOTS, StringComparison.Ordinal)
@@ -303,6 +334,9 @@ public static class TelegramDeliveryMode_Glyphs
 
         if (topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal))
             return AWAITING_TEST.Length;
+
+        if (topicName.StartsWith(PAUSED_BY_OWNER, StringComparison.Ordinal))
+            return PAUSED_BY_OWNER.Length;
 
         if (topicName.StartsWith(PAUSED_FOR_LIMIT, StringComparison.Ordinal))
             return PAUSED_FOR_LIMIT.Length;

@@ -64,6 +64,23 @@ if [ -f "$SUPERVISION_ROOT/$AIORCH_ID/.awaiting-answer" ]; then
   exit 0
 fi
 
+# THE OWNER PAUSED THIS ORCHESTRATION. Same reasoning as the deadlock guard above, and the same
+# remedy: the debt is real and it SURVIVES the pause — what stops is the pressure, not the
+# obligation. A paused session has been told that nothing is expected of it until the owner lifts
+# the pause, so demanding a PLAN.md write before it may stop is demanding work from the one session
+# they told to sleep, and dormancy would be a word.
+#
+# NOT IN MASTER, deliberately added here: master gated Check_LedgerHealth_Async on the pause, which
+# stops a NEW .ledger-behind being raised but cannot clear one raised before the pause — and a flag
+# raised a minute earlier would block every turn end for as long as the pause lasted.
+#
+# DERIVED, NEVER AUTHORED, like the meeting flag: the app re-syncs this file for every session on
+# its tick, so a flag left behind by a crash is gone the moment the app returns and finds the
+# orchestration unpaused.
+if [ -f "$SUPERVISION_ROOT/$AIORCH_ID/.paused" ]; then
+  exit 0
+fi
+
 PLAN_FILE="$SUPERVISION_ROOT/$AIORCH_ID/PLAN.md"
 
 # THE REASON NAMES BOTH DEBTS, because the hook cannot tell them apart and guessing would send a

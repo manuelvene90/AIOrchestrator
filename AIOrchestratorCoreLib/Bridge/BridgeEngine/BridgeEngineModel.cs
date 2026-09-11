@@ -669,6 +669,21 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// When each orchestration was paused, so a SECOND /pause inside the rename lag re-asserts the
+    /// pause rather than lifting it. In memory on purpose: it guards a double-tap, which happens in
+    /// seconds, and an app restart that forgot one would at worst make the next tap an honest
+    /// toggle. The pause itself is on the session, where it survives everything.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _pausedAtUtc = [];
+
+    /// <summary>
+    /// How long a repeat of /pause counts as "I did not see it happen" rather than "un-pause".
+    /// Sized from the /done evidence, where every toggle in this machine's history was undone by a
+    /// second press 17-23 seconds after the first.
+    /// </summary>
+    const int PAUSE_REASSERT_SECONDS = 60;
+
+    /// <summary>
     /// When the belief above was last thrown away on purpose. It is a BELIEF and never an
     /// observation — the sync skips any topic whose wanted name matches it, and nothing reads the
     /// real name back from Telegram — so once it is wrong it is wrong for the life of the process.
@@ -1549,6 +1564,11 @@ internal sealed class BridgeEngineModel(
         // watcher silent, and a tick that appends before reconciling it would litter the meeting.
         Sync_MeetingFlags();
 
+        // Same reason, same place: the .paused marker is what lets a paused session END ITS TURN,
+        // so it must be true before anything in this tick can write to a channel — and reconciling
+        // it here is what stops a flag surviving a crash into an orchestration nobody paused.
+        Sync_PausedFlags();
+
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
@@ -2344,7 +2364,11 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var session in Sessions_ThisTick())
         {
-            if (session.ClosedUtc != null)
+            // PAUSED is checked beside ClosedUtc in every sweep that WRITES to a channel. The
+            // supervisor half is stopped at the choke point, but members are deliberately outside
+            // it (they are not in the owner's meeting), and a nudged member starts working — which
+            // is exactly what pause promised would not happen.
+            if (session.ClosedUtc != null || session.Paused)
                 continue;
 
             Nudge_IdleSupervisor(session);
@@ -3021,7 +3045,10 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var session in Sessions_ThisTick())
         {
-            if (session.ClosedUtc != null)
+            // PAUSED: the ledger debt is real and survives the pause — it is the PRESSURE that
+            // stops, not the obligation. Raising .ledger-behind while paused would also block the
+            // turn end of a session that has been told to sleep.
+            if (session.ClosedUtc != null || session.Paused)
                 continue;
 
             _ledgerDebtSinceUtc.TryGetValue(session.OrchId, out var ledgerDebtSinceUtc);
@@ -4026,18 +4053,35 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// A topic's OWN mode wins over the app-wide setting — "silence just this one while I work in
     /// its terminal" must survive someone flipping the global DND, and vice versa. Only when the
-    /// topic is Normal does the app-wide setting apply.
+    /// topic is Normal does the app-wide setting apply. A PAUSED orchestration outranks all of it:
+    /// every outbound gate in this file asks this one question, so pause reaches them by answering
+    /// it here rather than by fifteen new checks.
     /// </summary>
     TelegramDeliveryModes Resolve_EffectiveMode(string orchId)
     {
         // GATHERS, decides nothing — the ORDER of these opinions is the decision, and it is not one
         // a reader or a test could see while it lived here (rev-4, 2026-08-13).
+        var session = _store.Get_Session_OrNull(orchId);
+
         return EffectiveMode_Resolver.Resolve(
             Resolve_Presence(orchId),
             isGeneral: orchId == ChannelDiscovery.GENERAL_ORCH_ID,
-            topicMode: _store.Get_Session_OrNull(orchId)?.TelegramMode ?? TelegramDeliveryModes.Normal,
+            paused: session?.Paused ?? false,
+            topicMode: session?.TelegramMode ?? TelegramDeliveryModes.Normal,
             appWideDeferred: _telegramMuted,
             appWideSilenced: _silenceAllTopics);
+    }
+
+    /// <summary>
+    /// PAUSED means the owner walked away from this orchestration without closing it, so the app
+    /// holds its outbound traffic — that half rides Resolve_EffectiveMode above and reaches every
+    /// send gate at once. This is the OTHER half: what the app WRITES INTO THE CHANNELS — nudges,
+    /// ledger complaints, idle flags, the periodic pass — which no delivery mode has ever governed,
+    /// so each waker asks this question for itself.
+    /// </summary>
+    bool Is_Paused(string orchId)
+    {
+        return _store.Get_Session_OrNull(orchId)?.Paused ?? false;
     }
 
     /// <summary>Silence is TOTAL for a topic: its mirrored entries AND its alerts.</summary>
@@ -6900,6 +6944,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Toggle_Done_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "pause")
+                    {
+                        await Toggle_Paused_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "refresh")
                     {
                         await Refresh_TopicName_Async(client, message.MessageThreadId, cancellationToken);
@@ -8850,6 +8898,149 @@ internal sealed class BridgeEngineModel(
         _log.Log_Info(session.OrchId, "the owner wrote to a finished topic — ✅ cleared and unmuted so their reply can reach them");
     }
 
+    /// <summary>
+    /// A PAUSED TOPIC WAKES UP THE MOMENT THE OWNER WRITES IN IT, for the rule this file already
+    /// learned the hard way: *"a mode they must remember to turn off is one they get trapped by"*.
+    ///
+    /// It matters more here than for /done, because pause stops the SESSION as well as the texting.
+    /// Without it the owner would write into a paused topic, get the ✓ tick (acks are ungated), and
+    /// then wait on an orchestration the app has been told not to poke. Writing in a topic is the
+    /// plainest possible statement that they are not done with it after all.
+    ///
+    /// ONLY REAL MESSAGES REACH HERE: recognised commands are dispatched before routing, so reading
+    /// a paused topic with /progress leaves it asleep.
+    /// </summary>
+    void Wake_PausedTopic_IfNeeded(IOrchestrationSession session)
+    {
+        if (!session.Paused)
+            return;
+
+        _store.Set_Paused(session.OrchId, false);
+        Sync_PausedFlag(session.OrchId, paused: false);
+        _pausedAtUtc.Remove(session.OrchId);
+
+        _log.Log_Info(session.OrchId, "the owner wrote to a paused topic — 💤 cleared, the orchestration is awake again");
+    }
+
+    /// <summary>
+    /// /pause — "I am done with this one for now, but I don't want to close it yet" (owner,
+    /// 2026-09-09). Traffic held, nothing pushed, session dormant. ClosedUtc kills the terminals and
+    /// deletes the topic; this does neither, and every part of it is reversible.
+    ///
+    /// <para>
+    /// IT IS A TOGGLE, which is what the owner asked for, WITH THE GUARD /done had to learn. A
+    /// rename takes a moment to surface in Telegram's topic list, so when nothing appears the owner
+    /// sends the command again — and every historical use of the /done toggle was undone that way
+    /// within 17-23 seconds. So a second /pause inside PAUSE_REASSERT_SECONDS RE-ASSERTS the pause
+    /// rather than lifting it; after that it toggles, as a toggle should. Lifting it early is never
+    /// blocked: writing anything in the topic does it (Wake_PausedTopic_IfNeeded).
+    /// </para>
+    /// <para>
+    /// The delivery mode is deliberately NOT touched, unlike /done which mutes underneath. Pause
+    /// outranks the mode in EffectiveMode_Resolver, so whatever the topic was set to comes back by
+    /// itself when the pause lifts — no state to restore, and nothing to restore it wrongly.
+    /// </para>
+    /// </summary>
+    async Task Toggle_Paused_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/pause works inside an orchestration's own topic — there is nothing here to pause.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var reasserting = session.Paused
+                && _pausedAtUtc.TryGetValue(session.OrchId, out var pausedAtUtc)
+                && (DateTime.UtcNow - pausedAtUtc).TotalSeconds < PAUSE_REASSERT_SECONDS;
+
+            var wantPaused = reasserting || !session.Paused;
+
+            _store.Set_Paused(session.OrchId, wantPaused);
+            Sync_PausedFlag(session.OrchId, wantPaused);
+
+            if (wantPaused)
+                _pausedAtUtc[session.OrchId] = DateTime.UtcNow;
+            else
+                _pausedAtUtc.Remove(session.OrchId);
+
+            _log.Log_Info(session.OrchId, wantPaused
+                ? (reasserting
+                    ? "/pause — already paused, re-asserted: a second tap inside the rename lag is not an un-pause"
+                    : "/pause — paused: traffic held, nothing pushed, session dormant")
+                : "/pause — lifted: held traffic delivers now and the session is expected to work again");
+
+            Raise_OrchestrationActivity(session.OrchId);
+
+            // The name is pushed BEFORE the reply, so the reply can quote what the topic actually
+            // reads — the /done lesson: a confirmation that disagrees with the topic list leaves the
+            // owner with no way to tell which of the two is right.
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+
+            var updated = _store.Get_Session_OrNull(session.OrchId) ?? session;
+            var wantedName = Build_WantedTopicName(updated);
+            var renamed = _appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName;
+
+            string reply;
+
+            if (wantPaused)
+            {
+                reply = renamed
+                    ? $"💤 paused — “{wantedName}”. Nothing more reaches you from here and the session sleeps; whatever it writes is kept and arrives when you lift it. Write anything in this topic, or tap /pause again later, to wake it."
+                    : $"💤 paused — traffic held and the session dormant, but Telegram has not accepted the name “{wantedName}” yet. It retries on its own; the pause itself is saved.";
+            }
+            else
+            {
+                reply = $"▶ resumed — “{wantedName}”. Anything written while it slept is on its way now.";
+            }
+
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, reply, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "/pause failed", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/pause failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Makes the .paused marker match the session, and says so when it cannot. The file is what a
+    /// BASH hook can test, and it is the half of pause the SESSION obeys — a paused session with no
+    /// flag is refused its turn end and keeps working, which is the one thing pause promised.
+    /// </summary>
+    void Sync_PausedFlag(string orchId, bool paused)
+    {
+        if (Status.PausedFlag_Marker.Sync(_paths, orchId, paused, out var failure))
+            _log.Log_Info(orchId, paused
+                ? "paused flag raised — the turn-end hook will now let this session stop"
+                : "paused flag cleared");
+
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
+    }
+
+    /// <summary>
+    /// Reconciles every orchestration's .paused marker with its session, on the tick — the
+    /// DERIVED-NEVER-AUTHORED rule the meeting flag states: a file that lifts a guard must not be
+    /// able to outlive the state it stands for, so an app that died with one on disk clears it on
+    /// the way back in. A closed orchestration never keeps one either.
+    /// </summary>
+    void Sync_PausedFlags()
+    {
+        foreach (var session in Sessions_ThisTick())
+            Sync_PausedFlag(session.OrchId, session.ClosedUtc == null && session.Paused);
+    }
+
     async Task Request_Close_FromCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
@@ -9437,6 +9628,7 @@ internal sealed class BridgeEngineModel(
             baseName,
             new TelegramDeliveryMode_Glyphs.TopicNameFlags(
                 OwnerReply: Last_OwnerReplyState(session.OrchId),
+                IsPausedByOwner: session.Paused,
                 IsPausedForUsageLimit: Is_SupervisorPausedForUsageLimit(session),
                 IsClosed: session.ClosedUtc != null,
                 IsAwaitingTest: session.AwaitingTest,
@@ -9650,7 +9842,11 @@ internal sealed class BridgeEngineModel(
 
         foreach (var session in _store.Load_All())
         {
-            if (session.ClosedUtc != null)
+            // PAUSED sessions are not woken and are not counted as not-woken either: /resume means
+            // "the limit reset, carry on", and a paused orchestration has nothing to carry on with
+            // until the owner lifts it. Waking it here would undo the pause from a command aimed at
+            // something else entirely.
+            if (session.ClosedUtc != null || session.Paused)
                 continue;
 
             wokenOrchestrations++;
@@ -10305,7 +10501,9 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var session in Sessions_ThisTick())
         {
-            if (session.ClosedUtc != null)
+            // PAUSED: every member of a paused orchestration is idle BY INSTRUCTION, so flagging
+            // them as idle would be the app complaining about the state the owner just asked for.
+            if (session.ClosedUtc != null || session.Paused)
                 continue;
 
             // Above the SIGNATURE, not at the append: storing it while suppressed marks this exact
@@ -11821,6 +12019,13 @@ internal sealed class BridgeEngineModel(
         if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
             return false;
 
+        // PAUSED, for the same reason and at the same place: this is the one site every piece of
+        // attention traffic passes through, and the owner asked for a state in which nothing pokes
+        // the session at all. Unlike a meeting, nothing here is deferred-and-resent — the pause
+        // ends when they lift it, and whatever was worth saying will still be true then.
+        if (Is_Paused(orchId))
+            return false;
+
         // The return value means "an entry is on disk", so a failed append must answer FALSE. It
         // used to be an unconditional true because the append could only throw; now that a throw is
         // caught, saying true would be the same defect this file spent the evening fixing — a
@@ -12984,6 +13189,7 @@ internal sealed class BridgeEngineModel(
             channelFile = _paths.Get_OwnerChannelFile(orchId);
 
             Wake_DoneTopic_IfNeeded(session);
+            Wake_PausedTopic_IfNeeded(session);
         }
 
         string segmentText;
@@ -13602,6 +13808,12 @@ internal sealed class BridgeEngineModel(
         foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
+                continue;
+
+            // PAUSED: skipped before the stamp for the same reason as a meeting — stamping here
+            // would restart the clock on every tick of a pause that may last days, so the first
+            // digest after they lift it would be a whole period late.
+            if (session.Paused)
                 continue;
 
             // MEETING: skipped BEFORE the stamp, deliberately. Stamping here would restart the

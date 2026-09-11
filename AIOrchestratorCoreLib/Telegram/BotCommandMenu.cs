@@ -124,6 +124,7 @@ public static class BotCommandMenu
         ("log", "The whole of a headless session's last turn (/log 1, /log sup)"),
         ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
         ("done", "Toggle ✅ — finished, muted, and kept open in case you come back"),
+        ("pause", "Toggle 💤 — done with it for now: traffic held, session dormant, nothing closed"),
         ("refresh", "Re-sync this topic's NAME — use when a ❓ or a glyph is stuck on it"),
         ("switch", "Turn this into a full crew, or back into one session — send twice"),
         ("clear", "Wipe THIS topic's messages (the sessions keep running)"),

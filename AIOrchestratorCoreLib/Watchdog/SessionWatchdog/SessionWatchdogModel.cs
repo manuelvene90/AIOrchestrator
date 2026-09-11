@@ -67,6 +67,14 @@ internal sealed class SessionWatchdogModel(
             if (session.ClosedUtc != null)
                 continue;
 
+            // PAUSED: the owner put this orchestration to sleep without closing it, so a dead
+            // terminal here is not a fault to repair. Respawning would boot a session that reads its
+            // role command, arms a watcher and starts working — the pause silently over, with
+            // nothing on screen saying so. It comes back the moment they lift it, because that is
+            // when this loop starts looking at it again.
+            if (session.Paused)
+                continue;
+
             // A BASIC orchestration never had a supervisor — checking for one would respawn a
             // supervisor into it forever, on top of the solo session that IS the orchestration.
             //

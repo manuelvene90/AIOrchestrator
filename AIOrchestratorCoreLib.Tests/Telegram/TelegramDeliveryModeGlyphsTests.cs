@@ -132,6 +132,30 @@ public class TelegramDeliveryModeGlyphsTests
     }
 
     /// <summary>
+    /// 💤 IS THE OWNER'S OWN PAUSE — they walked away from this endeavour without closing it — and it
+    /// is a SEPARATE FACT from ⏸, which is a usage limit the app detected. The two used to compete
+    /// for one slot (spec 2026-09-11 §7.4); they are two fields now, and this pins the precedence
+    /// between them in both directions: 💤 outranks ⏸, ✅ and 🧪, and 🏁 outranks 💤.
+    ///
+    /// A closed orchestration is not a paused one — closing is the end of it — so the chequered flag
+    /// still leads. Below that, the owner having stopped the work outranks every "finished" mark,
+    /// because those describe work that is over and this describes work that is merely asleep.
+    /// </summary>
+    [Fact]
+    public void ATopicPausedByTheOwner_WearsTheSleepGlyph_AboveDoneAndTest_BelowClosed()
+    {
+        Assert.StartsWith(
+            "💤",
+            Name(new(IsPausedByOwner: true, IsPausedForUsageLimit: true, IsAwaitingTest: true, IsDone: true)));
+
+        Assert.StartsWith(
+            "🏁",
+            Name(new(IsPausedByOwner: true, IsClosed: true)));
+
+        Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph("💤 crm bug"));
+    }
+
+    /// <summary>
     /// EXACTLY ONE STATE GLYPH, MOST-FINAL-FIRST: 🏁 then ✅ then 🧪 then ⏸. A closed endeavour is not
     /// also awaiting a test, and a topic the owner has finished with does not need to say why the
     /// machine stopped. Each glyph REPLACES the ones below it — stating one fact twice is what made
@@ -305,7 +329,7 @@ public class TelegramDeliveryModeGlyphsTests
     }
 
     /// <summary>
-    /// The five the name CAN draw must be five different characters — two states sharing a symbol in
+    /// The six the name CAN draw must be six different characters — two states sharing a symbol in
     /// the topic list is worse than no symbol, and the list is read at a glance with no legend.
     /// </summary>
     [Fact]
@@ -315,6 +339,7 @@ public class TelegramDeliveryModeGlyphsTests
         [
             TelegramDeliveryMode_Glyphs.REPLY_WANTED,
             TelegramDeliveryMode_Glyphs.CLOSED,
+            TelegramDeliveryMode_Glyphs.PAUSED_BY_OWNER,
             TelegramDeliveryMode_Glyphs.DONE,
             TelegramDeliveryMode_Glyphs.AWAITING_TEST,
             TelegramDeliveryMode_Glyphs.PAUSED_FOR_LIMIT,
@@ -406,7 +431,7 @@ public class TelegramDeliveryModeGlyphsTests
     }
 
     /// <summary>
-    /// Every value the flags can take — 3 reply states × 4 booleans. Small enough to sweep whole,
+    /// Every value the flags can take — 3 reply states × 5 booleans. Small enough to sweep whole,
     /// which is what makes the "departed glyph" tests claims about the FUNCTION rather than about
     /// six examples of it.
     /// </summary>
@@ -415,15 +440,17 @@ public class TelegramDeliveryModeGlyphsTests
         bool[] bothWays = [false, true];
 
         foreach (var reply in Enum.GetValues<OwnerReplyStates>())
-            foreach (var paused in bothWays)
-                foreach (var closed in bothWays)
-                    foreach (var awaitingTest in bothWays)
-                        foreach (var done in bothWays)
-                            yield return new TelegramDeliveryMode_Glyphs.TopicNameFlags(
-                                OwnerReply: reply,
-                                IsPausedForUsageLimit: paused,
-                                IsClosed: closed,
-                                IsAwaitingTest: awaitingTest,
-                                IsDone: done);
+            foreach (var pausedByOwner in bothWays)
+                foreach (var paused in bothWays)
+                    foreach (var closed in bothWays)
+                        foreach (var awaitingTest in bothWays)
+                            foreach (var done in bothWays)
+                                yield return new TelegramDeliveryMode_Glyphs.TopicNameFlags(
+                                    OwnerReply: reply,
+                                    IsPausedByOwner: pausedByOwner,
+                                    IsPausedForUsageLimit: paused,
+                                    IsClosed: closed,
+                                    IsAwaitingTest: awaitingTest,
+                                    IsDone: done);
     }
 }
