@@ -38,6 +38,11 @@ public static class PlanSeed_Writer
             // the five that drifted, and it drifted twice: it lost `- [-]` entirely and narrowed
             // `- [!]` to "blocked on owner", leaving a supervisor blocked on anything else with no
             // marker to use.
+            //
+            // [?], not [>]: a fresh orchestration with nothing from the owner yet is blocked on them
+            // by definition, and [>] made the Stop hook refuse the very first turn end of every new
+            // session (observed 2026-09-11 at boot). The app's status line then reads "needs you",
+            // which is true.
             var seed =
                 $"""
                 # PLAN — {repoName} ({orchId})
@@ -50,7 +55,7 @@ public static class PlanSeed_Writer
                 The app reads this file for the card's progress bar and the owner's /progress command,
                 so update it at every boundary.
 
-                - [>] agree the direction with the owner, then replace this line with the real tasks
+                - [?] agree the direction with the owner, then replace this line with the real tasks - blocked on: the owner's first message
 
                 ## PARKED — found, not asked for
 

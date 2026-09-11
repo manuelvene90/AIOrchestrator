@@ -67,6 +67,24 @@ public class RunToTheEndHookTests : IDisposable
     }
 
     /// <summary>
+    /// `- [!]` says something is blocked on a MACHINE — a build, a suite, a sub-agent already
+    /// running — and the block message has promised this escape since it was written. The code
+    /// never checked it: on 2026-09-11 a solo with one `- [!]` line and thirteen queued `- [ ]`
+    /// lines behind it was refused its turn end and had to write a WAITING ON entry into the
+    /// owner's channel purely to satisfy this hook — noise on their phone (owner, entry 37: "too
+    /// invasive, it keeps firing constantly"). A queue behind a blocked line is the normal state of
+    /// any plan.
+    /// </summary>
+    [Fact]
+    public void ALineBlockedOnAMachineLetsTheTurnEnd()
+    {
+        Write_Plan("- [!] build the suite - waiting on the run\n- [ ] next task\n- [ ] the one after\n");
+
+        Assert.False(Blocks("solo"));
+        Assert.False(Blocks("supervisor"));
+    }
+
+    /// <summary>
     /// ONLY THE LAST ENTRY COUNTS. An old question further up the channel was answered long ago, and
     /// honouring it would let one ancient QUESTION exempt every turn for the rest of the orchestration.
     /// </summary>

@@ -114,6 +114,16 @@ if grep -qE '^[[:space:]]*- \[\?\]' "$PLAN_FILE" 2>/dev/null; then
   exit 0
 fi
 
+# BLOCKED ON A MACHINE — a build, a suite, a sub-agent already running. The block message below has
+# promised this escape since it was written, and the code never implemented it: on 2026-09-11 a solo
+# with one `- [!]` line and thirteen queued `- [ ]` lines behind it was refused its turn end and had
+# to write a WAITING ON entry into the owner's channel purely to satisfy this hook — noise on their
+# phone (owner, entry 37: "too invasive, it keeps firing constantly"). A queue behind a blocked line
+# is the normal state of any plan. Trusted the way `- [?]` is trusted: hooks advise (decision 21).
+if grep -qE '^[[:space:]]*- \[!\]' "$PLAN_FILE" 2>/dev/null; then
+  exit 0
+fi
+
 # THE SESSION HAS JUST ASKED. Only the LAST entry counts: an old question further up the channel was
 # answered long ago, and treating it as current would let one ancient QUESTION exempt every turn
 # from here to the end of the orchestration.
@@ -172,5 +182,5 @@ if [ -f "$CHANNEL_FILE" ]; then
 fi
 
 cat <<JSON
-{"decision":"block","reason":"DO NOT STOP — $OPEN_LINES ledger line(s) are still open, and none of them is marked as blocked on the owner. The default is to run the endeavour to the end (their directive, 2026-08-20): finishing a phase and reporting is NOT a turn boundary, it only feels like one. Carry straight on with the next open line in $PLAN_FILE.\nIf you truly cannot proceed, say so honestly instead. Every one of these is a STATEMENT, not a way out, and each clears this block:\n  • WAITING on something you already started — a build, a suite, a sub-agent: put 'WAITING ON <what>' in your channel entry's SUBJECT, or at the START of a body line. Then END THE TURN. Do NOT poll it in the foreground: a session sitting inside one long tool call cannot read the owner's messages, and ending the turn is how they reach you — the job and your monitor both wake you.\n  • Blocked on a MACHINE rather than on them: mark the line '- [!] <task>'.\n  • Blocked on the OWNER: mark it '- [?] <task> - blocked on: <what you need from them>'. This is the only one that puts it on their plate, so do not use it for a build.\n  • You need them to CHOOSE: end your channel entry with a 'QUESTION:' line and 2-4 'OPTION:' lines.\n  • They told you to stop, or asked for step-by-step: mark the rest '- [-] not doing' with the reason.\nMarking every line done to escape this is a lie the owner will read on their phone."}
+{"decision":"block","reason":"DO NOT STOP — $OPEN_LINES ledger line(s) are still open, and none of them is marked blocked — '- [?]' on the owner or '- [!]' on a machine. The default is to run the endeavour to the end (their directive, 2026-08-20): finishing a phase and reporting is NOT a turn boundary, it only feels like one. Carry straight on with the next open line in $PLAN_FILE.\nIf you truly cannot proceed, say so honestly instead. Every one of these is a STATEMENT, not a way out, and each clears this block:\n  • WAITING on something you already started — a build, a suite, a sub-agent: put 'WAITING ON <what>' in your channel entry's SUBJECT, or at the START of a body line. Then END THE TURN. Do NOT poll it in the foreground: a session sitting inside one long tool call cannot read the owner's messages, and ending the turn is how they reach you — the job and your monitor both wake you.\n  • Blocked on a MACHINE rather than on them: mark the line '- [!] <task>'.\n  • Blocked on the OWNER: mark it '- [?] <task> - blocked on: <what you need from them>'. This is the only one that puts it on their plate, so do not use it for a build.\n  • You need them to CHOOSE: end your channel entry with a 'QUESTION:' line and 2-4 'OPTION:' lines.\n  • They told you to stop, or asked for step-by-step: mark the rest '- [-] not doing' with the reason.\nMarking every line done to escape this is a lie the owner will read on their phone."}
 JSON
