@@ -1312,11 +1312,25 @@ printf '%s
 # BLOCKED ON A MACHINE. `- [!]` already cleared this hook and the block message never said so, which
 # is why sessions invented foreground polls instead: the escape existed and nobody was told. Pinned
 # now so a future tightening of the open-line regex cannot silently take it away again.
+#
+# THE QUEUED LINE BELOW IS LOAD-BEARING (decision 20, found in review 2026-09-11): a PLAN.md whose
+# ONLY line is the `- [!]` one has OPEN_LINES == 0, so this case reached ALLOW through the "nothing
+# left to do" gate, before the code ever reached a `- [!]` check -- two routes to ALLOW, green since
+# 2026-08-21 whether or not the escape existed, which is exactly why it stayed green while the grep
+# was missing entirely. A queued `- [ ]` line forces OPEN_LINES > 0 so the case actually exercises
+# the new grep rather than the finished-ledger exit.
 printf '%s
 ' '## [1] FROM solo - d - s' 'a plain report' > "$RUNEND_CHANNEL"
 printf '%s
-' '- [!] land on master - blocked on the suite' > "$RUNEND_PLAN"
+' '- [!] land on master - blocked on the suite' '- [ ] the next thing' > "$RUNEND_PLAN"
 check "a line blocked on a machine" ALLOW "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
+
+# THE MUTATION THAT PROVES IT: the same plan with the `- [!]` line removed -- only the queued
+# `- [ ]` line survives -- must DENY. This is the control the case above lacked; without it, ALLOW
+# could still be coming from anywhere.
+printf '%s
+' '- [ ] the next thing' > "$RUNEND_PLAN"
+check "the same plan without the marker denies" DENY "$(verdict "$(run_hook "$RUNEND_HOOK" '{}')")"
 
 # THE BLOCK MESSAGE HAS TO TEACH THEM, or the escapes above are dead on arrival -- which is exactly
 # how `- [!]` sat unused. Asserted on the emitted text, not on the file, so a reworded message that
