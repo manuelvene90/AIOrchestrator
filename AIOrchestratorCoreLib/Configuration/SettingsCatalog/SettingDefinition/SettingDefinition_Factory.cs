@@ -8,6 +8,15 @@ namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingDefinition;
 /// a definition is never built with a kind and renderer that disagree — and refuses a blank path,
 /// label or description at construction, naming the path in the exception, because those three are
 /// read by every renderer this catalogue will ever grow.
+///
+/// <para>
+/// Only <see cref="Create_String"/> and <see cref="Create_StringList"/> take a named
+/// <c>validator</c>: every validator this catalogue needs is string-shaped (a listen address, a
+/// list of known field or command words), so <see cref="Create_Bool"/>, <see cref="Create_Enum"/>,
+/// <see cref="Create_Int"/> and <see cref="Create_Composite"/> do not carry the parameter at all —
+/// a definition of one of those kinds simply has no named validator to point at, rather than one
+/// that compiles and is silently never read.
+/// </para>
 /// </summary>
 public static class SettingDefinition_Factory
 {
@@ -19,8 +28,7 @@ public static class SettingDefinition_Factory
         string label,
         string description,
         RestartKinds restart,
-        string? legacyPath = null,
-        string validator = SettingValidators.NONE)
+        string? legacyPath = null)
     {
         Validate_Common(path, label, description);
 
@@ -39,7 +47,7 @@ public static class SettingDefinition_Factory
             restart: restart,
             renderer: SettingRenderers.Toggle,
             compositeParser_OrNull: null,
-            validatorName: validator,
+            validatorName: SettingValidators.NONE,
             nullable: false);
     }
 
@@ -53,8 +61,7 @@ public static class SettingDefinition_Factory
         string description,
         RestartKinds restart,
         bool nullable = false,
-        string? legacyPath = null,
-        string validator = SettingValidators.NONE)
+        string? legacyPath = null)
     {
         Validate_Common(path, label, description);
 
@@ -73,7 +80,7 @@ public static class SettingDefinition_Factory
             restart: restart,
             renderer: SettingRenderers.Choice,
             compositeParser_OrNull: null,
-            validatorName: validator,
+            validatorName: SettingValidators.NONE,
             nullable: nullable);
     }
 
@@ -87,8 +94,7 @@ public static class SettingDefinition_Factory
         string label,
         string description,
         RestartKinds restart,
-        string? legacyPath = null,
-        string validator = SettingValidators.NONE)
+        string? legacyPath = null)
     {
         Validate_Common(path, label, description);
 
@@ -107,7 +113,7 @@ public static class SettingDefinition_Factory
             restart: restart,
             renderer: SettingRenderers.Number,
             compositeParser_OrNull: null,
-            validatorName: validator,
+            validatorName: SettingValidators.NONE,
             nullable: false);
     }
 
@@ -187,8 +193,7 @@ public static class SettingDefinition_Factory
         string label,
         string description,
         RestartKinds restart,
-        string? legacyPath = null,
-        string validator = SettingValidators.NONE)
+        string? legacyPath = null)
     {
         Validate_Common(path, label, description);
 
@@ -207,7 +212,7 @@ public static class SettingDefinition_Factory
             restart: restart,
             renderer: SettingRenderers.ReadOnly,
             compositeParser_OrNull: parserTypeName,
-            validatorName: validator,
+            validatorName: SettingValidators.NONE,
             nullable: true);
     }
 

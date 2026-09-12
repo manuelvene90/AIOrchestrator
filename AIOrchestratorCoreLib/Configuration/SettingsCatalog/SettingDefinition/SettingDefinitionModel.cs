@@ -54,7 +54,7 @@ internal sealed class SettingDefinitionModel(
             SettingKinds.String => Validate_String_OrNull(value),
             SettingKinds.StringList => Validate_StringList_OrNull(value),
             SettingKinds.Composite => null,
-            _ => throw new Exception($"Unhandled SettingKinds: {Kind}"),
+            _ => throw new InvalidOperationException($"Unhandled SettingKinds: {Kind}"),
         };
     }
 
@@ -83,12 +83,24 @@ internal sealed class SettingDefinitionModel(
             return $"'{Path}' must be a whole number";
 
         if (Minimum != null && number < Minimum.Value)
-            return $"'{Path}' must be between {Minimum.Value} and {Maximum} — {number} is too low";
+            return $"'{Path}' must be {Describe_Range()} — {number} is too low";
 
         if (Maximum != null && number > Maximum.Value)
-            return $"'{Path}' must be between {Minimum} and {Maximum.Value} — {number} is too high";
+            return $"'{Path}' must be {Describe_Range()} — {number} is too high";
 
         return null;
+    }
+
+    /// <summary>Names only the bound(s) actually set — a one-sided range never claims the other side.</summary>
+    string Describe_Range()
+    {
+        if (Minimum != null && Maximum != null)
+            return $"between {Minimum.Value} and {Maximum.Value}";
+
+        if (Minimum != null)
+            return $"at least {Minimum.Value}";
+
+        return $"at most {Maximum!.Value}";
     }
 
     string? Validate_String_OrNull(JsonNode value)

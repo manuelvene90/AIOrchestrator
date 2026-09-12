@@ -14,13 +14,25 @@ public static class SettingValidators
     /// <summary>Letters, digits, '-', '_' and '.', through <see cref="Spawning.SpawnCommand_Builder.First_InvalidModelCharacter_OrNull"/>.</summary>
     public const string MODEL_WORD = "modelWord";
 
-    /// <summary>`host:port`, or the literal `off`. Used by `web.listen`.</summary>
+    /// <summary>
+    /// WILL check for `host:port`, or the literal `off`, for `web.listen`. NOT YET IMPLEMENTED — see
+    /// the fallthrough in <see cref="Validate_OrNull"/>: a definition may point at this name today
+    /// and it accepts any value until a later task wires the check in.
+    /// </summary>
     public const string LISTEN_ADDRESS = "listenAddress";
 
-    /// <summary>Every element must be one of `PulseField_Names.ALL`, with no repeats.</summary>
+    /// <summary>
+    /// WILL check that every element is one of `PulseField_Names.ALL`, with no repeats. NOT YET
+    /// IMPLEMENTED — see the fallthrough in <see cref="Validate_OrNull"/>: a definition may point at
+    /// this name today and it accepts any value until a later task wires the check in.
+    /// </summary>
     public const string PULSE_FIELDS = "pulseFields";
 
-    /// <summary>Every element must be a command in `Telegram.BotCommandMenu.ALL`, with no repeats.</summary>
+    /// <summary>
+    /// WILL check that every element is a command in `Telegram.BotCommandMenu.ALL`, with no repeats.
+    /// NOT YET IMPLEMENTED — see the fallthrough in <see cref="Validate_OrNull"/>: a definition may
+    /// point at this name today and it accepts any value until a later task wires the check in.
+    /// </summary>
     public const string BOT_COMMANDS = "botCommands";
 
     /// <summary>The message, or null when the value is acceptable.</summary>
@@ -30,6 +42,12 @@ public static class SettingValidators
         {
             NONE => null,
             MODEL_WORD => Validate_ModelWord_OrNull(value),
+
+            // LISTEN_ADDRESS, PULSE_FIELDS and BOT_COMMANDS are registered names only — a definition
+            // may point at one before its check exists (a definition naming a not-yet-implemented
+            // validator is legitimate). Until a later task adds a case above, any value is accepted;
+            // this is a real gap, not an oversight, and it must stay visible here rather than only in
+            // a report nobody reading this switch will see.
             _ => null,
         };
     }

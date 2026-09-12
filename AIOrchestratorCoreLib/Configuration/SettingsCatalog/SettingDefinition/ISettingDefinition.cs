@@ -61,8 +61,11 @@ public interface ISettingDefinition
 
     /// <summary>
     /// The reason <paramref name="value"/> is not acceptable for this setting, or null when it is.
-    /// Checks the value's shape against <see cref="Kind"/> first, then the range or enum list, then
-    /// any named validator this definition points at.
+    /// Checks the value's shape against <see cref="Kind"/> first, then the range or enum list; a
+    /// named validator this definition points at runs only for the <see cref="SettingKinds.String"/>
+    /// and <see cref="SettingKinds.StringList"/> kinds — every validator the catalogue needs is
+    /// string-shaped (a listen address, a list of known field or command words), so Bool, Enum, Int
+    /// and Composite never consult one.
     /// </summary>
     string? Validate_OrNull(JsonNode? value);
 }
