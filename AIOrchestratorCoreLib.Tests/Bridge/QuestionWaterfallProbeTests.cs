@@ -4,8 +4,10 @@ using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -64,8 +66,15 @@ public class QuestionWaterfallProbeTests : IDisposable
     /// entry — so the silence cannot be the entry merely not having been READ yet. The release
     /// assertion that follows each of these closes that door from the other side: the entry was
     /// sitting there, and the owner's word is what let it out.
+    ///
+    /// <para>
+    /// FIVE TICKS, COMPUTED — not the 12_000 ms literal this used to be. At the suite's fast tick
+    /// that literal is a twelve-second sleep asserting nothing about ticks, which is exactly what
+    /// <see cref="BridgeTestTiming.Window_ForTicks"/> exists to replace. The tailer's trailing-entry
+    /// quiet window is two ticks at this period, so five still clears it.
+    /// </para>
     /// </summary>
-    const int SILENT_WINDOW_MS = 12_000;
+    static readonly int SILENT_WINDOW_MS = BridgeTestTiming.Window_ForTicks(5);
 
     /// <summary>Free of any sentinel, and not a control word (bare "wait" / "go" would be).</summary>
     const string FIRST_ANSWER = "understood, take the shorter route";
@@ -99,7 +108,7 @@ public class QuestionWaterfallProbeTests : IDisposable
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -110,7 +119,7 @@ public class QuestionWaterfallProbeTests : IDisposable
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
     public void Dispose()
@@ -340,10 +349,25 @@ public class QuestionWaterfallProbeTests : IDisposable
     /// the `QUESTION:` line — which is what <c>QuestionPrompt_Builder</c> puts above the buttons.
     /// The option labels are short on purpose: long ones are moved off the buttons and into the
     /// message body, which would change what "sent" means here for no gain.
+    ///
+    /// <para>
+    /// ALL FIVE LINES, and that is not decoration: <c>OwnerQuestion_Contract</c> forwards a question
+    /// ONLY complete, so a QUESTION/OPTION-only body is REFUSED and grows no buttons — and since the
+    /// `QUESTION:` line is extracted out of the body before the body is sent, an incomplete question
+    /// puts the sentinel on no message at all. Every assertion here would then pass for the wrong
+    /// reason. The recommendation and the row code carry no sentinel, so they cannot answer the
+    /// "did this reach the phone" question on their own.
+    /// </para>
     /// </summary>
     static string Question_Body(string sentinel)
     {
-        return $"QUESTION: Which branch carries the {sentinel} change?\nOPTION: Keep\nOPTION: Replace";
+        // THE QUESTION AND ITS OPTIONS COME LAST, because OwnerMessage_Contract counts anything after
+        // the last `QUESTION:` line that is not one of its companions (OPTION/DEADLINE/DEFAULT/
+        // IMAGE/ATTACH) as PROSE AFTER THE QUESTION and coaches the asker for it. RECOMMEND, RISK and
+        // ROW are not companions, so writing them underneath would have this probe generate an App
+        // coaching entry per question — traffic of its own, in the channel this file counts.
+        return "RECOMMEND: Keep — it is the branch the ledger already names.\nRISK: low\nROW: none\n"
+            + $"QUESTION: Which branch carries the {sentinel} change?\nOPTION: Keep\nOPTION: Replace";
     }
 
     /// <summary>Anything the bot was asked to SEND (not edits) that carries this question's sentinel.</summary>
@@ -463,7 +487,7 @@ public class QuestionWaterfallProbeTests : IDisposable
         _store.Set_DisplayName(session.OrchId, DISPLAY_NAME);
         Seed_OwnerChannel(session.OrchId);
 
-        await Run_For_Async(4_000);
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(3));
 
         return session.OrchId;
     }
@@ -553,6 +577,15 @@ internal sealed class WaterfallTelegram_Fake : ITelegramApiClient
     string? _queuedUpdatesJson;
     long _nextMessageId = 9000;
 
+    // The startup handshake (see ITelegramApiClient): a fake not testing it answers with a name and
+    // a cleared webhook, so the inbound loop starts exactly as it does in production.
+    public Task<string> Get_BotUsername_Async(CancellationToken cancellationToken) => Task.FromResult("test_bot");
+
+    public Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>The typing bubble creates no message, so it is not traffic and is not recorded.</summary>
+    public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public void Queue_OwnerMessage(string updatesJson)
     {
         lock (_lock)
@@ -602,7 +635,7 @@ internal sealed class WaterfallTelegram_Fake : ITelegramApiClient
             return string.Join(" | ", _topicNames);
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         lock (_lock)
         {
@@ -613,15 +646,30 @@ internal sealed class WaterfallTelegram_Fake : ITelegramApiClient
         }
     }
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    /// <summary>
+    /// RECORDED LIKE A PLAIN SEND: since 2026-09-07 the mirror sends every entry as HTML, so a fake
+    /// blind to this call would see none of the conversation it is counting.
+    /// </summary>
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, html, cancellationToken);
+        return Send_Message_Async(messageThreadId, html, sound, cancellationToken);
+    }
+
+    /// <summary>
+    /// THE QUESTION'S OWN MESSAGE, and the only place a sentinel ever lands: the `QUESTION:` line is
+    /// extracted out of the body before the body is sent, so if this call went unrecorded every
+    /// "did it reach the phone" assertion in this file would read false for all three questions.
+    /// </summary>
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
     }
 
     public Task<long?> Send_MessageWithButtons_Async(
         long? messageThreadId,
         string text,
         IReadOnlyList<(string Data, string Label)> buttons,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         lock (_lock)
@@ -634,18 +682,9 @@ internal sealed class WaterfallTelegram_Fake : ITelegramApiClient
         }
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
-    }
-
-    public Task<long?> Send_MessageWithReplyKeyboard_Async(
-        long? messageThreadId,
-        string text,
-        IReadOnlyList<IReadOnlyList<string>> keyboardRows,
-        CancellationToken cancellationToken)
-    {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
@@ -654,6 +693,11 @@ internal sealed class WaterfallTelegram_Fake : ITelegramApiClient
             _editedTexts.Add(text);
 
         return Task.CompletedTask;
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
@@ -685,7 +729,7 @@ internal sealed class WaterfallTelegram_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
-    public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken)
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
         return Task.FromResult(7777L);
     }
@@ -710,11 +754,15 @@ internal sealed class WaterfallTelegram_Fake : ITelegramApiClient
 
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<byte>());
 }

@@ -669,6 +669,18 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// How many mirrorable entries of a HELD append already reached the phone, per channel file. The
+    /// tailer confirms whole appends, so a partially delivered one is re-emitted in full; without
+    /// this the entries sent before the hold would be texted again on every poll for as long as the
+    /// owner took to answer.
+    ///
+    /// In memory, like the rest of the mirror's in-flight state: losing it on a restart costs a
+    /// duplicate message, which is the at-least-once contract this component already documents,
+    /// while persisting it would risk skipping entries nobody ever received.
+    /// </summary>
+    readonly Dictionary<string, int> _deliveredEntriesOfHeldAppend = [];
+
+    /// <summary>
     /// When each orchestration was paused, so a SECOND /pause inside the rename lag re-asserts the
     /// pause rather than lifting it. In memory on purpose: it guards a double-tap, which happens in
     /// seconds, and an app restart that forgot one would at worst make the next tap an honest
@@ -1681,7 +1693,13 @@ internal sealed class BridgeEngineModel(
         var pollResult = _tailer.Poll(channels);
 
         foreach (var truncatedFile in pollResult.TruncatedFiles)
+        {
+            // The prefix memo counts entries of a batch that no longer exists — compaction moved
+            // them into the archive — so keeping it would skip the first entries of whatever the
+            // file holds now.
+            _deliveredEntriesOfHeldAppend.Remove(truncatedFile);
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Channel file shrank (append-only protocol anomaly), offset reset: {truncatedFile}");
+        }
 
         // The tailer has no logger of its own. A channel it cannot read is a session the owner
         // silently stops hearing from, so the failure is surfaced here and the next poll retries it.
@@ -1701,14 +1719,44 @@ internal sealed class BridgeEngineModel(
 
         _heldTrailingEntryFiles.IntersectWith(pollResult.HeldTrailingEntryFiles);
 
+        // ONE QUESTION AT A TIME (owner, 2026-09-09: "I have just received like 10 questions in a
+        // row ... This was a mess"; re-affirmed 2026-09-11 as the ONLY way, because when three or
+        // four questions arrive at once their answers conflict). A channel whose orchestration is
+        // already waiting on an answer is HELD: neither delivered nor settled, so its cursor does
+        // not move and the tailer re-emits it on the next poll. Not Settle_MirrorAttempt_Async(false)
+        // — that is the FAILURE path, which gives up after MIRROR_RETRY_WINDOW_MINUTES and drops the
+        // entries with an error.
+        //
+        // ONCE HELD, THE REST OF THAT CHANNEL IS HELD WITH IT. The cursor is per FILE, so confirming
+        // a later entry confirms the held one along with it — holding the question while letting the
+        // next entry through would lose the question outright, which is the failure this exists to
+        // prevent arriving by the door left open for it. It also keeps the conversation in order.
+        HashSet<string> heldChannels = [];
+
         foreach (var append in pollResult.CompletedAppends)
         {
             if (!Is_MirrorAttemptDue(append.Channel.FilePath))
                 continue;
 
-            var delivered = await Mirror_Append_Async(append, cancellationToken);
+            // A channel held earlier in THIS tick stays held: a second append for the same file
+            // (the tailer can emit one per poll, but the loop outlives a single poll's worth when
+            // several channels are in play) must not jump the queue in front of the entries the
+            // hold just left behind.
+            if (heldChannels.Contains(append.Channel.FilePath))
+                continue;
+
+            var outcome = await Mirror_Append_Async(append, cancellationToken);
             Raise_OrchestrationActivity(append.Channel.OrchId);
-            await Settle_MirrorAttempt_Async(append, delivered, cancellationToken);
+
+            // HELD is neither settled nor confirmed: the cursor stays put, the failure clock never
+            // starts, and everything still queued for this channel waits its turn.
+            if (outcome == MirrorOutcomes.Held)
+            {
+                heldChannels.Add(append.Channel.FilePath);
+                continue;
+            }
+
+            await Settle_MirrorAttempt_Async(append, outcome == MirrorOutcomes.Delivered, cancellationToken);
         }
 
         await Check_UsageLimits_Async(cancellationToken);
@@ -3668,11 +3716,14 @@ internal sealed class BridgeEngineModel(
             if (channel.IsOwnerChannel && _ownerDeliveryBuffer.Is_Holding(channel.FilePath))
                 continue;
 
-            // NOTE: a pending question does NOT freeze this channel. Queueing the supervisor's
-            // output would hide the real problem rather than fix it — the supervisor would still be
-            // working, briefing implementers and moving the state while the owner's answer was
-            // pending, so the answer would land against a world that had already changed. The
-            // supervisor is STOPPED instead, by the awaiting-answer hook (see Raise_AwaitingAnswerFlag).
+            // A pending owner question HOLDS the owner channel at the mirror (QuestionHold_Policy,
+            // owner ruling 2026-09-11: one question at a time is the only way). The hold is not an
+            // offset freeze — the file is still polled, the held append is simply not settled — so
+            // the fork's "the supervisor is STOPPED instead" remains true as well: both halves
+            // apply. The stop (the awaiting-answer hook, see Raise_AwaitingAnswerFlag) keeps the
+            // supervisor from moving the world the answer will land against; the hold keeps the
+            // phone from receiving a second question while the first is unanswered, which is the
+            // half a hook running in the session can never enforce (decision 21).
 
             activeChannels.Add(channel);
         }
@@ -3692,12 +3743,40 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Mirrors one append to Telegram. Returns whether the caller may confirm it — TRUE when every
-    /// entry reached the phone AND when there was deliberately nothing to send (no client, a
-    /// silenced topic, nothing mirrorable); FALSE only when a send actually failed, which leaves
-    /// the append unconfirmed so the tailer re-emits it and the retry can happen.
+    /// What became of one append. DELIVERED and FAILED are the original pair — confirm, or leave it
+    /// for the retry. HELD is neither: the entries are fine and the endpoint is fine, the owner is
+    /// simply still answering the last question, so the append must NOT be confirmed and must NOT
+    /// start the failure clock that gives up and drops after MIRROR_RETRY_WINDOW_MINUTES.
     /// </summary>
-    async Task<bool> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
+    enum MirrorOutcomes
+    {
+        Delivered,
+        Failed,
+        Held,
+    }
+
+    /// <summary>
+    /// Mirrors one append to Telegram. DELIVERED when every entry reached the phone AND when there
+    /// was deliberately nothing to send (no client, a silenced topic, nothing mirrorable); FAILED
+    /// only when a send actually failed, which leaves the append unconfirmed so the tailer re-emits
+    /// it and the retry can happen; HELD when this orchestration is waiting on the owner's answer.
+    ///
+    /// <para>
+    /// THE HOLD IS PER ENTRY, NOT PER APPEND, and that distinction is the whole bug. One poll builds
+    /// ONE append carrying every entry it read, and the owner's waterfall was six questions written
+    /// 20 milliseconds apart — a single append. A check before this method sees the flag unraised,
+    /// because the first question has not been sent yet; by the time it is raised, the remaining
+    /// entries are already inside this loop. So the flag is re-read before every entry, and the rest
+    /// of the append is left undelivered.
+    /// </para>
+    /// <para>
+    /// WHICH MEANS AN APPEND CAN BE PARTIALLY DELIVERED, and the tailer confirms whole appends only.
+    /// <see cref="_deliveredEntriesOfHeldAppend"/> remembers how many mirrorable entries of a HELD
+    /// append already went out, so the next poll — which re-emits the same entries at the front, in
+    /// order — skips them instead of texting the owner the same question twice.
+    /// </para>
+    /// </summary>
+    async Task<MirrorOutcomes> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
         List<int> supervisorEntryIndexes = [];
 
@@ -3731,25 +3810,53 @@ internal sealed class BridgeEngineModel(
         }
 
         // File-only mode: there is no phone to reach, so the entries are as delivered as they will
-        // ever be. Returning false here would freeze the cursor forever on a machine with no bot.
+        // ever be. Failing here would freeze the cursor forever on a machine with no bot.
         if (_telegramClient == null)
-            return true;
+            return MirrorOutcomes.Delivered;
 
         var mirrorableEntries = Select_MirrorableEntries(append);
 
         if (mirrorableEntries.Count == 0)
-            return true;
+            return MirrorOutcomes.Delivered;
 
         // TOPIC SILENCE ("I'm at the PC, talking to this supervisor in its terminal"): drop this
         // orchestration's outbound traffic entirely. Unlike DND, nothing is queued for later —
         // the owner is already reading it live in the terminal, and offsets keep advancing.
         if (Is_TopicSilenced(append.Channel.OrchId))
-            return true;
+            return MirrorOutcomes.Delivered;
 
         var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
 
+        // Entries of THIS append that already reached the phone before an earlier tick held it. They
+        // are re-emitted by the tailer because the append was never confirmed; sending them again
+        // would be the waterfall arriving by the door built to stop it.
+        var alreadyDelivered = _deliveredEntriesOfHeldAppend.TryGetValue(append.Channel.FilePath, out var previouslyDelivered)
+            ? previouslyDelivered
+            : 0;
+
+        var deliveredHere = 0;
+
         foreach (var entry in mirrorableEntries)
         {
+            if (deliveredHere < alreadyDelivered)
+            {
+                deliveredHere++;
+                continue;
+            }
+
+            // ONE QUESTION AT A TIME, re-read per entry — see this method's docstring for why a
+            // check outside the loop cannot see a flag its own first entry is about to raise.
+            if (QuestionHold_Policy.Should_Hold(append.Channel.IsOwnerChannel, Is_AwaitingAnswer(append.Channel.OrchId)))
+            {
+                _deliveredEntriesOfHeldAppend[append.Channel.FilePath] = deliveredHere;
+
+                _log.Log_Info(
+                    append.Channel.OrchId,
+                    $"held entry #{entry.Index} and everything after it — the owner is still answering the last question (delivered so far from this batch: {deliveredHere})");
+
+                return MirrorOutcomes.Held;
+            }
+
             // Set when this entry is the answer the owner is waiting for, and ACTED ON only once the
             // send below has succeeded. The wait is not consumed by an attempt.
             var answersTheOwnersWait = false;
@@ -3936,16 +4043,26 @@ internal sealed class BridgeEngineModel(
             {
                 _log.Log_Error(append.Channel.OrchId, $"Telegram mirror send failed for entry #{entry.Index}", ex);
 
-                // FALSE, not "consumed": the caller leaves this append unconfirmed and the tailer
+                // FAILED, not "consumed": the caller leaves this append unconfirmed and the tailer
                 // re-emits it, so the entry is retried instead of vanishing. Stopping at the first
                 // failure keeps the channel in ORDER, at the price of re-sending any entry of this
                 // same append that already landed. A duplicate on the phone is a nuisance; a
                 // supervisor's message that never arrives is what the owner reported today.
-                return false;
+                //
+                // The held-prefix memo is dropped deliberately: a FAILURE retries the whole append,
+                // exactly as it always has. Carrying a prefix into the failure path would change
+                // retry semantics that have nothing to do with questions.
+                _deliveredEntriesOfHeldAppend.Remove(append.Channel.FilePath);
+                return MirrorOutcomes.Failed;
             }
+
+            deliveredHere++;
         }
 
-        return true;
+        // The whole append is out, so nothing is owed and the memo must not survive into the next
+        // one — a stale prefix would silently skip the first entries of an unrelated batch.
+        _deliveredEntriesOfHeldAppend.Remove(append.Channel.FilePath);
+        return MirrorOutcomes.Delivered;
     }
 
     /// <summary>
@@ -4084,6 +4201,23 @@ internal sealed class BridgeEngineModel(
         return _store.Get_Session_OrNull(orchId)?.Paused ?? false;
     }
 
+    /// <summary>
+    /// Is this orchestration waiting on the owner to answer a question it already texted them?
+    ///
+    /// The flag is raised inside Send_QuestionWithButtons_Async (Remote owner only), cleared by any
+    /// inbound word from them, and expired by Expire_StaleAwaitingAnswerFlags after
+    /// QUESTION_HOLD_CAP_MINUTES — so nothing can be held for ever, including by a question they
+    /// never intend to answer.
+    ///
+    /// Until 2026-09-09 the app WROTE this flag and never read it: the only reader was a bash hook
+    /// that covered supervisors alone, which is how a solo session put nine unanswered questions on
+    /// the owner's phone in five minutes.
+    /// </summary>
+    bool Is_AwaitingAnswer(string orchId)
+    {
+        return Status.AwaitingAnswerFlag_Marker.Is_Raised(_paths, orchId);
+    }
+
     /// <summary>Silence is TOTAL for a topic: its mirrored entries AND its alerts.</summary>
     bool Is_TopicSilenced(string orchId)
     {
@@ -4131,43 +4265,19 @@ internal sealed class BridgeEngineModel(
         var client = _telegramClient
             ?? throw new Exception("Send_QuestionWithButtons_Async called without a Telegram client");
 
-        // A SECOND OPEN QUESTION IS COACHED, NOT REFUSED — and the refusal was tried first.
+        // THE SECOND-OPEN-QUESTION COACHING IS GONE, and the hold is why (owner ruling, 2026-09-11:
+        // one question at a time is the ONLY way — when three or four arrive at once their answers
+        // conflict). Its text told the asker that "both are live and both are tappable, but a TYPED
+        // reply now binds to neither", and under the hold that is FALSE for the ordinary Remote case:
+        // the second question never reaches the phone while the first is unanswered, so there is no
+        // second live question to warn about. AnswerBinding_Decider's two-open branch is still
+        // reachable — terminal presence raises no flag, the ten-minute cap expires one with the
+        // question still open, and /pc lifts a standing block — but those are the app's own routes,
+        // not something to coach an asker about at the moment it asks.
         //
-        // `kit/commands/supervisor.md:323` carries "A QUESTION ENDS YOUR TURN — one open question at
-        // a time" as a HARD RULE, and 721 lines later the same file says "build that and ask in
-        // passing". Nothing here ever counted, so the owner ended up with a merge question, 004, 267
-        // and 277 live at once and reported that they could not answer a moving target.
-        //
-        // ENFORCING IT AS A HARD CAP BROKE SOMETHING REAL, which is how this ended up advisory:
-        // DecisionStateSurvivesARestartTests opens two questions in one orchestration on purpose,
-        // /pending filters a topic's questions in the plural, and every question already carries its
-        // own nonce, deadline and default. The app deliberately supports several open decisions and
-        // made each one individually resolvable. The hole was never the count — it was that a TYPED
-        // reply could not be attributed, and AnswerBinding_Decider now closes exactly that: with two
-        // open, a typed reply binds nothing and the owner taps the one they meant.
-        //
-        // So the count is a smell to tell the session about, not a thing to prevent. The audience is
-        // Agent, so this coaching never reaches the phone.
-        // DECIDED BEFORE THE SEND, so the coaching below is not written about questions this send is
-        // about to close — and swept AFTER it, so a send that fails leaves the older ones open.
+        // DECIDED BEFORE THE SEND, so what is swept is not a question this send is about to close —
+        // and swept AFTER it, so a send that fails leaves the older ones open.
         var toSupersede = Find_QuestionsToSupersede(channel.OrchId);
-
-        if (toSupersede.Count == 0 && Would_BeASecondOpenQuestion(channel.OrchId))
-        {
-            _log.Log_Info(
-                channel.OrchId,
-                "a second question went out while one was still open — the owner must tap, since a typed reply cannot be bound");
-
-            ChannelAppender.Append_AppEntry(
-                channel.FilePath,
-                AppEntryAudiences.Agent,
-                "a second question while one is still open",
-                "A question of yours was already open with the owner when this one went out. Both are "
-                + "live and both are tappable, but a TYPED reply now binds to neither — the app cannot "
-                + "tell which one they meant, so it will leave both open rather than guess. Prefer "
-                + "waiting for the first answer.",
-                DateTime.Now);
-        }
 
         var prompt = questionPrompt;
 
@@ -12480,12 +12590,6 @@ internal sealed class BridgeEngineModel(
                 QuestionPrompt_Builder.Build_SupersededText(question.Text),
                 cancellationToken);
         }
-    }
-
-    bool Would_BeASecondOpenQuestion(string orchId)
-    {
-        lock (_ownerStateLock)
-            return _openQuestions.Values.Any(question => question.OrchId == orchId);
     }
 
     /// <summary>

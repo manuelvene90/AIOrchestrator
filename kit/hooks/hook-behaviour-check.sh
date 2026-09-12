@@ -338,6 +338,13 @@ check "no awaiting-verdict file (fail closed)" DENY "$(verdict "$(run_hook "$AWA
 
 check "a non-supervisor role is untouched" ALLOW "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')" implementer)")"
 
+# AND SOLO IS COVERED, which is the half that was missing until 2026-09-09: the role gate read
+# "supervisor" alone, so the SOLO session — which talks to the owner exactly as a supervisor does —
+# was never stopped by this hook at all, and put nine unanswered questions on the owner's phone in
+# five minutes. Pinned as a DENY beside the ALLOW above so the pair says what the gate admits and
+# what it refuses; a gate narrowed back to supervisors reddens here and nowhere else.
+check "SOLO is stopped like a supervisor" DENY "$(verdict "$(run_hook "$AWAIT_HOOK" "$(fixture Write file_path 'C:/repo/Foo.cs')" solo)")"
+
 # ── A HOOK THAT CANNOT EVALUATE ITS PREDICATE SAYS SO, AND ALLOWS ───────────────────────────────
 #
 # Both halves need a case, and the SECOND one is the whole point. Allowing was never the defect —
