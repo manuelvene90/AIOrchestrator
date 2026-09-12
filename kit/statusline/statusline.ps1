@@ -9,6 +9,15 @@
 #    the orchestrator app reads for per-member cost display and usage-limit Telegram alerts.
 # Configured in ~/.claude/settings.json by install.ps1; env vars are set by the spawner.
 
+# stdout leaves powershell.exe in the console's OEM code page unless told otherwise; the host reads
+# it as UTF-8 and '·' arrives as U+FFFD, the replacement character (measured 2026-09-11, the first
+# Windows run of the suite). Wrapped in try/catch because a host that owns no console — a redirected
+# child under a service — throws on the setter, and a status line must never be the thing that fails.
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch { }
+
 $raw = $null
 $json = $null
 try {
