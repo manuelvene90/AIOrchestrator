@@ -84,9 +84,16 @@ public static class SettingDefinition_Factory
             nullable: nullable);
     }
 
+    /// <summary>
+    /// <paramref name="nullable"/> exists for the same reason <see cref="Create_Enum"/> has it: three
+    /// catalogue keys — the two Telegram ids and the orchestration token budget — ship ABSENT rather
+    /// than with a number, and "the owner has never set this" is not expressible as an int. A
+    /// nullable Int's shipped default is <c>null</c>, and a null VALUE is then accepted rather than
+    /// refused as empty; the range still governs every value that is present.
+    /// </summary>
     public static ISettingDefinition Create_Int(
         string path,
-        int shippedDefault,
+        int? shippedDefault,
         int? minimum,
         int? maximum,
         SettingScopes scope,
@@ -94,15 +101,19 @@ public static class SettingDefinition_Factory
         string label,
         string description,
         RestartKinds restart,
+        bool nullable = false,
         string? legacyPath = null)
     {
         Validate_Common(path, label, description);
+
+        if (shippedDefault == null && !nullable)
+            throw new ArgumentException($"Setting '{path}' has no shipped default but is not nullable");
 
         return new SettingDefinitionModel(
             path: path,
             legacyPath_OrNull: legacyPath,
             kind: SettingKinds.Int,
-            default_OrNull: JsonValue.Create(shippedDefault),
+            default_OrNull: shippedDefault == null ? null : JsonValue.Create(shippedDefault.Value),
             enumValues: [],
             minimum: minimum,
             maximum: maximum,
@@ -114,7 +125,7 @@ public static class SettingDefinition_Factory
             renderer: SettingRenderers.Number,
             compositeParser_OrNull: null,
             validatorName: SettingValidators.NONE,
-            nullable: false);
+            nullable: nullable);
     }
 
     public static ISettingDefinition Create_String(
