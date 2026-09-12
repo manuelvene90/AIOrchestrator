@@ -204,6 +204,33 @@ variables unset. The groups below hold 2 + 4 + 7 + 7 + 2 = 22 names, and they ar
 
 **This is the list every later task compares against. Compare the NAMES, never the count.**
 
+---
+
+#### RUN AFTER TASK 12 (Windows, 2026-09-12, HEAD `b932f9d`, a CLEAN shell — `AIORCH_*` unset)
+
+**Non superati: 7 · Superati: 3522 · Ignorati: 4 · Totale: 3533 · 7 m 40 s.** Full log
+`../after-task12.log`, red names `../after-task12-red.txt`.
+
+`comm -13` against the baseline names printed **one line**, and it is a flake, not a regression:
+`Bridge.APausedOrchestrationIsDormantTests.WhilePaused_NothingIsPushedToTheSupervisor_AndOutboundIsDeferred_UntilTheOwnerWrites`
+failed with *"the `.paused` marker was never raised"* — a wall-clock marker written on the engine
+tick — and is **green 3/3 run alone**, immediately after. It belongs to Task 5's family and to the
+convention note's "re-run a red that had company before attributing it"; nothing Task 12 changed
+goes near it. **NO NEW RED.**
+
+**Sixteen of the baseline's 22 names are now green:** all of group C (7 + Task 8's 2), all of group D
+(7), group E's environment leak (gone with the clean shell), and Task 7's two in group A. The seven
+that remain are:
+
+- **four of group B** — the Fable-vs-Opus default, by the coordinator's ruling above: plan 02 moves
+  the constant, nobody in plan 01 touches it;
+- **one of group E** — `AWellFormedQuestionIsWritten_WithTheToolsOwnIndexAndStamp`, which the section
+  below already records as red in a clean shell too (red 3/3 alone here, unchanged and unowned by
+  Task 12);
+- **`PrintTurnLimitResetTests.ResumeClear_…`**, fixed in `b932f9d` AFTER this run — the run is the
+  one full pass this task was budgeted, so the fix is pinned by twelve isolated runs instead;
+- **the `APaused` flake above.**
+
 ### A. Master-only tests of features this merge dropped — expected red, they go green when re-ported
 
 ```
@@ -242,7 +269,7 @@ with Opus shipped and the `classic` preset carrying Fable, and the constant move
 now would move the owner's live default before the preset that gives Fable back to him exists. A
 later task seeing these four must leave them alone, not "fix" them.
 
-### C. Statusline PowerShell-vs-C# parity, Windows only — seven fixtures
+### C. Statusline PowerShell-vs-C# parity, Windows only — seven fixtures (NINE by the time Task 12 ran)
 
 Every one differs on the same thing: the `·` separator and the accented run come back mangled from
 the PowerShell reference under this machine's console code page.
@@ -252,6 +279,20 @@ master's whole effort block (Task 8 row).** The parity reds are still not a merg
 reason is checkable rather than assumed: **no fixture under `kit/statusline/fixtures/` contains
 `effort`** (15 fixtures, `grep -rli effort` returns nothing), so master's block never executes on any
 parity path. What differs is the encoding, and it stays in the baseline until someone fixes that.
+
+**ALL NINE GREEN (Task 12, 797e891) — and it was NINE, not seven.** Task 8's two new fixtures
+(`supervisor-with-effort`, `unorchestrated-with-effort`) landed after this baseline was taken and
+their PowerShell leg joined this family exactly as that row predicted. The seven above plus those
+two: `communicator-green`, `implementer-never-shows-the-ledger`, `reviewer-without-member-falls-back`,
+`supervisor-named-short-progress`, `supervisor-stale-progress-hidden`, `supervisor-with-effort`,
+`unorchestrated-posix-path-full-context`, `unorchestrated-windows-path`, `unorchestrated-with-effort`.
+
+The cause was one line's absence. `powershell.exe` leaves stdout in the console's OEM code page
+unless told otherwise, and the harness reads the child's stdout as UTF-8, so `·` arrived as U+FFFD.
+`[Console]::OutputEncoding = UTF8` at the top of `statusline.ps1`, before any output, and the class
+went 36/36 (17 bash + 17 PowerShell + the 2 shape facts). **Note for delivery (decision 17): this is
+a `kit/` change, so it reaches `~/.claude` only after the MAIN checkout is rebuilt and the app
+restarted — the test proves the script, not the installed copy.**
 
 ```
 AIOrchestratorCoreLib.Tests.Kit.StatusLineScriptParityTests.ThePowerShellReference_RendersTheSameLine_WhereItCanRun(fixtureName: "communicator-green")
@@ -280,6 +321,28 @@ AIOrchestratorCoreLib.Tests.Running.WakeUpDigestReviewFixTests.AHeldReport_IsNot
 `System.IO.IOException : The process cannot access the file` on
 `…\repo-1\im…` and on `…\repo-1\.supervisor.print-session.json`.
 
+**ALL THREE GREEN (Task 12).**
+
+- The watcher (**aa44435**): Windows raises `FileSystemWatcher.Error` when the watched root is
+  deleted and inotify does not, so the handler logged its line and `Check_WatchStillValid` then
+  logged "armed again" — two lines where the contract is one. The error line is now for a watcher
+  that failed with its folder STILL THERE; a root that is gone is the deletion, which the validity
+  check already owns. A new test raises the private handler by name (nothing else can reach that
+  branch) and asserts BOTH halves, so the suppression cannot grow into silence.
+- The two IOExceptions (**e72cc84**) were never two tests' bugs: across five runs of the print-runner
+  filter the same collision landed on THREE different names, wandering. Windows honours `FileShare`
+  and Linux does not, so `Atomic_FileWriter`'s rename and an ordinary read lock each other out here
+  and nowhere else. `Storage/Tolerant_FileReader` is the read half (`FileShare.Delete` so the rename
+  may proceed, plus a short bounded backoff; it THROWS when it gives up, which is the difference from
+  `Safe_FileReader` — an empty string for a print session's identity reads as "there is no session").
+  `PrintSessionState_Store` was the reader in the trace; `Safe_FileReader` and
+  `UsageTotals_Reader.Read_Text_Safe` go through it too, their swallow kept as the LAST resort.
+  **The rename got the same backoff, because the new test found the other direction rather than
+  assuming it away:** a replacing rename needs DELETE on the target and an open reader refuses it, so
+  `File.Move(overwrite: true)` throws `UnauthorizedAccessException` even against a reader that had
+  granted `FileShare.Delete`. Fixing only the reader would have moved the failure onto the writer and
+  looked like a fix. Five runs after: zero IOExceptions.
+
 **Four are ORDINARY ASSERTION FAILURES and are NOT attributed to anything.** No exception class
 excuses them and nobody has diagnosed them — they are recorded as ground state, and **the first task
 to touch `Running/` (Task 12) diagnoses them**:
@@ -295,6 +358,44 @@ What each actually said: `MultiSourceSupervisorTests` — `Assert.Contains() …
 `PrintTurnLimitResetTests` — `Assert.Equal() … Expected: 1 / Actual: 0`; `ClosingTurnReviewFixTests` —
 `Assert.Empty() Failure: Collection was not empty`; `MemberTrafficRidesOneDigestedTurnTests` — its own
 message, *"the supervisor never took its boot turn, so nothing below is measuring the digest"*.
+
+**ALL FOUR GREEN (Task 12). They were three different things, and only one was a defect in anything
+that ships.**
+
+1. `MultiSourceSupervisorTests.AfterABridgeRestart_…` — the ONLY deterministic one (red every run,
+   alone or in company). Dumping the prompt showed the turn DID carry the entry, as
+   `REPORT ÔÇö two`: **the fake CLI was the faulty instrument**, not the app. `Console.In` decodes
+   with the console's code page on Windows, so the UTF-8 the bridge writes on stdin was mangled
+   before it was ever logged. Nothing in the product was wrong — `PrintTurnRunnerModel` and
+   `StreamSessionProcess` both set `StandardInputEncoding` to UTF-8. It showed on exactly one test
+   because the STREAM path hides it: `System.Text.Json` escapes non-ASCII to `\uXXXX`, so a stream
+   message is pure ASCII on the wire and survives any code page, and only the print path sends the
+   prompt as plain text. FakeClaude now replaces all three streams with UTF-8 (**9870c7e**);
+   `MultiSourceSupervisorTests` 9/9.
+2. `ClosingTurnReviewFixTests`, `MemberTrafficRidesOneDigestedTurnTests`,
+   `WakeUpDigestReviewFixTests` — LOAD REDS: each passes alone, repeatedly, in a fraction of its
+   60-second budget, and ten runs of the print-runner filter put the failure on five DIFFERENT names
+   across them. Never a wrong answer, always an extra one (`Assert.Empty` holding one executed turn,
+   `Assert.Single` holding two app entries): `Drive_Until` polls a wall-clock deadline every 100 ms
+   while each tick spawns a fake-CLI process, so between two polls a loaded box lets a further turn
+   complete. The convention note already prescribes the practice; the four classes now sit in
+   `Running/REAL_TIME_COLLECTION` (`DisableParallelization`), which is the half that can be enforced
+   (**7fda591**). **Not a budget increase** — raising a deadline only makes a genuine failure take
+   longer to arrive and would not touch an overshoot at all. Cost: the print-runner filter goes from
+   1 m 12 s to 2 m 39 s; the full suite from 6 m 09 s to 7 m 40 s.
+   One case in `ClosingTurnReviewFixTests` survived the collection —
+   `WithNoPrintRungBeneathIt_TheKilledTurnsRecordSaysTheEntriesAreRetried`, which is NOT in the list
+   above and so was a flake this one-run baseline happened to miss. Its two "matching items" were
+   turn 1's TIMEOUT record and turn 1's successful RETRY record, i.e. the system working; the
+   predicate now names the killed turn by its outcome, which is what the sibling case ten lines below
+   already did (**ed0fe0d**). The three assertions on the record's wording are untouched.
+3. `PrintTurnLimitResetTests.ResumeClear_…` — **not a load red**: about one run in EIGHT with the
+   class alone. The product is right and the test read too early. A refused turn writes
+   `RetryNotBeforeUtc` and only THEN drops its `_inFlight` entry, while `Clear_LimitDeferrals`
+   deliberately skips a session whose turn is still running (F6 — a snapshot taken before that turn's
+   own writes is not something to act on), so "the state file says deferred" is not "the deferral has
+   settled". It now waits on `Is_TurnInFlight`, which is on `IPrintTurnDispatcher` for exactly this
+   (**b932f9d**). Twelve isolated runs after: green. No assertion changed.
 
 ### E. The channel-append tool — two, and ONE of them is this session's own environment
 
