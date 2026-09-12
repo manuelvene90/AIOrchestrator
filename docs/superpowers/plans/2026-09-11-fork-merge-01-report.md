@@ -185,7 +185,7 @@ question left open (owner has not decided — the fork's deletion is not adopted
 recording the merge itself; the Repository Structure block and Design Spec pointer refreshed against
 the actual tree. `docs/MODIFICHE-DEL-FORK.md` §7 got one dated Italian line. `.claude/rules/*.md`
 left untouched — `git-and-boundaries.md` is now partly stale for a merged repo (flagged for the
-owner, not rewritten). **Fix round, reviewed: [x] <fix-commit-placeholder>** — decision 11 reworded
+owner, not rewritten). **Fix round, reviewed: [x] 9b882c6** — decision 11 reworded
 so the primary paragraph states the tree's CURRENT state (layer gone, code doesn't exist) rather
 than reading as present-tense working behaviour, with the owner's §11.1 question kept open in a
 second half; decision 26 names the specific `git-and-boundaries.md` contradiction (it forbids
