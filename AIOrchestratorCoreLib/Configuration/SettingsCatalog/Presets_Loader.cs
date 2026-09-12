@@ -12,10 +12,13 @@ namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 /// <para>
 /// A PRESET IS A LIST OF CATALOGUE PATHS, so its keys are written FLAT
 /// (<c>"phone.push"</c>), never nested — the flat form is what makes "does this preset name only
-/// catalogue paths" a one-line test (<c>PresetsLoaderTests</c>). <see cref="SettingsJson_Path"/>
-/// reads a dotted path regardless of whether the JSON tree it walks is flat or nested, which is why
-/// the flat form is legal in <c>config.json</c> too — this class does not depend on that, but the
-/// two readers agree because they are the same reader.
+/// catalogue paths" a one-line test (<c>PresetsLoaderTests</c>). A config.json file is the opposite
+/// shape, a real nested object tree — but neither shape is exclusive to one file any more
+/// (2026-09-12): <see cref="Settings_Resolver"/> tries the literal whole-path key FIRST, then the
+/// segment walk, in BOTH the preset layer and the config layer, so a flat-dotted key hand-written
+/// into config.json and a nested key someone writes into a preset loaded from a file path both
+/// resolve. This class itself only ever produces the flat shape and does not depend on the resolver's
+/// tolerance for the other one.
 /// </para>
 /// <para>
 /// AN UNKNOWN PRESET NAME THROWS RATHER THAN DEFAULTING (spec §6.2) — the fork's own rule for

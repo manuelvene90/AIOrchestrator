@@ -24,20 +24,24 @@ namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 /// trusting what it reads.
 /// </para>
 /// <para>
-/// THE PRESET TREE IS FLAT, THE CONFIG TREE IS NESTED. <c>Presets_Loader</c>'s embedded presets are
-/// deliberately flat — one top-level key per catalogue path, literally <c>"phone.receipts"</c>,
-/// never nested (see its own class doc and <c>kit/presets/classic.json</c>) — so a preset layer is
-/// read by a single direct lookup of the whole dotted path as one key. config.json is the opposite:
-/// a real nested object tree (<c>{"phone":{"receipts":...}}</c>), which is exactly what
-/// <see cref="SettingsJson_Path"/> walks. The two lookups are kept as separate helpers below so
-/// neither tree is ever walked the way the other one is shaped.
+/// EACH LAYER TRIES BOTH SHAPES, LITERAL KEY FIRST (2026-09-12): the shipped presets really are flat
+/// — one top-level key per catalogue path, literally <c>"phone.receipts"</c>, never nested (see
+/// <c>Presets_Loader</c>'s own class doc and <c>kit/presets/classic.json</c>) — but a preset loaded
+/// from a file path is free text an owner wrote by hand, and config.json is nominally nested but
+/// nothing stops someone hand-writing a flat-dotted key there, which <see cref="SettingsJson_Path"/>'s
+/// own doc calls legal for a single-segment path. A layer that could only see ONE of the two shapes
+/// silently read the other as absent, which is the exact failure this catalogue exists to prevent.
+/// So both the preset layer and the config layer first try the literal whole-path key as a single
+/// dictionary lookup, then fall back to the segment walk. For a single-segment path the two lookups
+/// are the same operation, so nothing changes there. For a multi-segment path both can only hit when
+/// someone has written the key twice — the literal whole-path key wins, since it is tried first.
 /// </para>
 /// <para>
 /// THE OLD SPELLING IS READ IN THE SAME LAYER, after the new one: <see cref="ISettingDefinition.LegacyPath_OrNull"/>
-/// is tried only once the new path's answer for that same layer has been ruled out, never across
-/// layers — a legacy key in config.json must not be beaten by a new-spelling key in the preset, or a
-/// re-homed path would silently reset an owner's config.json value to the shipped default the day
-/// the alias is read.
+/// is tried — literal key first, then the segment walk, same as the new path — only once the new
+/// path's answer for that same layer has been ruled out, never across layers — a legacy key in
+/// config.json must not be beaten by a new-spelling key in the preset, or a re-homed path would
+/// silently reset an owner's config.json value to the shipped default the day the alias is read.
 /// </para>
 /// </summary>
 public static class Settings_Resolver
@@ -89,7 +93,15 @@ public static class Settings_Resolver
         return value!.GetValue<bool>();
     }
 
-    public static int? Resolve_Int(
+    /// <summary>
+    /// 64-bit, not 32: three Kind=Int rows (<c>telegramSupergroupChatId</c>, <c>telegramOwnerUserId</c>,
+    /// <c>orchestrationTokenBudget</c>) are nullable with no bounds and the catalogue's own validator
+    /// reads them as <see cref="long"/> — a real Telegram supergroup id looks like
+    /// <c>-1001234567890</c>, which does not fit <see cref="int"/>. An accessor that called
+    /// <c>GetValue&lt;int&gt;()</c> would throw on exactly the values the catalogue was widened to
+    /// accept.
+    /// </summary>
+    public static long? Resolve_Long(
         ISettingDefinition definition,
         JsonObject? presetTree,
         JsonObject? configTree,
@@ -98,7 +110,7 @@ public static class Settings_Resolver
         Require_Kind(definition, SettingKinds.Int);
 
         var (value, _) = Resolve(definition, presetTree, configTree, session);
-        return value?.GetValue<int>();
+        return value?.GetValue<long>();
     }
 
     static void Require_Kind(ISettingDefinition definition, params SettingKinds[] accepted)
@@ -125,24 +137,42 @@ public static class Settings_Resolver
         return true;
     }
 
+    /// <summary>Literal whole-path key first, then the segment walk — see the class doc.</summary>
     static bool Try_ConfigLayer(JsonObject? tree, ISettingDefinition definition, out JsonNode? value)
     {
-        if (Try_NestedPath(tree, definition.Path, definition, out value))
+        if (Try_EitherShape(tree, definition.Path, definition, out value))
             return true;
 
-        if (definition.LegacyPath_OrNull != null && Try_NestedPath(tree, definition.LegacyPath_OrNull, definition, out value))
+        if (definition.LegacyPath_OrNull != null && Try_EitherShape(tree, definition.LegacyPath_OrNull, definition, out value))
             return true;
 
         value = null;
         return false;
     }
 
+    /// <summary>Literal whole-path key first, then the segment walk — see the class doc.</summary>
     static bool Try_PresetLayer(JsonObject? tree, ISettingDefinition definition, out JsonNode? value)
     {
-        if (Try_FlatPath(tree, definition.Path, definition, out value))
+        if (Try_EitherShape(tree, definition.Path, definition, out value))
             return true;
 
-        if (definition.LegacyPath_OrNull != null && Try_FlatPath(tree, definition.LegacyPath_OrNull, definition, out value))
+        if (definition.LegacyPath_OrNull != null && Try_EitherShape(tree, definition.LegacyPath_OrNull, definition, out value))
+            return true;
+
+        value = null;
+        return false;
+    }
+
+    /// <summary>
+    /// The literal whole-path key wins when both shapes are present — see the class doc's stated
+    /// order. For a single-segment path the two lookups are the same operation.
+    /// </summary>
+    static bool Try_EitherShape(JsonObject? tree, string path, ISettingDefinition definition, out JsonNode? value)
+    {
+        if (Try_FlatPath(tree, path, definition, out value))
+            return true;
+
+        if (Try_NestedPath(tree, path, definition, out value))
             return true;
 
         value = null;

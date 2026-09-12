@@ -15,6 +15,14 @@ namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 /// <see cref="OrchestratorConfig_Loader"/>'s own readers were given on 2026-09-10: a hand-edited
 /// <c>{"phone": 3}</c> costs that ONE setting its default, never the app's startup.
 /// </para>
+/// <para>
+/// THE FLAT FORM (a literal dotted key like <c>"phone.receipts"</c> as one top-level property) IS
+/// LEGAL HERE ONLY FOR A SINGLE-SEGMENT PATH, where "read the whole path as one key" and "walk one
+/// segment" are the same lookup — a flat-dotted MULTI-segment key is invisible to this class's own
+/// segment walk, which is exactly why <see cref="Settings_Resolver"/> tries a literal whole-path key
+/// lookup of its own, ahead of calling <see cref="Read_OrNull"/>, rather than relying on this reader
+/// to see both shapes.
+/// </para>
 ///
 /// <para>
 /// <see cref="Write"/> CLONES THE VALUE BEFORE ASSIGNING IT (2026-09-12): a <see cref="JsonNode"/>

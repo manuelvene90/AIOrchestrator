@@ -39,25 +39,30 @@ public class SettingsResolverTests
         Assert.Equal(SettingOrigins.Preset, origin);
     }
 
+    /// <summary>
+    /// Three DISTINCT values (shipped default "opus", preset "sonnet", config "haiku") so both
+    /// assertions carry weight — the earlier version used a config value equal to the shipped
+    /// default, so a resolver that silently fell all the way through to the default would still pass
+    /// the value assertion, leaving only the origin assertion load-bearing.
+    /// </summary>
     [Fact]
     public void TheConfigFile_BeatsThePreset()
     {
-        var definition = Catalog.Find_OrNull("phone.receipts")!;
+        var definition = Catalog.Find_OrNull("models.supervisor")!;
 
         var (value, origin) = Settings_Resolver.Resolve(
             definition,
-            Tree("""{"phone.receipts":"reactions"}"""),
-            Tree("""{"phone":{"receipts":"ticks"}}"""),
+            Tree("""{"models.supervisor":"sonnet"}"""),
+            Tree("""{"models":{"supervisor":"haiku"}}"""),
             session: null);
 
-        Assert.Equal("ticks", value!.GetValue<string>());
+        Assert.Equal("haiku", value!.GetValue<string>());
         Assert.Equal(SettingOrigins.ConfigFile, origin);
     }
 
     /// <summary>
-    /// THE SESSION IS THE TOP RUNG AND ONLY FOR ORCHESTRATION-SCOPE KEYS. A Machine-scope key read
-    /// with a session present must not go looking in session.json — there is nothing there, and a
-    /// resolver that looked would make every renderer's origin label unreliable.
+    /// THE SESSION IS THE TOP RUNG AND ONLY FOR ORCHESTRATION-SCOPE KEYS — this is the positive case,
+    /// pinning that a session override actually wins.
     /// </summary>
     [Fact]
     public void TheSession_BeatsTheConfigFile_ForAnOrchestrationScopedKey()
@@ -71,6 +76,15 @@ public class SettingsResolverTests
         Assert.Equal(SettingOrigins.Session, origin);
     }
 
+    /// <summary>
+    /// DOES NOT PIN THE SCOPE GUARD (review round 1, item 6): "phone.receipts" with no preset and no
+    /// config tree is answered null by <see cref="Try_Session"/>'s own default arm in
+    /// <see cref="SessionScoped_Reader"/> regardless of scope, so deleting the
+    /// <c>definition.Scope == SettingScopes.Orchestration</c> guard in
+    /// <see cref="Settings_Resolver.Resolve"/> would leave this test green too — it only covers "an
+    /// unrecognised path with a session present still falls through to the shipped default", not
+    /// "a Machine-scope key is refused a session lookup".
+    /// </summary>
     [Fact]
     public void AMachineScopedKey_IgnoresTheSessionEntirely()
     {
@@ -167,6 +181,91 @@ public class SettingsResolverTests
 
         Assert.Null(value);
         Assert.Equal(SettingOrigins.ConfigFile, origin);
+    }
+
+    /// <summary>
+    /// PINS THE EXISTENCE MACHINERY ITSELF (spec §6.2 review round 1, item 4): a NULLABLE setting
+    /// absent from the config tree and set in the preset must still resolve from the preset, with
+    /// origin Preset. Without <c>NestedPath_Exists</c>/<c>ContainsKey</c> distinguishing "the key is
+    /// absent" from "the key is present and JSON null", an absent nullable key in config.json would
+    /// read back as the same <c>JsonNode? null</c> that <see cref="SettingsJson_Path.Read_OrNull"/>
+    /// returns for an explicit null — silently stopping the fall-through to the preset's value.
+    /// Verified by hand: deleting the <c>ContainsKey</c>/<c>NestedPath_Exists</c> check (so
+    /// <c>Try_NestedPath</c> trusts <c>Read_OrNull</c> alone) turns this test red, because the config
+    /// tree below has no <c>effort</c> key at all — <c>Read_OrNull</c> already answers null for it
+    /// without any existence check, so the difference is purely in what the ABSENT case is allowed to
+    /// mean.
+    /// </summary>
+    [Fact]
+    public void ANullableSetting_AbsentFromConfig_AndSetInThePreset_ResolvesFromThePreset()
+    {
+        var definition = Catalog.Find_OrNull("effort.supervisor")!;
+
+        var (value, origin) = Settings_Resolver.Resolve(
+            definition,
+            Tree("""{"effort.supervisor":"xhigh"}"""),
+            Tree("""{"unrelated":true}"""),
+            session: null);
+
+        Assert.Equal("xhigh", value!.GetValue<string>());
+        Assert.Equal(SettingOrigins.Preset, origin);
+    }
+
+    /// <summary>
+    /// ALL SEVEN <see cref="SessionScoped_Reader"/> ARMS, EACH WITH ITS OWN DISTINGUISHABLE VALUE
+    /// (review round 1, item 5): before this, only "models.supervisor" was exercised anywhere in this
+    /// file, so a typo in any other arm — or a swap of the supervisor/implementer override properties
+    /// — left every test green. The two model overrides and the two effort overrides deliberately
+    /// never share a value, so a swap between the supervisor and implementer arm of either pair still
+    /// fails.
+    /// </summary>
+    public static IEnumerable<object[]> SevenSessionScopedPaths()
+    {
+        yield return new object[] { "models.supervisor" };
+        yield return new object[] { "models.implementer" };
+        yield return new object[] { "effort.supervisor" };
+        yield return new object[] { "effort.implementer" };
+        yield return new object[] { "session.paused" };
+        yield return new object[] { "session.telegramMode" };
+        yield return new object[] { "session.ownerPresence" };
+    }
+
+    [Theory]
+    [MemberData(nameof(SevenSessionScopedPaths))]
+    public void EverySessionScopedArm_ReadsItsOwnDistinguishableValue(string path)
+    {
+        var definition = Catalog.Find_OrNull(path)!;
+        var session = new TestSession
+        {
+            SupervisorModelOverride = "sup-model",
+            ImplementerModelOverride = "imp-model",
+            SupervisorEffortOverride = "low",
+            ImplementerEffortOverride = "max",
+            Paused = true,
+            TelegramMode = global::AIOrchestratorCoreLib.Telegram.TelegramDeliveryModes.Deferred,
+            OwnerPresence = global::AIOrchestratorCoreLib.Telegram.OwnerPresenceModes.Terminal,
+        };
+
+        var value = SessionScoped_Reader.Read_OrNull(definition, session);
+
+        if (path == "session.paused")
+        {
+            Assert.True(value!.GetValue<bool>());
+            return;
+        }
+
+        var expected = path switch
+        {
+            "models.supervisor" => "sup-model",
+            "models.implementer" => "imp-model",
+            "effort.supervisor" => "low",
+            "effort.implementer" => "max",
+            "session.telegramMode" => "Deferred",
+            "session.ownerPresence" => "Terminal",
+            _ => throw new InvalidOperationException($"Unhandled path '{path}' — add it to this switch."),
+        };
+
+        Assert.Equal(expected, value!.GetValue<string>());
     }
 
     /// <summary>
