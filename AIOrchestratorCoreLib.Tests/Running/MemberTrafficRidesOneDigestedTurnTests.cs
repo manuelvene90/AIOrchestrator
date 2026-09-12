@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Channels;
+﻿using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
 using AIOrchestratorCoreLib.Running.SessionLaunch;
@@ -31,6 +31,7 @@ namespace AIOrchestratorCoreLib.Tests.Running;
 /// which are then about the traffic under test alone.
 /// </para>
 /// </summary>
+[Collection(REAL_TIME_COLLECTION.NAME)]
 public class MemberTrafficRidesOneDigestedTurnTests
 {
     /// <summary>Production's default (<c>RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW</c>), in the unit config.json takes.</summary>

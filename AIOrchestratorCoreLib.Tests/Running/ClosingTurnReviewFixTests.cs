@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Channels;
+﻿using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.ClosingTurn;
@@ -25,6 +25,7 @@ namespace AIOrchestratorCoreLib.Tests.Running;
 /// answered.
 /// </para>
 /// </summary>
+[Collection(REAL_TIME_COLLECTION.NAME)]
 public class ClosingTurnReviewFixTests
 {
     /// <summary>Five seconds — a window a real <c>dotnet FakeClaude.dll</c> start fits inside; production is 30 minutes.</summary>

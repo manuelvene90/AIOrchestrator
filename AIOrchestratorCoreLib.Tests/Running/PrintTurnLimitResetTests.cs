@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Running;
@@ -25,6 +25,7 @@ namespace AIOrchestratorCoreLib.Tests.Running;
 /// names an hour a fixed distance from now, and the distance is the thing under test.
 /// </para>
 /// </summary>
+[Collection(REAL_TIME_COLLECTION.NAME)]
 public class PrintTurnLimitResetTests
 {
     /// <summary>
