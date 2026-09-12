@@ -156,6 +156,72 @@ public class TolerantFileReaderTests : IDisposable
     }
 
     /// <summary>
+    /// UnauthorizedAccessException IS RETRIED, and this is the case that matters most: Windows answers
+    /// an open of a file already marked for deletion with STATUS_DELETE_PENDING, which reaches .NET as
+    /// UnauthorizedAccessException and NOT as an IOException. That is the delete-pending window this
+    /// class was written for, so a reader that retried only IOException would have missed it.
+    /// <para>
+    /// STATED HONESTLY: a real delete-pending race cannot be constructed on demand — it is a window of
+    /// microseconds inside somebody else's rename, and a test that tried to hit it would be a
+    /// coin toss. What is constructed here is a genuine UnauthorizedAccessException that GOES AWAY: on
+    /// Windows, opening a directory as a file throws it, so the path starts as a folder and becomes a
+    /// file partway through the backoff. That exercises the new catch and the recovery for real; it
+    /// does not claim to be the delete-pending case itself.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AnUnauthorizedAccess_ThatGoesAway_IsRetriedRatherThanThrown()
+    {
+        if (!OperatingSystem.IsWindows())
+            return; // Opening a directory as a file is not UnauthorizedAccessException elsewhere.
+
+        var path = Path.Combine(_folder, "becomes-a-file.json");
+        Directory.CreateDirectory(path);
+
+        var release = Task.Run(async () =>
+        {
+            await Task.Delay(50);
+            Directory.Delete(path);
+            File.WriteAllText(path, "{\"session_id\":\"ghi\"}");
+        });
+
+        var contents = Tolerant_FileReader.Read_AllText(path);
+
+        release.Wait();
+
+        Assert.Equal("{\"session_id\":\"ghi\"}", contents);
+    }
+
+    /// <summary>
+    /// And when it does NOT go away it is rethrown WITH ITS OWN TYPE — an UnauthorizedAccessException
+    /// is not an IOException, and a caller (or a human reading the log) is told which of the two
+    /// happened. Bounded, like the IOException case.
+    /// </summary>
+    [Fact]
+    public void AnUnauthorizedAccess_ThatNeverGoesAway_IsRethrownAsItself_AndGivesUpQuickly()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(_folder, "stays-a-directory");
+        Directory.CreateDirectory(path);
+
+        var stopwatch = Stopwatch.StartNew();
+
+        Assert.Throws<UnauthorizedAccessException>(() => Tolerant_FileReader.Read_AllText(path));
+
+        Assert.True(stopwatch.ElapsedMilliseconds < 3_000, $"the reader spent {stopwatch.ElapsedMilliseconds} ms on an access denial that was never going to lift");
+    }
+
+    // NOT PINNED HERE, and said rather than faked: the same claim for Safe_FileReader and
+    // UsageTotals_Reader.Read_Text_Safe cannot be tested through the directory trick above, because
+    // both guard on File.Exists first and that is FALSE for a folder — the tolerant reader is never
+    // reached. In the real delete-pending case File.Exists is true and it is reached, but that window
+    // cannot be constructed on demand. What those two callers get from this change is the retry inside
+    // Read_AllText, which the two cases above pin directly; there is no separate behaviour of theirs
+    // left to assert.
+
+    /// <summary>
     /// An absent file is an ANSWER, not a race: it throws at once rather than spending the backoff on
     /// every absent-file probe the mirror tick makes by design.
     /// </summary>

@@ -37,13 +37,28 @@ public static class Tolerant_FileReader
     public const int BACKOFF_STEP_MILLISECONDS = 20;
 
     /// <summary>
-    /// The file's text. Throws the LAST <see cref="IOException"/> when every attempt lost the race —
-    /// the caller decides what that means. A missing file throws too, exactly as
+    /// The file's text. Throws the LAST exception when every attempt lost the race, WITH ITS OWN TYPE
+    /// — the caller decides what that means. A missing file throws too, exactly as
     /// <c>File.ReadAllText</c> does: absence is the caller's question, not this one's.
+    /// <para>
+    /// BOTH EXCEPTION TYPES ARE RETRIED, and the second one is the whole delete-pending window this
+    /// class was written for. Windows answers an open of a file that is already marked for deletion
+    /// with <c>STATUS_DELETE_PENDING</c>, which surfaces as <c>ERROR_ACCESS_DENIED</c> and reaches
+    /// .NET as <see cref="UnauthorizedAccessException"/> — NOT an <see cref="IOException"/>, which
+    /// does not derive from it. Catching only <c>IOException</c> would have let the exact case named
+    /// in this file's own summary escape: out of <c>PrintSessionState_Store.Read_OrNull</c> onto the
+    /// tick, and into <c>Safe_FileReader</c>'s swallow as the silent empty this class exists to
+    /// remove. <c>Atomic_FileWriter.Move_TolerantOfAReader</c> catches both; so does this.
+    /// </para>
+    /// <para>
+    /// The cost of the wider catch is bounded and paid only by a failure: a genuine permission denial
+    /// (or a path that is a folder) waits out the backoff and then throws the same exception it would
+    /// have thrown at once.
+    /// </para>
     /// </summary>
     public static string Read_AllText(string filePath)
     {
-        IOException? last = null;
+        Exception? last = null;
 
         for (var attempt = 0; attempt < ATTEMPTS; attempt++)
         {
@@ -64,7 +79,7 @@ public static class Tolerant_FileReader
             {
                 throw;
             }
-            catch (IOException e)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 last = e;
 
@@ -73,6 +88,10 @@ public static class Tolerant_FileReader
             }
         }
 
+        // The stored exception, so the caller sees the TYPE it would have seen without the retries —
+        // an IOException stays an IOException and an UnauthorizedAccessException stays one. The two
+        // mean different things to a human reading the log, and collapsing them here would throw that
+        // away to save a field.
         throw last!;
     }
 }
