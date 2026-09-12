@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Running;
 using Xunit;
@@ -143,5 +144,42 @@ public class SettingsCatalogTests
             ["effort.implementer", "effort.supervisor", "models.implementer", "models.supervisor",
              "session.ownerPresence", "session.paused", "session.telegramMode"],
             orchestrationScoped);
+    }
+
+    /// <summary>
+    /// A REAL TELEGRAM SUPERGROUP CHAT ID IS THREE ORDERS OF MAGNITUDE PAST INT32
+    /// (<c>-1001234567890</c>). The shipped definition stays <c>Kind = Int</c> with no range and must
+    /// accept that value while still refusing a non-integer.
+    /// </summary>
+    [Fact]
+    public void TelegramSupergroupChatId_AcceptsAValuePastInt32_AndStillRefusesANonInteger()
+    {
+        var definition = Catalog.Find_OrNull("telegramSupergroupChatId")!;
+
+        Assert.Null(definition.Validate_OrNull(JsonValue.Create(-1001234567890L)));
+        Assert.NotNull(definition.Validate_OrNull(JsonValue.Create("abc")));
+        Assert.NotNull(definition.Validate_OrNull(JsonValue.Create(1.5)));
+    }
+
+    /// <summary>
+    /// THE THREE <c>session.*</c> ROWS ARE STATE THE APP WRITES, NOT A SETTING A RENDERER MAY EDIT
+    /// (CLAUDE.md decision 21) — a renderer draws its control from <c>Renderer</c>, so each of the
+    /// three must ship <c>ReadOnly</c> while still keeping its own <c>Kind</c>.
+    /// </summary>
+    [Fact]
+    public void EverySessionStateRow_ShipsReadOnly_ButKeepsItsOwnKind()
+    {
+        var paused = Catalog.Find_OrNull("session.paused")!;
+        var telegramMode = Catalog.Find_OrNull("session.telegramMode")!;
+        var ownerPresence = Catalog.Find_OrNull("session.ownerPresence")!;
+
+        Assert.Equal(SettingKinds.Bool, paused.Kind);
+        Assert.Equal(SettingRenderers.ReadOnly, paused.Renderer);
+
+        Assert.Equal(SettingKinds.Enum, telegramMode.Kind);
+        Assert.Equal(SettingRenderers.ReadOnly, telegramMode.Renderer);
+
+        Assert.Equal(SettingKinds.Enum, ownerPresence.Kind);
+        Assert.Equal(SettingRenderers.ReadOnly, ownerPresence.Renderer);
     }
 }

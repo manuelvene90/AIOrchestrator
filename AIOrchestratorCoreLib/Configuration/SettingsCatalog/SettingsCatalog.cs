@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingDefinition;
 using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Mirroring;
@@ -35,6 +36,17 @@ namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 /// omission: <c>repos[].code</c> and the per-user environment exports land there in plan 05.
 /// <c>SettingsCatalogTests.EveryCategory_ExceptKit_HasAtLeastOneEntry</c> names the exemption by
 /// hand, so the day plan 05 lands, that test is the thing that notices the exemption is stale.
+/// </para>
+/// <para>
+/// <c>Kind = Int</c> IS THE DELIBERATE SURFACE for five keys that are read as <c>double</c> —
+/// <c>dispatchPauseThresholdPercent</c>, <c>turnTimeoutMinutes</c>, <c>coalesceSeconds</c>,
+/// <c>streamSilenceSeconds</c> and <c>memberDigestMinutes</c>. Sub-unit precision is intentionally
+/// not offered on any of the five; this is one statement of that rather than five silent ones.
+/// </para>
+/// <para>
+/// <c>runners.&lt;role&gt;.permission_mode</c> and <c>runners.&lt;role&gt;.settings</c> ARE
+/// DELIBERATE OMISSIONS, not a miss by a later completeness pass: <c>RunnerConfigs_Json</c> reads and
+/// writes both, but neither is registered here.
 /// </para>
 /// </summary>
 public static class SettingsCatalog
@@ -129,6 +141,20 @@ public static class SettingsCatalog
         "The layer above is the per-orchestration /effort dial in session.json " +
         "(supervisorEffortOverride / implementerEffortOverride); a solo sits on the implementer slot, as it does for the model.";
 
+    /// <summary>
+    /// SUPERVISOR AND IMPLEMENTER ARE THE TWO ROWS THIS CLASS DOC'S PROMISE DOES NOT HOLD FOR. Every
+    /// other model row below reads <see cref="OrchestratorConfig_Factory"/>'s own constant; these two
+    /// are deliberate literals instead, because <c>OrchestratorConfig_Factory.DEFAULT_SUPERVISOR_MODEL</c>
+    /// and <c>DEFAULT_IMPLEMENTER_MODEL</c> are <c>"claude-fable-5-1"</c> today (owner directive
+    /// 2026-09-09) while <c>"opus"</c> is the REGISTERED shipped default here, by controller ruling on
+    /// the 2026-09-12 catalogue review: this catalogue becomes the source of the shipped default in a
+    /// later plan-02 task, and pointing these two rows at a constant scheduled to change under them
+    /// would make that later reader circular. Four tests are red by the same recorded ruling —
+    /// <c>PerRoleModelDefaultsTests</c> (three cases) and
+    /// <c>OrchestratorConfigLoaderGuardrailsTests.Save_OverACorruptConfigJson_StillSucceeds_AndWritesTheKnownKeys</c>
+    /// — and the task that moves <see cref="OrchestratorConfig_Factory"/>'s constants into this
+    /// catalogue is the one that turns them green.
+    /// </summary>
     static IReadOnlyList<ISettingDefinition> Build_Models()
     {
         return
@@ -137,13 +163,13 @@ public static class SettingsCatalog
                 "The model a SUPERVISOR session spawns with — the turn that is the owner's phone line."),
             Model_Definition(SessionRoles.Implementer, "implementerModel", "opus", SettingScopes.Orchestration,
                 "The model an IMPLEMENTER session spawns with, and the rung the reviewer and solo fall back to."),
-            Model_Definition(SessionRoles.Reviewer, "reviewerModel", "opus", SettingScopes.Machine,
+            Model_Definition(SessionRoles.Reviewer, "reviewerModel", OrchestratorConfig_Factory.DEFAULT_REVIEWER_MODEL, SettingScopes.Machine,
                 "The model a REVIEWER session spawns with. A bad review costs more than it saves, so this rung is worth its price."),
-            Model_Definition(SessionRoles.Solo, "soloModel", "opus", SettingScopes.Machine,
+            Model_Definition(SessionRoles.Solo, "soloModel", OrchestratorConfig_Factory.DEFAULT_SOLO_MODEL, SettingScopes.Machine,
                 "The model a SOLO session spawns with — the session that both talks to the owner and does the work."),
-            Model_Definition(SessionRoles.General, "generalSupervisorModel", "sonnet", SettingScopes.Machine,
+            Model_Definition(SessionRoles.General, "generalSupervisorModel", OrchestratorConfig_Factory.DEFAULT_GENERAL_SUPERVISOR_MODEL, SettingScopes.Machine,
                 "The model the GENERAL supervisor spawns with. Routing, not judging, so it is deliberately cheap."),
-            Model_Definition(SessionRoles.Communicator, "communicatorModel", "sonnet", SettingScopes.Machine,
+            Model_Definition(SessionRoles.Communicator, "communicatorModel", OrchestratorConfig_Factory.DEFAULT_COMMUNICATOR_MODEL, SettingScopes.Machine,
                 "The model a COMMUNICATOR session spawns with. Narration, not judging, so it is deliberately cheap."),
 
             Effort_Definition(SessionRoles.Supervisor, SettingScopes.Orchestration),
@@ -513,7 +539,8 @@ public static class SettingsCatalog
                     "STATE, NOT A SETTING — the app writes it, /pause toggles it. Asleep, not closed and not finished: " +
                     "outbound traffic is held and replays on unpause, and every waker is gated separately so dormancy is " +
                     "not merely a word. Shown so a renderer can display it; never edited through the catalogue.",
-                restart: RestartKinds.None),
+                restart: RestartKinds.None,
+                readOnly: true),
 
             SettingDefinition_Factory.Create_Enum(
                 path: "session.telegramMode",
@@ -527,7 +554,8 @@ public static class SettingsCatalog
                     "'Deferred' keeps everything and replays it later (the owner is away), 'Silenced' drops it outright " +
                     "(the owner is reading the same content live in a terminal). The words are the enum's own, which is " +
                     "how session.json spells them. Shown so a renderer can display it; never edited through the catalogue.",
-                restart: RestartKinds.None),
+                restart: RestartKinds.None,
+                readOnly: true),
 
             SettingDefinition_Factory.Create_Enum(
                 path: "session.ownerPresence",
@@ -541,7 +569,8 @@ public static class SettingsCatalog
                     "as what gets delivered: 'Terminal' means the conversation is happening in the session itself, so " +
                     "nothing is pushed and nothing BLOCKS on a Telegram answer. Shown so a renderer can display it; never " +
                     "edited through the catalogue.",
-                restart: RestartKinds.None),
+                restart: RestartKinds.None,
+                readOnly: true),
         ];
     }
 

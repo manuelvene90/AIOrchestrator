@@ -157,4 +157,97 @@ public class SettingDefinitionFactoryTests
 
         Assert.Contains("phone.appMessagesRing", thrown.Message);
     }
+
+    /// <summary>
+    /// A TELEGRAM SUPERGROUP CHAT ID IS THREE ORDERS OF MAGNITUDE PAST INT32 — the shipped
+    /// <c>telegramSupergroupChatId</c> definition stays <c>Kind = Int</c> with no range, and must
+    /// still accept a real value like <c>-1001234567890</c> while still refusing a non-integer.
+    /// </summary>
+    [Fact]
+    public void Create_Int_WithNoRange_AcceptsAValuePastInt32_AndStillRefusesANonInteger()
+    {
+        var definition = SettingDefinition_Factory.Create_Int(
+            path: "telegramSupergroupChatId",
+            shippedDefault: null,
+            minimum: null,
+            maximum: null,
+            scope: SettingScopes.Machine,
+            category: SettingCategories.Kernel,
+            label: "Telegram supergroup chat id",
+            description: "The forum supergroup every topic is created in.",
+            restart: RestartKinds.None,
+            nullable: true);
+
+        Assert.Null(definition.Validate_OrNull(JsonValue.Create(-1001234567890L)));
+        Assert.NotNull(definition.Validate_OrNull(JsonValue.Create("abc")));
+        Assert.NotNull(definition.Validate_OrNull(JsonValue.Create(1.5)));
+    }
+
+    /// <summary>
+    /// A RENDERER DRAWS ITS CONTROL FROM <see cref="ISettingDefinition.Renderer"/>, so
+    /// <c>session.*</c> must ship <see cref="SettingRenderers.ReadOnly"/> even though each row keeps
+    /// its own <see cref="SettingKinds"/> — the data must refuse the working switch a Toggle/Choice
+    /// renderer would otherwise offer over state nothing reads back (CLAUDE.md decision 21).
+    /// </summary>
+    [Fact]
+    public void Create_Bool_And_Create_Enum_WithReadOnlyTrue_RenderReadOnly_ButKeepTheirOwnKind()
+    {
+        var boolDefinition = SettingDefinition_Factory.Create_Bool(
+            path: "session.paused",
+            shippedDefault: false,
+            scope: SettingScopes.Orchestration,
+            category: SettingCategories.Kernel,
+            label: "Paused",
+            description: "STATE, NOT A SETTING.",
+            restart: RestartKinds.None,
+            readOnly: true);
+
+        var enumDefinition = SettingDefinition_Factory.Create_Enum(
+            path: "session.telegramMode",
+            values: ["Normal", "Deferred", "Silenced"],
+            shippedDefault: "Normal",
+            scope: SettingScopes.Orchestration,
+            category: SettingCategories.Kernel,
+            label: "Telegram delivery mode",
+            description: "STATE, NOT A SETTING.",
+            restart: RestartKinds.None,
+            readOnly: true);
+
+        Assert.Equal(SettingKinds.Bool, boolDefinition.Kind);
+        Assert.Equal(SettingRenderers.ReadOnly, boolDefinition.Renderer);
+
+        Assert.Equal(SettingKinds.Enum, enumDefinition.Kind);
+        Assert.Equal(SettingRenderers.ReadOnly, enumDefinition.Renderer);
+    }
+
+    /// <summary>
+    /// <see cref="SettingDefinition_Factory.Create_Int"/> already refused a null default arriving
+    /// without <c>nullable</c> before this fix round; <see cref="SettingDefinition_Factory.Create_Enum"/>
+    /// gains the identical guard here, so a definition never builds with a default its own
+    /// validator would refuse.
+    /// </summary>
+    [Fact]
+    public void Create_Int_And_Create_Enum_WithANullDefaultAndNotNullable_BothThrow()
+    {
+        Assert.Throws<ArgumentException>(() => SettingDefinition_Factory.Create_Int(
+            path: "kernel.someInt",
+            shippedDefault: null,
+            minimum: null,
+            maximum: null,
+            scope: SettingScopes.Machine,
+            category: SettingCategories.Kernel,
+            label: "Some int",
+            description: "…",
+            restart: RestartKinds.None));
+
+        Assert.Throws<ArgumentException>(() => SettingDefinition_Factory.Create_Enum(
+            path: "kernel.someEnum",
+            values: ["a", "b"],
+            shippedDefault: null,
+            scope: SettingScopes.Machine,
+            category: SettingCategories.Kernel,
+            label: "Some enum",
+            description: "…",
+            restart: RestartKinds.None));
+    }
 }

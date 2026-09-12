@@ -28,7 +28,8 @@ public static class SettingDefinition_Factory
         string label,
         string description,
         RestartKinds restart,
-        string? legacyPath = null)
+        string? legacyPath = null,
+        bool readOnly = false)
     {
         Validate_Common(path, label, description);
 
@@ -45,7 +46,7 @@ public static class SettingDefinition_Factory
             label: label,
             description: description,
             restart: restart,
-            renderer: SettingRenderers.Toggle,
+            renderer: readOnly ? SettingRenderers.ReadOnly : SettingRenderers.Toggle,
             compositeParser_OrNull: null,
             validatorName: SettingValidators.NONE,
             nullable: false);
@@ -61,9 +62,13 @@ public static class SettingDefinition_Factory
         string description,
         RestartKinds restart,
         bool nullable = false,
-        string? legacyPath = null)
+        string? legacyPath = null,
+        bool readOnly = false)
     {
         Validate_Common(path, label, description);
+
+        if (shippedDefault == null && !nullable)
+            throw new ArgumentException($"Setting '{path}' has no shipped default but is not nullable");
 
         return new SettingDefinitionModel(
             path: path,
@@ -78,7 +83,7 @@ public static class SettingDefinition_Factory
             label: label,
             description: description,
             restart: restart,
-            renderer: SettingRenderers.Choice,
+            renderer: readOnly ? SettingRenderers.ReadOnly : SettingRenderers.Choice,
             compositeParser_OrNull: null,
             validatorName: SettingValidators.NONE,
             nullable: nullable);

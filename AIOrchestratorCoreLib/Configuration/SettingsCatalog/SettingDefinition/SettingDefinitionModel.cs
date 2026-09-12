@@ -77,18 +77,49 @@ internal sealed class SettingDefinitionModel(
         return null;
     }
 
+    /// <summary>
+    /// Reads as <see cref="long"/>, not <see cref="int"/>: three Kind=Int rows carry values past
+    /// Int32 (a Telegram supergroup chat id looks like <c>-1001234567890</c>) and would otherwise be
+    /// refused by their own catalogue entry. <see cref="Minimum"/>/<see cref="Maximum"/> stay
+    /// <c>int?</c> — every ranged Int row in the catalogue has Int32 bounds — so the comparison
+    /// widens the bound to long rather than the other way around.
+    /// </summary>
     string? Validate_Int_OrNull(JsonNode value)
     {
-        if (value is not JsonValue jsonValue || !jsonValue.TryGetValue<int>(out var number))
+        if (value is not JsonValue jsonValue || !Try_GetLong(jsonValue, out var number))
             return $"'{Path}' must be a whole number";
 
-        if (Minimum != null && number < Minimum.Value)
+        if (Minimum != null && number < (long)Minimum.Value)
             return $"'{Path}' must be {Describe_Range()} — {number} is too low";
 
-        if (Maximum != null && number > Maximum.Value)
+        if (Maximum != null && number > (long)Maximum.Value)
             return $"'{Path}' must be {Describe_Range()} — {number} is too high";
 
         return null;
+    }
+
+    /// <summary>
+    /// <see cref="JsonValue.TryGetValue{TValue}"/> only converts to the exact CLR type a non-element
+    /// backed <see cref="JsonValue"/> was created with — a <c>JsonValue.Create(30)</c> is backed by
+    /// <see langword="int"/>, and asking it for <see langword="long"/> fails even though 30 fits. A
+    /// JsonElement-backed value (the shape every value read off disk actually is) has no such
+    /// restriction: <c>TryGetValue&lt;long&gt;</c> alone would already accept
+    /// <c>-1001234567890</c> there. Trying <see langword="long"/> first and falling back to
+    /// <see langword="int"/> covers both shapes without accepting anything a whole number is not.
+    /// </summary>
+    static bool Try_GetLong(JsonValue jsonValue, out long number)
+    {
+        if (jsonValue.TryGetValue(out number))
+            return true;
+
+        if (jsonValue.TryGetValue(out int intValue))
+        {
+            number = intValue;
+            return true;
+        }
+
+        number = 0;
+        return false;
     }
 
     /// <summary>Names only the bound(s) actually set — a one-sided range never claims the other side.</summary>

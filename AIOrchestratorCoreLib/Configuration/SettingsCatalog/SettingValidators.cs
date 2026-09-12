@@ -29,9 +29,14 @@ public static class SettingValidators
     public const string PULSE_FIELDS = "pulseFields";
 
     /// <summary>
-    /// WILL check that every element is a command in `Telegram.BotCommandMenu.ALL`, with no repeats.
-    /// NOT YET IMPLEMENTED — see the fallthrough in <see cref="Validate_OrNull"/>: a definition may
-    /// point at this name today and it accepts any value until a later task wires the check in.
+    /// WILL check the FIRST space-delimited token of each element against
+    /// <c>Telegram.BotCommandMenu.ALL</c>, with no repeats of that token. A trailing target after the
+    /// space is legal and is not checked against anything — <c>pulse.buttons</c>' shipped default
+    /// carries <c>"tail sup"</c>, a verb WITH ITS TARGET (a button tap carries no text, so the target
+    /// rides inside the verb), and <c>BotCommandMenu.ALL</c> holds only the bare verb <c>"tail"</c>.
+    /// Checking the whole element for exact membership would refuse the catalogue's own default. NOT
+    /// YET IMPLEMENTED — see the fallthrough in <see cref="Validate_OrNull"/>: a definition may point
+    /// at this name today and it accepts any value until a later task wires the check in.
     /// </summary>
     public const string BOT_COMMANDS = "botCommands";
 
