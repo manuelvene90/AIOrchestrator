@@ -142,18 +142,21 @@ public static class SettingsCatalog
         "(supervisorEffortOverride / implementerEffortOverride); a solo sits on the implementer slot, as it does for the model.";
 
     /// <summary>
-    /// SUPERVISOR AND IMPLEMENTER ARE THE TWO ROWS THIS CLASS DOC'S PROMISE DOES NOT HOLD FOR. Every
-    /// other model row below reads <see cref="OrchestratorConfig_Factory"/>'s own constant; these two
-    /// are deliberate literals instead, because <c>OrchestratorConfig_Factory.DEFAULT_SUPERVISOR_MODEL</c>
-    /// and <c>DEFAULT_IMPLEMENTER_MODEL</c> are <c>"claude-fable-5-1"</c> today (owner directive
-    /// 2026-09-09) while <c>"opus"</c> is the REGISTERED shipped default here, by controller ruling on
-    /// the 2026-09-12 catalogue review: this catalogue becomes the source of the shipped default in a
-    /// later plan-02 task, and pointing these two rows at a constant scheduled to change under them
-    /// would make that later reader circular. Four tests are red by the same recorded ruling —
-    /// <c>PerRoleModelDefaultsTests</c> (three cases) and
+    /// ALL SIX ROWS ARE LITERALS, NEVER A READ OF <see cref="OrchestratorConfig_Factory"/>'S OWN
+    /// CONSTANTS (moved 2026-09-12, task 6 of this plan). They used to split: supervisor and
+    /// implementer were deliberate literals because pointing them at
+    /// <c>OrchestratorConfig_Factory.DEFAULT_SUPERVISOR_MODEL</c> (then <c>"claude-fable-5-1"</c>,
+    /// owner directive 2026-09-09) while <c>"opus"</c> was the REGISTERED shipped default here would
+    /// have been a live mismatch; the other four read the factory's constants directly. Task 6 makes
+    /// <see cref="OrchestratorConfig_Factory"/>'s six <c>DEFAULT_*_MODEL</c> fields <c>static
+    /// readonly</c>, computed BY READING THIS CATALOGUE (<c>Read_ShippedModel</c>) — so a row here that
+    /// still read the factory's constant would be a type-initializer cycle: this class's static
+    /// constructor would call into the factory's, which calls back into this class's before it has
+    /// finished running, and the reader would observe an unassigned <c>null</c>. Literals here are
+    /// what break the cycle; the factory derives FROM the catalogue, never the other way round. Four
+    /// tests were red on purpose until this task — <c>PerRoleModelDefaultsTests</c> (three cases) and
     /// <c>OrchestratorConfigLoaderGuardrailsTests.Save_OverACorruptConfigJson_StillSucceeds_AndWritesTheKnownKeys</c>
-    /// — and the task that moves <see cref="OrchestratorConfig_Factory"/>'s constants into this
-    /// catalogue is the one that turns them green.
+    /// — and are green now that both sides agree the catalogue is the one source.
     /// </summary>
     static IReadOnlyList<ISettingDefinition> Build_Models()
     {
@@ -163,13 +166,13 @@ public static class SettingsCatalog
                 "The model a SUPERVISOR session spawns with — the turn that is the owner's phone line."),
             Model_Definition(SessionRoles.Implementer, "implementerModel", "opus", SettingScopes.Orchestration,
                 "The model an IMPLEMENTER session spawns with, and the rung the reviewer and solo fall back to."),
-            Model_Definition(SessionRoles.Reviewer, "reviewerModel", OrchestratorConfig_Factory.DEFAULT_REVIEWER_MODEL, SettingScopes.Machine,
+            Model_Definition(SessionRoles.Reviewer, "reviewerModel", "opus", SettingScopes.Machine,
                 "The model a REVIEWER session spawns with. A bad review costs more than it saves, so this rung is worth its price."),
-            Model_Definition(SessionRoles.Solo, "soloModel", OrchestratorConfig_Factory.DEFAULT_SOLO_MODEL, SettingScopes.Machine,
+            Model_Definition(SessionRoles.Solo, "soloModel", "opus", SettingScopes.Machine,
                 "The model a SOLO session spawns with — the session that both talks to the owner and does the work."),
-            Model_Definition(SessionRoles.General, "generalSupervisorModel", OrchestratorConfig_Factory.DEFAULT_GENERAL_SUPERVISOR_MODEL, SettingScopes.Machine,
+            Model_Definition(SessionRoles.General, "generalSupervisorModel", "sonnet", SettingScopes.Machine,
                 "The model the GENERAL supervisor spawns with. Routing, not judging, so it is deliberately cheap."),
-            Model_Definition(SessionRoles.Communicator, "communicatorModel", OrchestratorConfig_Factory.DEFAULT_COMMUNICATOR_MODEL, SettingScopes.Machine,
+            Model_Definition(SessionRoles.Communicator, "communicatorModel", "sonnet", SettingScopes.Machine,
                 "The model a COMMUNICATOR session spawns with. Narration, not judging, so it is deliberately cheap."),
 
             Effort_Definition(SessionRoles.Supervisor, SettingScopes.Orchestration),

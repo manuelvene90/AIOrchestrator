@@ -3,10 +3,13 @@ using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
+using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
 
 namespace AIOrchestratorCoreLib.Configuration;
 
@@ -26,20 +29,28 @@ public static class OrchestratorConfig_Loader
 
         var repos = Parse_Repos(configRoot);
 
+        // THE PRESET RUNG, between the shipped default and this file (spec §6.2). It is applied HERE and
+        // only to the six model keys, because the factory's ladder (reviewer/solo → implementer → shipped)
+        // must see "the owner said nothing" as null — a preset value read one layer lower would arrive as
+        // a stated value and shorten the ladder. Nothing is written back: Save() merges, so a preset value
+        // stays a preset value and the renderers can still show its origin (spec §6.2, the reviewerModel
+        // rule generalised).
+        var preset = Presets_Loader.Resolve_ForConfig(configRoot).Tree;
+
         return OrchestratorConfig_Factory.Create(
             repos,
-            Get_String_OrNull(configRoot, "supervisorModel"),
-            Get_String_OrNull(configRoot, "implementerModel"),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Supervisor),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Implementer),
 
             // ABSENT MEANS "WHAT THE ROLE GOT UNTIL NOW", and the factory is where that ladder lives
             // (reviewer/solo → implementer → the shipped default). Passed as the raw key, null and
             // all, precisely so the factory can tell "the owner never said" from "the owner said
             // this" — reading them here with a fallback would hide the first case from the only
             // place that can act on it.
-            Get_String_OrNull(configRoot, REVIEWER_MODEL_KEY),
-            Get_String_OrNull(configRoot, SOLO_MODEL_KEY),
-            Get_String_OrNull(configRoot, "generalSupervisorModel"),
-            Get_String_OrNull(configRoot, "communicatorModel"),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Reviewer),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Solo),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.General),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Communicator),
             Get_Long_OrNull(configRoot, "telegramSupergroupChatId"),
             Get_Long_OrNull(configRoot, "telegramOwnerUserId"),
             Get_String_OrNull(secretsRoot, "telegramBotToken"),
@@ -55,6 +66,81 @@ public static class OrchestratorConfig_Loader
             // `telegramInbound`: "poll" (default) or "off". Hand-edited, never written back by Save
             // below — the same contract as the four blocks above it.
             Telegram.TelegramInbound_Modes.Parse_OrPoll(Get_String_OrNull(configRoot, "telegramInbound")));
+    }
+
+    /// <summary>
+    /// The model this file or the preset states for a role, or null when neither does — which is what
+    /// the factory's ladder needs to hear. Blank is null for the reason
+    /// <see cref="OrchestratorConfig_Factory"/> gives: a cleared field is the owner saying nothing, and
+    /// an empty string reaching a spawn emits no --model flag at all (proven 2026-09-10).
+    ///
+    /// <para>
+    /// TWO REFINEMENTS ON TOP OF THE RESOLVER'S PLAIN FOUR-LAYER ANSWER, both forced by tests already
+    /// on this branch (not invented here — <c>PerRoleModelDefaultsTests</c> pins both):
+    /// </para>
+    /// <para>
+    /// FIRST: A KEY THAT IS PRESENT BUT INVALID NEVER FALLS TO THE PRESET. <see cref="Settings_Resolver"/>
+    /// treats "present but fails validation" the same as "absent" and falls through a layer — correct
+    /// for the resolver in general, but wrong for a typo: <c>{"supervisorModel":true}</c> must cost
+    /// the CATALOGUE's own shipped answer, not whatever Fable value <c>classic</c> happens to carry,
+    /// or a mistyped key would silently pick up a DIFFERENT model than an absent one ever would (proven
+    /// by <c>AMistypedModelValue_DoesNotTakeDownTheProviderOnTheStartupPath</c> and
+    /// <c>AnEmptyImplementerModel_IsAbsentForEveryRoleThatRidesIt</c>). So the preset tree is withheld
+    /// from the resolver call whenever the key is PRESENT in config.json at all — valid or not — and
+    /// handed through only when the key is genuinely absent.
+    /// </para>
+    /// <para>
+    /// SECOND: REVIEWER AND SOLO NEVER ACCEPT A PRESET ANSWER FOR THEMSELVES. The compat ladder in
+    /// <see cref="OrchestratorConfig_Factory"/> says an absent reviewer or solo model falls to the
+    /// IMPLEMENTER's, before any default — and <c>classic</c> names <c>models.reviewer</c> and
+    /// <c>models.solo</c> explicitly (to keep every judging role on Fable), which would otherwise
+    /// pre-empt that ladder for a config.json that only ever set <c>implementerModel</c> (proven by
+    /// <c>AFileWrittenBeforeTheseKeysExisted_KeepsGivingTheReviewerAndSoloTheImplementerModel</c> and
+    /// three siblings). So a Preset-origin answer for these two roles reads as absence here too,
+    /// exactly like the shipped default — the factory's ladder, fed the implementer's own
+    /// stated-or-preset answer as its second rung, is what actually answers for them.
+    /// </para>
+    /// </summary>
+    static string? Read_Model_OrNull(JsonObject? configRoot, JsonObject? presetTree, SessionRoles role)
+    {
+        var definition = Catalog.Find_OrNull(Catalog.Get_ModelPath(role))!;
+
+        var presentInConfig = Key_IsPresent(configRoot, definition.Path)
+            || (definition.LegacyPath_OrNull != null && Key_IsPresent(configRoot, definition.LegacyPath_OrNull));
+
+        var (value, origin) = Settings_Resolver.Resolve(definition, presentInConfig ? null : presetTree, configRoot, session: null);
+
+        if (origin == SettingOrigins.ShippedDefault)
+            return null;
+
+        if (origin == SettingOrigins.Preset && (role == SessionRoles.Reviewer || role == SessionRoles.Solo))
+            return null;
+
+        return value?.GetValue<string>();
+    }
+
+    /// <summary>
+    /// True when every segment of the dotted <paramref name="path"/> is an actual key in
+    /// <paramref name="tree"/>, even when the final segment's value is JSON null or of the wrong
+    /// type — a PRESENT-BUT-INVALID key must be told apart from an ABSENT one (see
+    /// <see cref="Read_Model_OrNull"/>), and plain indexing cannot tell "absent" from "present and
+    /// null" apart; only <see cref="JsonObject.ContainsKey"/> can. The same walk
+    /// <see cref="Settings_Resolver"/> does internally to answer the same question, needed here
+    /// because that check is private to it.
+    /// </summary>
+    static bool Key_IsPresent(JsonObject? tree, string path)
+    {
+        JsonNode? current = tree;
+
+        foreach (var segment in path.Split('.'))
+        {
+            if (current is not JsonObject currentObject || !currentObject.ContainsKey(segment))
+                return false;
+
+            current = currentObject[segment];
+        }
+
+        return true;
     }
 
     /// <summary>

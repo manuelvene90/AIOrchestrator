@@ -2,33 +2,41 @@ using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
+using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
 public static class OrchestratorConfig_Factory
 {
     /// <summary>
-    /// Owner's model ladder: routing = cheap, supervision and implementation = Fable 5.1
-    /// (owner directive 2026-09-09, replacing opus). Pinned to the full model id rather than the
-    /// 'fable' alias, which follows whatever the latest Fable happens to be.
+    /// THE SHIPPED DEFAULT IS NOW A CATALOGUE ENTRY, not a literal here (spec §6.4, owner §11.4:
+    /// "Opus for every role except general and communicator"). Moved 2026-09-12: the same number had to
+    /// be stateable by a preset, editable by three renderers and readable by the resolver, and a `const`
+    /// in this file is none of those. `classic` carries claude-fable-5-1 for the four judging roles, so
+    /// a machine whose config.json says nothing spawns exactly what it spawned before the merge —
+    /// `preset` absent means classic.
+    ///
+    /// STILL NAMED HERE because six call sites and four tests read these by name, and because this file
+    /// is where the LADDER lives: an absent reviewerModel or soloModel falls to implementerModel before
+    /// any default applies, and that is unchanged.
     /// </summary>
-    public const string DEFAULT_GENERAL_SUPERVISOR_MODEL = "sonnet";
-    public const string DEFAULT_SUPERVISOR_MODEL = "claude-fable-5-1";
-    public const string DEFAULT_IMPLEMENTER_MODEL = "claude-fable-5-1";
-    public const string DEFAULT_COMMUNICATOR_MODEL = "sonnet";
+    public static readonly string DEFAULT_SUPERVISOR_MODEL = Read_ShippedModel(SessionRoles.Supervisor);
+    public static readonly string DEFAULT_IMPLEMENTER_MODEL = Read_ShippedModel(SessionRoles.Implementer);
+    public static readonly string DEFAULT_REVIEWER_MODEL = Read_ShippedModel(SessionRoles.Reviewer);
+    public static readonly string DEFAULT_SOLO_MODEL = Read_ShippedModel(SessionRoles.Solo);
+    public static readonly string DEFAULT_GENERAL_SUPERVISOR_MODEL = Read_ShippedModel(SessionRoles.General);
+    public static readonly string DEFAULT_COMMUNICATOR_MODEL = Read_ShippedModel(SessionRoles.Communicator);
 
-    /// <summary>
-    /// Reviewing stays opus even after the implementer moves to sonnet (owner, 2026-09-09): a bad
-    /// implementation gets found and fixed, a bad APPROVAL does not announce itself.
-    /// </summary>
-    public const string DEFAULT_REVIEWER_MODEL = "opus";
+    static string Read_ShippedModel(SessionRoles role)
+    {
+        var definition = Catalog.Find_OrNull(Catalog.Get_ModelPath(role))
+            ?? throw new Exception($"No catalogue entry for {Catalog.Get_ModelPath(role)} — a role without a registered model default cannot spawn");
 
-    /// <summary>
-    /// A solo is supervisor, implementer and reviewer in one session with nobody above it, so it
-    /// takes the supervision price rather than the implementation one.
-    /// </summary>
-    public const string DEFAULT_SOLO_MODEL = "opus";
+        return definition.Default_OrNull!.GetValue<string>();
+    }
+
     /// <summary>Opt-in: a screenshot raises a real window, so an absent key must read as OFF.</summary>
     public const bool DEFAULT_TELEGRAM_STATUS_SCREENSHOTS = false;
 

@@ -266,4 +266,67 @@ public class PerRoleModelDefaultsTests : IDisposable
         foreach (var role in SessionRole_Names.ALL)
             Assert.False(string.IsNullOrWhiteSpace(config.Get_ModelForRole(role)), $"role {role} resolved to no model");
     }
+
+    /// <summary>
+    /// THE SHIPPED DEFAULT IS OPUS AND CLASSIC IS WHERE FABLE LIVES NOW (owner, spec §11.4). Spec §5.2
+    /// named this precisely: master's claude-fable-5-1 auto-merged away to the fork's opus, which is
+    /// right by accident — "but the `classic` preset must carry Fable + xhigh, or Manu silently loses
+    /// his model". `preset` absent means classic (§11.3), so a config.json that says nothing at all
+    /// still spawns the model master spawned, and the value's ORIGIN is the preset rather than a
+    /// materialised key.
+    /// </summary>
+    [Fact]
+    public void WithNoPresetKeyAtAll_TheFourJudgingRoles_StillGetTheClassicModel()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[]}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Implementer));
+        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Reviewer));
+        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Solo));
+
+        // Routing and narration are cheap on BOTH sides and neither preset touches them.
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.General));
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Communicator));
+    }
+
+    /// <summary>The quiet preset names no model at all, so every role falls to the shipped default: opus.</summary>
+    [Fact]
+    public void UnderTheQuietPreset_EveryRoleGetsTheShippedOpus()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
+    }
+
+    /// <summary>
+    /// A KEY IN config.json BEATS THE PRESET, and the preset is not written back. The owner who typed
+    /// a model into the Settings window has said something; the preset is what applies when they have
+    /// not — which is exactly the reviewerModel rule, one layer down.
+    /// </summary>
+    [Fact]
+    public void AModelInTheConfigFile_BeatsThePreset_AndTheSaveDoesNotMaterialiseThePresetsValue()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"sonnet"}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Implementer));
+        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Supervisor));
+
+        OrchestratorConfig_Loader.Save(config, _paths);
+
+        var written = JsonNode.Parse(File.ReadAllText(_paths.ConfigFile)) as JsonObject;
+
+        Assert.Null(written![OrchestratorConfig_Loader.REVIEWER_MODEL_KEY]);
+        Assert.Null(written[OrchestratorConfig_Loader.SOLO_MODEL_KEY]);
+        Assert.Null(written["preset"]);
+    }
 }
