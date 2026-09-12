@@ -3785,6 +3785,31 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task<MirrorOutcomes> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
+        var outcome = await Mirror_AppendEntries_Async(append, cancellationToken);
+
+        // THE MEMO IS A POSITIONAL SKIP — "ignore the first N mirrorable entries of this file's
+        // re-emitted append" — so it is only valid while the cursor has NOT advanced. Every outcome
+        // except HELD lets the caller settle the append, which confirms it and moves the cursor; the
+        // batch those N entries were counted against is then gone for ever, and anything left over
+        // would silently count off the front of an UNRELATED later batch, with no log line at all.
+        //
+        // Cleared HERE, once, rather than at each exit: two of them (nothing mirrorable, silenced
+        // topic) return Delivered above the entry loop and used to leave the memo behind. That is an
+        // ordinary sequence, not a corner: a question is held, the owner walks to the PC, presence
+        // silences the topic, the held append is confirmed and dropped — and the next thing the
+        // supervisor writes to the owner loses its first N entries.
+        if (outcome != MirrorOutcomes.Held)
+            _deliveredEntriesOfHeldAppend.Remove(append.Channel.FilePath);
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// The body of <see cref="Mirror_Append_Async"/>. Split out so the held-prefix memo has exactly
+    /// one clearing point (see there) instead of one per exit.
+    /// </summary>
+    async Task<MirrorOutcomes> Mirror_AppendEntries_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
+    {
         List<int> supervisorEntryIndexes = [];
 
         foreach (var entry in append.Entries)
@@ -4080,19 +4105,17 @@ internal sealed class BridgeEngineModel(
                 // same append that already landed. A duplicate on the phone is a nuisance; a
                 // supervisor's message that never arrives is what the owner reported today.
                 //
-                // The held-prefix memo is dropped deliberately: a FAILURE retries the whole append,
-                // exactly as it always has. Carrying a prefix into the failure path would change
-                // retry semantics that have nothing to do with questions.
-                _deliveredEntriesOfHeldAppend.Remove(append.Channel.FilePath);
+                // The held-prefix memo is dropped by the caller (any non-Held outcome): a FAILURE
+                // retries the whole append, exactly as it always has. Carrying a prefix into the
+                // failure path would change retry semantics that have nothing to do with questions.
                 return MirrorOutcomes.Failed;
             }
 
             deliveredHere++;
         }
 
-        // The whole append is out, so nothing is owed and the memo must not survive into the next
-        // one — a stale prefix would silently skip the first entries of an unrelated batch.
-        _deliveredEntriesOfHeldAppend.Remove(append.Channel.FilePath);
+        // The whole append is out, so nothing is owed; the caller drops the memo, which must not
+        // survive into the next batch — a stale prefix would silently skip its first entries.
         return MirrorOutcomes.Delivered;
     }
 
