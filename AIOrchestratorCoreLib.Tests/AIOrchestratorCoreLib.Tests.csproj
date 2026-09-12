@@ -14,9 +14,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Master-only tests parked by the 2026-09-11 merge until their feature is re-ported (plan 01,
-         Tasks 3-11). Each task moves its files back; Task 14 deletes this folder and this item. -->
-    <Compile Remove="_pending-reports\**" />
+    <!-- Master-only tests whose feature is NOT in this tree yet. Plan 01 re-ported everything it
+         owned and deleted `_pending-reports`; what is left here is deferred to a named later plan.
+         See `_deferred/README.md` — each file says which plan un-parks it. -->
+    <Compile Remove="_deferred\**" />
   </ItemGroup>
 
   <ItemGroup>
