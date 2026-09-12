@@ -177,7 +177,15 @@ call the tool with `--question --option`, and that wording stays. `kit/hooks/run
 and `kit/hooks/supervisor-awaiting-answer-check.sh` auto-merged carrying BOTH sides (the fork's
 `SUPERVISION_ROOT="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"` and master's `.paused`
 exit and `case "$AIORCH_ROLE" in supervisor|solo)`) — Tasks 5 and 6 verify them. `CLAUDE.md`
-auto-merged; Task 13 rewrites the merged decisions.
+auto-merged; Task 13 rewrites the merged decisions. **[x] 3aa3682** — decisions 8 (resume now names
+both runners, off the same `runners.<role>.resume` key), 17 (kit delivery rewritten around
+`KitAssets_Bootstrapper`/`IPluginGate`, `KitAssets_Installer` retired) and 23 (cross-referenced to
+17) rewritten against the merged code; decision 11 restored to master's text with the spec §11.1
+question left open (owner has not decided — the fork's deletion is not adopted); decision 26 added
+recording the merge itself; the Repository Structure block and Design Spec pointer refreshed against
+the actual tree. `docs/MODIFICHE-DEL-FORK.md` §7 got one dated Italian line. `.claude/rules/*.md`
+left untouched — `git-and-boundaries.md` is now partly stale for a merged repo (flagged for the
+owner, not rewritten).
 
 ## Red after the merge commit (Windows, 2026-09-11)
 
