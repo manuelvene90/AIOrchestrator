@@ -458,3 +458,95 @@ Checked for the same trap elsewhere: this here-string is the file's ONLY multi-r
 
 `ChannelAppendTypedEntriesTests` **13/13**; `ChannelAppendHelperInteropTests` + `ChannelGrammarTests`
 21/21 alongside it. Group E is closed.
+
+---
+
+## THE GATE (Task 14, 2026-09-12, HEAD `6c436ca`) — the final red set on both OSes
+
+### Windows, five consecutive runs, clean shell (`AIORCH_*` unset), nothing else on the box
+
+```
+dotnet test AIOrchestratorCoreLib.Tests --no-build -c Debug      # x5
+```
+
+| run | failed | passed | skipped | duration | reds beyond the expected four |
+|---|---|---|---|---|---|
+| 1 | 7 | 3525 | 4 | 7 m 56 s | `EffortDialOnABridgeDrivenSupervisorTests.SlashEffort_OnARegisteredPrintImplementer_…`, `ChannelAppendTypedEntriesTests.AWellFormedQuestionIsWritten_…`, `AStalledWriterNeverTearsATrailingEntryTests.AWriterStallingMidEntry_…` |
+| 2 | 5 | 3527 | 4 | 7 m 56 s | `ClosingATopicReallyDeletesItTests.ADeleteLeftPendingByAPreviousProcess_…` |
+| 3 | 5 | 3527 | 4 | 7 m 53 s | `AttachmentsReachThePhoneTests.AFileOutsideTheAllowedRoots_…` |
+| 4 | 9 | 3523 | 4 | 7 m 44 s | `AttachmentsReachThePhoneTests.AnHtmlFileSentAsAPicture_…`, `ChannelChangeWakerTests.ARootDeletedAndRecreated_…`, `WakeUpDigestSecondReviewTests.FiveCycles_…`, `TolerantFileReaderTests.AReaderHoldingTheFileForAMoment_…`, `TolerantFileReaderTests.AnUnauthorizedAccess_…` |
+| 5 | 9 | 3523 | 4 | 8 m 41 s | `AttachmentsReachThePhoneTests.AFileOutsideTheAllowedRoots_…`, `ClosingATopicReallyDeletesItTests.ARateLimitedDelete_…`, `EffortDialOnABridgeDrivenSupervisorTests.SlashEffort_OnASupervisorFlippedToPrintButNeverRegistered_…`, `WakeUpDigestSecondReviewTests.AfterCompaction_…`, `AStalledWriterNeverTearsATrailingEntryTests.AWriterStallingMidEntry_…` |
+
+**THE INTERSECTION OF ALL FIVE IS EXACTLY THE FOUR EXPECTED NAMES, and nothing else:**
+
+```
+Configuration.OrchestratorConfigLoaderGuardrailsTests.Save_OverACorruptConfigJson_StillSucceeds_AndWritesTheKnownKeys
+Configuration.PerRoleModelDefaultsTests.AMistypedModelValue_DoesNotTakeDownTheProviderOnTheStartupPath
+Configuration.PerRoleModelDefaultsTests.AnEmptyImplementerModel_IsAbsentForEveryRoleThatRidesIt
+Configuration.PerRoleModelDefaultsTests.WithNoConfigFileAtAll_EveryRoleGetsItsShippedDefault
+```
+
+Group B — the Fable-vs-Opus default, held red by the coordinator's ruling for the whole of plan 01.
+They fail identically in every run, on both OSes, in 1 ms each. **Plan 02 moves the constant.**
+
+`tools/claude-contract/ClaudeContract.Tests`: **0 failed, 31 passed, 8 skipped, 6 s** — the number
+the brief predicted, exactly.
+
+### THE OTHER REDS ARE A FLAKE FAMILY, AND THE PROOF IS THAT THEY NEVER REPEAT
+
+Twelve distinct names appeared across the five runs beyond the four. **Ten appeared once; two
+appeared twice; none appeared three times; none is in the intersection.** Two CI legs and two
+earlier loaded local runs add seven more names on the same terms — eight observations in all, and in
+none of them does any name but the four survive.
+
+It is the family Task 12 named and half-fixed, wider than the four classes it enclosed in
+`Running/REAL_TIME_COLLECTION`:
+
+- **Wall-clock overshoot.** `Drive_Until` and the bridge tick poll a deadline while work continues
+  behind them, so a loaded box lets one more turn land between two polls. Never a wrong answer,
+  always an extra one — `WakeUpDigestSecondReviewTests`, `ClosingTurnTests` (CI), `PrintRunnerReviewFixTests`
+  (CI, Linux), `AStalledWriterNeverTearsATrailingEntryTests`.
+- **Windows file sharing, on the TEST side this time.** `AttachmentsReachThePhoneTests.Channel_Text`
+  and `QuestionContractProbeTests.Channel` (CI) fail with *"The process cannot access the file …
+  owner-channel.md because it is being used by another process"* out of a bare `File.ReadAllText`
+  while the engine is mid-`Atomic_FileWriter` rename. This is exactly the collision Task 12 diagnosed
+  and fixed for the PRODUCTION readers (`Storage/Tolerant_FileReader`, e72cc84); the test helpers were
+  not part of that fix and still read raw. **There are 141 raw `File.ReadAllText` calls in the test
+  project**, 34 files of them under `Bridge/` alone, so this is a campaign, not a patch — named here
+  rather than attempted in the gate (decision 22).
+- **One environment leak, seen once (run 1).** `ChannelAppendTypedEntriesTests.AWellFormedQuestionIsWritten_…`
+  failed with the entry authored `FROM solo-1` instead of `FROM supervisor` — `AIORCH_MEMBER`
+  reaching the tool from the session running the suite. This is the leak the baseline section above
+  already predicted for this class: *"Task 1's fixture scrub covers `ChannelAppendHelperInteropTests`
+  only; `ChannelAppendTypedEntriesTests` sets `AIORCH_ROLE` per case but lets `AIORCH_ID` and
+  `AIORCH_MEMBER` through from the parent process."* The shell was scrubbed for all five runs, and it
+  still happened once — most likely through a reused MSBuild node started before the scrub — so the
+  scrub belongs in the FIXTURE, where Task 1 put the other one, not in the operator's shell.
+  **One-line follow-up: extend Task 1's env-scrub fixture to `ChannelAppendTypedEntriesTests`.**
+
+**None of this is a merge effect.** Every mechanism above is documented in this ledger's own
+post-Task-12 sections, predates the merge, and is orthogonal to every re-ported feature.
+
+### Linux and Windows in CI
+
+The workflow Task 1 added had never actually run. Two commits were needed to make it ask the
+question at all, and both are part of this task:
+
+- `f653aa1` — the push trigger named `ours/integration`, `stage/**` and `master` only, so a push of
+  `integration/fork-merge` ran nothing; `workflow_dispatch` is no way round it either, because the
+  workflow does not exist on master. `integration/**` added.
+- `6c436ca` — the `tests` job ran `dotnet build AIOrchestrator.slnx` on BOTH legs, and on ubuntu that
+  cannot work: `AIOrchestrator/` is `net10.0-windows` with `UseWPF`, so the leg died at NETSDK1100 in
+  20 s having compiled no test at all. Linux now builds the two test projects and the daemon; Windows
+  still builds the whole solution.
+
+Run **34672218828** (HEAD `6c436ca`):
+
+| leg | result |
+|---|---|
+| `wpf` (windows-latest) | ✅ **green**, 1 m 24 s — the WPF app and the solution both build |
+| `tests (ubuntu-latest)` | 5 failed · 3522 passed · 9 skipped — **the four, plus `PrintRunnerReviewFixTests.ATurnThatCannotEvenStart_IsCountedAndEventuallyStalls`** (wall-clock overshoot on a 2-core runner) |
+| `tests (windows-latest)` | 8 failed · 3524 passed · 4 skipped — **the four, plus four file-lock/overshoot names**, none of which repeats locally |
+
+**No red on ubuntu that is green on Windows** — the brief's merge-regression test. The four are red on
+both; everything else is the flake family, and it lands harder on a 2-core runner than on this box.
