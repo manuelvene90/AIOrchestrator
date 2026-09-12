@@ -12,7 +12,10 @@ name: windows-build
 
 on:
   push:
-    branches: [ours/integration, 'stage/**', master]
+    # `integration/**` was added by plan 01's gate (Task 14): the merge branch is where the two-OS
+    # question is actually asked, and a trigger list that does not name it makes the gate unaskable
+    # — the workflow is not on master either, so `workflow_dispatch` cannot reach it from here.
+    branches: [ours/integration, 'integration/**', 'stage/**', master]
   pull_request:
   workflow_dispatch:
 
