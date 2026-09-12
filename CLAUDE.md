@@ -39,12 +39,18 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     cards, the detail window, `/tokens` and `/cost` can never disagree — and every source passes
     exactly once through the respawn accumulator. `/cost` is the money reading (per-session share
     + burn rate, suppressed under 15 min as meaningless); `/tokens` is the token reading.
-11. **`/italian` toggles the translation layer** from the phone, and the app's status-bar
-    checkbox mirrors it. Unlike 🌙/🔕 (passing state, in-memory) this one is PERSISTED to
-    config.json — the provider reloads on the file's write stamp, so there is no in-memory copy to
-    keep in step. Use `OrchestratorConfig_Factory.Create_WithItalianLayer` rather than restating
-    every field.
-    **Pending the owner's decision in the 2026-09-11 spec §11.1** (`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md`, on branch `feat/fork-merge-and-profiles-spec`, not in this worktree): the fork deleted this layer entirely — no `Translation/` tree, no `telegramItalianLayer` key, no `/italian` command — on the rule "with the owner, write in the owner's language" instead. That deletion is NOT adopted here; this decision's text is master's until the owner answers §11.1.
+11. **The translation layer is gone from this tree as of the 2026-09-11 fork merge** — no
+    `Translation/` tree, no `telegramItalianLayer` key, no `Create_WithItalianLayer`, no `/italian`
+    command; the code that used to back this paragraph (`/italian` toggled the layer from the phone,
+    with the app's status-bar checkbox mirroring it, PERSISTED to config.json so the provider
+    reloaded on the file's write stamp rather than keeping an in-memory copy in step) does not exist
+    anymore. **Whether that stays permanent is still open**: the 2026-09-11 spec's §11.1
+    (`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md`, on branch
+    `feat/fork-merge-and-profiles-spec`, not in this worktree) asks the owner to confirm dropping it
+    in favour of the fork's rule ("with the owner, write in the owner's language"); the owner has not
+    answered. Until they do, treat the deletion as the tree's *current* state, not as a *settled*
+    decision — if the answer is "keep it," a future task re-ports the layer described above from
+    master's history; it is not merely un-deleting a flag.
 12. **Channel headers are AGENT-WRITTEN — treat `[n]` and the timestamp as untrusted input.** Both
     are guesses unless the agent re-read the file: on 2026-08-10 `option-lab-2` carried two `[80]`
     and two `[81]` entries, and a supervisor stamped `2026-08-11 01:34` on an entry written at
@@ -94,7 +100,11 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     a content mismatch (`kit-and-scripts` rule: "it never copies commands into `~/.claude/commands` —
     a local command beats a plugin skill for the slash word"). A running app built from a stale
     checkout still only verifies against ITS OWN build's commit — decision 23 still applies: the
-    binary that is actually running is what matters, not what `git log` says is merged.
+    binary that is actually running is what matters, not what `git log` says is merged. **The
+    equivalent caution for this model: a kit edit is not verified by editing `kit/` and re-running
+    the installer** — verify it against a RESTARTED session (terminal or bridge), because
+    `KitAssets_Bootstrapper` runs the verdict at STARTUP, and neither the marketplace registration nor
+    a `git diff` on `kit/` tells you what verdict the currently-running process already recorded.
 18. **SAY WHICH COPY YOU READ — installed, built, or branch source.** Every file in this system
     exists three times: the branch source (`kit/…`), the app's build output, and the installed copy
     (`~/.claude/commands`, `~/.claude/hooks`). They drift, and a finding about one is not a finding
@@ -213,6 +223,11 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     `integration/fork-merge` — read it from that branch, not here). Two names for the same repo
     persist for now: `.claude/rules/` still describes fork/upstream boundaries that a merged repo has
     already outgrown (see the git-and-boundaries rule) — that is a known staleness, not yet resolved.
+    **One concrete contradiction it will trip over:** `git-and-boundaries.md` says "Do not modify
+    `docs/investigations/`, `HANDOFF.md` or `CLAUDE.md` — they are Manu's; a fact for him goes in the
+    report," yet this very decision (and 8, 11, 17, 23 above) were written directly into `CLAUDE.md`
+    by task on the owner's own instruction. Do not read that rule as still binding on `CLAUDE.md`
+    without asking — it needs the owner's explicit call on how session boundaries work post-merge.
 
 ## Resolved Decisions (2026-08-06, owner)
 
