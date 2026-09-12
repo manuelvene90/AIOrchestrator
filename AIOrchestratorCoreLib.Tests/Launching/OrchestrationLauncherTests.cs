@@ -280,6 +280,77 @@ public class OrchestrationLauncherTests : IDisposable
         Assert.DoesNotContain("medium", resetScript);
     }
 
+    /// <summary>
+    /// THE COMMUNICATOR AND THE GENERAL SUPERVISOR REACH THE COMMAND LINE TOO (fix round 1, 2026-09-12).
+    /// The launcher resolved <c>effort.communicator</c> and <c>effort.general</c> onto the launch from
+    /// the day the block existed, and the terminal runner then dropped both on the floor: neither
+    /// <see cref="SpawnCommand_Builder.Build_ForCommunicator"/> nor
+    /// <see cref="SpawnCommand_Builder.Build_ForGeneralSupervisor"/> took an effort at all, so an owner
+    /// who wrote the keys got no flag, no warning and no log line — the silent discard CLAUDE.md
+    /// decision 21 refuses. Both shipped presets leave these two roles null, which is exactly why this
+    /// needs a config that STATES them: a default of null is a second route to green.
+    /// </summary>
+    [Fact]
+    public void Spawn_CarriesTheCommunicatorAndGeneralRoleEfforts_OntoTheirCommandLines()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"effort":{"communicator":"max","general":"high"}}""");
+
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Communicator(session.OrchId);
+        _launcher.Spawn_GeneralSupervisor();
+
+        Assert.Contains($"--effort max {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/communicator {session.OrchId}'", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+        Assert.Contains($"--effort high {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/general-supervisor'", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
+    }
+
+    /// <summary>
+    /// A BLANK OVERRIDE IS ABSENT, so the ROLE DEFAULT still applies (fix round 1, 2026-09-12). The
+    /// deleted <c>SpawnCommand_Builder.Resolve_Effort_OrDefault</c> said so with
+    /// <c>IsNullOrWhiteSpace</c>; the launcher's <c>??</c> catches null only, so a hand-edited
+    /// <c>"supervisorEffortOverride": ""</c> — which <c>SessionJson_Serializer.Get_String_OrNull</c>
+    /// returns verbatim — used to give the supervisor its xhigh and now gave it no flag at all. The
+    /// deciding reason is not reachability but AGREEMENT: <c>SessionScoped_Reader</c> maps these
+    /// same two overrides with blank-is-absent, and two descriptions of one precedence disagreeing on
+    /// one input is the drift CLAUDE.md decision 12 forbids.
+    ///
+    /// <para>
+    /// TWO GUARDS AGAINST A SECOND ROUTE TO GREEN (decision 20). The blank is read back from the store
+    /// before the respawn, so a store or serializer that normalised it away could not let this case
+    /// pass without ever putting a blank in front of the launcher. And the implementer's role default
+    /// is STATED in config.json rather than left at the catalogue's null: asserting "no flag" for it
+    /// would pass either way, because <c>Build_ClaudeInvocation</c> also suppresses a blank — the
+    /// blank has to fall through to a level that is VISIBLE on the line for the assertion to pin the
+    /// launcher's reading of it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ABlankEffortOverride_IsAbsent_SoTheRoleDefaultStillApplies()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"effort":{"implementer":"low"}}""");
+
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var orchId = session.OrchId;
+
+        _store.Set_SupervisorEffortOverride(orchId, "");
+        _store.Set_ImplementerEffortOverride(orchId, "   ");
+
+        var stored = _store.Get_Session(orchId);
+        Assert.Equal("", stored.SupervisorEffortOverride);
+        Assert.Equal("   ", stored.ImplementerEffortOverride);
+
+        _spawner.SpawnedCommands.Clear();
+
+        _launcher.Respawn_Supervisor(orchId);
+        _launcher.Respawn_Implementer(orchId, "imp-1");
+
+        // The supervisor's role default is xhigh (classic, which an `effort` block naming only the
+        // implementer leaves standing); the implementer's is the `low` this config states.
+        Assert.Contains($"--effort xhigh {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+        Assert.Contains($"--effort low {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/implementer {orchId}/imp-1'", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
+    }
+
     const string SUPERVISOR_SESSION_ID = "11111111-2222-4333-8444-555555555555";
     const string SOLO_SESSION_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa";
 

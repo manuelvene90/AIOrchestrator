@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.Kit;
 using AIOrchestratorCoreLib.Kit.PluginGate;
@@ -338,8 +339,14 @@ internal sealed class OrchestrationLauncherModel(
             // answers — xhigh under `classic`, nothing under `quiet`. It is resolved HERE rather than
             // in SpawnCommand_Builder because this is the one place that holds both the session and
             // the config provider; the builder held neither and had to be handed a compiled constant
-            // (deleted 2026-09-12). Null still means no --effort flag at all.
-            session.SupervisorEffortOverride ?? _configProvider.Get_Current().Get_EffortForRole_OrNull(SessionRoles.Supervisor),
+            // (deleted 2026-09-12). A null RESOLVED effort — no override and a role default of null —
+            // still means no --effort flag at all.
+            //
+            // A BLANK OVERRIDE IS ABSENT, and that decision has ONE definition — SessionScoped_Reader
+            // .Stated_OrNull, which is the same rule the catalogue reads these two fields by. A bare
+            // `??` here caught null only, so a hand-edited "" took the role default away (fix round 1,
+            // 2026-09-12); the deleted Resolve_Effort_OrDefault had said IsNullOrWhiteSpace.
+            SessionScoped_Reader.Stated_OrNull(session.SupervisorEffortOverride) ?? _configProvider.Get_Current().Get_EffortForRole_OrNull(SessionRoles.Supervisor),
             resumeSessionId);
 
         // Stamp the spawn (watchdog grace) BEFORE deleting the stale pid file, so no tick can see
@@ -379,8 +386,9 @@ internal sealed class OrchestrationLauncherModel(
             // role's effort. `effort.communicator` is null in the catalogue and in both shipped
             // presets, so this is null today and emits nothing — but the ladder is here rather than
             // absent, which is the difference between a setting that is off and a setting that is
-            // unreachable. NOTE: SpawnCommand_Builder.Build_ForCommunicator takes no effort argument
-            // yet, so the terminal runner drops this value; that gap predates this change.
+            // unreachable. AND IT NOW REACHES THE COMMAND LINE: until 2026-09-12 (task-7 fix round 1)
+            // SpawnCommand_Builder.Build_ForCommunicator took no effort argument, so a value resolved
+            // here was discarded one layer down — silently, which is the thing decision 21 refuses.
             _configProvider.Get_Current().Get_EffortForRole_OrNull(SessionRoles.Communicator));
 
         // No pid lands in session.json for the communicator — the pid file is the liveness
@@ -461,7 +469,10 @@ internal sealed class OrchestrationLauncherModel(
         // implementer-side slot it already is — `/effort implementer` is the owner reaching into one
         // orchestration by hand and has covered every working member since it existed, exactly as
         // `set-model implementer` does one line above.
-        var effort = session.ImplementerEffortOverride ?? _configProvider.Get_Current().Get_EffortForRole_OrNull(role);
+        //
+        // Blank is absent here for the reason spelled out at the supervisor's call site, and through
+        // the SAME single definition — SessionScoped_Reader.Stated_OrNull.
+        var effort = SessionScoped_Reader.Stated_OrNull(session.ImplementerEffortOverride) ?? _configProvider.Get_Current().Get_EffortForRole_OrNull(role);
 
         var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName, effort, resumeSessionId);
 
@@ -498,7 +509,7 @@ internal sealed class OrchestrationLauncherModel(
             null,
 
             // Same ladder as every other role, and null for the same reason the communicator's is —
-            // see the note there, including the builder gap this value currently meets.
+            // see the note there, including the builder gap that was closed with it on 2026-09-12.
             _configProvider.Get_Current().Get_EffortForRole_OrNull(SessionRoles.General));
 
         var runner = Start_Session(launch);

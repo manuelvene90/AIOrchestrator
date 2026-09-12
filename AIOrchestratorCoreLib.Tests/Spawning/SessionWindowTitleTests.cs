@@ -87,7 +87,7 @@ public class SessionWindowTitleTests
     public void Communicator_TheWindowItSpawns_IsTheWindowTheTerminatorCloses()
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "arb-fix", ".communicator.pid");
-        var command = SpawnCommand_Builder.Build_ForCommunicator("arb-fix", @"C:\repos\arb", null, pidFile, null);
+        var command = SpawnCommand_Builder.Build_ForCommunicator("arb-fix", @"C:\repos\arb", null, null, pidFile, null);
 
         Assert.Equal(Spawned_Title(command), SessionTerminator.Build_TitleFragment_OrNull(pidFile));
         Assert.Equal(Spawned_Title(command), SessionWindowTitle_Builder.Build_ForCommunicator("arb-fix"));
@@ -97,7 +97,7 @@ public class SessionWindowTitleTests
     public void GeneralSupervisor_TheWindowItSpawns_IsTheWindowTheTerminatorCloses()
     {
         var pidFile = Path.Combine(SUPERVISION_ROOT, "general", ".pid");
-        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(Path.Combine(SUPERVISION_ROOT, "general"), null, pidFile);
+        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(Path.Combine(SUPERVISION_ROOT, "general"), null, null, pidFile);
 
         Assert.Equal(Spawned_Title(command), SessionTerminator.Build_TitleFragment_OrNull(pidFile));
     }

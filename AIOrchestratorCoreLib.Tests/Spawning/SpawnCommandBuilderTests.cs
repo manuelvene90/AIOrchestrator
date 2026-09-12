@@ -57,8 +57,8 @@ public class SpawnCommandBuilderTests
     {
         var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", "claude-fable-5-1", null, PID_FILE, null);
         var reviewer = SpawnCommand_Builder.Build_ForReviewer("arb-fix", "rev-1", @"C:\repos\arb", "claude-fable-5-1", null, PID_FILE, null);
-        var communicator = SpawnCommand_Builder.Build_ForCommunicator("arb-fix", @"C:\repos\arb", "sonnet", PID_FILE, null);
-        var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", PID_FILE);
+        var communicator = SpawnCommand_Builder.Build_ForCommunicator("arb-fix", @"C:\repos\arb", "sonnet", null, PID_FILE, null);
+        var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", null, PID_FILE);
 
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(implementer));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(reviewer));
@@ -155,7 +155,7 @@ public class SpawnCommandBuilderTests
     {
         var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", null, null, null, PID_FILE, null);
         var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", null, null, PID_FILE, null);
-        var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", null, PID_FILE);
+        var general = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", null, null, PID_FILE);
 
         Assert.Contains(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS, SpawnCommand_Builder.Decode_SessionScript(supervisor));
         Assert.Contains(SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS, SpawnCommand_Builder.Decode_SessionScript(implementer));
@@ -165,7 +165,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_AnyCommand_NeverPassesRawScriptText_WtSplitsTabsOnSemicolons()
     {
-        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", PID_FILE);
+        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", null, PID_FILE);
 
         Assert.Contains("-EncodedCommand", command.Arguments);
         Assert.DoesNotContain(command.Arguments, argument => argument.Contains(';', StringComparison.Ordinal));
@@ -198,7 +198,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForGeneralSupervisor_AlwaysStartsFresh_StatelessAcrossLaunches()
     {
-        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", PID_FILE);
+        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(@"C:\Users\x\.claude\supervision\general", "sonnet", null, PID_FILE);
 
         Assert.Contains("GENERAL", command.Arguments);
         Assert.Contains(SpawnCommand_Builder.GENERAL_TAB_COLOR, command.Arguments);

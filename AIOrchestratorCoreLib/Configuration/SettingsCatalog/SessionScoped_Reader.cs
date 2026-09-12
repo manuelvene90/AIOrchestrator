@@ -33,9 +33,33 @@ public static class SessionScoped_Reader
         };
     }
 
-    /// <summary>Blank is absent, the same rule the resolver applies to every other layer.</summary>
+    /// <summary>
+    /// THE ONE DEFINITION OF "BLANK IS ABSENT" FOR A SESSION-SCOPE OVERRIDE — the string the session
+    /// actually states, or null when it states nothing. Blank is absent, the same rule the resolver
+    /// applies to every other layer.
+    ///
+    /// <para>
+    /// PUBLIC SINCE 2026-09-12 (task-7 fix round 1) because there is a SECOND reader of these same two
+    /// override fields: <c>OrchestrationLauncherModel</c> resolves them against the role default at
+    /// spawn time, and it did so with <c>??</c>, which catches null only. So
+    /// <c>"supervisorEffortOverride": ""</c> — which <c>SessionJson_Serializer.Get_String_OrNull</c>
+    /// returns verbatim to whoever hand-edits session.json — was absent to the catalogue and present
+    /// to the launcher: one precedence with two descriptions that disagreed on one input, which is the
+    /// drift CLAUDE.md decision 12 forbids. The deleted <c>SpawnCommand_Builder.Resolve_Effort_OrDefault</c>
+    /// had said <c>IsNullOrWhiteSpace</c> too, so the launcher's <c>??</c> also quietly CHANGED that
+    /// answer when the role default moved. Both readers now come through here rather than each
+    /// spelling the rule out, which is the only shape in which they cannot drift again.
+    /// </para>
+    /// </summary>
+    public static string? Stated_OrNull(string? text)
+    {
+        return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
     static JsonNode? Text_OrNull(string? text)
     {
-        return string.IsNullOrWhiteSpace(text) ? null : JsonValue.Create(text);
+        var stated = Stated_OrNull(text);
+
+        return stated == null ? null : JsonValue.Create(stated);
     }
 }

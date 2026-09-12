@@ -133,7 +133,13 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, implementerModelOverride: model, implementerModelWasSet: true);
     }
 
-    /// <summary>Null RESETS the override — the next spawn then carries no --effort flag at all.</summary>
+    /// <summary>
+    /// Null RESETS the override — the next spawn then falls back to the ROLE DEFAULT
+    /// (<c>effort.&lt;role&gt;</c> in the catalogue: xhigh for the supervisor and the solo under
+    /// `classic`, null — and so no flag at all — under `quiet`). Corrected 2026-09-12: it used to say
+    /// a reset carried no flag, which was the truth only until plan 02 task 7 gave effort a config
+    /// default the way the model already had one.
+    /// </summary>
     public static IOrchestrationSession CreateFrom_Existing_WithSupervisorEffortOverride(IOrchestrationSession existing, string? effort)
     {
         return CreateFrom_Existing(existing, supervisorEffortOverride: effort, supervisorEffortWasSet: true);
@@ -243,8 +249,10 @@ public static class OrchestrationSession_Factory
         string? implementerModelOverride = null,
         bool implementerModelWasSet = false,
 
-        // Same wasSet dance as the two model overrides: null must be able to mean "cleared — spawn
-        // with no --effort flag" and not only "unchanged".
+        // Same wasSet dance as the two model overrides: null must be able to mean "cleared — spawn on
+        // the role default again" and not only "unchanged". (Corrected 2026-09-12 with the four doc
+        // comments beside it: a cleared override means no flag only where the role default is itself
+        // null, which under `classic` the supervisor's and the solo's are not.)
         string? supervisorEffortOverride = null,
         bool supervisorEffortWasSet = false,
         string? implementerEffortOverride = null,

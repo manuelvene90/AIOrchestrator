@@ -121,7 +121,14 @@ public static class SessionJson_Serializer
             root["telegramTopicDeleteFailureReported"]?.GetValue<bool>() ?? false,
 
             // Absent in every session written before the effort override existed, and null is the
-            // right reading: no override means no --effort flag, so the CLI keeps its own default.
+            // right reading: no override means the ROLE DEFAULT decides (effort.<role> in the
+            // catalogue), which is exactly what a session that never had the key always got.
+            // Corrected 2026-09-12: this said "no override means no --effort flag", true only while
+            // the default was SpawnCommand_Builder's compiled constant; plan 02 task 7 made it data,
+            // and the default is null only where the catalogue and the preset leave it null.
+            // NOTE the blank case: Get_String_OrNull returns "" verbatim from a hand-edited file, and
+            // it is the LAUNCHER that reads blank as absent (SessionScoped_Reader.Stated_OrNull) —
+            // this reader stays literal so nothing here silently rewrites what the owner typed.
             Get_String_OrNull(root, "supervisorEffortOverride"),
             Get_String_OrNull(root, "implementerEffortOverride"),
 

@@ -96,12 +96,23 @@ public static class SpawnCommand_Builder
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), SOLO_TAB_COLOR, repoPath, script);
     }
 
-    /// <summary>The orchestration's green press-secretary voice: narrates, never works (see communicator.md).</summary>
-    public static ISpawnCommand Build_ForCommunicator(string orchId, string repoPath, string? model, string pidFilePath, string? displayName)
+    /// <summary>
+    /// The orchestration's green press-secretary voice: narrates, never works (see communicator.md).
+    ///
+    /// <para>
+    /// IT TAKES AN EFFORT LIKE EVERY OTHER ROLE since 2026-09-12 (task-7 fix round 1). It did not, and
+    /// hardcoded null into <see cref="Build_ClaudeInvocation"/> — so from the moment the launcher began
+    /// resolving <c>effort.communicator</c>, an owner who wrote that key had it resolved correctly and
+    /// then dropped here: no flag, no warning, no log line. Silent discard is the failure class this
+    /// project refuses (CLAUDE.md decision 21). Both shipped presets leave the key null, so the emitted
+    /// line is unchanged for everyone who never wrote it.
+    /// </para>
+    /// </summary>
+    public static ISpawnCommand Build_ForCommunicator(string orchId, string repoPath, string? model, string? effort, string pidFilePath, string? displayName)
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(null, model, null)} '/communicator {orchId}'", pidFilePath);
+        var script = Build_SessionScript("communicator", orchId, "com", $"{Build_ClaudeInvocation(null, model, effort)} '/communicator {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForCommunicator(orchId), displayName), COMMUNICATOR_TAB_COLOR, repoPath, script);
     }
@@ -124,10 +135,17 @@ public static class SpawnCommand_Builder
     /// A '--continue' resume proved harmful: the restored conversation re-executed its own
     /// in-flight plans (a failed start-orchestration was retried on boot → duplicate
     /// orchestrations).
+    ///
+    /// <para>
+    /// STATELESS IS ABOUT THE CONVERSATION, NOT ABOUT THE DIALS: it takes an effort like every other
+    /// role since 2026-09-12 (task-7 fix round 1), for the reason given on
+    /// <see cref="Build_ForCommunicator"/> — the launcher resolved <c>effort.general</c> and this
+    /// method hardcoded null over it, which is a setting that answers and is then thrown away.
+    /// </para>
     /// </summary>
-    public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string pidFilePath)
+    public static ISpawnCommand Build_ForGeneralSupervisor(string generalHomeFolder, string? model, string? effort, string pidFilePath)
     {
-        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(null, model, null)} '/general-supervisor'", pidFilePath);
+        var script = Build_SessionScript("general", "general", "general", $"{Build_ClaudeInvocation(null, model, effort)} '/general-supervisor'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.GENERAL_TITLE, GENERAL_TAB_COLOR, generalHomeFolder, script);
     }

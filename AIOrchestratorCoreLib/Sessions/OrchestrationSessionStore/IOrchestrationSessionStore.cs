@@ -56,7 +56,12 @@ public interface IOrchestrationSessionStore
     void Set_SupervisorModelOverride(string orchId, string? model);
     void Set_ImplementerModelOverride(string orchId, string? model);
 
-    /// <summary>Per-orchestration --effort level; null resets to "no flag" (the CLI's own default).</summary>
+    /// <summary>
+    /// Per-orchestration --effort level; null resets to the ROLE DEFAULT (<c>effort.&lt;role&gt;</c>
+    /// from the catalogue — xhigh for the supervisor and the solo under `classic`, null and so no flag
+    /// at all under `quiet`). Corrected 2026-09-12: "resets to no flag" was the truth only while the
+    /// default was a compiled constant, which plan 02 task 7 replaced with data.
+    /// </summary>
     void Set_SupervisorEffortOverride(string orchId, string? effort);
     void Set_ImplementerEffortOverride(string orchId, string? effort);
 

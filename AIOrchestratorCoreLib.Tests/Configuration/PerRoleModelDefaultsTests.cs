@@ -516,9 +516,21 @@ public class PerRoleModelDefaultsTests : IDisposable
         Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.Communicator));
     }
 
-    /// <summary>Nathan's phone: the quiet preset names no effort, so no role carries the flag.</summary>
+    /// <summary>
+    /// Nathan's phone: the quiet preset names no effort, so no role carries the flag.
+    ///
+    /// <para>
+    /// STRENGTHENED 2026-09-12 (task-7 fix round 1): the loop alone passes identically if the PRESET
+    /// LAYER WERE DELETED, or if effort resolution returned null unconditionally — <c>quiet.json</c>
+    /// names no effort key and the catalogue ships null for all six roles, so every route ends in the
+    /// same null and the case pinned none of them (CLAUDE.md decision 20: never assert a state with two
+    /// routes to it). The second half proves quiet ITSELF was consulted, the way the model case above
+    /// does: <c>phone.push</c> is a row quiet genuinely carries and classic does not, and it must
+    /// resolve with <see cref="SettingOrigins.Preset"/> as its origin.
+    /// </para>
+    /// </summary>
     [Fact]
-    public void UnderTheQuietPreset_NoRoleCarriesAnEffortFlag()
+    public void UnderTheQuietPreset_NoRoleCarriesAnEffortFlag_AndQuietItselfIsGenuinelyConsulted()
     {
         File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
 
@@ -526,6 +538,15 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         foreach (var role in SessionRole_Names.ALL)
             Assert.Null(config.Get_EffortForRole_OrNull(role));
+
+        var definition = Catalog.Find_OrNull("phone.push")!;
+        var presetTree = Presets_Loader.Resolve_ForConfig(
+            JsonNode.Parse(File.ReadAllText(_paths.ConfigFile)) as JsonObject).Tree;
+
+        var (value, origin) = Settings_Resolver.Resolve(definition, presetTree, configTree: null, session: null);
+
+        Assert.Equal(SettingOrigins.Preset, origin);
+        Assert.Equal("everything", value!.GetValue<string>());
     }
 
     /// <summary>

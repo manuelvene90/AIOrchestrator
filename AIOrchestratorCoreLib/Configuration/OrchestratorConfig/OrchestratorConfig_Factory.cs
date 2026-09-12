@@ -85,11 +85,13 @@ public static class OrchestratorConfig_Factory
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
 
-        // OPTIONAL, AND ONLY THESE FOUR. Every other parameter is required because every caller
-        // knows its value; these keys are hand-edited in config.json and no window has a field for
-        // any of them, so the Settings window builds a config without them — and the loader, which is
-        // the only reader that can have them, passes them explicitly. Save() never serialises any of
-        // the four, so a config built without them cannot erase them from disk.
+        // OPTIONAL, AND ONLY THE SIX BELOW (four here, plus telegramInbound and effort — the count was
+        // stale from the day the fifth was added and is corrected 2026-09-12). Every other parameter
+        // is required because every caller knows its value; these keys are hand-edited in config.json
+        // and no window has a field for any of them, so the Settings window builds a config without
+        // them — and the loader, which is the only reader that can have them, passes them explicitly.
+        // Save() never serialises any of the six, so a config built without them cannot erase them
+        // from disk.
         PlanBackendSettings? planBackend = null,
         IGuardrailSettings? guardrails = null,
         IDefaultsSettings? defaults = null,

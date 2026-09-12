@@ -165,8 +165,11 @@ public class SettingsResolverTests
 
     /// <summary>
     /// NULL IS A REAL ANSWER FOR A NULLABLE ENUM, and it has to be distinguishable from "this layer
-    /// said nothing" — `effort.supervisor: null` in the quiet preset MEANS "emit no --effort flag",
-    /// which is not the same as the key being absent from a preset that sets xhigh.
+    /// said nothing" — `"effort": {"supervisor": null}` hand-written in config.json MEANS "emit no
+    /// --effort flag", and it must beat a preset that sets xhigh (which `classic` does) rather than be
+    /// read as the key being absent. Corrected 2026-09-12: this comment used to place the null in the
+    /// QUIET preset, which carries no effort key at all — the layers it named were not the layers the
+    /// case builds.
     /// </summary>
     [Fact]
     public void AnExplicitJsonNull_ForANullableSetting_IsAnAnswer_NotAnAbsence()

@@ -42,9 +42,18 @@ public interface IOrchestrationSession
     string? ImplementerModelOverride { get; }
 
     /// <summary>
-    /// Per-orchestration EFFORT overrides (low / medium / high / xhigh / max), passed to
-    /// `claude --effort` at spawn. Null means NO FLAG AT ALL — the CLI then uses its own default —
-    /// so unlike the model there is no config default to fall back to.
+    /// Per-orchestration EFFORT overrides (low / medium / high / xhigh / max) — the TOP layer of the
+    /// effort ladder, applied to `claude --effort` at spawn. Null (or blank, which the launcher reads
+    /// as absent through <c>SessionScoped_Reader.Stated_OrNull</c>) means the ROLE DEFAULT answers:
+    /// <c>effort.&lt;role&gt;</c> resolved catalogue → preset → config.json, which is xhigh for the
+    /// supervisor and the solo under `classic` and null under `quiet`.
+    ///
+    /// <para>
+    /// CORRECTED 2026-09-12: this said "unlike the model there is no config default to fall back to",
+    /// which was true only while the default was the compiled
+    /// <c>SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL</c> — plan 02 task 7 made effort data, exactly
+    /// like the model. A role default of NULL is still a real answer and still means no flag at all.
+    /// </para>
     /// </summary>
     string? SupervisorEffortOverride { get; }
     string? ImplementerEffortOverride { get; }
