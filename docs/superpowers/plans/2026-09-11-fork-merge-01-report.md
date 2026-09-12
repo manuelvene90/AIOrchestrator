@@ -232,12 +232,19 @@ that remain are:
 
 - **four of group B** — the Fable-vs-Opus default, by the coordinator's ruling above: plan 02 moves
   the constant, nobody in plan 01 touches it;
-- **one of group E** — `AWellFormedQuestionIsWritten_WithTheToolsOwnIndexAndStamp`, which the section
-  below already records as red in a clean shell too (red 3/3 alone here, unchanged and unowned by
-  Task 12);
+- **one of group E** — `AWellFormedQuestionIsWritten_WithTheToolsOwnIndexAndStamp`. **FIXED AFTER
+  THIS RUN, in `a6e3379`** (Task 12's review round): it was not a test artefact but a live Windows
+  defect in `kit/bin/channel-append.sh` — carriage returns on the marker list made the tool refuse
+  every typed question. See group E below; the class is now 13/13;
 - **`PrintTurnLimitResetTests.ResumeClear_…`**, fixed in `b932f9d` AFTER this run — the run is the
   one full pass this task was budgeted, so the fix is pinned by twelve isolated runs instead;
 - **the `APaused` flake above.**
+
+**So after Task 12's review round, five of those seven are closed and the expected red set for Task
+14 is FOUR: group B's four, and nothing else.** (`ResumeClear` → `b932f9d`, group E's survivor →
+`a6e3379`, the `APaused` name → a flake that is green alone.) The two fixes that landed after the
+full run are pinned by isolated repetition instead — twelve runs and 13/13 respectively — because
+this task was budgeted one full pass and spent it.
 
 ### A. Master-only tests of features this merge dropped — expected red, they go green when re-ported
 
@@ -419,3 +426,30 @@ environment leak from the session that ran the merge, not a property of the tree
 scrub covers `ChannelAppendHelperInteropTests` only; `ChannelAppendTypedEntriesTests` sets
 `AIORCH_ROLE` per case but lets `AIORCH_ID` and `AIORCH_MEMBER` through from the parent process.** A
 later task running from a clean shell should expect 21 red here, not 22.
+
+**BOTH GREEN (Task 12, a6e3379) — and the survivor was a LIVE WINDOWS DEFECT IN THE SHIPPED KIT, not
+a test artefact.** On this machine a supervisor's or solo's typed `--question` to the owner's phone
+was refused outright: `kit/bin/channel-append.sh` exited 2 having written nothing.
+
+Windows `jq` writes text-mode output, so every record it emits ends `\r\n`, and the tool reads the
+grammar TWO WAYS of which only one notices. `grammar()` uses `value="$(jq -er …)"`, and command
+substitution eats the trailing CR along with the newline. The prose counter feeds a MULTI-record jq
+result through a here-string (`done <<< "$MARKER_PREFIXES"`), where the CRs sit in the middle of the
+string and survive. So every marker was `QUESTION:\r`, the `case "$line" in "$marker"*)` prefix match
+never fired, every marker line counted as PROSE, and a well-formed question is six marker lines by
+construction against a five-line prose ceiling. Only the LAST marker escaped (no CR after the final
+record) — which is exactly why short typed entries still passed and the class read 12 green, 1 red.
+
+Fixed at the source of the string (`| tr -d '\r'` on the jq output), because the match is a PREFIX
+match: a CR on the BODY line is harmless, the marker is the only thing that must be clean, and one
+strip in one place cannot drift from a second. `grammar()` is hardened too — with PARAMETER
+EXPANSION, never a pipe, because a pipe there would make `||` test `tr`'s exit status instead of
+`jq -e`'s and the missing-key refusal would stop being seen at all (verified still exit 4 against an
+empty grammar). Its comment says plainly that the strip is a no-op today: what saves that reader is
+the shell's behaviour, not anything the tool asked for.
+
+Checked for the same trap elsewhere: this here-string is the file's ONLY multi-record jq consumer.
+`kit/install.sh`'s jq uses are command substitutions or pipes INTO jq, which the trap does not reach.
+
+`ChannelAppendTypedEntriesTests` **13/13**; `ChannelAppendHelperInteropTests` + `ChannelGrammarTests`
+21/21 alongside it. Group E is closed.
