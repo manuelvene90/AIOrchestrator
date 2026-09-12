@@ -52,8 +52,21 @@ jobs:
       - name: Install jq (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Build
+      # THE SOLUTION IS NOT BUILDABLE ON LINUX and never was: `AIOrchestrator/` is `net10.0-windows`
+      # with `UseWPF`, so `dotnet build AIOrchestrator.slnx` on ubuntu stops at NETSDK1100 ("set the
+      # EnableWindowsTargeting property to true") in 20 seconds without compiling a single test. The
+      # WPF job above is where that project is built, on the only OS that can run it; here the two
+      # TEST projects are built directly, which pulls in CoreLib and FakeClaude and nothing else.
+      # Windows still builds the whole solution, so nothing stops covering the daemon or the app.
+      - name: Build (Windows — the whole solution)
+        if: runner.os == 'Windows'
         run: dotnet build AIOrchestrator.slnx -c Debug
+      - name: Build (Linux — the test projects, without the WPF app)
+        if: runner.os == 'Linux'
+        run: |
+          dotnet build AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj -c Debug
+          dotnet build tools/claude-contract/ClaudeContract.Tests/ClaudeContract.Tests.csproj -c Debug
+          dotnet build AIOrchestrator.Daemon/AIOrchestrator.Daemon.csproj -c Debug
       - name: Test CoreLib
         run: dotnet test AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj --no-build -c Debug --logger "trx;LogFileName=corelib-${{ matrix.os }}.trx"
       - name: Test claude-contract
