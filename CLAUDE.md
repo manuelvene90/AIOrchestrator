@@ -315,11 +315,20 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
   implementer's value before any default) lives there. General supervisor and communicator stay on
   `sonnet` (routing/narration = cheap), and neither preset ever states a value for them. **Supervisor and solo sessions spawn with
   `--effort xhigh` UNLESS the orchestration carries an effort override** (`/effort`, decision 24),
-  which wins; no other role carries a default. The role default sits at the role's own call site in
-  `SpawnCommand_Builder` (`SUPERVISION_EFFORT_LEVEL`), and every flag is emitted by the single
-  chokepoint `Build_ClaudeInvocation`. Note the two live in DIFFERENT places: the model is DATA
-  (`~/.claude/supervision/config.json`, read live — a change applies to the next spawn with no
-  restart), the effort is CODE (in the app binary — it needs a rebuilt app running, see decision 23).
+  which wins; no other role carries a default. Every flag is emitted by the single chokepoint
+  `Build_ClaudeInvocation`. **EFFORT IS DATA TOO AS OF 2026-09-12 (plan 02 task 7, `015b6dd`), and the
+  sentence that used to end this bullet — "the model is DATA … the effort is CODE (in the app binary
+  — it needs a rebuilt app running)" — is no longer true.** The role default lived in
+  `SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL`, a compiled constant, so the owner could change the
+  model from their phone and could not change the effort at all without a rebuild — the same dial in
+  two different places. That constant and `Resolve_Effort_OrDefault` are DELETED; the default is now a
+  catalogue row (`effort.supervisor`, `effort.solo`) resolved catalogue → preset → config.json by
+  `EffortSettings_Json.Parse` on the same preset rung the models use, and read through
+  `IOrchestratorConfig.Get_EffortForRole_OrNull`. The RESOLUTION happens at the launcher, which is the
+  one place holding both the per-orchestration override and the config provider. `EffortSettings_Json`
+  has deliberately NO `Write`: a block written back becomes a stated value, which is exactly how the
+  owner's live config.json came to pin a stale model and defeat the Opus default they had asked for
+  (found 2026-09-12, entry 216). Both dials are now data, read live, and neither needs a rebuilt app.
 
 ## Design Spec
 
