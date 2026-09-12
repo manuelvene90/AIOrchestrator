@@ -44,13 +44,12 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     command; the code that used to back this paragraph (`/italian` toggled the layer from the phone,
     with the app's status-bar checkbox mirroring it, PERSISTED to config.json so the provider
     reloaded on the file's write stamp rather than keeping an in-memory copy in step) does not exist
-    anymore. **Whether that stays permanent is still open**: the 2026-09-11 spec's §11.1
-    (`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md`, on branch
-    `feat/fork-merge-and-profiles-spec`, not in this worktree) asks the owner to confirm dropping it
-    in favour of the fork's rule ("with the owner, write in the owner's language"); the owner has not
-    answered. Until they do, treat the deletion as the tree's *current* state, not as a *settled*
-    decision — if the answer is "keep it," a future task re-ports the layer described above from
-    master's history; it is not merely un-deleting a flag.
+    anymore. **The owner answered on 2026-09-12: it stays gone.** Asked to confirm dropping it in favour
+    of the fork's rule ("with the owner, write in the owner's language"), they said *"Yes — agents
+    write in my language, drop it"*. So this is a SETTLED decision, not merely the tree's current
+    state: nothing re-ports the layer, and the rule lives in the role protocols plus an
+    `owner.language` entry in the settings catalogue that plan 02 ships. The question this
+    paragraph used to hold open (2026-09-11 spec §11.1) is closed.
 12. **Channel headers are AGENT-WRITTEN — treat `[n]` and the timestamp as untrusted input.** Both
     are guesses unless the agent re-read the file: on 2026-08-10 `option-lab-2` carried two `[80]`
     and two `[81]` entries, and a supervisor stamped `2026-08-11 01:34` on an entry written at
