@@ -164,7 +164,16 @@ public class ClosingTurnReviewFixTests
         Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).FailedAttempts >= 1, PrintRunnerTestHarness.GENEROUS));
         await dispatcher.Stop_Async();
 
-        var record = Assert.Single(ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId)), entry => entry.Subject.Contains(PrintTurn_Words.TURN_ENDED_SUBJECT));
+        // THE KILLED TURN'S RECORD, NAMED — not "the only turn-ended record there is". Drive_Until
+        // stops at the first poll where FailedAttempts has risen, and the retry is 100 ms behind it
+        // with a scenario that succeeds, so on a loaded box the retry's own record is already in the
+        // channel by the time this line reads it. That is the system working; the old predicate
+        // failed on it, which made a passing retry look like a defect. Nothing is loosened — this
+        // test's claim is about what the KILLED turn's record says, and the outcome in the subject is
+        // what tells the two apart. Same predicate as the sibling case below.
+        var record = Assert.Single(
+            ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId)),
+            entry => entry.Subject.Contains($"{PrintTurn_Words.TURN_ENDED_SUBJECT} {memberId} turn 1 — {TurnOutcomes.TIMEOUT}"));
 
         Assert.DoesNotContain("a closing turn wrote where it got to", record.Body);
         Assert.Contains("retried as before", record.Body);
