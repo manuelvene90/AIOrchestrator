@@ -12013,12 +12013,12 @@ internal sealed class BridgeEngineModel(
     /// owner's ruling covers all of them — *"status, receipts and app bookkeeping do not ring"*. The
     /// few that must ring say so at the call site, which is the only reason it is a parameter at all.
     /// </summary>
-    /// <summary>
-    /// Returns the id of the message it sent, or null if there was none (a refused send, a sender
-    /// that produced no message). Nearly every caller ignores it; <c>/merge</c> does not — that
-    /// reply is the RECEIPT its pending-reply tracker edits, exactly as the ✓ is for a typed owner
-    /// message, so the id has to come back out of here rather than be sent a second time.
-    /// </summary>
+    /// <returns>
+    /// The id of the message it sent, or null if there was none (a refused send, a sender that
+    /// produced no message). Nearly every caller ignores it; <c>/merge</c> does not — that reply is
+    /// the RECEIPT its pending-reply tracker edits, exactly as the ✓ is for a typed owner message, so
+    /// the id has to come back out of here rather than be sent a second time.
+    /// </returns>
     async Task<long?> Send_DirectReply_BestEffort_Async(
         ITelegramApiClient client,
         long? messageThreadId,
