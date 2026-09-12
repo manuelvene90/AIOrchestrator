@@ -4150,7 +4150,7 @@ internal sealed class BridgeEngineModel(
     /// <para>
     /// BEST EFFORT, LIKE THE ENTRY PHOTO, and for a stronger reason: the messages are already on the
     /// phone by the time this runs. A failed upload must therefore cost the attachment and nothing
-    /// else — letting it throw would return false from Mirror_Append_Async, leave the append
+    /// else — letting it throw would make Mirror_Append_Async answer FAILED, leave the append
     /// unconfirmed, and re-send every chunk of a message the owner has already read.
     /// </para>
     /// </summary>

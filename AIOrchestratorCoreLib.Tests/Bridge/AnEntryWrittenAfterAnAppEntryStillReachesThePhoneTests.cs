@@ -42,6 +42,13 @@ public class AnEntryWrittenAfterAnAppEntryStillReachesThePhoneTests : IDisposabl
     const long OWNER_USER_ID = 555000111;
     const long TOPIC_ID = 5150;
 
+    /// <summary>
+    /// The engine's own cap on how long an unanswered question may hold the conversation, restated
+    /// here because the engine's copy is private. Only the ORDER matters to this fixture — backdate
+    /// the flag past it and the engine expires it.
+    /// </summary>
+    const int QUESTION_HOLD_CAP_MINUTES = 10;
+
     // Both are COMPLETE questions: a question is the one shape OwnerPush_Policy always pushes, so
     // the probe is about the mirror and not about the narration filter. The first one deliberately
     // carries prose under its QUESTION: line, which is what makes the app write its coaching entry
@@ -154,6 +161,30 @@ public class AnEntryWrittenAfterAnAppEntryStillReachesThePhoneTests : IDisposabl
             Assert.True(
                 await Wait_Until_Async(() => File.ReadAllText(channelFile).Contains("FROM app", StringComparison.Ordinal), 20_000),
                 $"the app never wrote an entry of its own, so this probe would test nothing.{Environment.NewLine}{File.ReadAllText(channelFile)}");
+
+            // AND THE FIRST QUESTION IS LET GO FIRST, which this probe did not have to do until the
+            // owner's 2026-09-11 ruling: one question at a time is the ONLY way, so
+            // QuestionHold_Policy now HOLDS this channel while a question is unanswered and the
+            // second entry would never be mirrored — the probe would then fail for the hold rather
+            // than for the defect it is about, which is a supervisor entry written after an APP
+            // entry. The route is the app's own ten-minute cap (Expire_StaleAwaitingAnswerFlags):
+            // the owner never answered, the supervisor is let go anyway. The flag's age is real
+            // wall-clock time — that sweep stats the file rather than reading the injected clock —
+            // so it is backdated rather than waited out.
+            //
+            // NOTHING ABOUT THE SUBJECT MOVES: the app's own entry is still written between the two
+            // supervisor entries, and entry [9] is still appended after it.
+            var flagFile = AIOrchestratorCoreLib.Status.AwaitingAnswerFlag_Marker.Build_FilePath(_paths, session.OrchId);
+
+            Assert.True(
+                File.Exists(flagFile),
+                "the first question raised no awaiting-answer flag, so the cap below expires nothing.");
+
+            File.SetLastWriteTimeUtc(flagFile, DateTime.UtcNow.AddMinutes(-(QUESTION_HOLD_CAP_MINUTES + 1)));
+
+            Assert.True(
+                await Wait_Until_Async(() => !File.Exists(flagFile), 20_000),
+                $"the awaiting-answer flag never expired, so the second entry would be HELD.{Environment.NewLine}{_log.Dump()}");
 
             Append_Supervisor(session.OrchId, 9, SECOND_QUESTION);
 

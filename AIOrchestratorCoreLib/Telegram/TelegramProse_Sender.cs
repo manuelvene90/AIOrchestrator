@@ -11,7 +11,7 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// <para>
 /// THE FALLBACK IS THE POINT, not a nicety. This whole system exists so an owner-facing message is
 /// never lost, and a rendering bug is a new way to lose one: a malformed entity is a 400, the send
-/// throws, <c>Mirror_Append_Async</c> returns false, and the entry is retried into the same
+/// throws, <c>Mirror_Append_Async</c> answers FAILED, and the entry is retried into the same
 /// rejection for ever. One escaped bracket in one agent's message would silently wedge that
 /// channel. So the refusal costs the formatting, never the message.
 /// </para>

@@ -29,6 +29,14 @@ public class QuestionContractProbeTests : IDisposable
     const long OWNER_USER_ID = 555000111;
     const long TOPIC_ID = 4646;
 
+    /// <summary>
+    /// The engine's own cap on how long an unanswered question may hold the conversation, restated
+    /// here because the engine's copy is private. Only the ORDER matters to these fixtures — backdate
+    /// the flag past it and the engine expires it — so a drift in the engine's number cannot make
+    /// them wrong, only make them back-date further than they need to.
+    /// </summary>
+    const int QUESTION_HOLD_CAP_MINUTES = 10;
+
     const string COMPLETE_QUESTION =
         "Two plan levers changed and the build can start.\n"
         + "QUESTION: Start the FIN-D-277a build now?\n"
@@ -259,20 +267,11 @@ public class QuestionContractProbeTests : IDisposable
     {
         var orchId = await Start_Async();
 
-        // BOTH APPENDED BEFORE THE ENGINE RUNS, and the reason is the tailer's TRAILING-ENTRY rule
-        // rather than anything about taps: the last entry in a file is held until the file goes
-        // quiet, measured against the injected clock — which this harness freezes. Appended this
-        // way, each question is terminated by the next append's header, so neither is trailing.
-        // (Stage 8a parked this as a suspected mirror-cursor defect; stage 8b found the real cause,
-        // and AnEntryWrittenAfterAnAppEntryStillReachesThePhoneTests pins it.)
-        Append_Supervisor(orchId, COMPLETE_QUESTION);
-        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
-
-        Assert.True(
-            await Run_Until_Async(
-                () => _telegram.Find_ButtonFor("Start it") != null && _telegram.Find_ButtonFor("Merge it") != null,
-                25_000),
-            $"both questions never reached the phone.{Environment.NewLine}=== CHANNEL ==={Environment.NewLine}{Channel(orchId)}{Environment.NewLine}{_log.Dump()}");
+        // ONE AT A TIME, THEN THE CAP — see Reach_TwoQuestionsOpen_Async. The two questions used to
+        // be appended side by side before the engine ran; the owner's 2026-09-11 ruling means the
+        // app now WITHHOLDS the second while the first is unanswered, so that setup asserted a state
+        // the system no longer permits. The subject below is untouched.
+        await Reach_TwoQuestionsOpen_Async(orchId);
 
         // The ids come from the registry rather than from "the last message with buttons": two
         // questions are in flight and only their own text says which is which.
@@ -478,16 +477,9 @@ public class QuestionContractProbeTests : IDisposable
     {
         var orchId = await Start_Async();
 
-        Append_Supervisor(orchId, COMPLETE_QUESTION);
-        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
-
-        Assert.True(
-            await Run_Until_Async(
-                () => _telegram.Find_ButtonFor("Start it") != null && _telegram.Find_ButtonFor("Merge it") != null,
-                25_000),
-            $"both questions never reached the phone.{Environment.NewLine}{_log.Dump()}");
-
-        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
+        // ONE AT A TIME, THEN THE CAP — see Reach_TwoQuestionsOpen_Async, and the note on the tap
+        // probe above: two questions written side by side is a state the app no longer permits.
+        await Reach_TwoQuestionsOpen_Async(orchId);
 
         // The owner answers in words — and with two open, that binds neither (by design). The
         // harness clock is frozen, so it is stepped first: "replied AFTER the question was asked" is
@@ -531,6 +523,72 @@ public class QuestionContractProbeTests : IDisposable
             $"a superseded question's option was still live.{Environment.NewLine}{_log.Dump()}");
 
         Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+    }
+
+    /// <summary>
+    /// TWO QUESTIONS OPEN ON THE PHONE AT ONCE, REACHED HONESTLY UNDER THE ONE-QUESTION RULE.
+    ///
+    /// <para>
+    /// The owner ruled on 2026-09-11 that one question at a time is the ONLY way — when three or
+    /// four arrive together their answers conflict — so <c>QuestionHold_Policy</c> now HOLDS the
+    /// owner channel at the mirror while a question is unanswered. The probes below used to append
+    /// both questions before the engine's first pass and wait for both keyboards; that setup
+    /// manufactured a state the app deliberately no longer produces, and it is the setup that had to
+    /// change, never the rule and never what these probes assert.
+    /// </para>
+    /// <para>
+    /// THE ROUTE IS THE APP'S OWN TEN-MINUTE CAP (<c>Expire_StaleAwaitingAnswerFlags</c>): the owner
+    /// never answered, the supervisor is let go anyway, and the next question goes out with the first
+    /// still open. That is a real production sequence and it is the one route that leaves both
+    /// questions OPEN — an owner message would clear the flag too, but it also records a reply in
+    /// words, and the next question would then SUPERSEDE the first, which is the opposite of what
+    /// these two probes need. (Terminal presence is not a route at all: it silences the topic, so no
+    /// question is ever sent and none is ever registered open.)
+    /// </para>
+    /// <para>
+    /// The flag's age is real wall-clock time — <c>Expire_StaleAwaitingAnswerFlags</c> stats the file
+    /// rather than reading the injected clock — so it is BACKDATED rather than waited out. The clock
+    /// step afterwards is the unrelated trailing-entry rule: the second question is the file's last
+    /// entry, and a frozen clock means the file is never "quiet" enough to release it.
+    /// </para>
+    /// </summary>
+    async Task Reach_TwoQuestionsOpen_Async(string orchId)
+    {
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 25_000),
+            $"the first question never reached the phone.{Environment.NewLine}=== CHANNEL ==={Environment.NewLine}{Channel(orchId)}{Environment.NewLine}{_log.Dump()}");
+
+        var flagFile = AIOrchestratorCoreLib.Status.AwaitingAnswerFlag_Marker.Build_FilePath(_paths, orchId);
+
+        Assert.True(
+            File.Exists(flagFile),
+            "the first question raised no awaiting-answer flag, so the cap below expires nothing and "
+            + "the hold this setup works around was never in force.");
+
+        File.SetLastWriteTimeUtc(flagFile, DateTime.UtcNow.AddMinutes(-(QUESTION_HOLD_CAP_MINUTES + 1)));
+
+        Assert.True(
+            await Run_Until_Async(() => !File.Exists(flagFile), 25_000),
+            $"the awaiting-answer flag never expired, so the second question would be HELD.{Environment.NewLine}{_log.Dump()}");
+
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
+
+        // THE STEP COMES AFTER THE BYTES ARE READ, not before, and the order is the whole of it: the
+        // tailer stamps "quiet since" at the poll that READS an append, so a clock stepped first is
+        // simply the instant that stamp is taken and the file is never quiet afterwards. One short
+        // run lets the poll happen, then the step is what the file going quiet does in production.
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(3));
+        _clock.Advance(TimeSpan.FromSeconds(30));
+
+        Assert.True(
+            await Run_Until_Async(
+                () => _telegram.Find_ButtonFor("Start it") != null && _telegram.Find_ButtonFor("Merge it") != null,
+                25_000),
+            $"both questions never reached the phone.{Environment.NewLine}=== CHANNEL ==={Environment.NewLine}{Channel(orchId)}{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
     }
 
     async Task Run_For_Async(int milliseconds)

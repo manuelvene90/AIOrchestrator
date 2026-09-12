@@ -180,13 +180,18 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         // raised, so a second question appended while the first is unanswered is HELD at the mirror
         // and never becomes a keyboard — this test would then be asserting on one question, not two.
         //
-        // TWO OPEN QUESTIONS ARE STILL REACHABLE, by three routes the app keeps on purpose, and this
-        // fixture takes the one it can drive honestly: the TEN-MINUTE CAP. The flag is backdated past
-        // QUESTION_HOLD_CAP_MINUTES and the engine's own Expire_StaleAwaitingAnswerFlags deletes it —
-        // the owner never answered, the supervisor is let go anyway, and the next question goes out
-        // with the first still open. (The other two are terminal presence, which raises no flag at
-        // all, and /pc lifting a standing block; terminal presence is unusable here because it also
-        // SILENCES the topic, so no question would reach the fake at all.)
+        // TWO OPEN QUESTIONS ARE STILL REACHABLE, and this fixture takes the route it can drive
+        // honestly: the TEN-MINUTE CAP. The flag is backdated past QUESTION_HOLD_CAP_MINUTES and the
+        // engine's own Expire_StaleAwaitingAnswerFlags deletes it — the owner never answered, the
+        // supervisor is let go anyway, and the next question goes out with the first still open.
+        //
+        // TERMINAL PRESENCE IS NOT A SECOND ROUTE, and this comment used to claim it was. It raises
+        // no awaiting-answer flag, true — but it also resolves the topic to SILENCED
+        // (OwnerPresence_Policy.Resolve_ModeOverride_OrNull), so Mirror_Append_Async returns before
+        // any send and no question is EVER registered open. It cannot produce two open questions; it
+        // produces none. The other real route is an owner message, which clears the flag — but it
+        // also records a reply in words, so the next question SUPERSEDES the first and the pair this
+        // test needs is destroyed.
         //
         // The assertion is untouched: five decisions, two open questions, six buttons.
         var flagFile = AIOrchestratorCoreLib.Status.AwaitingAnswerFlag_Marker.Build_FilePath(_paths, session.OrchId);
