@@ -26,10 +26,12 @@ public static class Safe_FileReader
             if (!File.Exists(filePath))
                 return string.Empty;
 
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-
-            return reader.ReadToEnd();
+            // THROUGH THE TOLERANT READER, and the swallow below stays as the LAST resort. Returning
+            // empty for a file that merely lost a race with its own writer is a silent wrong answer:
+            // on Windows the atomic writer's rename and a plain shared read collide, and the caller
+            // cannot tell "the file said nothing" from "I could not open it for 0 ms". Retry first,
+            // default only if it is still unreadable after that.
+            return Tolerant_FileReader.Read_AllText(filePath);
         }
         catch
         {

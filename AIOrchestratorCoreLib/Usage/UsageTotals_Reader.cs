@@ -266,9 +266,11 @@ public static partial class UsageTotals_Reader
             // tick makes by design (a member that has no archive, a session with no PLAN.md).
             Diagnostics.TickIo_Counters.Count_TextFileRead();
 
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-            return reader.ReadToEnd();
+            // THROUGH THE TOLERANT READER, with the swallow below kept as the LAST resort. A .usage.json
+            // is rewritten by a live session on every status-line render, so on Windows this read can
+            // lose to the writer that owns it — and an empty string here does not read as "could not
+            // open", it reads as "this session has spent nothing", which is a wrong number on a card.
+            return Storage.Tolerant_FileReader.Read_AllText(filePath);
         }
         catch
         {

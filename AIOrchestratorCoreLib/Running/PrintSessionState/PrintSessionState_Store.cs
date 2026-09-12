@@ -69,7 +69,10 @@ public static class PrintSessionState_Store
         if (!File.Exists(stateFile))
             return null;
 
-        var root = JsonNode.Parse(File.ReadAllText(stateFile)) as JsonObject
+        // TOLERANT, because this file's own writer is the racer: the dispatcher rewrites it after
+        // every turn while the engine's tick reads it, and on Windows an ordinary read and the atomic
+        // writer's rename cannot both hold the file. See Tolerant_FileReader.
+        var root = JsonNode.Parse(Tolerant_FileReader.Read_AllText(stateFile)) as JsonObject
             ?? throw new Exception($"Print session state at '{stateFile}' is not a JSON object");
 
         List<IExecutedTurn> executed = [];
