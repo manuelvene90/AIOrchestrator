@@ -1,0 +1,15 @@
+{
+  "_comment": "Manu's way. Keys are flat dotted catalogue paths (SettingsJson_Path), deliberately not nested, so 'does this preset name only catalogue paths' is a one-line test. Only keys whose value differs from the shipped default appear here — a preset that restates a default is a default that can never move.",
+  "models.supervisor": "claude-fable-5-1",
+  "models.implementer": "claude-fable-5-1",
+  "models.reviewer": "claude-fable-5-1",
+  "models.solo": "claude-fable-5-1",
+  "effort.supervisor": "xhigh",
+  "effort.solo": "xhigh",
+  "phone.replyKeyboard": "on",
+  "topic.modeGlyphs": "name",
+  "pulse.fields": ["supervisor", "members", "modelEffort", "merged", "updated"],
+  "pulse.buttons": ["screen", "show", "merge", "test", "pc", "close", "pause", "progress"],
+  "pulse.holdToggle": false,
+  "general.buttons": []
+}
