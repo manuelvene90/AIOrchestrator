@@ -3984,6 +3984,14 @@ internal sealed class BridgeEngineModel(
             // PRESENTATION choice — the opening in the clear, the rest behind one tap — while 4096 is
             // a hard refusal. See OwnerMessage_Folder, which degrades to the chunker's own output for
             // every entry it cannot improve on.
+            // An entry whose whole body WAS the picture line has nothing left to say, and a bare
+            // "🟠 " is not a message. Its subject is the caption the owner should read under the
+            // photo — the same fallback Pick_Content already makes for an empty body. Re-ported
+            // from master's da8f66c, dropped by merge 91d3402: this is a straight port, not an
+            // addition, matched to master's condition exactly.
+            if (text.Trim().Length == 0)
+                text = entry.Subject;
+
             // COMPOSED BACK HERE, and nowhere earlier: everything above reads the agent's own words.
             text = speaker + text;
 

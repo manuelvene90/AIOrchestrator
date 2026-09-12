@@ -33,8 +33,8 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// <see cref="AttachmentsReachThePhoneTests.AnHtmlFileSentAsAPicture_IsRefusedToTheAgent_NamingTheMarkerThatWouldHaveWorked"/>),
 /// so this regression guard stays.
 ///
-/// Three of master's original four cases are retired here, not adapted — see the commit body for
-/// the reasons and, where one applies, the named fork test that already pins it:
+/// Two of master's original four cases are retired here, not adapted — see the commit body for
+/// the reasons and the named fork test that already pins each:
 ///   - narration holding a picture is no longer a routing question at all (the narration filter
 ///     that could hold anything back was removed on 2026-09-09 — everything the supervisor writes
 ///     is pushed); pinned directly by
@@ -44,13 +44,20 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 ///   - "narration alone still does not reach the phone" is now the OPPOSITE of the shipped contract
 ///     and would pin a regression against the owner's own 2026-09-09 ruling; pinned (inverted) by
 ///     <see cref="OwnerPushPolicyTests.NoSubject_ChangesNothing_ForCallersThatDoNotPassOne"/>, which
-///     asserts plain narration with no marker at all now pushes;
-///   - the picture-only entry captioning the photo with its SUBJECT rather than sending a bare
-///     "🟠 " does not hold on the fork's current code (verified failing 2026-09-12 — the engine
-///     still sends a bare-glyph message when the body is nothing but the marker line). That
-///     behaviour is not named in this task's "worth preserving" contract (only prompt delivery and
-///     agent-facing refusal are), so it is dropped here rather than kept red; see the task report
-///     for the finding.
+///     asserts plain narration with no marker at all now pushes.
+///
+/// A THIRD CASE, initially dropped and then RESTORED (2026-09-12, reviewer correction): the
+/// picture-only entry captioning the photo with its SUBJECT rather than sending a bare "🟠 ".
+/// This was first misjudged as an optional preservation outside this task's contract. It is not:
+/// master's <c>da8f66c</c> added exactly this guard in the engine's mirror loop —
+/// <c>if (content.Trim().Length == 0) content = entry.Subject;</c>, placed after marker extraction
+/// and before the speaker prefix was glued back on — and merge <c>91d3402</c> dropped it while
+/// promising in its own message that master's intent would be re-ported. So this was an
+/// UNFINISHED RE-PORT, not a difference to weigh. The guard is re-ported (matching master's
+/// condition, now over the fork's <c>text</c> variable) and the case below is back. The earlier,
+/// incorrect root-cause note (blaming <c>MirrorText_Formatter.Pick_Content</c>, which is unchanged
+/// between master and the fork) is corrected: the fallback that went missing lives in the ENGINE's
+/// mirror loop, after all marker extraction, not in the formatter.
 /// </summary>
 public class PicturesReachTheOwnerTests : IDisposable
 {
@@ -100,7 +107,12 @@ public class PicturesReachTheOwnerTests : IDisposable
         Directory.Delete(_tempRoot, recursive: true);
     }
 
-    /// <summary>DEFECT A, still a live regression guard: see the class remarks.</summary>
+    /// <summary>
+    /// DEFECT A, still a live regression guard: see the class remarks. A failure here now means
+    /// someone moved `text = speaker + text` back ABOVE the `Extract_MarkerLines` calls (or added a
+    /// new marker extracted only after that line) — the current code makes the original defect
+    /// structurally impossible, so this red would point at a reintroduction, not a first discovery.
+    /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
     public async Task AnEntryThatOpensWithItsPicture_UploadsThePhoto_AndNeverTextsThePath()
@@ -115,6 +127,34 @@ public class PicturesReachTheOwnerTests : IDisposable
             await Run_Until_Async(engine, () => telegram.Has_SentPhoto(_pictureFile), 15_000),
             "THE DEFECT: the body opened with the picture line, so the speaker glyph was glued to it "
             + $"and the marker never matched — no photo was uploaded.{Environment.NewLine}"
+            + Describe_Traffic(telegram));
+
+        Assert_NoTextCarriedThePath(telegram);
+    }
+
+    /// <summary>
+    /// An entry whose whole body IS the picture has nothing left once the marker is lifted out, and
+    /// a bare "🟠 " is not a message. The subject is the caption the owner should read under the
+    /// photo. Re-homed from master's <c>da8f66c</c> (see the class remarks) — a straight re-port,
+    /// not a new assertion.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task APictureOnlyEntry_CaptionsThePhotoWithItsSubject_RatherThanSendingABareGlyph()
+    {
+        var telegram = new FailableTelegram_Fake();
+        var engine = Build_Engine(telegram);
+        var orchId = await Start_WithChannelAlreadySeen_Async(engine);
+
+        Append_SoloEntry(orchId, 1, "main window, new look", $"IMAGE: {_pictureFile}");
+
+        Assert.True(
+            await Run_Until_Async(engine, () => telegram.Has_SentPhoto(_pictureFile), 15_000),
+            $"the photo was never uploaded.{Environment.NewLine}{Describe_Traffic(telegram)}");
+
+        Assert.True(
+            telegram.Has_Sent_Containing("main window, new look"),
+            $"the subject never reached the owner, so the photo arrived uncaptioned.{Environment.NewLine}"
             + Describe_Traffic(telegram));
 
         Assert_NoTextCarriedThePath(telegram);
