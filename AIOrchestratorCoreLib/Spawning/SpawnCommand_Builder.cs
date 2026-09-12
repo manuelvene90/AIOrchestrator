@@ -267,15 +267,35 @@ public static class SpawnCommand_Builder
     /// </summary>
     static string Validate_Model(string model)
     {
+        var invalid = First_InvalidModelCharacter_OrNull(model);
+
+        if (invalid != null)
+            throw new ArgumentException($"Model '{model}' contains invalid character '{invalid}' — a model name may hold letters, digits, '-', '_' or '.' (it travels through a shell command)");
+
+        return model;
+    }
+
+    /// <summary>
+    /// The first character of <paramref name="model"/> that a model word may not hold, or null when
+    /// every character is legal: letters, digits, '-', '_' and '.'. PUBLIC and separate from
+    /// <see cref="Validate_Model"/> because there are now two reactions to the same fact and only one
+    /// may own the charset (CLAUDE.md decision 12, the rule about a second copy of a formatter): a
+    /// SPAWN throws, because a model word travels through a shell command line and a spawn that would
+    /// break out of its quoting must not happen; a SETTINGS RENDERER returns a message naming the
+    /// character, because refusing the owner's typing without saying why is the silence decision 21 is
+    /// about. Added 2026-09-12 with the settings catalogue, whose `models.*` entries validate through it.
+    /// </summary>
+    public static char? First_InvalidModelCharacter_OrNull(string model)
+    {
         foreach (var character in model)
         {
             var valid = char.IsAsciiLetterOrDigit(character) || character == '-' || character == '_' || character == '.';
 
             if (!valid)
-                throw new ArgumentException($"Model '{model}' contains invalid character '{character}' — a model name may hold letters, digits, '-', '_' or '.' (it travels through a shell command)");
+                return character;
         }
 
-        return model;
+        return null;
     }
 
     /// <summary>The override when it says something, else the role's default — blank counts as unset.</summary>
