@@ -14,6 +14,8 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// </summary>
 public class ReplyKeyboardMarkupTests
 {
+    const string ENGINE_RELATIVE_PATH = "AIOrchestratorCoreLib/Bridge/BridgeEngine/BridgeEngineModel.cs";
+
     [Fact]
     public void TheRows_BecomeTelegramKeyboardButtons_InOrder()
     {
@@ -44,8 +46,48 @@ public class ReplyKeyboardMarkupTests
         Assert.False(markup["selective"]?.GetValue<bool>());
     }
 
+    /// <summary>
+    /// 75abab7 on the fork measured live that deleting the carrier message deletes the bar with it —
+    /// and master's own bridge deletes the carrier immediately after sending it, so on that evidence
+    /// master's bar never actually worked. The spec's ruling (§7.6) makes the keyboard a per-user
+    /// setting in a LATER plan, defaulting off, with the carrier kept once it is wired. Until then,
+    /// <see cref="ReplyKeyboard_Markup"/> stays compiled and pinned but UNCALLED — this fails the
+    /// moment any production code installs it.
+    /// </summary>
+    [Fact]
+    public void NothingInstallsTheKeyboardYet_BecauseTheCarrierDeleteRemovesTheBar()
+    {
+        var engine = Read_EngineSource();
+
+        Assert.DoesNotContain("Install_CommandKeyboard", engine);
+    }
+
     static string? Text_At(JsonArray keyboard, int row, int column)
     {
         return keyboard[row]?[column]?["text"]?.GetValue<string>();
+    }
+
+    /// <summary>
+    /// THE GUARD ON THE GUARD. Returns the source or FAILS — a harness that cannot find what it tests
+    /// must refuse to run rather than certify the absence of the thing it never read.
+    /// </summary>
+    static string Read_EngineSource()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory != null)
+        {
+            var candidate = Path.Combine(directory.FullName, ENGINE_RELATIVE_PATH.Replace('/', Path.DirectorySeparatorChar));
+
+            if (File.Exists(candidate))
+                return File.ReadAllText(candidate);
+
+            directory = directory.Parent;
+        }
+
+        throw new Exception(
+            $"Could not locate '{ENGINE_RELATIVE_PATH}' walking up from '{AppContext.BaseDirectory}'. "
+            + "This harness reads the engine's SOURCE, so a missing file means it measured nothing — "
+            + "failing rather than reporting the keyboard as never installed.");
     }
 }
