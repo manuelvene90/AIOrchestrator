@@ -31,7 +31,7 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
 5. **The app spawns sessions in real terminals** (Windows Terminal `wt new-tab`, fallback `Start-Process`), passing the role slash command as the initial prompt so the session knows its role and id from message one. Mac later via `osascript`; same design, different launcher line.
 6. **Portable kit:** everything a new machine needs (app, role commands, config template) installs from this repo (`kit/install.ps1`). Owner uses this across multiple machines.
 7. **Request-file protocol (`~/.claude/supervision/.requests/*.json`)** — agents ask, the app executes (~2 s), and confirms with a first-class `FROM app` channel entry that wakes the requester's watcher. Actions: `start-orchestration` (repo only — ids are auto-allocated `repo-slug-n`) + `close-orchestration` (general supervisor), `add-implementer` + `close-implementer` (orchestration supervisors), `set-telegram-muted` (any supervisor — DND). Closing marks `ClosedUtc` in session.json (audit trail kept, tailing stops, UI dims, terminals killed); the orchestration close also closes its Telegram topic. See the spec's AMENDMENT sections.
-8. **Lifecycle (spec AMENDMENT 2, revised):** sessions are always-on while the app runs — pid files (written by the spawned shells) + `SessionWatchdog` respawn anything dead (general supervisor auto-starts); app exit tree-kills every session (and closes their terminal windows); app restart brings everything back. **Resume (revised 2026-09-10, owner request): a SUPERVISOR or SOLO respawn continues its OWN conversation with `claude --resume <session-id>`** — the id comes from the slot's `.usage.json` (the statusline probe already dumps `session_id` + `transcript_path`), and `ResumableSession_Resolver` names it ONLY when that transcript still exists and is non-empty, because `--resume` of an unknown id prints "No conversation found" and exits, which under the watchdog is a respawn loop. The first spawn has no probe file, so it is fresh without anyone telling a first spawn from a respawn. Every respawn path (watchdog, `/model`, `/effort`, app restart) goes through the same two launcher methods, so there is one apply path. **Never `--continue`**: it guesses the most recent conversation in a repo directory several sessions share. **Implementers and reviewers still re-enter fresh** through their role command (the channels are their durable state), and **the general supervisor stays stateless** across launches by owner directive (memory = its own CLAUDE.md + the channel read as a LOG — closed/failed requests are never auto-retried on boot; `--continue` once re-ran a failed start and duplicated orchestrations). A resumed session must still trust the CHANNEL over its memory of what it was about to do — the role commands say so.
+8. **Lifecycle (spec AMENDMENT 2, revised):** sessions are always-on while the app runs — pid files (written by the spawned shells) + `SessionWatchdog` respawn anything dead (general supervisor auto-starts); app exit tree-kills every session (and closes their terminal windows); app restart brings everything back. **Resume (revised 2026-09-10, owner request): a SUPERVISOR or SOLO respawn continues its OWN conversation with `claude --resume <session-id>`** — the id comes from the slot's `.usage.json` (the statusline probe already dumps `session_id` + `transcript_path`), and `ResumableSession_Resolver` names it ONLY when that transcript still exists and is non-empty, because `--resume` of an unknown id prints "No conversation found" and exits, which under the watchdog is a respawn loop. The first spawn has no probe file, so it is fresh without anyone telling a first spawn from a respawn. Every respawn path (watchdog, `/model`, `/effort`, app restart) goes through the same two launcher methods, so there is one apply path. **Never `--continue`**: it guesses the most recent conversation in a repo directory several sessions share. **Implementers and reviewers still re-enter fresh** through their role command (the channels are their durable state), and **the general supervisor stays stateless** across launches by owner directive (memory = its own CLAUDE.md + the channel read as a LOG — closed/failed requests are never auto-retried on boot; `--continue` once re-ran a failed start and duplicated orchestrations). A resumed session must still trust the CHANNEL over its memory of what it was about to do — the role commands say so. **After the 2026-09-11 fork merge, this covers only the terminal runner** — gated on `runners.<role>.runner == terminal` AND `runners.<role>.resume == transcript` in the merged config (`IRoleRunnerConfig.Resume`, `AIOrchestratorCoreLib/Running/RoleRunnerConfig/`). **Bridge-driven sessions** (`runners.<role>.runner = print|stream`) are driven by the dispatcher instead of a terminal: `ResumeModes.Transcript` (`AIOrchestratorCoreLib/Running/ResumeModes.cs`) resumes the print session so every turn after the first keeps context, and `ResumeModes.Fresh` starts empty with a state pack rebuilt from disk. Same config key (`Resume`), two runners reading it. **Never `--continue`, in either runner.**
 9. **DND with catch-up:** mute pauses outbound Telegram by FREEZING tailer offsets — unmute (UI, request, or the owner texting anything) delivers all pending traffic in one burst. The general supervisor's "check-in ritual" (summary digest of all orchestrations + pending questions per topic) is protocol.
 10. **Telemetry:** `statusline.ps1` doubles as probe — dumps raw statusline JSON to per-session `.usage.json`; UI shows per-member cost/task/worktree(`WORKTREE:` marker)/time-on-task; engine texts usage-limit alerts at 90/95/97/98/99/100% (schema-tolerant parser — NEEDS LIVE VERIFICATION that this Claude Code version exposes limit data). "Show session" foregrounds a terminal by title (sessions spawn one WT window each, `wt -w new`).
     **Usage figures have ONE reader** (`UsageTotals_Reader`): `Build_PerSourceTotals` is the
@@ -39,16 +39,12 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     cards, the detail window, `/tokens` and `/cost` can never disagree — and every source passes
     exactly once through the respawn accumulator. `/cost` is the money reading (per-session share
     + burn rate, suppressed under 15 min as meaningless); `/tokens` is the token reading.
-11. **~~`/italian` toggles the translation layer~~ — THE TRANSLATION LAYER IS GONE (owner
-    decision 2026-09-09).** The app no longer translates anything: the `Translation/` tree, the
-    `telegramItalianLayer` key, `Create_WithItalianLayer`, the `/italian` command and the status-bar
-    checkbox were all removed. Roles handle languages themselves — with the owner a role writes in
-    the language the owner used; files, code, commits, the ledger and every channel entry addressed
-    to another agent stay English. Kept switched off the layer was not merely dead: turned back on it
-    would have fed already-Italian prose through an English→Italian prompt, and the unchanged text
-    coming back reads as a failed translation, so a correct message got stamped with a flag. What
-    survives of this decision is the rule it taught, which is decision 14's neighbour: nothing may put
-    an output of the outbound pipeline back into its input side.
+11. **`/italian` toggles the translation layer** from the phone, and the app's status-bar
+    checkbox mirrors it. Unlike 🌙/🔕 (passing state, in-memory) this one is PERSISTED to
+    config.json — the provider reloads on the file's write stamp, so there is no in-memory copy to
+    keep in step. Use `OrchestratorConfig_Factory.Create_WithItalianLayer` rather than restating
+    every field.
+    **Pending the owner's decision in the 2026-09-11 spec §11.1** (`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md`, on branch `feat/fork-merge-and-profiles-spec`, not in this worktree): the fork deleted this layer entirely — no `Translation/` tree, no `telegramItalianLayer` key, no `/italian` command — on the rule "with the owner, write in the owner's language" instead. That deletion is NOT adopted here; this decision's text is master's until the owner answers §11.1.
 12. **Channel headers are AGENT-WRITTEN — treat `[n]` and the timestamp as untrusted input.** Both
     are guesses unless the agent re-read the file: on 2026-08-10 `option-lab-2` carried two `[80]`
     and two `[81]` entries, and a supervisor stamped `2026-08-11 01:34` on an entry written at
@@ -87,18 +83,18 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     deliverable (own review cycle, worktree, or ledger line); one deliverable going faster is fan-out,
     and ledger lines never shatter into units. Spec:
     `docs/superpowers/specs/2026-08-11-implementer-parallel-fanout-design.md`.
-17. **The APP is the delivery path for the kit — `install.ps1` is bootstrap only.**
-    `AIOrchestrator.csproj` copies `kit/commands/*.md` and the statusline into the app's output
-    folder, and `KitAssets_Installer` overwrites `~/.claude/commands` from THAT folder at every
-    startup. So editing `kit/commands/` is not delivery: without `dotnet build AIOrchestrator.slnx`
-    the next app launch silently reverts every change back to the stale build output. Verify a kit
-    change AFTER an app restart, never just after a copy — a `diff` taken between the two reads
-    IDENTICAL and means nothing. `kit/install.ps1` is for a fresh machine that has not built yet.
-    **And the build must be the MAIN checkout's, never a worktree's:** `dotnet build` inside a
-    worktree lands in THAT worktree's output folder, which the running app never reads — so a kit
-    change can be edited, built, tested and reported as verified while the app keeps installing the
-    old one. Since implementer work happens in worktrees by default, this is the normal case, not the
-    exception.
+17. **The APP VERIFIES the kit plugin; it never copies commands.** `KitAssets_Bootstrapper`
+    (`AIOrchestratorCoreLib/Kit/KitAssets_Bootstrapper.cs`) runs in BOTH hosts at startup — the WPF
+    app and the daemon (`AIOrchestrator/App.xaml.cs`, `AIOrchestrator.Daemon/BridgeHost_Service.cs`):
+    it unwires legacy hooks, moves aside legacy `~/.claude/commands` files, installs only the
+    statusline, and records a verdict (`PluginVerdicts`) on the `IPluginGate`
+    (`AIOrchestratorCoreLib/Kit/PluginGate/`) — SPAWNING is refused on a mismatch, the bridge keeps
+    running regardless. Delivery is `kit/install.ps1` / `kit/install.sh`: they register this checkout
+    as the `aiorch-local` marketplace and install `aiorch@aiorch-local` at user scope, reinstalling on
+    a content mismatch (`kit-and-scripts` rule: "it never copies commands into `~/.claude/commands` —
+    a local command beats a plugin skill for the slash word"). A running app built from a stale
+    checkout still only verifies against ITS OWN build's commit — decision 23 still applies: the
+    binary that is actually running is what matters, not what `git log` says is merged.
 18. **SAY WHICH COPY YOU READ — installed, built, or branch source.** Every file in this system
     exists three times: the branch source (`kit/…`), the app's build output, and the installed copy
     (`~/.claude/commands`, `~/.claude/hooks`). They drift, and a finding about one is not a finding
@@ -158,6 +154,9 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     builds. **To read a running binary** (metadata names are UTF-8, string literals are UTF-16LE —
     an ASCII `grep` returns confident false negatives): search the DLL for
     `"Some_Method_Name".encode('utf-8')` and `"a literal".encode('utf-16-le')`.
+    **`KitAssets_Bootstrapper` replaces `KitAssets_Installer` in that paragraph** (decision 17,
+    rewritten for the 2026-09-11 fork merge) — the fourth-copy trap is unchanged: it is still the
+    RUNNING binary's bootstrapper that decides what gets installed and verified, not the source tree.
 
 24. **`/model` and `/effort` from the phone (owner request 2026-09-09) — never a guess, one apply path,
     stateless buttons.** Bare `/model` or `/effort` answers with buttons; a typed value resolves through
@@ -200,6 +199,20 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     append, so a guard answered before that wait describes a file that has since grown — entry 137
     was kept by the rewrite and parked behind the re-anchored cursor, in the file and never on the
     phone. The step's old docstring called that window "microseconds"; it was the length of an append.
+
+26. **The fork merge of 2026-09-11 (plan 01).** A fork developed headless on a Linux VPS
+    (`nathanthegrey/AIOrchestrator`, see `.claude/rules/git-and-boundaries.md` and
+    `docs/MODIFICHE-DEL-FORK.md` for its own account) was merged into the owner's master on
+    `integration/fork-merge`: **the fork's structure won every conflicted file**, and master's
+    features and intent (decisions 8's resume rule, 17's kit delivery rule, the Telegram/pause/
+    question-hold decisions above, etc.) were **re-ported by hand across a numbered task series**,
+    ledgered in `docs/superpowers/plans/2026-09-11-fork-merge-01-report.md` — that ledger is the
+    audit trail for which side's code is actually running where. Spec:
+    `docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md` (this spec file
+    lives on branch `feat/fork-merge-and-profiles-spec`, not in the merge worktree or on
+    `integration/fork-merge` — read it from that branch, not here). Two names for the same repo
+    persist for now: `.claude/rules/` still describes fork/upstream boundaries that a merged repo has
+    already outgrown (see the git-and-boundaries rule) — that is a known staleness, not yet resolved.
 
 ## Resolved Decisions (2026-08-06, owner)
 
@@ -266,13 +279,38 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
 
 **`docs/superpowers/specs/2026-08-06-ai-orchestrator-design.md` is the approved design** — read it before changing architecture. This file stays the quick context; the spec is the authority.
 
+**`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md`** covers the
+2026-09-11 fork merge (decision 26) and per-user profiles. It lives on branch
+`feat/fork-merge-and-profiles-spec`, not on `integration/fork-merge` or in this worktree — check out
+that branch (or `git show` the path from it) to read it.
+
 ## Repository Structure
 
 ```
-AIOrchestrator.slnx        ← solution (repo root = solution level)
-AIOrchestrator/            ← the desktop app project (currently the raw VS template)
-CLAUDE.md                  ← this file
-docs/superpowers/specs/    ← design specs (pending)
+AIOrchestrator.slnx           ← solution (repo root = solution level)
+AIOrchestrator/                ← the WPF desktop app host
+AIOrchestrator.Daemon/          ← the headless bridge host (systemd/launchd/Windows service)
+AIOrchestratorCoreLib/          ← the shared engine: Bridge, Channels, Running, Kit, Launching, Composition, …
+AIOrchestratorCoreLib.Tests/    ← xUnit test suite (see .claude/rules/code-conventions.md)
+tools/
+  claude-contract/              ← contract tests against the real/fake `claude` CLI (FakeClaude harness)
+  token-gate/
+  ledger-sampler/
+kit/                            ← the `aiorch` Claude Code plugin + local marketplace (decision 17)
+  .claude-plugin/                ← marketplace.json, plugin.json
+  skills/                        ← one skill per role (supervisor, implementer, reviewer, solo, communicator, general-supervisor, subagents)
+  bin/                           ← channel-append.sh and other plugin executables
+  hooks/
+  grammar/
+  statusline/
+deploy/                        ← systemd unit, launchd plist, Windows service script, ledger-sampler deploy
+docs/
+  MODIFICHE-DEL-FORK.md          ← the fork author's own narrative (Italian)
+  investigations/
+  superpowers/                    ← specs, plans, sdd task briefs/reports (this task's brief lives here)
+CLAUDE.md                      ← this file
+HANDOFF.md                     ← in-progress work carried across sessions, when present
+README-daemon.md               ← daemon-specific run/deploy notes
 ```
 
 ## Conventions
