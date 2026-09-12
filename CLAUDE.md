@@ -186,29 +186,47 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     is no longer `is_persistent`: that flag re-shows the bar whenever the phone keyboard hides (which is
     what the back button does) and disables the icon that collapses it.
 
-25. **THE OWNER'S ANSWER CREDIT: raised at DELIVERY, never spent on a status line, and everything
-    filed inside the reply turn reaches the phone at turn end** (owner reports 2026-09-10 —
-    `da-vinci-fintech-suite-31` entries 137, 183, 202 and the `/merge` silence). `OwnerPush_Policy`
-    pushes an owner-channel entry only if it asks, is blocked, carries a picture, or is THE answer:
-    `_ownerAwaitingAnswer`, one credit, consumed by the first push. **That drop writes NOTHING at any
-    log level** — for a missing entry, `[owner] entry #N FROM Solo` present with no `mirror send
-    failed` line means the push policy suppressed it; absent means it was never tailed. Three drops
-    came from the credit: a `WAITING ON …` SUBJECT (the run-to-the-end hook's own marker) spent it
-    seconds before the real answer; it was raised at buffering, so a line written before the owner's
-    message even landed spent it; and the suppressed memo was one slot, so the status line written
-    after the answer overwrote it and the turn-ended receipt delivered the wrong text. Now
-    `Is_TurnEndDeclaration` (subject only — bodies end with `WAITING ON` lines by habit, so the body
-    says nothing) leaves the credit open; `Raise_OwnerWait` runs at delivery and from `/merge`, which
-    opens the same `Track_OwnerReply` tracker an owner message does (its completion report is the
-    credited answer, its turn end is announced); `_suppressedEntries` is a LIST and
-    `Build_TurnEndedText` sends everything filed since the owner's message as one message; the busy
-    notice is gated on `!pending.Answered`. The credit stays ONE-SHOT on purpose —
-    `OwnerAnswerSurvivesFailedSendTests` pins that narration after the answer is not pushed, because
-    that was the waterfall. **And the compaction guard is asked INSIDE the channel gate**
+25. **THE OWNER'S ANSWER CREDIT: raised at DELIVERY, one-shot, and never spent on a status line**
+    (owner reports 2026-09-10 — `da-vinci-fintech-suite-31` entries 137, 183, 202 and the `/merge`
+    silence). **What this tree actually contains:** `_ownerAwaitingAnswer` is the credit, raised by
+    `Raise_OwnerWait` at DELIVERY (`Flush_OwnerDeliveries_Async`, and `/merge`, which opens the same
+    `Track_OwnerReply` tracker an owner message does — its completion report is the credited answer
+    and its turn end is announced), and `Is_TurnEndDeclaration` reads the SUBJECT only (bodies end
+    with `WAITING ON` lines by habit, so the body says nothing) so a turn-end declaration cannot
+    CONSUME it. Three drops came from the credit: a `WAITING ON …` SUBJECT (the run-to-the-end hook's
+    own marker) spent it seconds before the real answer; it was raised at buffering, so a line
+    written before the owner's message even landed spent it; and the suppressed memo was one slot, so
+    the status line written after the answer overwrote it and the turn-ended receipt delivered the
+    wrong text. The busy notice is gated on `!pending.Answered`.
+    **What is NOT here, and the diagnostic that goes with it.** The narration FILTER is gone — the
+    fork abolished it on 2026-09-09 on the owner's ruling (*"if the supervisor writes to me, I must
+    know it — that rings"*), and this merge kept that. So on this build `OwnerPush_Policy.Should_Push`
+    pushes EVERY supervisor entry on the owner channel except an empty body and the owner's own words
+    quoted back (`Is_OwnerRestatement`); its `ownerIsWaitingForAReply` parameter is **unread**, which
+    means the credit is live in the engine and INERT at the push. There is no `_suppressedEntries`
+    list anywhere in `AIOrchestratorCoreLib/` and no turn-end digest: `Build_TurnEndedText` says so
+    itself, its "last words" half deleted with the filter. `OwnerAnswerSurvivesFailedSendTests` still
+    pins that the answer survives a failed send, but its "narration after the answer is not pushed"
+    oracle was RETIRED with the filter — the file's own comment records it — and it now pins the
+    opposite: the channel is not wedged afterwards. **So the old recipe "entry #N present with no
+    `mirror send failed` line means the push policy suppressed it" WOULD MISDIAGNOSE a live incident
+    on this tree.** Read a missing entry this way instead: absent from the log entirely ⇒ never
+    tailed; `[owner] entry #N FROM …` present with no `mirror send failed` ⇒ look at the QUESTION
+    HOLD, not at the filter — `QuestionHold_Policy` parks an owner channel whose orchestration is
+    awaiting an answer (a `held entry #N` line says so), the topic may be Silenced or Deferred, or
+    the entry was an owner restatement. The filter, the suppression list and the turn-end digest are
+    **plan 03's (`phone.push = filtered`) to restore as a per-user setting** — the protective half of
+    the credit landed here precisely so it is correct the day they return.
+    **And the compaction guard is asked INSIDE the channel gate**
     (`Channel_Compactor.Compact_IfNeeded(path, mayRewrite)`): the compactor queues behind a session's
     append, so a guard answered before that wait describes a file that has since grown — entry 137
     was kept by the rewrite and parked behind the re-anchored cursor, in the file and never on the
     phone. The step's old docstring called that window "microseconds"; it was the length of an append.
+    **The held-append prefix memo dies with its append** (2026-09-12): `_deliveredEntriesOfHeldAppend`
+    counts entries POSITIONALLY, so it is only valid while the cursor has not advanced — it is
+    cleared on every non-`Held` exit of `Mirror_Append_Async`, in one place. Two early `Delivered`
+    returns (nothing mirrorable, a silenced topic) used to leave it behind, and a topic silenced
+    while a question was held then ate the front of the NEXT append, silently and with no log line.
 
 26. **The fork merge of 2026-09-11 (plan 01).** A fork developed headless on a Linux VPS
     (`nathanthegrey/AIOrchestrator`, see `.claude/rules/git-and-boundaries.md` and

@@ -155,6 +155,15 @@ public static class OwnerPush_Policy
     /// spent their wait — the real answer that followed then read as narration.
     /// </para>
     /// </summary>
+    /// <param name="ownerIsWaitingForAReply">
+    /// CURRENTLY UNREAD — kept so the call sites do not have to be rebuilt when the filter returns.
+    /// It was the filter's "the owner is waiting for this one" arm, and on this build the credit it
+    /// carries is inert AT THE PUSH: the credit machinery is live in the engine (raised at delivery,
+    /// one-shot, never spent by a `WAITING ON` subject), but nothing here consults it. The filter and
+    /// the turn-end digest belong to plan 03 (`phone.push = filtered`); this parameter is what makes
+    /// the surrounding prose read as though they were already here.
+    /// </param>
+    /// <param name="subject">Also unread on this build, and for the same reason.</param>
     public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply, string? subject = null)
     {
         // An entry with no body is nothing to read. Not a filter — a guard against sending an empty
