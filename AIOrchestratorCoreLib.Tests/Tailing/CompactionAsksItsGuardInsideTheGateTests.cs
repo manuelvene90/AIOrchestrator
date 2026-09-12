@@ -1,5 +1,6 @@
 using System.Text;
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Time.Clock;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
@@ -40,6 +41,9 @@ public class CompactionAsksItsGuardInsideTheGateTests : IDisposable
 
     const string ORCH_ID = "orch-x";
 
+    /// <summary>Short enough that the polls below span it; the rule itself is not this file's subject.</summary>
+    static readonly TimeSpan TRAILING_ENTRY_QUIET = TimeSpan.FromMilliseconds(20);
+
     readonly string _tempFolder;
     readonly string _channelFile;
     readonly IDiscoveredChannel _channel;
@@ -62,7 +66,11 @@ public class CompactionAsksItsGuardInsideTheGateTests : IDisposable
     {
         Write_LongChannel();
 
-        var tailer = ChannelTailer_Factory.Create_Fresh();
+        // A SHORT TRAILING QUIET, because this file's subject is the compaction guard and not the
+        // tailer's quiet rule. The shipped 4 s hold on a trailing entry is wall-clock, so the six
+        // rapid polls below would return nothing at all and the "was it mirrored" assertion would
+        // fail for a reason that has nothing to do with the gate.
+        var tailer = ChannelTailer_Factory.Create_Fresh(TRAILING_ENTRY_QUIET, Clock_Factory.Create_System());
         var log = new RecordingLog();
 
         // First sight registers the file at its end and emits nothing; the channel now counts as polled.
@@ -116,6 +124,10 @@ public class CompactionAsksItsGuardInsideTheGateTests : IDisposable
                 entries.AddRange(append.Entries);
                 tailer.Confirm_Append(append.Channel.FilePath);
             }
+
+            // The trailing entry is released only after a quiet stretch of WALL CLOCK, so the polls
+            // have to be spread across one rather than fired back to back.
+            Thread.Sleep((int)TRAILING_ENTRY_QUIET.TotalMilliseconds + 10);
         }
 
         return entries;

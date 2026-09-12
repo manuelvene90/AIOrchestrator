@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
@@ -20,8 +21,14 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// no question in it, so OwnerPush_Policy filed it as narration, and the only route left to the
 /// phone was the five-minute silent-deadlock release, wearing a "nothing has moved" warning.
 ///
-/// THE REPORT CARRIES NO QUESTION MARK AND NO MARKER, on purpose: the owner waiting is the only route
-/// to it being pushed, so a green here pins that /merge raised the wait and nothing else.
+/// ADAPTED TO THIS BUILD, and the adaptation is the honest half of the re-port. Master could pin
+/// this through the PUSH — the report carries no question mark and no marker, so the owner waiting
+/// was the only route to the phone. Here everything the supervisor writes is pushed (owner's ruling,
+/// 2026-09-09), so "the report arrived" proves nothing about the tracker and the narration that
+/// follows it is pushed too. What /merge opening the tracker still decides, and nothing else does,
+/// is that the request is FOLLOWED TO ITS END: the report is counted as the answer and the turn end
+/// is resolved. That is what the assertions read. The phone-visible "turn ended" wording master
+/// asserted is the suppression digest's, and comes back with it in plan 03.
 /// </summary>
 public class MergeCommandOpensTheReplyTrackerTests : IDisposable
 {
@@ -30,7 +37,6 @@ public class MergeCommandOpensTheReplyTrackerTests : IDisposable
     const long TOPIC_ID = 4444;
 
     const string REPORT_TEXT = "Merged as 3f2a1c9, 214 tests green on the merged tree, worktree and branch removed.";
-    const string NARRATION_TEXT = "Tidying the remaining worktrees now that the branch is gone.";
 
     readonly string _tempRoot;
     readonly string _tempRepo;
@@ -64,7 +70,7 @@ public class MergeCommandOpensTheReplyTrackerTests : IDisposable
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
     public void Dispose()
@@ -93,37 +99,24 @@ public class MergeCommandOpensTheReplyTrackerTests : IDisposable
 
         Assert.True(
             await Run_Until_Async(() => _telegram.Has_Sent_Containing(REPORT_TEXT), 20_000),
-            "THE DEFECT: /merge raised no wait, so the session's completion report was filed as "
-            + "narration and the owner was never told the merge happened."
+            "the session's completion report never reached the phone at all."
             + $"{Environment.NewLine}Sent:{Environment.NewLine}{string.Join(Environment.NewLine, _telegram.Sent_Texts())}"
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
 
-        // 3 — the request is tracked to its end: the session answered and is idle, so the turn end
-        // is announced exactly as it is for a typed owner message.
+        // 3 — THE DEFECT. The request is tracked to its end: the report is counted as the answer and
+        // the turn end is resolved, exactly as it is for a typed owner message. Without the tracker
+        // there is no pending reply for /merge at all, so nothing here ever runs.
+        //
+        // Read from the log rather than from a sent message BECAUSE this build says nothing on the
+        // phone once the owner has been answered — Build_TurnEndedText returns null and the resolver
+        // logs that it did (owner, 2026-09-07: the second of two status messages per exchange). The
+        // line is only ever written from inside Announce_SupervisorFree_Async, which only a tracked
+        // reply reaches.
         Assert.True(
-            await Run_Until_Async(() => Was_Sent_Containing("turn ended"), 20_000),
-            "the report was pushed but no turn-ended announcement followed — /merge is not being "
+            await Run_Until_Async(() => _log.Has_Info_Containing("Turn ended after the owner was answered"), 20_000),
+            "the report was pushed but /merge's reply was never resolved — /merge is not being "
             + "tracked as a reply the way an owner message is."
-            + $"{Environment.NewLine}Sent:{Environment.NewLine}{string.Join(Environment.NewLine, _telegram.Sent_Texts())}");
-
-        // 4 — AND THE WAIT IS SPENT: what the session says afterwards is narration again.
-        Append_SupervisorEntry(orchId, 3, "progress", NARRATION_TEXT);
-
-        Assert.False(
-            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 12_000),
-            "the report was delivered but the owner's wait was never consumed, so ordinary narration "
-            + "is still being pushed to their phone");
-    }
-
-    bool Was_Sent_Containing(string fragment)
-    {
-        foreach (var text in _telegram.Sent_Texts())
-        {
-            if (text.Contains(fragment, StringComparison.Ordinal))
-                return true;
-        }
-
-        return false;
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
     }
 
     void Seed_OwnerChannel(string orchId)
@@ -140,7 +133,7 @@ public class MergeCommandOpensTheReplyTrackerTests : IDisposable
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
         Seed_OwnerChannel(session.OrchId);
 
-        await Run_For_Async(4_000);
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(3));
 
         return session.OrchId;
     }

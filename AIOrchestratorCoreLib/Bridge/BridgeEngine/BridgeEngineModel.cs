@@ -669,10 +669,17 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
-    /// How many mirrorable entries of a HELD append already reached the phone, per channel file. The
+    /// How many mirrorable entries of a HELD append were already DEALT WITH, per channel file. The
     /// tailer confirms whole appends, so a partially delivered one is re-emitted in full; without
     /// this the entries sent before the hold would be texted again on every poll for as long as the
     /// owner took to answer.
+    ///
+    /// <para>
+    /// DEALT WITH, NOT SENT, and the difference is the whole correctness of it: the resume skips this
+    /// many entries POSITIONALLY, without looking at them, so an entry the push policy refused counts
+    /// here exactly like one that was texted. Counting only the sent ones left the prefix short by
+    /// one per suppressed entry and re-sent something the owner already had.
+    /// </para>
     ///
     /// In memory, like the rest of the mirror's in-flight state: losing it on a restart costs a
     /// duplicate message, which is the at-least-once contract this component already documents,
@@ -3893,7 +3900,15 @@ internal sealed class BridgeEngineModel(
                 // The subject is still passed because Should_Push's signature carries it for the
                 // callers that predate this change.
                 if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting, entry.Subject))
+                {
+                    // COUNTED, THOUGH NOTHING WAS SENT. The held-append memo is POSITIONAL — the
+                    // resume skips the first `alreadyDelivered` entries of the re-emitted append —
+                    // so it has to count entries CONSUMED, not entries sent. Counting only the sent
+                    // ones left the prefix short by one for every suppressed entry ahead of a sent
+                    // one, and the resume then re-sent an entry the owner already had.
+                    deliveredHere++;
                     continue;
+                }
 
                 lock (_ownerStateLock)
                 {
@@ -4018,7 +4033,15 @@ internal sealed class BridgeEngineModel(
                 // phone, so what follows is narration again. Anything that threw above skipped this
                 // line with the flag still raised, which is what makes the retry deliver the answer
                 // instead of re-classifying it.
-                if (answersTheOwnersWait)
+                //
+                // …AND NOT BY A STATUS LINE. Sessions write their turn-end declaration ("WAITING ON
+                // the re-review — fix landed") in the seconds BEFORE the actual answer, and the
+                // credit is one-shot: on 2026-09-10 the declaration took it three times in one topic
+                // and the answer that followed was filed as narration. Such an entry is delivered
+                // like any other — it simply leaves the credit open for the entry that is really the
+                // answer. Judged on the SUBJECT alone: bodies end with a "WAITING ON …" line by
+                // habit, answers included, so the body says nothing about what the entry IS.
+                if (answersTheOwnersWait && !OwnerPush_Policy.Is_TurnEndDeclaration(entry.Subject))
                 {
                     lock (_ownerStateLock)
                     {
@@ -4216,6 +4239,68 @@ internal sealed class BridgeEngineModel(
     bool Is_AwaitingAnswer(string orchId)
     {
         return Status.AwaitingAnswerFlag_Marker.Is_Raised(_paths, orchId);
+    }
+
+    /// <summary>
+    /// THE OWNER'S ANSWER CREDIT IS RAISED HERE AND NOWHERE ELSE. The owner has just been heard by
+    /// the session — a message delivered to its channel, or a command that asks it to act — so
+    /// whatever it says next is the answer, and it MUST reach them.
+    ///
+    /// <para>
+    /// RAISED AT DELIVERY, NEVER AT BUFFERING. Raised early, the credit went to whatever the session
+    /// happened to write during the aggregation window — on 2026-09-10 a status line written one
+    /// second before the owner's entry even landed in the channel, so the session could not possibly
+    /// have been answering it — and the real answer that followed was filed as narration.
+    /// </para>
+    /// <para>
+    /// NOT THE <c>.awaiting-answer</c> FILE, which is a different fact with a similar name: that one
+    /// says the APP asked the owner a question and is holding the mirror until they reply
+    /// (<see cref="Is_AwaitingAnswer"/>). This set says the OWNER asked and is owed a reply.
+    /// </para>
+    /// <para>
+    /// Plan 03 adds the suppressed-entry clear here, when the narration filter — and the list of
+    /// entries it holds back — comes back with `phone.push = filtered`.
+    /// </para>
+    /// </summary>
+    void Raise_OwnerWait(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            _ownerAwaitingAnswer.Add(orchId);
+        }
+
+        // R1 SURVIVES A RESTART TOO. The flag is what makes the answer to the owner's own question
+        // push instead of being re-read as narration, and losing it while an answer was still in
+        // flight dropped that answer silently — the exact failure R1 names, reached by closing the
+        // app instead of by a failed send.
+        Persist_EngineState();
+    }
+
+    /// <summary>
+    /// Tracks the reply until the session answers AND its turn ends — the one construction site for
+    /// <see cref="PendingOwnerReply"/>, shared by a delivered owner message and by <c>/merge</c>,
+    /// which is an owner request in every way that matters and was the only one the app forgot to
+    /// watch (owner, 2026-09-10: *"The solo/sup does merge, clean, etc, but doesn't tell me anything
+    /// at completion"*).
+    /// </summary>
+    void Track_OwnerReply(string orchId, long? threadId, long? receiptMessageId, bool receiptWasReaction, int ownerAnswerCountAtDelivery)
+    {
+        lock (_ownerStateLock)
+        {
+            _pendingOwnerReplies[orchId] = new PendingOwnerReply
+            {
+                ThreadId = threadId,
+                ReceiptMessageId = receiptMessageId,
+
+                // Publish returns null for BOTH "the reaction landed" and "there was nothing to
+                // edit", so the fact is taken from the receipt path itself rather than inferred
+                // from a null.
+                ReceiptWasReaction = receiptWasReaction,
+                OwnerAnswerCountAtDelivery = ownerAnswerCountAtDelivery,
+                DeliveredUtc = DateTime.UtcNow,
+                Nudged = false,
+            };
+        }
     }
 
     /// <summary>Silence is TOTAL for a topic: its mirrored entries AND its alerts.</summary>
@@ -5093,12 +5178,11 @@ internal sealed class BridgeEngineModel(
                     // answers something asked, or reports being blocked). The orchestration would come
                     // up, get a topic, do the work and tell the owner nothing — asked from the phone,
                     // answered into a room the phone never rang for.
-                    lock (_ownerStateLock)
-                        _ownerAwaitingAnswer.Add(session.OrchId);
-
-                    // Persisted for the reason R1 gives about its own flag: an answer in flight across
-                    // a restart must not be silently downgraded to narration on the way back up.
-                    Persist_EngineState();
+                    //
+                    // THE TASK IS ALREADY IN THE CHANNEL at this point (taskFiled), so this IS the
+                    // delivery moment for it — the same instant Flush_OwnerDeliveries_Async raises it
+                    // for a typed message.
+                    Raise_OwnerWait(session.OrchId);
                 }
 
                 var crew = isBasic
@@ -8592,6 +8676,10 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // Counted BEFORE the ritual lands, exactly as Flush_OwnerDeliveries_Async counts before an
+        // owner entry: a later rise can only mean the session wrote back about THIS request.
+        var ownerAnswerCountBefore = Count_OwnerAnswerEntries(_paths.Get_OwnerChannelFile(session.OrchId));
+
         if (!Append_OrchestrationAppEntry(session.OrchId, AppEntryAudiences.Agent, MergeRitual_Wording.SUBJECT, MergeRitual_Wording.Build()))
         {
             // Told rather than swallowed: the session's own report is the only other feedback this
@@ -8606,10 +8694,22 @@ internal sealed class BridgeEngineModel(
 
         Raise_OrchestrationActivity(session.OrchId);
 
-        await Send_DirectReply_BestEffort_Async(
+        var receiptMessageId = await Send_DirectReply_BestEffort_Async(
             client, messageThreadId,
             "Asked. It merges, runs the full suite on the merged tree, and pushes only if that is green — then cleans up and reports.",
             cancellationToken);
+
+        // /merge IS AN OWNER REQUEST, and it was the one the app never watched. The ritual lands as
+        // an agent-tagged app entry, so nothing raised the owner's wait and nothing tracked the
+        // reply: the session's report — "merged as 3f2a1c9, 214 tests green" — was never credited as
+        // the answer, and its turn end was never announced (owner, 2026-09-10: *"I never quite know
+        // if the merge has actually been done or not"*). Now the report is the credited answer, the
+        // "Asked." line above is the receipt the busy narration edits, and the turn-ended
+        // announcement closes it.
+        //
+        // The receipt is a real message, never a reaction: there is no owner message to react to.
+        Raise_OwnerWait(session.OrchId);
+        Track_OwnerReply(session.OrchId, messageThreadId, receiptMessageId, receiptWasReaction: false, ownerAnswerCountBefore);
     }
 
     async Task Toggle_AwaitingTest_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
@@ -11913,7 +12013,13 @@ internal sealed class BridgeEngineModel(
     /// owner's ruling covers all of them — *"status, receipts and app bookkeeping do not ring"*. The
     /// few that must ring say so at the call site, which is the only reason it is a parameter at all.
     /// </summary>
-    async Task Send_DirectReply_BestEffort_Async(
+    /// <summary>
+    /// Returns the id of the message it sent, or null if there was none (a refused send, a sender
+    /// that produced no message). Nearly every caller ignores it; <c>/merge</c> does not — that
+    /// reply is the RECEIPT its pending-reply tracker edits, exactly as the ✓ is for a typed owner
+    /// message, so the id has to come back out of here rather than be sent a second time.
+    /// </summary>
+    async Task<long?> Send_DirectReply_BestEffort_Async(
         ITelegramApiClient client,
         long? messageThreadId,
         string text,
@@ -11928,9 +12034,11 @@ internal sealed class BridgeEngineModel(
             // its markers showing — while the client's own doc comment claimed every owner-facing
             // send was HTML. The sender falls back to plain text on a parse refusal, so the worst
             // case is exactly today's behaviour.
-            Remember_TopicMessage(
-                messageThreadId,
-                await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, messageThreadId, text, sound, cancellationToken));
+            var messageId = await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, messageThreadId, text, sound, cancellationToken);
+
+            Remember_TopicMessage(messageThreadId, messageId);
+
+            return messageId;
         }
         // FILTERED — THE TOKEN DECIDES, which is this file's canonical account (see
         // Refresh_TopicStatusLines_Async) applied to the one best-effort sender that still had the
@@ -11949,6 +12057,8 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Direct reply send failed: {ex.Message}");
+
+            return null;
         }
     }
 
@@ -13371,21 +13481,12 @@ internal sealed class BridgeEngineModel(
             _stallAlertedQuestionKeyByOrchId.Remove(orchId);
         }
 
-        // The owner is engaged, so nothing is deadlocked — a suppressed entry from before must not
-        // surface later, out of context, as if it were still waiting for them.
-        lock (_ownerStateLock)
-        {
-
-            // Whatever the supervisor says next is the answer to this, and it MUST reach them.
-            _ownerAwaitingAnswer.Add(orchId);
-        }
-
-        // R1 SURVIVES A RESTART TOO, which it did not before. The flag is what makes the answer to
-        // the owner's own question push instead of being re-read as narration, and losing it while
-        // an answer was still in flight dropped that answer silently — the exact failure R1 names,
-        // reached by closing the app instead of by a failed send.
-        Persist_EngineState();
-
+        // THE ANSWER CREDIT IS NOT RAISED HERE. This is the BUFFERING moment: the owner's words are
+        // in the aggregation window and are not in the channel yet, so a session writing right now
+        // cannot be answering them — and on 2026-09-10 exactly that happened, a status line written
+        // one second before the entry landed took the one-shot credit and the real answer that
+        // followed was filed as narration. Raise_OwnerWait runs at DELIVERY, from
+        // Flush_OwnerDeliveries_Async.
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
 
@@ -13519,6 +13620,11 @@ internal sealed class BridgeEngineModel(
         }
 
         _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
+
+        // DELIVERED — so from this instant whatever the session says next is the answer, and it must
+        // reach them. Raised here rather than at buffering: see Raise_OwnerWait.
+        Raise_OwnerWait(target.OrchId);
+
         Raise_OrchestrationActivity(target.OrchId);
 
         // AN OWNER MESSAGE PUTS THE LEDGER IN DEBT, exactly as a verdict does, and this is the half
@@ -13574,23 +13680,9 @@ internal sealed class BridgeEngineModel(
             await Show_Typing_BestEffort_Async(_telegramClient, target.ThreadId, cancellationToken);
 
             // Tracked until the supervisor actually answers — the owner must never be left
-            // with a bubble that never resolves into anything.
-            lock (_ownerStateLock)
-            {
-                _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
-                {
-                    ThreadId = target.ThreadId,
-                    ReceiptMessageId = receiptMessageId,
-
-                    // Publish returns null for BOTH "the reaction landed" and "there was nothing to
-                    // edit", so the fact is taken from the receipt path itself rather than inferred
-                    // from a null.
-                    ReceiptWasReaction = receiptWasReaction,
-                    OwnerAnswerCountAtDelivery = ownerAnswerCountBefore,
-                    DeliveredUtc = DateTime.UtcNow,
-                    Nudged = false,
-                };
-            }
+            // with a bubble that never resolves into anything. ONE construction site, shared with
+            // /merge, which is an owner request in every way that matters.
+            Track_OwnerReply(target.OrchId, target.ThreadId, receiptMessageId, receiptWasReaction, ownerAnswerCountBefore);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -15471,7 +15563,13 @@ internal sealed class BridgeEngineModel(
                 // NOT WHILE QUEUED. "You have been mid-turn since it arrived" is false of a session
                 // that has not started, and the entry would only be read when the queued turn — which
                 // already carries the owner's message — finally runs. Written once it is running.
-                if (!supervisorQueued
+                // NOT TO A SESSION THAT HAS ALREADY ANSWERED. The notice says the owner's message is
+                // "still unanswered", and it ignored Answered: on 2026-09-10 it told a solo that had
+                // replied a minute earlier exactly that, the solo wrote another status line pointing
+                // at its own reply, and THAT extra line is what spent the credit the real answer
+                // needed. The owner quoted the solo's complaint about it the same morning.
+                if (!pending.Answered
+                    && !supervisorQueued
                     && !pending.BusyNoticeWritten
                     && (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds >= OWNER_REPLY_GRACE_SECONDS)
                 {

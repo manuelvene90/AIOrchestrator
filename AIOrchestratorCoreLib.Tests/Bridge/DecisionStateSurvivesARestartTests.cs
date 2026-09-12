@@ -136,12 +136,14 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         var firstTelegram = new CapturingTelegram_Fake();
         var firstEngine = Build_Engine(firstTelegram);
 
-        // The owner speaks, which is what raises the "they are waiting for an answer" flag.
+        // The owner speaks, which is what raises the "they are waiting for an answer" flag — and it
+        // is raised when the message LANDS in the channel, not when it is buffered. A session writing
+        // during the aggregation window cannot be answering a message it has not been given yet.
         firstTelegram.Queue_Updates(Build_OwnerMessageJson("what is the state of the cache work"));
 
         Assert.True(
-            await Run_Until_Async(firstEngine, () => _log.Has_Info_Containing("Owner message buffered"), 15_000),
-            "the owner's message never reached the router, so the waiting flag was never raised."
+            await Run_Until_Async(firstEngine, () => _log.Has_Info_Containing("Owner message delivered"), 40_000),
+            "the owner's message was never delivered to the channel, so the waiting flag was never raised."
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
 
         // THE OWNER'S OUTSTANDING WAIT IS PERSISTED, asserted here rather than at the end because
@@ -155,6 +157,14 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         // baselines a channel it has never seen at its CURRENT length, so anything written before
         // the engine's first pass is absorbed as history and never mirrored at all.
         Append_SupervisorQuestion(session.OrchId, 3, QUESTION_TEXT, FIRST_OPTION, SECOND_OPTION);
+
+        // AND ONE ENTRY BEHIND IT, for the fixed-clock reason spelled out at the SECOND question
+        // below: a file's last entry is released by the next HEADER and by nothing else here. This
+        // used to be the owner's own message, which landed behind the question because the credit was
+        // raised while the message was still BUFFERING and this assertion ran before it was written.
+        // The credit is raised at DELIVERY now (decision 25), so the owner's entry is already in the
+        // file by this line and the question would be the trailing one for ever.
+        Append_SupervisorNote(session.OrchId, 4, "so the question above is no longer the file's last entry");
 
         Assert.True(
             await Run_Until_Async(

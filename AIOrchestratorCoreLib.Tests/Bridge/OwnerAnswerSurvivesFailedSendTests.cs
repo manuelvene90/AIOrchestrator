@@ -133,12 +133,14 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         // behind the starting offset and is never mirrored at all.
         Seed_OwnerChannel(session.OrchId);
 
-        // 1 — the owner asks. This is the only thing that raises the waiting flag.
+        // 1 — the owner asks. This is the only thing that raises the waiting flag, and it is raised
+        // when the message LANDS in the channel (after the aggregation window), not when it is
+        // buffered — an answer the session wrote before it could have read the message is narration.
         _telegram.Queue_OwnerMessage(Build_OwnerMessageJson("is the rebuild done"));
 
         Assert.True(
-            await Run_Until_Async(() => _log.Has_Info_Containing("Owner message buffered"), 10_000),
-            "the owner's message never reached the router, so the waiting flag was never raised");
+            await Run_Until_Async(() => _log.Has_Info_Containing("Owner message delivered"), BridgeTestTiming.Window_ForAggregation(30)),
+            "the owner's message was never delivered to the channel, so the waiting flag was never raised");
 
         // 2 — the supervisor answers, and the send fails.
         Append_SupervisorEntry(session.OrchId, 1, "the answer", ANSWER_TEXT);
@@ -372,6 +374,7 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
     readonly object _lock = new();
     readonly List<string> _attemptedTexts = [];
     readonly List<string> _sentTexts = [];
+    readonly List<string> _sentPhotoPaths = [];
     string? _queuedUpdatesJson;
     string? _failFragment;
     string? _timeoutFragment;
@@ -604,9 +607,30 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// RECORDED, not swallowed. This was a bare `Task.CompletedTask` — the fake accepted photos and
+    /// remembered nothing — so no test in the suite could tell a picture that was uploaded from one
+    /// that was texted as a path.
+    /// </summary>
     public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
+        lock (_lock)
+            _sentPhotoPaths.Add(filePath);
+
         return Task.CompletedTask;
+    }
+
+    public bool Has_SentPhoto(string filePath)
+    {
+        lock (_lock)
+            return _sentPhotoPaths.Any(path => string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Everything that actually left, in order — for the failure messages that have to show it.</summary>
+    public IReadOnlyList<string> Sent_Texts()
+    {
+        lock (_lock)
+            return _sentTexts.ToList();
     }
 
     public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken)
