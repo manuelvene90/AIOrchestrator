@@ -1,10 +1,11 @@
-using AIOrchestratorCoreLib.Channels;
+﻿using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.ClaudeInvocation;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
+using AIOrchestratorCoreLib.Running.SessionSandbox;
 using AIOrchestratorCoreLib.Running.TurnExecutor;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
@@ -244,7 +245,31 @@ public class PrintRunnerReviewFixTests
 
         var dispatcher = PrintTurnDispatcher_Factory.Create(
             harness.Paths, harness.Store, harness.ConfigProvider,
-            TurnExecutor_Factory.Create_All(harness.Paths, ClaudeInvocation_Factory.Create(Path.Combine(harness.RepoPath, "no-such-binary"), []), harness.Log, harness.ConfigProvider),
+            TurnExecutor_Factory.Create_All(
+                harness.Paths,
+                ClaudeInvocation_Factory.Create(Path.Combine(harness.RepoPath, "no-such-binary"), []),
+                harness.Log,
+                harness.ConfigProvider,
+
+                // THE SANDBOX IS PINNED OFF, AND WITHOUT THIS THE CASE DOES NOT EXIST ON LINUX.
+                // Create_All defaults to SessionSandbox_Factory.Create_ForThisMachine, which on a
+                // Linux box with a usable `systemd-run --user --scope` REWRITES the invocation:
+                // the executable becomes systemd-run — which exists — and 'no-such-binary' slides
+                // down into an argument. The process then STARTS perfectly well and fails with an
+                // exit code, so this test stopped exercising a failure to start at all and measured
+                // the ordinary bad-exit path instead. It failed on ubuntu-latest in CI on every run
+                // (2026-09-12, runs 34677151567 and 34701554255 among them) with
+                // `Not found: "failed outside the process"`, while windows-latest passed, because
+                // Windows has no systemd-run and so never wrapped anything. The rewrite itself is
+                // not folklore: SessionSandboxTests already asserts
+                // `Assert.Equal(MemoryLimitedInvocation_Builder.SYSTEMD_RUN, wrapped.Executable)`.
+                //
+                // The fix is NOT to accept either wording: that would silence CI by deleting the
+                // distinction this test exists to pin (an out-of-process failure is counted, versus a
+                // process that ran and returned badly — two different code paths, two different
+                // subjects). Pinning the sandbox off makes the missing binary the executable on every
+                // OS, which is the condition the docstring above describes: `claude` missing from PATH.
+                SessionSandbox_Factory.Create_None()),
             harness.Log,
             TimeSpan.FromMilliseconds(50));
 
