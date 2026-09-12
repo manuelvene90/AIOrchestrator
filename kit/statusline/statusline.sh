@@ -191,6 +191,6 @@ case "$role" in
         ;;
     *)
         # A session the app did not spawn still has a context window, and the owner reads these too.
-        printf '%s\n' "${model} · ${cwd}${context_suffix}"
+        printf '%s\n' "${model}${effort_suffix} · ${cwd}${context_suffix}"
         ;;
 esac
