@@ -1,11 +1,19 @@
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 
-internal sealed class OrchestratorConfigProviderModel(ISupervisionPaths paths) : IOrchestratorConfigProvider
+/// <summary>
+/// <paramref name="log"/> is threaded through to <see cref="OrchestratorConfig_Loader.Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/>
+/// so a mistyped <c>preset</c> word is reported rather than merely swallowed — this is the provider's
+/// <c>Get_Current()</c> that runs on EVERY tick with no try/catch above it, the exact path a typo
+/// used to be able to take down.
+/// </summary>
+internal sealed class OrchestratorConfigProviderModel(ISupervisionPaths paths, IOrchestrationLog? log = null) : IOrchestratorConfigProvider
 {
     readonly ISupervisionPaths _paths = paths;
+    readonly IOrchestrationLog? _log = log;
     readonly Lock _lock = new();
 
     IOrchestratorConfig? _cached;
@@ -25,7 +33,7 @@ internal sealed class OrchestratorConfigProviderModel(ISupervisionPaths paths) :
 
             if (!isCacheFresh)
             {
-                _cached = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+                _cached = OrchestratorConfig_Loader.Load_OrEmpty(_paths, _log);
                 _cachedConfigStampUtc = configStamp;
                 _cachedSecretsStampUtc = secretsStamp;
             }

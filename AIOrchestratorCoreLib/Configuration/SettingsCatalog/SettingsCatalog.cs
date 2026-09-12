@@ -17,9 +17,13 @@ namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 /// this plan and the next ones grow (the WPF window, the web page, the Telegram <c>/settings</c>
 /// menu) all read THIS — none of them carries its own idea of what a key is called, what it
 /// defaults to, or where its value may live. A key that is wrong here is wrong in every one of
-/// them at once, which is why every default below is READ from the constant that already governs
-/// it rather than retyped: a second copy of 900 or of 720 is exactly the drift CLAUDE.md decision
-/// 12 forbids.
+/// them at once, which is why most defaults below are READ from the constant that already governs
+/// them rather than retyped: a second copy of 900 or of 720 is exactly the drift CLAUDE.md decision
+/// 12 forbids. THE SIX MODEL ROWS IN <see cref="Build_Models"/> ARE THE STATED EXCEPTION, and
+/// deliberately the other direction: <see cref="OrchestratorConfig.OrchestratorConfig_Factory"/>'s
+/// six <c>DEFAULT_*_MODEL</c> fields are READ FROM THIS CATALOGUE, not the other way round — a model
+/// row pointing at one of those constants instead would be a type-initializer cycle. See
+/// <see cref="Build_Models"/>'s own doc for why.
 ///
 /// <para>
 /// WHAT THIS IS NOT: it is not a reader and not a writer. It does not consult config.json,

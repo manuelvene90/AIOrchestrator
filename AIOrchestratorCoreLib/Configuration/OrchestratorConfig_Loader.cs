@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.Storage;
@@ -19,13 +20,40 @@ namespace AIOrchestratorCoreLib.Configuration;
 /// </summary>
 public static class OrchestratorConfig_Loader
 {
+    /// <summary>Orch id used for the one app-global entry this loader can produce (a mistyped preset). See <see cref="Resolve_Preset_OrClassic"/>.</summary>
+    const string GLOBAL_ORCH_ID = "";
+
     public static IOrchestratorConfig Load_OrEmpty(ISupervisionPaths paths)
+    {
+        return Load_OrEmpty(paths, log: null);
+    }
+
+    /// <summary>
+    /// Reads config.json and secrets.json, or the shipped defaults when either is missing. Passing
+    /// <paramref name="log"/> lets a mistyped <c>preset</c> word or path be reported instead of merely
+    /// swallowed — see <see cref="Resolve_Preset_OrClassic"/>.
+    ///
+    /// <para>
+    /// AN ABSENT config.json AND AN EMPTY ONE RESOLVE IDENTICALLY (ruling 2026-09-12, task-6 fix
+    /// round 2). This method used to return <see cref="OrchestratorConfig_Factory.Create_Empty"/>
+    /// early when both files were missing, bypassing the preset rung below entirely — so a machine
+    /// with no config.json at all got no preset, while one containing <c>{}</c> got classic. Nothing
+    /// in either shipped preset states a model today, so the difference was invisible; but <c>classic</c>
+    /// carries the owner's effort preference (<c>effort.supervisor</c>/<c>effort.solo</c>), and a
+    /// later task wires effort through this same rung. "Absent" and "empty" are the same statement —
+    /// the owner has said nothing — and must resolve the same way, so the early return is gone: every
+    /// downstream reader below (<see cref="Parse_Repos"/>, <see cref="RunnerConfigs_Json.Parse"/>,
+    /// <see cref="Parse_Guardrails"/>, <see cref="DefaultsSettings_Json.Parse"/>,
+    /// <see cref="TelegramProseSettings_Json.Parse"/>, every <c>Get_*_OrNull</c> helper here) already
+    /// tolerates a null <c>configRoot</c> and answers with the exact same shipped default
+    /// <c>Create_Empty</c> supplied, so this is a pure simplification, not a behaviour change, for
+    /// every setting except the preset-stated ones.
+    /// </para>
+    /// </summary>
+    public static IOrchestratorConfig Load_OrEmpty(ISupervisionPaths paths, IOrchestrationLog? log)
     {
         var configRoot = Read_JsonObject_OrNull(paths.ConfigFile);
         var secretsRoot = Read_JsonObject_OrNull(paths.SecretsFile);
-
-        if (configRoot == null && secretsRoot == null)
-            return OrchestratorConfig_Factory.Create_Empty();
 
         var repos = Parse_Repos(configRoot);
 
@@ -34,8 +62,9 @@ public static class OrchestratorConfig_Loader
         // must see "the owner said nothing" as null — a preset value read one layer lower would arrive as
         // a stated value and shorten the ladder. Nothing is written back: Save() merges, so a preset value
         // stays a preset value and the renderers can still show its origin (spec §6.2, the reviewerModel
-        // rule generalised).
-        var preset = Presets_Loader.Resolve_ForConfig(configRoot).Tree;
+        // rule generalised). Resolved through the safety net below rather than
+        // Presets_Loader.Resolve_ForConfig directly — this path cannot fail.
+        var preset = Resolve_Preset_OrClassic(configRoot, log);
 
         return OrchestratorConfig_Factory.Create(
             repos,
@@ -69,50 +98,71 @@ public static class OrchestratorConfig_Loader
     }
 
     /// <summary>
+    /// <c>Presets_Loader.Resolve_ForConfig</c> throws for an unknown preset word and for a preset
+    /// file that cannot be read or does not parse — correct for a caller that asked for a named
+    /// preset explicitly (ruled 2026-09-12, task-6 fix round 2 — the class doc's own reasoning still
+    /// applies there). It is wrong for THIS path: config LOADING cannot fail, because
+    /// <see cref="Load_OrEmpty(ISupervisionPaths)"/> runs on the app's startup path and
+    /// <c>IOrchestratorConfigProvider.Get_Current()</c> calls it again on every tick with no
+    /// try/catch above it. A single transposed letter in a hand-edited <c>"preset": "quite"</c>
+    /// would otherwise take the whole app's config loading down — the same failure class
+    /// <c>AMistypedModelValue_DoesNotTakeDownTheProviderOnTheStartupPath</c> exists to forbid for a
+    /// mistyped model, reached through a different key. So a typo here costs exactly what an ABSENT
+    /// <c>preset</c> key already costs — classic — never the load itself. Never silent, and never
+    /// the owner's phone: one warning line names the bad word or path (the exception message already
+    /// does), the way <see cref="AIOrchestratorCoreLib.Bridge.BridgeState_Store.Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/>
+    /// reports a predicate this codebase could not honour — never Telegram, an alert the owner cannot
+    /// act on does not belong there (CLAUDE.md decision 15).
+    /// </summary>
+    static JsonObject Resolve_Preset_OrClassic(JsonObject? configRoot, IOrchestrationLog? log)
+    {
+        try
+        {
+            return Presets_Loader.Resolve_ForConfig(configRoot).Tree;
+        }
+        catch (Exception ex)
+        {
+            log?.Log_Warning(GLOBAL_ORCH_ID, $"config.json's '{Presets_Loader.PRESET_KEY}' could not be resolved ({ex.Message}) — the classic preset was used instead.");
+            return Presets_Loader.Load_Embedded(Presets_Loader.CLASSIC);
+        }
+    }
+
+    /// <summary>
     /// The model this file or the preset states for a role, or null when neither does — which is what
     /// the factory's ladder needs to hear. Blank is null for the reason
     /// <see cref="OrchestratorConfig_Factory"/> gives: a cleared field is the owner saying nothing, and
     /// an empty string reaching a spawn emits no --model flag at all (proven 2026-09-10).
     ///
     /// <para>
-    /// TWO REFINEMENTS ON TOP OF THE RESOLVER'S PLAIN FOUR-LAYER ANSWER, both forced by tests already
-    /// on this branch (not invented here — <c>PerRoleModelDefaultsTests</c> pins both):
-    /// </para>
-    /// <para>
-    /// FIRST: A KEY THAT IS PRESENT BUT INVALID NEVER FALLS TO THE PRESET. <see cref="Settings_Resolver"/>
-    /// treats "present but fails validation" the same as "absent" and falls through a layer — correct
-    /// for the resolver in general, but wrong for a typo: <c>{"supervisorModel":true}</c> must cost
-    /// the CATALOGUE's own shipped answer, not whatever a preset happens to carry for that key, or a
-    /// mistyped key would silently pick up a DIFFERENT model than an absent one ever would (proven
-    /// by <c>AMistypedModelValue_DoesNotTakeDownTheProviderOnTheStartupPath</c> and
-    /// <c>AnEmptyImplementerModel_IsAbsentForEveryRoleThatRidesIt</c>). So the preset tree is withheld
-    /// from the resolver call whenever the key is PRESENT in config.json at all — valid or not — and
-    /// handed through only when the key is genuinely absent.
-    /// </para>
-    /// <para>
-    /// SECOND: REVIEWER AND SOLO NEVER ACCEPT A PRESET ANSWER FOR THEMSELVES. The compat ladder in
+    /// REVIEWER AND SOLO NEVER ACCEPT A PRESET ANSWER FOR THEMSELVES. The compat ladder in
     /// <see cref="OrchestratorConfig_Factory"/> says an absent reviewer or solo model falls to the
     /// IMPLEMENTER's, before any default. No shipped preset states <c>models.reviewer</c> or
     /// <c>models.solo</c> as of the 2026-09-12 ruling (task-6 fix round 1) that removed all four model
-    /// rows from <c>classic</c> — but this rule is kept rather than deleted, because a HAND-EDITED
-    /// preset file (<c>Presets_Loader.Load_FromDisk</c>) is legal input and could still name either
-    /// key, and if one did, it would otherwise pre-empt the ladder for a config.json that only ever set
-    /// <c>implementerModel</c> (proven by
-    /// <c>AFileWrittenBeforeTheseKeysExisted_KeepsGivingTheReviewerAndSoloTheImplementerModel</c> and
-    /// three siblings, back when <c>classic</c> still carried these two rows itself). So a Preset-origin
-    /// answer for these two roles reads as absence here too, exactly like the shipped default — the
-    /// factory's ladder, fed the implementer's own stated-or-preset answer as its second rung, is what
-    /// actually answers for them.
+    /// rows from <c>classic</c> — but this rule is KEPT rather than deleted (re-confirmed fix round 2),
+    /// because it now defends a HAND-EDITED preset file specifically (<c>Presets_Loader.Load_FromDisk</c>),
+    /// which is legal input an owner can still write and could name either key. If one did, it would
+    /// otherwise pre-empt the ladder for a config.json that only ever set <c>implementerModel</c>
+    /// (proven by <c>AFileWrittenBeforeTheseKeysExisted_KeepsGivingTheReviewerAndSoloTheImplementerModel</c>
+    /// and three siblings, back when <c>classic</c> still carried these two rows itself and exercised
+    /// the same code path). So a Preset-origin answer for these two roles reads as absence here too,
+    /// exactly like the shipped default — the factory's ladder, fed the implementer's own
+    /// stated-or-preset answer as its second rung, is what actually answers for them.
+    /// </para>
+    /// <para>
+    /// A SECOND REFINEMENT USED TO LIVE HERE TOO (withholding the preset tree entirely whenever the
+    /// config key was present, valid or not) and is GONE as of fix round 2: it existed only because
+    /// <c>classic</c> used to restate a model for every judging role, so a present-but-invalid config
+    /// value would otherwise have picked up the preset's answer instead of the catalogue's. With no
+    /// shipped preset stating any model any more, that condition cannot occur — verified by removing
+    /// the refinement and confirming no test in <c>PerRoleModelDefaultsTests</c> turned red. It also
+    /// duplicated a presence check <see cref="Settings_Resolver"/> already makes internally; deleting
+    /// it removes that second copy rather than re-homing it, since nothing calls it any more.
     /// </para>
     /// </summary>
     static string? Read_Model_OrNull(JsonObject? configRoot, JsonObject? presetTree, SessionRoles role)
     {
         var definition = Catalog.Find_OrNull(Catalog.Get_ModelPath(role))!;
-
-        var presentInConfig = Key_IsPresent(configRoot, definition.Path)
-            || (definition.LegacyPath_OrNull != null && Key_IsPresent(configRoot, definition.LegacyPath_OrNull));
-
-        var (value, origin) = Settings_Resolver.Resolve(definition, presentInConfig ? null : presetTree, configRoot, session: null);
+        var (value, origin) = Settings_Resolver.Resolve(definition, presetTree, configRoot, session: null);
 
         if (origin == SettingOrigins.ShippedDefault)
             return null;
@@ -121,30 +171,6 @@ public static class OrchestratorConfig_Loader
             return null;
 
         return value?.GetValue<string>();
-    }
-
-    /// <summary>
-    /// True when every segment of the dotted <paramref name="path"/> is an actual key in
-    /// <paramref name="tree"/>, even when the final segment's value is JSON null or of the wrong
-    /// type — a PRESENT-BUT-INVALID key must be told apart from an ABSENT one (see
-    /// <see cref="Read_Model_OrNull"/>), and plain indexing cannot tell "absent" from "present and
-    /// null" apart; only <see cref="JsonObject.ContainsKey"/> can. The same walk
-    /// <see cref="Settings_Resolver"/> does internally to answer the same question, needed here
-    /// because that check is private to it.
-    /// </summary>
-    static bool Key_IsPresent(JsonObject? tree, string path)
-    {
-        JsonNode? current = tree;
-
-        foreach (var segment in path.Split('.'))
-        {
-            if (current is not JsonObject currentObject || !currentObject.ContainsKey(segment))
-                return false;
-
-            current = currentObject[segment];
-        }
-
-        return true;
     }
 
     /// <summary>

@@ -297,10 +297,23 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
   race, stayed pinned for ever. `Sweep_TopicCreationPins_FireAndForget` now re-runs it over every
   open topic at startup. **General is deliberately never swept**: the owner pinned their own channel
   message there, and `unpinAllChatMessages` / `unpinAllGeneralForumTopicMessages` would wipe it.
-- **Model ladder + effort (owner, 2026-09-09):** supervisor and implementer (so also solo and
-  reviewer, which resolve off `ImplementerModel`) default to `claude-fable-5-1` — pinned to the
-  full id, not the `fable` alias that follows the latest Fable. General supervisor and communicator
-  stay on `sonnet` (routing/narration = cheap). **Supervisor and solo sessions spawn with
+- **Model ladder + effort (owner, 2026-09-09; shipped default corrected 2026-09-12):** supervisor,
+  implementer, reviewer and solo (reviewer and solo resolve off `ImplementerModel` when they carry
+  no value of their own) default to Opus. **This superseded the original ruling that pinned them to
+  the full id `claude-fable-5-1`**: that pin lived on as `kit/presets/classic.json`'s restatement of
+  all four roles even after the settings catalogue registered Opus as the shipped default, which
+  made the registered default unreachable in practice on any machine naming no preset — the common
+  case, since `preset` absent means classic. Ruled out 2026-09-12 (task-6 fix round 1): the four
+  `models.*` rows were removed from `classic`, so a machine that states nothing now actually spawns
+  the catalogue's Opus. `claude-fable-5-1` remains reachable — name it explicitly in config.json (or
+  a hand-edited preset file) — it is simply no longer what an untouched machine gets. **The shipped
+  default now lives in the settings catalogue**
+  (`AIOrchestratorCoreLib/Configuration/SettingsCatalog/SettingsCatalog.cs`'s `Build_Models`), not as
+  a literal in `OrchestratorConfig_Factory`: that file's six `DEFAULT_*_MODEL` fields are `static
+  readonly`, read FROM the catalogue at class-load time, kept only because six call sites and four
+  tests still read them by name and because the reviewer/solo compat ladder (absent falls to the
+  implementer's value before any default) lives there. General supervisor and communicator stay on
+  `sonnet` (routing/narration = cheap), and neither preset ever states a value for them. **Supervisor and solo sessions spawn with
   `--effort xhigh` UNLESS the orchestration carries an effort override** (`/effort`, decision 24),
   which wins; no other role carries a default. The role default sits at the role's own call site in
   `SpawnCommand_Builder` (`SUPERVISION_EFFORT_LEVEL`), and every flag is emitted by the single

@@ -4,6 +4,8 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using Xunit;
@@ -321,9 +323,19 @@ public class PerRoleModelDefaultsTests : IDisposable
         Assert.Equal("xhigh", value!.GetValue<string>());
     }
 
-    /// <summary>The quiet preset names no model at all, so every role falls to the shipped default: opus.</summary>
+    /// <summary>
+    /// The quiet preset names no model at all, so every role falls to the shipped default: opus.
+    ///
+    /// <para>
+    /// STRENGTHENED 2026-09-12 (task-6 fix round 2): this used to assert only the four models, which
+    /// would pass identically with <c>quiet.json</c> EMPTY — it distinguished nothing about quiet
+    /// specifically, only "no preset states a model". The second half proves quiet itself is genuinely
+    /// the preset consulted: <c>phone.push</c> is a row quiet carries and classic does not, and it
+    /// must resolve with <see cref="SettingOrigins.Preset"/> as its origin.
+    /// </para>
+    /// </summary>
     [Fact]
-    public void UnderTheQuietPreset_EveryRoleGetsTheShippedOpus()
+    public void UnderTheQuietPreset_EveryRoleGetsTheShippedOpus_AndQuietItselfIsGenuinelyConsulted()
     {
         File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
 
@@ -333,29 +345,47 @@ public class PerRoleModelDefaultsTests : IDisposable
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
+
+        var definition = Catalog.Find_OrNull("phone.push")!;
+        var presetTree = Presets_Loader.Resolve_ForConfig(
+            JsonNode.Parse(File.ReadAllText(_paths.ConfigFile)) as JsonObject).Tree;
+
+        var (value, origin) = Settings_Resolver.Resolve(definition, presetTree, configTree: null, session: null);
+
+        Assert.Equal(SettingOrigins.Preset, origin);
+        Assert.Equal("everything", value!.GetValue<string>());
     }
 
     /// <summary>
-    /// A KEY IN config.json BEATS THE PRESET, and the preset is not written back. The owner who typed
-    /// a model into the Settings window has said something; the preset is what applies when they have
-    /// not — which is exactly the reviewerModel rule, one layer down.
+    /// A KEY IN config.json BEATS THE PRESET, and the ladder-only keys are not written back. The
+    /// owner who typed a model into the Settings window has said something; the preset is what
+    /// applies when they have not — which is exactly the reviewerModel rule, one layer down.
     ///
     /// <para>
-    /// STALE AFTER THE 2026-09-12 RULING (task-6 fix round 1): Supervisor used to be asserted at
-    /// <c>classic</c>'s Fable, proving a config that says nothing about supervisor still lands on the
-    /// preset. Now that <c>classic</c> states no model rows at all, an unstated supervisorModel falls
-    /// straight to the catalogue's shipped Opus instead — still the correct "config beats the layer
-    /// below" story, one rung further down.
+    /// STRENGTHENED 2026-09-12 (task-6 fix round 2): with all four model rows gone from <c>classic</c>
+    /// (fix round 1), the old version of this test no longer exercised any preset-STATED model at
+    /// all — Supervisor merely fell through an EMPTY preset to the catalogue's shipped default, which
+    /// proves nothing about beating a preset specifically. This version points <c>preset</c> at a
+    /// hand-edited file (<c>Presets_Loader.Load_FromDisk</c>) that genuinely states
+    /// <c>models.supervisor</c>, so "config beats preset" has something real to beat.
     /// </para>
     /// </summary>
     [Fact]
-    public void AModelInTheConfigFile_BeatsThePreset_AndTheSaveDoesNotMaterialiseThePresetsValue()
+    public void AModelInTheConfigFile_BeatsAPresetStatedModel_AndTheSaveDoesNotMaterialiseTheLadderKeys()
     {
-        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"sonnet"}""");
+        var presetFile = Path.Combine(_tempRoot, "hand-edited-preset-fix2-beats.json");
+        File.WriteAllText(presetFile, """{"models.supervisor":"haiku"}""");
+        var presetPath = presetFile.Replace('\\', '/');
+
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $$"""{"repos":[],"preset":"{{presetPath}}","implementerModel":"sonnet","supervisorModel":"opus"}""");
 
         var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Implementer));
+
+        // The config file's own supervisorModel beats the preset file's stated "haiku".
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Supervisor));
 
         OrchestratorConfig_Loader.Save(config, _paths);
@@ -364,6 +394,130 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         Assert.Null(written![OrchestratorConfig_Loader.REVIEWER_MODEL_KEY]);
         Assert.Null(written[OrchestratorConfig_Loader.SOLO_MODEL_KEY]);
-        Assert.Null(written["preset"]);
+    }
+
+    /// <summary>
+    /// CRITICAL, RULED 2026-09-12 (task-6 fix round 2): <c>Presets_Loader.Resolve_ForConfig</c> throws
+    /// for an unknown preset word, and <c>Load_OrEmpty</c> used to call it with no try/catch — so one
+    /// transposed letter in a hand-edited <c>"preset": "quite"</c> took the app's config loading down
+    /// entirely, on the startup path and on every tick. A typo must cost exactly what an ABSENT
+    /// <c>preset</c> key already costs — classic — never the load, and the failure must be named
+    /// rather than swallowed.
+    /// </summary>
+    [Fact]
+    public void AMistypedPresetWord_StillLoads_YieldsClassicsBehaviour_AndIsReportedNotSwallowed()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quite"}""");
+
+        // The no-log overload must not throw either — this is the path the app's own startup and
+        // every provider tick actually call.
+        Assert.Null(Record.Exception(() => OrchestratorConfig_Loader.Load_OrEmpty(_paths)));
+
+        var log = new RecordingLog();
+        IOrchestratorConfig? config = null;
+
+        var exception = Record.Exception(() => config = OrchestratorConfig_Loader.Load_OrEmpty(_paths, log));
+
+        Assert.Null(exception);
+        Assert.NotNull(config);
+
+        // Classic's own behaviour — exactly what an ABSENT preset key already yields (classic states
+        // no model any more), because a typo must cost nothing more than saying nothing would.
+        Assert.Equal("opus", config!.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.General));
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Communicator));
+
+        // Not swallowed: one warning, naming the bad word.
+        var warning = Assert.Single(log.Warnings);
+        Assert.Contains("quite", warning);
+    }
+
+    /// <summary>
+    /// RULED 2026-09-12 (task-6 fix round 2): with all four model rows gone from <c>classic</c> and
+    /// <c>quiet</c> never carrying one, nothing proved the LOADER actually threads its preset argument
+    /// through <see cref="Settings_Resolver"/> — the whole rung could be replaced by a null and every
+    /// other test in this file would stay green, including the retargeted
+    /// <see cref="WithNoPresetKeyAtAll_TheFourJudgingRoles_GetTheCataloguesOpus_AndThePresetStillApplies"/>,
+    /// since that one proves the LOADER's collaborators work in isolation, not that the loader
+    /// consults them. A hand-edited preset FILE naming a model
+    /// (<c>Presets_Loader.Load_FromDisk</c>) is the one shape that still exercises it. Verified by
+    /// hand: passing <c>presetTree: null</c> instead of <c>preset</c> in
+    /// <c>OrchestratorConfig_Loader.Read_Model_OrNull</c>'s call to <c>Settings_Resolver.Resolve</c>
+    /// turns this test red (Implementer falls to the catalogue's opus instead of the preset file's
+    /// haiku).
+    /// </summary>
+    [Fact]
+    public void AHandEditedPresetFile_NamingAModel_IsGenuinelyConsultedByTheLoader()
+    {
+        var presetFile = Path.Combine(_tempRoot, "hand-edited-preset-fix2-consulted.json");
+        File.WriteAllText(presetFile, """{"models.implementer":"haiku"}""");
+        var presetPath = presetFile.Replace('\\', '/');
+
+        File.WriteAllText(_paths.ConfigFile, $$"""{"repos":[],"preset":"{{presetPath}}"}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("haiku", config.Get_ModelForRole(SessionRoles.Implementer));
+    }
+
+    /// <summary>
+    /// RULED 2026-09-12 (task-6 fix round 2): absent and empty config.json are the same statement —
+    /// "the owner has said nothing" — so they must resolve identically. A missing config.json used to
+    /// bypass the preset rung entirely (<c>OrchestratorConfig_Factory.Create_Empty</c>, before this
+    /// round); it now goes through the exact same path an empty <c>{"repos":[]}</c> file does.
+    ///
+    /// <para>
+    /// NOTHING OBSERVABLE THROUGH <see cref="IOrchestratorConfig"/> DISTINGUISHES THE TWO CASES
+    /// TODAY, and this is stated rather than hidden: neither shipped preset states a model any more
+    /// (fix round 1), and no other preset-stated setting is wired through this loader yet — that
+    /// lands with a later task (effort). So this test cannot be forced red by reverting the code
+    /// change the way the two tests above can; it pins the OBSERVABLE EQUIVALENCE the ruling asks
+    /// for now, so the day a preset-stated, loader-wired setting exists, a regression back to the
+    /// early return shows up here first.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void WithNoConfigFileAtAll_ResolvesIdenticallyToAnEmptyOne()
+    {
+        // _paths.ConfigFile is never written in this test — genuinely absent, not merely empty.
+        var absent = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[]}""");
+        var empty = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        foreach (var role in SessionRole_Names.ALL)
+            Assert.Equal(empty.Get_ModelForRole(role), absent.Get_ModelForRole(role));
+
+        Assert.Equal(empty.TelegramStatusScreenshots, absent.TelegramStatusScreenshots);
+        Assert.Equal(empty.OrchestrationTokenBudget, absent.OrchestrationTokenBudget);
+        Assert.Equal(empty.VoiceTranscribeCommand, absent.VoiceTranscribeCommand);
+    }
+
+    /// <summary>Captures what the loader reported, so "a mistyped preset is named, not swallowed" can be asserted.</summary>
+    sealed class RecordingLog : IOrchestrationLog
+    {
+        public List<string> Warnings { get; } = [];
+
+        public void Log_Info(string orchId, string message)
+        {
+        }
+
+        public void Log_Warning(string orchId, string message)
+        {
+            Warnings.Add(message);
+        }
+
+        public void Log_Error(string orchId, string message, Exception? exception)
+        {
+        }
+
+        public event Action<IOrchestrationLogEntry>? EntryLogged
+        {
+            add { }
+            remove { }
+        }
     }
 }
