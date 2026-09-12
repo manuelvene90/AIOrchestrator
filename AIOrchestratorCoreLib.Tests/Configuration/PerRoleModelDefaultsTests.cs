@@ -3,10 +3,18 @@ using AIOrchestratorCoreLib.Configuration;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using Xunit;
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
 
+// THE CATALOGUE IS REACHED THROUGH AN ALIAS: this file's own namespace
+// (AIOrchestratorCoreLib.Tests.Configuration) has a nested sibling namespace
+// AIOrchestratorCoreLib.Tests.Configuration.SettingsCatalog (PresetsLoaderTests, SettingsCatalogTests,
+// SettingsResolverTests), so the bare word "SettingsCatalog" resolves to that nested namespace before
+// the using directive importing the class is ever consulted (CS0234) — the same trap those sibling
+// files already worked around.
 namespace AIOrchestratorCoreLib.Tests.Configuration;
 
 /// <summary>
@@ -268,28 +276,49 @@ public class PerRoleModelDefaultsTests : IDisposable
     }
 
     /// <summary>
-    /// THE SHIPPED DEFAULT IS OPUS AND CLASSIC IS WHERE FABLE LIVES NOW (owner, spec §11.4). Spec §5.2
-    /// named this precisely: master's claude-fable-5-1 auto-merged away to the fork's opus, which is
-    /// right by accident — "but the `classic` preset must carry Fable + xhigh, or Manu silently loses
-    /// his model". `preset` absent means classic (§11.3), so a config.json that says nothing at all
-    /// still spawns the model master spawned, and the value's ORIGIN is the preset rather than a
-    /// materialised key.
+    /// RULED 2026-09-12 (task-6 fix round 1): THE SHIPPED DEFAULT IS OPUS, AND IT MUST ACTUALLY BE
+    /// REACHABLE. This test used to pin the opposite — that <c>classic</c> restated Fable on all four
+    /// judging roles, so a config.json naming no preset never got the catalogue's own answer. That was
+    /// the exact defect the controller ruled on: the owner's own request is that Opus is the SHIPPED
+    /// default, and a preset that restates an older model on every judging role made that default
+    /// unreachable in practice — satisfied on paper, nowhere else. <c>classic</c>'s four
+    /// <c>models.*</c> rows are gone now, so <c>preset</c> absent (which still means classic, §11.3)
+    /// really does spawn the catalogue's Opus.
+    ///
+    /// <para>
+    /// THE SECOND HALF PROVES THE PRESET LAYER IS STILL GENUINELY CONSULTED, not merely that deleting
+    /// it would look the same: a test that only asserted the shipped model would pass identically with
+    /// <c>Presets_Loader</c> ripped out entirely. <c>classic</c> still carries non-model rows
+    /// (<c>effort.supervisor</c>, <c>phone.replyKeyboard</c>, …) that the catalogue's own shipped
+    /// default does not, and a config.json naming no preset resolves one of those through
+    /// <see cref="Settings_Resolver"/> with <see cref="SettingOrigins.Preset"/> as its origin.
+    /// </para>
     /// </summary>
     [Fact]
-    public void WithNoPresetKeyAtAll_TheFourJudgingRoles_StillGetTheClassicModel()
+    public void WithNoPresetKeyAtAll_TheFourJudgingRoles_GetTheCataloguesOpus_AndThePresetStillApplies()
     {
         File.WriteAllText(_paths.ConfigFile, """{"repos":[]}""");
 
         var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
-        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Supervisor));
-        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Implementer));
-        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Reviewer));
-        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Solo));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
 
-        // Routing and narration are cheap on BOTH sides and neither preset touches them.
+        // Routing and narration are cheap on BOTH sides and neither preset ever touches them.
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.General));
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Communicator));
+
+        // A non-model row from classic proves the preset layer is genuinely still being consulted.
+        var effortDefinition = Catalog.Find_OrNull(Catalog.Get_EffortPath(SessionRoles.Supervisor))!;
+        var presetTree = Presets_Loader.Resolve_ForConfig(
+            JsonNode.Parse(File.ReadAllText(_paths.ConfigFile)) as JsonObject).Tree;
+
+        var (value, origin) = Settings_Resolver.Resolve(effortDefinition, presetTree, configTree: null, session: null);
+
+        Assert.Equal(SettingOrigins.Preset, origin);
+        Assert.Equal("xhigh", value!.GetValue<string>());
     }
 
     /// <summary>The quiet preset names no model at all, so every role falls to the shipped default: opus.</summary>
@@ -310,6 +339,14 @@ public class PerRoleModelDefaultsTests : IDisposable
     /// A KEY IN config.json BEATS THE PRESET, and the preset is not written back. The owner who typed
     /// a model into the Settings window has said something; the preset is what applies when they have
     /// not — which is exactly the reviewerModel rule, one layer down.
+    ///
+    /// <para>
+    /// STALE AFTER THE 2026-09-12 RULING (task-6 fix round 1): Supervisor used to be asserted at
+    /// <c>classic</c>'s Fable, proving a config that says nothing about supervisor still lands on the
+    /// preset. Now that <c>classic</c> states no model rows at all, an unstated supervisorModel falls
+    /// straight to the catalogue's shipped Opus instead — still the correct "config beats the layer
+    /// below" story, one rung further down.
+    /// </para>
     /// </summary>
     [Fact]
     public void AModelInTheConfigFile_BeatsThePreset_AndTheSaveDoesNotMaterialiseThePresetsValue()
@@ -319,7 +356,7 @@ public class PerRoleModelDefaultsTests : IDisposable
         var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Implementer));
-        Assert.Equal("claude-fable-5-1", config.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Supervisor));
 
         OrchestratorConfig_Loader.Save(config, _paths);
 

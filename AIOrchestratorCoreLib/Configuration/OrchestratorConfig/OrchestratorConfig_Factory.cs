@@ -14,13 +14,22 @@ public static class OrchestratorConfig_Factory
     /// THE SHIPPED DEFAULT IS NOW A CATALOGUE ENTRY, not a literal here (spec §6.4, owner §11.4:
     /// "Opus for every role except general and communicator"). Moved 2026-09-12: the same number had to
     /// be stateable by a preset, editable by three renderers and readable by the resolver, and a `const`
-    /// in this file is none of those. `classic` carries claude-fable-5-1 for the four judging roles, so
-    /// a machine whose config.json says nothing spawns exactly what it spawned before the merge —
-    /// `preset` absent means classic.
+    /// in this file is none of those.
     ///
+    /// <para>
+    /// RULED 2026-09-12 (task-6 fix round 1): <c>classic</c> used to name all four judging roles
+    /// (<c>models.supervisor/implementer/reviewer/solo</c>) at the older Fable id, which meant the
+    /// owner's own request here — Opus as the SHIPPED default — was satisfied on paper only, since
+    /// every machine that names no preset (the common case) got the preset's Fable instead. Those four
+    /// rows are gone from <c>kit/presets/classic.json</c> now, so a config.json that states nothing at
+    /// all really does spawn the catalogue's Opus; only <c>effort.supervisor</c>/<c>effort.solo</c>
+    /// (the owner's working preferences, not a model) remain preset-stated.
+    /// </para>
+    /// <para>
     /// STILL NAMED HERE because six call sites and four tests read these by name, and because this file
     /// is where the LADDER lives: an absent reviewerModel or soloModel falls to implementerModel before
     /// any default applies, and that is unchanged.
+    /// </para>
     /// </summary>
     public static readonly string DEFAULT_SUPERVISOR_MODEL = Read_ShippedModel(SessionRoles.Supervisor);
     public static readonly string DEFAULT_IMPLEMENTER_MODEL = Read_ShippedModel(SessionRoles.Implementer);
@@ -29,6 +38,21 @@ public static class OrchestratorConfig_Factory
     public static readonly string DEFAULT_GENERAL_SUPERVISOR_MODEL = Read_ShippedModel(SessionRoles.General);
     public static readonly string DEFAULT_COMMUNICATOR_MODEL = Read_ShippedModel(SessionRoles.Communicator);
 
+    /// <summary>
+    /// READS THE CATALOGUE'S OWN LITERAL, NEVER ONE OF THIS CLASS'S SIX CONSTANTS ABOVE — and every
+    /// one of <c>SettingsCatalog.Build_Models</c>'s six model rows MUST likewise pass a plain string
+    /// literal as its own <c>shippedDefault</c>, never <c>OrchestratorConfig_Factory.DEFAULT_*_MODEL</c>.
+    /// The six fields above are `static readonly`, assigned by running THIS method at this class's own
+    /// static-constructor time, and this method's first call reaches into <c>SettingsCatalog</c>. If
+    /// any catalogue row read one of this class's six constants back, that would be a TYPE-INITIALIZER
+    /// CYCLE: this class's static constructor would trigger <c>SettingsCatalog</c>'s, which would call
+    /// back into this class's constants before they finish being assigned — C#'s reentrant
+    /// type-initialization rule does not deadlock or throw for that, it silently hands back the
+    /// constant's default value (<c>null</c> for a string) at that point in the recursion, so the
+    /// catalogue row would build with a null shipped default instead of erroring at compile time.
+    /// Found and fixed 2026-09-12 while wiring this method in for the first time: the catalogue was
+    /// still pointing four of its six model rows at these very constants.
+    /// </summary>
     static string Read_ShippedModel(SessionRoles role)
     {
         var definition = Catalog.Find_OrNull(Catalog.Get_ModelPath(role))

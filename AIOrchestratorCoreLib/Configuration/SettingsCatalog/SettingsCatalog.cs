@@ -156,7 +156,15 @@ public static class SettingsCatalog
     /// what break the cycle; the factory derives FROM the catalogue, never the other way round. Four
     /// tests were red on purpose until this task — <c>PerRoleModelDefaultsTests</c> (three cases) and
     /// <c>OrchestratorConfigLoaderGuardrailsTests.Save_OverACorruptConfigJson_StillSucceeds_AndWritesTheKnownKeys</c>
-    /// — and are green now that both sides agree the catalogue is the one source.
+    /// — and both sides now agree the catalogue is the one source of the shipped default.
+    ///
+    /// <para>
+    /// RULED 2026-09-12 (task-6 fix round 1), SEPARATELY FROM THE CYCLE ABOVE: <c>classic</c> used to
+    /// restate these same four values (at the older Fable id) as preset rows, which meant a machine
+    /// naming no preset — the common case — never actually got the catalogue's Opus, only Fable. Those
+    /// four preset rows are gone from <c>kit/presets/classic.json</c> now; the shipped default declared
+    /// here is what a bare config.json actually spawns.
+    /// </para>
     /// </summary>
     static IReadOnlyList<ISettingDefinition> Build_Models()
     {

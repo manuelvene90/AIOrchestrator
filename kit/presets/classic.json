@@ -1,9 +1,5 @@
 {
-  "_comment": "Manu's way. Keys are flat dotted catalogue paths (SettingsJson_Path), deliberately not nested, so 'does this preset name only catalogue paths' is a one-line test. Only keys whose value differs from the shipped default appear here — a preset that restates a default is a default that can never move.",
-  "models.supervisor": "claude-fable-5-1",
-  "models.implementer": "claude-fable-5-1",
-  "models.reviewer": "claude-fable-5-1",
-  "models.solo": "claude-fable-5-1",
+  "_comment": "Manu's way. Keys are flat dotted catalogue paths (SettingsJson_Path), deliberately not nested, so 'does this preset name only catalogue paths' is a one-line test. Only keys whose value differs from the shipped default appear here — a preset that restates a default is a default that can never move. The four models.* rows (supervisor, implementer, reviewer, solo) were removed by ruling on 2026-09-12 (task-6 fix round 1): the owner's own request is that Opus is the SHIPPED default, and a preset that restates an older model on every judging role makes that default unreachable in practice, satisfied on paper and nowhere else. effort.supervisor and effort.solo stay — they are the owner's working preferences, not models.",
   "effort.supervisor": "xhigh",
   "effort.solo": "xhigh",
   "phone.replyKeyboard": "on",

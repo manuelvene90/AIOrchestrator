@@ -82,8 +82,8 @@ public static class OrchestratorConfig_Loader
     /// FIRST: A KEY THAT IS PRESENT BUT INVALID NEVER FALLS TO THE PRESET. <see cref="Settings_Resolver"/>
     /// treats "present but fails validation" the same as "absent" and falls through a layer — correct
     /// for the resolver in general, but wrong for a typo: <c>{"supervisorModel":true}</c> must cost
-    /// the CATALOGUE's own shipped answer, not whatever Fable value <c>classic</c> happens to carry,
-    /// or a mistyped key would silently pick up a DIFFERENT model than an absent one ever would (proven
+    /// the CATALOGUE's own shipped answer, not whatever a preset happens to carry for that key, or a
+    /// mistyped key would silently pick up a DIFFERENT model than an absent one ever would (proven
     /// by <c>AMistypedModelValue_DoesNotTakeDownTheProviderOnTheStartupPath</c> and
     /// <c>AnEmptyImplementerModel_IsAbsentForEveryRoleThatRidesIt</c>). So the preset tree is withheld
     /// from the resolver call whenever the key is PRESENT in config.json at all — valid or not — and
@@ -92,13 +92,17 @@ public static class OrchestratorConfig_Loader
     /// <para>
     /// SECOND: REVIEWER AND SOLO NEVER ACCEPT A PRESET ANSWER FOR THEMSELVES. The compat ladder in
     /// <see cref="OrchestratorConfig_Factory"/> says an absent reviewer or solo model falls to the
-    /// IMPLEMENTER's, before any default — and <c>classic</c> names <c>models.reviewer</c> and
-    /// <c>models.solo</c> explicitly (to keep every judging role on Fable), which would otherwise
-    /// pre-empt that ladder for a config.json that only ever set <c>implementerModel</c> (proven by
+    /// IMPLEMENTER's, before any default. No shipped preset states <c>models.reviewer</c> or
+    /// <c>models.solo</c> as of the 2026-09-12 ruling (task-6 fix round 1) that removed all four model
+    /// rows from <c>classic</c> — but this rule is kept rather than deleted, because a HAND-EDITED
+    /// preset file (<c>Presets_Loader.Load_FromDisk</c>) is legal input and could still name either
+    /// key, and if one did, it would otherwise pre-empt the ladder for a config.json that only ever set
+    /// <c>implementerModel</c> (proven by
     /// <c>AFileWrittenBeforeTheseKeysExisted_KeepsGivingTheReviewerAndSoloTheImplementerModel</c> and
-    /// three siblings). So a Preset-origin answer for these two roles reads as absence here too,
-    /// exactly like the shipped default — the factory's ladder, fed the implementer's own
-    /// stated-or-preset answer as its second rung, is what actually answers for them.
+    /// three siblings, back when <c>classic</c> still carried these two rows itself). So a Preset-origin
+    /// answer for these two roles reads as absence here too, exactly like the shipped default — the
+    /// factory's ladder, fed the implementer's own stated-or-preset answer as its second rung, is what
+    /// actually answers for them.
     /// </para>
     /// </summary>
     static string? Read_Model_OrNull(JsonObject? configRoot, JsonObject? presetTree, SessionRoles role)
