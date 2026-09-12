@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
+using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
@@ -26,7 +27,8 @@ internal sealed class OrchestratorConfigModel(
     IGuardrailSettings guardrails,
     IDefaultsSettings defaults,
     ITelegramProseSettings telegramProse,
-    Telegram.TelegramInboundModes telegramInbound) : IOrchestratorConfig
+    Telegram.TelegramInboundModes telegramInbound,
+    IEffortSettings effort) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -47,6 +49,7 @@ internal sealed class OrchestratorConfigModel(
     public IDefaultsSettings Defaults { get; } = defaults;
     public ITelegramProseSettings TelegramProse { get; } = telegramProse;
     public Telegram.TelegramInboundModes TelegramInbound { get; } = telegramInbound;
+    public IEffortSettings Effort { get; } = effort;
 
     /// <summary>
     /// A SWITCH RATHER THAN A DICTIONARY, so the compiler is the thing that notices a new role: an
@@ -66,6 +69,16 @@ internal sealed class OrchestratorConfigModel(
             SessionRoles.Communicator => CommunicatorModel,
             _ => throw new Exception($"Unhandled SessionRoles: {role} — no model default is configured for it"),
         };
+    }
+
+    /// <summary>
+    /// NO SECOND LADDER, which is why this delegates rather than switching: the roles' effort levels
+    /// were resolved once, at load, through the catalogue and the preset, and this method's only job
+    /// is to put that answer beside <see cref="Get_ModelForRole"/> where every spawn already looks.
+    /// </summary>
+    public string? Get_EffortForRole_OrNull(SessionRoles role)
+    {
+        return Effort.Get_ForRole_OrNull(role);
     }
 
     public bool Is_TelegramConfigured()

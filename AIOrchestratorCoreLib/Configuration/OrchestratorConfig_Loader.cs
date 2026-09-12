@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
+using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
@@ -94,7 +95,14 @@ public static class OrchestratorConfig_Loader
 
             // `telegramInbound`: "poll" (default) or "off". Hand-edited, never written back by Save
             // below — the same contract as the four blocks above it.
-            Telegram.TelegramInbound_Modes.Parse_OrPoll(Get_String_OrNull(configRoot, "telegramInbound")));
+            Telegram.TelegramInbound_Modes.Parse_OrPoll(Get_String_OrNull(configRoot, "telegramInbound")),
+
+            // THE `effort` BLOCK RIDES THE SAME PRESET RUNG THE MODELS DO (2026-09-12, plan 02 task 7),
+            // and it is passed the same `preset` tree for the same reason: `classic` is where the
+            // owner's xhigh for supervisor and solo lives now, so a machine that states nothing must
+            // still resolve through it. Unlike the models it needs no "absence" dance — there is no
+            // compat ladder between effort roles, so the resolved answer IS the answer, null included.
+            EffortSettings_Json.Parse(configRoot, preset));
     }
 
     /// <summary>
@@ -261,15 +269,19 @@ public static class OrchestratorConfig_Loader
         // first button press, on every box that had never heard of the keys. A hand-edited value is
         // safe either way: Save() merges, so keys it does not write survive untouched.
         //
-        // planBackend, THE GUARDRAIL KEYS, defaults AND telegram ARE DELIBERATELY ABSENT from the writes above,
+        // planBackend, THE GUARDRAIL KEYS, defaults, telegram AND effort ARE DELIBERATELY ABSENT from the writes above,
         // for the same reason from two directions. planBackend is hand-edited, no window builds one,
         // and IOrchestratorConfig.PlanBackend is null in every config the app constructs itself —
         // writing it would erase the owner's own key on the next save. The guardrail keys and the
         // defaults block have no UI and no command that changes them, so the only thing a save could
         // do is materialise this build's defaults into the file as if the owner had chosen them,
         // freezing a default that is meant to move when the app is updated. The telegram block —
-        // foldLongEntriesAbove, attachEntriesAbove — is the newest member of that same set. All four
-        // are read; none is owned.
+        // foldLongEntriesAbove, attachEntriesAbove — belongs to that same set, and so does the
+        // `effort` block (EffortSettings_Json.EFFORT_KEY), the newest member: its shipped answer comes
+        // from the catalogue and its working answer from a PRESET, so writing this build's resolution
+        // back would pin the owner to whichever preset was in force the day they last pressed a
+        // button. EffortSettings_Json has no Write method at all, so that cannot happen by accident.
+        // All five are read; none is owned.
 
         var secretsRoot = Read_JsonObject_ForEditing(paths.SecretsFile);
 

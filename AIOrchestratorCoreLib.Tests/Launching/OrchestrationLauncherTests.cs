@@ -216,9 +216,29 @@ public class OrchestrationLauncherTests : IDisposable
     }
 
     /// <summary>
-    /// The stored effort override is the ONLY source of `--effort` — there is no config default,
-    /// so a fresh orchestration spawns without the flag and a respawn after the owner set one
-    /// carries it: the supervisor's own, and the implementer-side one for every member kind.
+    /// THE ROLE DEFAULT MOVED FROM THE BUILDER TO THE CONFIG (2026-09-12, spec §6.4). The emitted
+    /// command line is byte-identical under `classic`, which is the point: what changed is WHERE the
+    /// xhigh is decided, so a brother on `quiet` can have none without a rebuild. The launcher is the
+    /// place because it is the one that already holds both the per-orchestration override and the
+    /// config provider; the builder holds neither and had to be handed a constant.
+    /// </summary>
+    [Fact]
+    public void Spawn_TakesTheRoleEffortFromTheConfig_NotFromTheCommandBuilder()
+    {
+        _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        Assert.Contains("--effort xhigh ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]));
+    }
+
+    /// <summary>
+    /// The stored effort override BEATS the role default — and with none stored, the role default the
+    /// CONFIG resolves is what a fresh orchestration spawns with (xhigh for the supervisor under
+    /// `classic`, nothing for the members), no longer a constant inside SpawnCommand_Builder.
+    /// The expected value is a LITERAL here rather than a catalogue read: this case is about the
+    /// launcher passing through what the config said, and re-deriving the expectation from the same
+    /// source the production code reads would make it assert nothing.
     /// </summary>
     [Fact]
     public void Respawn_PassesTheStoredEffortOverride_ToTheSupervisorAndToEveryMemberKind()
@@ -229,7 +249,7 @@ public class OrchestrationLauncherTests : IDisposable
         // Supervisor + imp-1 + rev-1, none with an override yet: the supervisor gets its ROLE
         // DEFAULT (xhigh, owner directive 2026-09-09), the members no flag at all.
         Assert.Equal(3, _spawner.SpawnedCommands.Count);
-        Assert.Contains($"--effort {SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL} ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+        Assert.Contains("--effort xhigh ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]));
 
@@ -256,7 +276,7 @@ public class OrchestrationLauncherTests : IDisposable
         _launcher.Respawn_Supervisor(orchId);
 
         var resetScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
-        Assert.Contains($"--effort {SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL} ", resetScript);
+        Assert.Contains("--effort xhigh ", resetScript);
         Assert.DoesNotContain("medium", resetScript);
     }
 

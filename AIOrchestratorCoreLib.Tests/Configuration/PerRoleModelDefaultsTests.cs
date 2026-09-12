@@ -496,6 +496,66 @@ public class PerRoleModelDefaultsTests : IDisposable
         Assert.Equal(empty.VoiceTranscribeCommand, absent.VoiceTranscribeCommand);
     }
 
+    /// <summary>
+    /// EFFORT STOPS BEING A COMPILED CONSTANT (spec §2.5, §6.4). Until 2026-09-12 the xhigh for
+    /// supervisor and solo lived in SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL — CODE, needing a
+    /// rebuilt app running (CLAUDE.md decision 23) — while the model beside it was DATA. Same dial, two
+    /// different places to change it. The value is unchanged for a machine that says nothing: classic
+    /// carries xhigh for the two roles the owner named, and `preset` absent means classic.
+    /// </summary>
+    [Fact]
+    public void WithNoConfigFileAtAll_OnlyTheSupervisorAndTheSolo_CarryARoleEffort()
+    {
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("xhigh", config.Get_EffortForRole_OrNull(SessionRoles.Supervisor));
+        Assert.Equal("xhigh", config.Get_EffortForRole_OrNull(SessionRoles.Solo));
+        Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.Implementer));
+        Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.Reviewer));
+        Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.General));
+        Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.Communicator));
+    }
+
+    /// <summary>Nathan's phone: the quiet preset names no effort, so no role carries the flag.</summary>
+    [Fact]
+    public void UnderTheQuietPreset_NoRoleCarriesAnEffortFlag()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        foreach (var role in SessionRole_Names.ALL)
+            Assert.Null(config.Get_EffortForRole_OrNull(role));
+    }
+
+    /// <summary>
+    /// A HAND-EDITED effort BLOCK BEATS THE PRESET, and an explicit null in it means "no flag" rather
+    /// than "say nothing" — the one place where a JSON null is an answer, because null IS the CLI's
+    /// own default and the owner may want it back from under classic.
+    /// </summary>
+    [Fact]
+    public void AnEffortBlockInTheConfigFile_BeatsThePreset_AndAnExplicitNullMeansNoFlag()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"effort":{"implementer":"high","supervisor":null}}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("high", config.Get_EffortForRole_OrNull(SessionRoles.Implementer));
+        Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.Supervisor));
+        Assert.Equal("xhigh", config.Get_EffortForRole_OrNull(SessionRoles.Solo));
+    }
+
+    /// <summary>A word that is not an effort level costs that one key its default, never the load.</summary>
+    [Fact]
+    public void AMistypedEffortLevel_CostsThatOneKeyItsDefault_NotTheWholeLoad()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"effort":{"supervisor":"enormous"}}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("xhigh", config.Get_EffortForRole_OrNull(SessionRoles.Supervisor));
+    }
+
     /// <summary>Captures what the loader reported, so "a mistyped preset is named, not swallowed" can be asserted.</summary>
     sealed class RecordingLog : IOrchestrationLog
     {

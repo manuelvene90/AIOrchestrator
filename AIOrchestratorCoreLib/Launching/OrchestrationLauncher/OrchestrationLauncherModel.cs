@@ -333,10 +333,13 @@ internal sealed class OrchestrationLauncherModel(
             pidFile,
             session.DisplayName,
 
-            // The effort has NO config default on purpose: null means no --effort flag here, which
-            // leaves the ROLE default inside SpawnCommand_Builder to decide (xhigh for this role).
-            // Only the per-orchestration override ever overrules it — /effort, decision 24.
-            session.SupervisorEffortOverride,
+            // THE ROLE DEFAULT IS A SETTING NOW (`effort.supervisor`, spec §6.4): the owner's
+            // per-orchestration dial wins (/effort, decision 24), and when there is none the config
+            // answers — xhigh under `classic`, nothing under `quiet`. It is resolved HERE rather than
+            // in SpawnCommand_Builder because this is the one place that holds both the session and
+            // the config provider; the builder held neither and had to be handed a compiled constant
+            // (deleted 2026-09-12). Null still means no --effort flag at all.
+            session.SupervisorEffortOverride ?? _configProvider.Get_Current().Get_EffortForRole_OrNull(SessionRoles.Supervisor),
             resumeSessionId);
 
         // Stamp the spawn (watchdog grace) BEFORE deleting the stale pid file, so no tick can see
@@ -370,7 +373,15 @@ internal sealed class OrchestrationLauncherModel(
             session.RepoPath,
             _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Communicator),
             pidFile,
-            session.DisplayName);
+            session.DisplayName,
+
+            // RESOLVED LIKE EVERY OTHER ROLE, so no launch path is the one that silently drops its
+            // role's effort. `effort.communicator` is null in the catalogue and in both shipped
+            // presets, so this is null today and emits nothing — but the ladder is here rather than
+            // absent, which is the difference between a setting that is off and a setting that is
+            // unreachable. NOTE: SpawnCommand_Builder.Build_ForCommunicator takes no effort argument
+            // yet, so the terminal runner drops this value; that gap predates this change.
+            _configProvider.Get_Current().Get_EffortForRole_OrNull(SessionRoles.Communicator));
 
         // No pid lands in session.json for the communicator — the pid file is the liveness
         // source and nothing else needs it. Only the spawn-grace stamp is stored.
@@ -441,9 +452,16 @@ internal sealed class OrchestrationLauncherModel(
         var resumeSessionId = resumes ? ResumableSession_Resolver.Resolve_ForMember_OrNull(_paths, orchId, memberId) : null;
 
         // One implementer-side effort override covers every member kind, exactly as the model
-        // override does; null means no --effort flag (the CLI's default), with no config fallback —
-        // except for a SOLO, which the builder gives the same role default the supervisor gets.
-        var effort = session.ImplementerEffortOverride;
+        // override does; null means no --effort flag at all (the CLI's own default).
+        //
+        // THE SECOND TIER IS THE ROLE'S OWN, and it is resolved by the MEMBER's role rather than by
+        // "implementer" (2026-09-12, spec §6.4): a solo takes `effort.solo` and a reviewer
+        // `effort.reviewer`, which is what makes the owner's xhigh-for-solo a piece of data instead of
+        // a constant inside SpawnCommand_Builder. The per-orchestration OVERRIDE stays the single
+        // implementer-side slot it already is — `/effort implementer` is the owner reaching into one
+        // orchestration by hand and has covered every working member since it existed, exactly as
+        // `set-model implementer` does one line above.
+        var effort = session.ImplementerEffortOverride ?? _configProvider.Get_Current().Get_EffortForRole_OrNull(role);
 
         var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName, effort, resumeSessionId);
 
@@ -477,7 +495,11 @@ internal sealed class OrchestrationLauncherModel(
             _paths.GeneralFolder,
             _configProvider.Get_Current().Get_ModelForRole(SessionRoles.General),
             _paths.GeneralPidFile,
-            null);
+            null,
+
+            // Same ladder as every other role, and null for the same reason the communicator's is —
+            // see the note there, including the builder gap this value currently meets.
+            _configProvider.Get_Current().Get_EffortForRole_OrNull(SessionRoles.General));
 
         var runner = Start_Session(launch);
 

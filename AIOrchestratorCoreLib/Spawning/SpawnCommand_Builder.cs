@@ -46,16 +46,6 @@ public static class SpawnCommand_Builder
     public const string CLAUDE_LAUNCH_FLAGS = "--dangerously-skip-permissions";
 
     /// <summary>
-    /// The ROLE DEFAULT for the two roles that talk to the owner and decide — supervisor and solo
-    /// (owner directive 2026-09-09: "XHigh effort in each solo and sup session"). It applies only
-    /// when the orchestration carries no effort override: the dial the owner turns from the phone
-    /// (/effort) wins, or a solo could never be told to think at anything but xhigh. Every other
-    /// role has no default — effort is billed thinking, and the owner named these two. Verified
-    /// against the installed CLI, whose --help lists --effort as (low, medium, high, xhigh, max).
-    /// </summary>
-    public const string SUPERVISION_EFFORT_LEVEL = "xhigh";
-
-    /// <summary>
     /// resumeSessionId is the conversation this slot ran before, when there is one to pick up
     /// (see <see cref="ResumableSession_Resolver"/>); null or blank starts fresh.
     /// </summary>
@@ -63,7 +53,7 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(resumeSessionId, model, Resolve_Effort_OrDefault(effort, SUPERVISION_EFFORT_LEVEL))} '/supervisor {orchId}'", pidFilePath);
+        var script = Build_SessionScript("supervisor", orchId, "sup", $"{Build_ClaudeInvocation(resumeSessionId, model, effort)} '/supervisor {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForSupervisor(orchId), displayName), SUPERVISOR_TAB_COLOR, repoPath, script);
     }
@@ -101,7 +91,7 @@ public static class SpawnCommand_Builder
     {
         Validate_OrchId(orchId);
 
-        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(resumeSessionId, model, Resolve_Effort_OrDefault(effort, SUPERVISION_EFFORT_LEVEL))} '/solo {orchId}'", pidFilePath);
+        var script = Build_SessionScript("solo", orchId, memberId, $"{Build_ClaudeInvocation(resumeSessionId, model, effort)} '/solo {orchId}'", pidFilePath);
 
         return Build_WindowsTerminalCommand(SessionWindowTitle_Builder.Build_Title(SessionWindowTitle_Builder.Build_ForMember(memberId, orchId), displayName), SOLO_TAB_COLOR, repoPath, script);
     }
@@ -211,14 +201,29 @@ public static class SpawnCommand_Builder
 
     /// <summary>
     /// All three parts are OPTIONAL and independent. A null or blank resume id starts a fresh
-    /// conversation; a null or blank effort emits NO --effort flag at all, so the CLI applies its
-    /// own default — there is no config fallback for it, unlike the model; the only default is the
-    /// ROLE default a caller resolves before getting here (see <see cref="SUPERVISION_EFFORT_LEVEL"/>).
+    /// conversation; a null or blank effort emits NO --effort flag at all, so the CLI applies its own
+    /// default, which is not a level called "default" and cannot be named.
+    ///
+    /// <para>
+    /// THIS BUILDER DECIDES NO EFFORT OF ITS OWN — it carries what it is handed, and it stopped
+    /// deciding on 2026-09-12. It used to own a <c>SUPERVISION_EFFORT_LEVEL = "xhigh"</c> constant
+    /// applied to the supervisor and the solo whenever the caller passed none: the owner's directive of
+    /// 2026-09-09 ("XHigh effort in each solo and sup session"), living in CODE while the model on the
+    /// same command line was read live from config.json — so moving it needed a rebuilt app actually
+    /// running (CLAUDE.md decision 23). That role default is a catalogue entry now
+    /// (<c>effort.supervisor</c> / <c>effort.solo</c>, carried at xhigh by the <c>classic</c> preset)
+    /// and is resolved by <c>OrchestrationLauncherModel</c>, the one place that holds both the
+    /// per-orchestration <c>/effort</c> override and the config provider. The emitted line is
+    /// byte-identical under classic; only the decision moved. The levels the installed CLI accepts are
+    /// the ones <c>EffortLevels</c> lists — its --help gives (low, medium, high, xhigh, max).
+    /// </para>
+    /// <para>
     /// Order is resume, then model, then effort, then the launch flags, always ahead of the prompt
     /// — and ahead of the reviewer's variadic --disallowedTools, which would otherwise swallow them
     /// as tool names. The dials come AFTER the resume on purpose: a model or effort the owner turned
     /// while the session was down applies to the resumed conversation (verified against the
     /// installed CLI, whose --help lists --model and --effort as per-session, alongside --resume).
+    /// </para>
     /// </summary>
     static string Build_ClaudeInvocation(string? resumeSessionId, string? model, string? effort)
     {
@@ -296,15 +301,6 @@ public static class SpawnCommand_Builder
         }
 
         return null;
-    }
-
-    /// <summary>The override when it says something, else the role's default — blank counts as unset.</summary>
-    static string? Resolve_Effort_OrDefault(string? effort, string? roleDefault)
-    {
-        if (string.IsNullOrWhiteSpace(effort))
-            return roleDefault;
-
-        return effort;
     }
 
     static void Validate_OrchId(string orchId)

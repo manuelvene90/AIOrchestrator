@@ -10,7 +10,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_ForSupervisor_CarriesTitleColorDirectoryPidFileAndScript()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", null, null, PID_FILE, null);
+        var command = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "xhigh", null, PID_FILE, null);
 
         Assert.Equal("wt.exe", command.Executable);
         Assert.Contains("SUP · arb-fix", command.Arguments);
@@ -25,15 +25,19 @@ public class SpawnCommandBuilderTests
     }
 
     /// <summary>
-    /// The owner asked for xhigh in the two roles that talk to them and decide (2026-09-09). With
-    /// NO override set, that is the role default, and it sits before --dangerously-skip-permissions
-    /// and before the slash command, or the CLI reads it as part of the prompt.
+    /// THIS PINS THE CARRYING, NOT THE CHOOSING (2026-09-12). The owner asked for xhigh in the two
+    /// roles that talk to them and decide (2026-09-09), and until this date that ROLE DEFAULT was a
+    /// constant inside this builder; it is a catalogue entry now (<c>effort.supervisor</c> /
+    /// <c>effort.solo</c>, carried at xhigh by the <c>classic</c> preset) and the LAUNCHER resolves
+    /// it. What is still this builder's own is PLACEMENT: the flag sits before
+    /// --dangerously-skip-permissions and before the slash command, or the CLI reads it as part of
+    /// the prompt.
     /// </summary>
     [Fact]
-    public void Build_SupervisorAndSolo_ThinkAtXHighEffort_ByDefault()
+    public void Build_SupervisorAndSolo_CarryTheEffortTheyAreHanded()
     {
-        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "claude-fable-5-1", null, null, PID_FILE, null);
-        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "claude-fable-5-1", null, null, PID_FILE, null);
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "claude-fable-5-1", "xhigh", null, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "claude-fable-5-1", "xhigh", null, PID_FILE, null);
 
         Assert.Contains(
             "claude --model claude-fable-5-1 --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'",
@@ -97,20 +101,24 @@ public class SpawnCommandBuilderTests
     }
 
     /// <summary>
-    /// With no override, the two roles the owner named get the ROLE DEFAULT and the others get NO
-    /// FLAG AT ALL, so the CLI applies its own. A blank override counts as unset: `--effort ` with
-    /// nothing after it would make the CLI eat the next token.
+    /// THE NEW TRUTH OF THE BUILDER (2026-09-12): handed no effort it emits NO FLAG FOR ANY ROLE,
+    /// supervisor and solo included. It has no role default of its own any more — the one the owner
+    /// named is resolved by the launcher from <c>effort.supervisor</c> / <c>effort.solo</c> — so a
+    /// null arriving here really does mean "the CLI's own default". A blank counts as unset for the
+    /// reason it always did: `--effort ` with nothing after it would make the CLI eat the next token.
     /// </summary>
     [Fact]
-    public void Build_WithoutEffortOverride_TheRoleDefaultDecides()
+    public void Build_WithoutAnEffort_EmitsNoFlagForAnyRole()
     {
         var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "   ", null, PID_FILE, null);
         var implementer = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-2", @"C:\repos\arb", "opus", "   ", PID_FILE, null);
         var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, null, PID_FILE, null);
         var reviewer = SpawnCommand_Builder.Build_ForReviewer("arb-fix", "rev-1", @"C:\repos\arb", null, string.Empty, PID_FILE, null);
 
-        Assert.Contains("claude --model opus --effort xhigh --dangerously-skip-permissions '/supervisor arb-fix'", SpawnCommand_Builder.Decode_SessionScript(supervisor));
-        Assert.Contains("claude --effort xhigh --dangerously-skip-permissions '/solo arb-fix'", SpawnCommand_Builder.Decode_SessionScript(solo));
+        Assert.Contains("claude --model opus --dangerously-skip-permissions '/supervisor arb-fix'", SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.Contains("claude --dangerously-skip-permissions '/solo arb-fix'", SpawnCommand_Builder.Decode_SessionScript(solo));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(supervisor));
+        Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(solo));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(implementer));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(reviewer));
     }
@@ -248,7 +256,7 @@ public class SpawnCommandBuilderTests
     public void Build_SupervisorAndSolo_WithAResumableConversation_ResumeIt_AheadOfEveryOtherFlag()
     {
         var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "medium", RESUME_ID, PID_FILE, null);
-        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, null, RESUME_ID, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", null, "xhigh", RESUME_ID, PID_FILE, null);
 
         Assert.Contains(
             $"claude --resume {RESUME_ID} --model opus --effort medium --dangerously-skip-permissions '/supervisor arb-fix'",
@@ -262,8 +270,8 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void Build_SupervisorAndSolo_WithNothingToResume_StartFresh_ExactlyAsBefore()
     {
-        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", null, null, PID_FILE, null);
-        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "opus", null, "   ", PID_FILE, null);
+        var supervisor = SpawnCommand_Builder.Build_ForSupervisor("arb-fix", @"C:\repos\arb", "opus", "xhigh", null, PID_FILE, null);
+        var solo = SpawnCommand_Builder.Build_ForSolo("arb-fix", "solo-1", @"C:\repos\arb", "opus", "xhigh", "   ", PID_FILE, null);
 
         var supervisorScript = SpawnCommand_Builder.Decode_SessionScript(supervisor);
         var soloScript = SpawnCommand_Builder.Decode_SessionScript(solo);
@@ -296,7 +304,7 @@ public class SpawnCommandBuilderTests
     [Fact]
     public void ASupervisorRespawn_ResumesItsOwnConversation_AndCarriesTheRoleEffort()
     {
-        var command = SpawnCommand_Builder.Build_ForSupervisor("repo-3", @"C:\repo", "claude-fable-5-1", effort: null,
+        var command = SpawnCommand_Builder.Build_ForSupervisor("repo-3", @"C:\repo", "claude-fable-5-1", effort: "xhigh",
             resumeSessionId: "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b", pidFilePath: @"C:\pid", displayName: null);
 
         var script = SpawnCommand_Builder.Decode_SessionScript(command);

@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
+using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
@@ -120,6 +121,14 @@ public interface IOrchestratorConfig
     ITelegramProseSettings TelegramProse { get; }
 
     /// <summary>
+    /// The <c>effort</c> block: the <c>--effort</c> ROLE DEFAULT per role, resolved catalogue →
+    /// preset → this file. Never null as an object — an absent block means the shipped defaults, the
+    /// same shape <see cref="Guardrails"/>, <see cref="Defaults"/> and <see cref="TelegramProse"/>
+    /// have — though every LEVEL inside it may legitimately be null, which means "emit no flag".
+    /// </summary>
+    IEffortSettings Effort { get; }
+
+    /// <summary>
     /// THE ONE READER OF THE PER-ROLE DEFAULT — the same rule <see cref="IRunnerConfigs.Get_ForRole"/>
     /// already follows for the runners, and for the reason CLAUDE.md decision 12 states about
     /// formatters: six roles resolved at four call sites is how two of them come to disagree. Every
@@ -127,6 +136,22 @@ public interface IOrchestratorConfig
     /// adding it here and nowhere else.
     /// </summary>
     string? Get_ModelForRole(SessionRoles role);
+
+    /// <summary>
+    /// THE EFFORT'S EQUIVALENT, and it sits beside <see cref="Get_ModelForRole"/> deliberately: the
+    /// two dials travel together onto one command line, and until 2026-09-12 only one of them was
+    /// readable from a config at all (the other was <c>SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL</c>,
+    /// a compiled constant). A caller now asks one object the same question twice instead of asking
+    /// the config for the model and the builder for the effort.
+    ///
+    /// <para>
+    /// NULL MEANS NO <c>--effort</c> FLAG, not "unknown": the CLI's own default then applies. The
+    /// per-orchestration <c>/effort</c> override is a LAYER ABOVE this and is applied by the launcher,
+    /// which holds the session (CLAUDE.md decision 24) — this answers only what the role gets when the
+    /// owner has turned no dial for that orchestration.
+    /// </para>
+    /// </summary>
+    string? Get_EffortForRole_OrNull(SessionRoles role);
 
     bool Is_TelegramConfigured();
 }

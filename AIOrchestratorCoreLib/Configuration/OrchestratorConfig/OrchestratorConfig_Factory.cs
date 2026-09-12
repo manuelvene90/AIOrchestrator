@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
+using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
@@ -97,13 +98,17 @@ public static class OrchestratorConfig_Factory
         // A FIFTH OF THE SAME KIND, and it obeys the same three rules: hand-edited in config.json,
         // no window field, never serialised by Save — so a config rebuilt without it cannot erase
         // it from disk. Null reads as `poll`, which is what every host did before the key existed.
-        Telegram.TelegramInboundModes? telegramInbound = null)
+        Telegram.TelegramInboundModes? telegramInbound = null,
+
+        // AND A SIXTH, the `effort` block (added 2026-09-12, plan 02 task 7). Same three rules again:
+        // hand-edited, no window field, never serialised — EffortSettings_Json has no Write at all.
+        IEffortSettings? effort = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, reviewerModel, soloModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
-            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound);
+            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound, effort);
     }
 
     /// <summary>
@@ -135,7 +140,8 @@ public static class OrchestratorConfig_Factory
         IGuardrailSettings? guardrails = null,
         IDefaultsSettings? defaults = null,
         ITelegramProseSettings? telegramProse = null,
-        Telegram.TelegramInboundModes? telegramInbound = null)
+        Telegram.TelegramInboundModes? telegramInbound = null,
+        IEffortSettings? effort = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -183,7 +189,15 @@ public static class OrchestratorConfig_Factory
             // POLLING IS THE DEFAULT, and the direction is chosen rather than inherited: a host that
             // silently stops polling is a phone that silently stops working, and it cannot report
             // the reason — it is not polling, so it never sees the 409 that would explain it.
-            telegramInbound ?? Telegram.TelegramInboundModes.Poll);
+            telegramInbound ?? Telegram.TelegramInboundModes.Poll,
+
+            // DEFAULTED, NEVER NULL — the guardrails/defaults/telegramProse rule again, and it earns
+            // it: every caller that predates this parameter keeps compiling and keeps getting the
+            // shipped behaviour, which for effort is "no --effort flag for any role" (the catalogue's
+            // own answer, read by Create_Default). The PRESET rung — classic's xhigh for supervisor
+            // and solo — is applied by OrchestratorConfig_Loader, which is the only reader that has a
+            // `preset` key to consult, exactly as for the six model keys.
+            effort ?? EffortSettings_Factory.Create_Default());
     }
 
     /// <summary>
@@ -259,6 +273,11 @@ public static class OrchestratorConfig_Factory
             source.Guardrails,
             source.Defaults,
             source.TelegramProse,
-            source.TelegramInbound);
+            source.TelegramInbound,
+
+            // CARRIED THROUGH, like every other block above: this method exists to move ONE bool, and
+            // a block it forgot would be silently reset to the shipped default on the next
+            // /screenshots tap — which is precisely the bug shape `runners` had here before.
+            source.Effort);
     }
 }

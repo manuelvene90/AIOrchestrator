@@ -146,6 +146,22 @@ public static class SettingsCatalog
         "(supervisorEffortOverride / implementerEffortOverride); a solo sits on the implementer slot, as it does for the model.";
 
     /// <summary>
+    /// THE OWNER'S OWN DIRECTIVE, carried here from the constant that used to hold it. Until
+    /// 2026-09-12 this sentence was the XML doc of <c>SpawnCommand_Builder.SUPERVISION_EFFORT_LEVEL</c>,
+    /// a compiled <c>const "xhigh"</c> applied to the supervisor and the solo whenever no
+    /// per-orchestration override was set — CODE, so changing it needed a rebuilt app actually running
+    /// (CLAUDE.md decision 23), while the MODEL on the same command line was already read live from
+    /// config.json. The value did not change when it moved: the <c>classic</c> preset carries xhigh for
+    /// these two roles, and an absent <c>preset</c> key means classic. The SHIPPED default registered
+    /// here is null for all six roles, because effort is billed thinking and the owner named two.
+    /// </summary>
+    const string EFFORT_OWNER_DIRECTIVE_NOTE =
+        "Owner directive 2026-09-09: \"XHigh effort in each solo and sup session\" — the two roles that " +
+        "talk to the owner and decide. That xhigh lives in the classic preset, not in this shipped " +
+        "default, so a machine on quiet carries no flag. Verified against the installed CLI, whose " +
+        "--help lists --effort as (low, medium, high, xhigh, max).";
+
+    /// <summary>
     /// ALL SIX ROWS ARE LITERALS, NEVER A READ OF <see cref="OrchestratorConfig_Factory"/>'S OWN
     /// CONSTANTS (moved 2026-09-12, task 6 of this plan). They used to split: supervisor and
     /// implementer were deliberate literals because pointing them at
@@ -187,10 +203,10 @@ public static class SettingsCatalog
             Model_Definition(SessionRoles.Communicator, "communicatorModel", "sonnet", SettingScopes.Machine,
                 "The model a COMMUNICATOR session spawns with. Narration, not judging, so it is deliberately cheap."),
 
-            Effort_Definition(SessionRoles.Supervisor, SettingScopes.Orchestration),
+            Effort_Definition(SessionRoles.Supervisor, SettingScopes.Orchestration, EFFORT_OWNER_DIRECTIVE_NOTE),
             Effort_Definition(SessionRoles.Implementer, SettingScopes.Orchestration),
             Effort_Definition(SessionRoles.Reviewer, SettingScopes.Machine),
-            Effort_Definition(SessionRoles.Solo, SettingScopes.Machine),
+            Effort_Definition(SessionRoles.Solo, SettingScopes.Machine, EFFORT_OWNER_DIRECTIVE_NOTE),
             Effort_Definition(SessionRoles.General, SettingScopes.Machine),
             Effort_Definition(SessionRoles.Communicator, SettingScopes.Machine),
         ];
@@ -210,8 +226,16 @@ public static class SettingsCatalog
             validator: SettingValidators.MODEL_WORD);
     }
 
-    static ISettingDefinition Effort_Definition(SessionRoles role, SettingScopes scope)
+    /// <summary>
+    /// <paramref name="ownerDirectiveNote"/> is appended for the two roles the owner named
+    /// (<see cref="EFFORT_OWNER_DIRECTIVE_NOTE"/>) and empty for the other four, so the renderer that
+    /// shows a supervisor's or a solo's effort also shows WHY xhigh is what it is — a question every
+    /// other role's row genuinely has no answer to.
+    /// </summary>
+    static ISettingDefinition Effort_Definition(SessionRoles role, SettingScopes scope, string ownerDirectiveNote = "")
     {
+        var directive = ownerDirectiveNote.Length == 0 ? string.Empty : $" {ownerDirectiveNote}";
+
         return SettingDefinition_Factory.Create_Enum(
             path: Get_EffortPath(role),
             values: EffortLevels.ALL,
@@ -219,7 +243,7 @@ public static class SettingsCatalog
             scope: scope,
             category: SettingCategories.Models,
             label: $"{SessionRole_Names.Get_ConfigKey(role)} effort",
-            description: $"The --effort level a {SessionRole_Names.Get_ConfigKey(role)} session spawns with. {EFFORT_NULL_NOTE}",
+            description: $"The --effort level a {SessionRole_Names.Get_ConfigKey(role)} session spawns with. {EFFORT_NULL_NOTE}{directive}",
             restart: RestartKinds.NextSpawn,
             nullable: true);
     }
