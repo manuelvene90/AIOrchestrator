@@ -143,12 +143,27 @@ internal sealed class ChannelChangeWakerModel : IChannelChangeWaker
     /// IT ALSO ASKS FOR A RE-ARM, because on Linux the two are the same event: an error here is how a
     /// dropped watch descriptor presents, and .NET does not re-add one.
     /// </para>
+    /// <para>
+    /// A ROOT THAT IS GONE IS NOT A SECOND FACT. Windows raises Error when the watched root is deleted;
+    /// inotify does not — one fact, one line, on both. <see cref="Check_WatchStillValid"/> already owns
+    /// that fact and says "armed again" when the folder comes back, so an error raised while the root is
+    /// missing asks for the re-arm and stays silent. The error line is for a watcher that failed with
+    /// its folder STILL THERE — an overflowed buffer, a watch the OS dropped underneath a live root —
+    /// which is a different thing to say and keeps its own once.
+    /// </para>
     /// </summary>
     void On_WatcherError(object sender, ErrorEventArgs args)
     {
         try
         {
             string? line = null;
+
+            // STATTED OUTSIDE THE GATE, for the same reason the log call below is: the wake path takes
+            // this lock and must not wait behind somebody else's filesystem. Directory.Exists is also
+            // false for a root this process cannot stat, and that is deliberate: it is the SAME reading
+            // Check_WatchStillValid takes two lines later, so the two can never disagree about whether
+            // there is a folder here — and the re-arm request below is made either way.
+            var rootStillExists = Directory.Exists(_supervisionRoot);
 
             lock (_gate)
             {
@@ -158,7 +173,10 @@ internal sealed class ChannelChangeWakerModel : IChannelChangeWaker
 
                 _rearmRequested = true;
 
-                if (!_reportedAnError)
+                if (!rootStillExists)
+                    _rootWasMissing = true;
+
+                if (rootStillExists && !_reportedAnError)
                 {
                     _reportedAnError = true;
 
