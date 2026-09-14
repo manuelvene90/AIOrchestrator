@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+using AIOrchestratorCoreLib.Bridge.SuppressedEntries;
 using AIOrchestratorCoreLib.Bridge.TopicDeletion;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
@@ -939,6 +940,12 @@ internal sealed class BridgeEngineModel(
     /// path alone — sharing _pendingOwnerReplies for this dropped every answer.
     /// </summary>
     readonly HashSet<string> _ownerAwaitingAnswer = [.. restoredState.OwnerAwaitingAnswer];
+
+    /// <summary>
+    /// What <c>phone.push = filtered</c> held back for the turn-end digest — its own store, not a field
+    /// of this file (plan 03 Task 2). See <see cref="ISuppressedEntries"/> for why it is a list.
+    /// </summary>
+    readonly ISuppressedEntries _suppressedEntries = SuppressedEntries_Factory.Create(log);
 
     /// <summary>
     /// Telegram message id → a question the owner has NOT answered yet, restored across a restart.
@@ -3873,6 +3880,11 @@ internal sealed class BridgeEngineModel(
 
         var deliveredHere = 0;
 
+        // phone.push, READ ONCE PER APPEND at the point of effect — never cached on this engine, because
+        // the provider re-reads config.json on its write stamp. General is exempt (D8): see
+        // OwnerPush_Policy.Resolve_ModeForChannel for why the concierge's narration is never filtered.
+        var pushMode = OwnerPush_Policy.Resolve_ModeForChannel(_configProvider.Get_Current().Phone.Push, append.Channel.OrchId);
+
         foreach (var entry in mirrorableEntries)
         {
             if (deliveredHere < alreadyDelivered)
@@ -3917,40 +3929,43 @@ internal sealed class BridgeEngineModel(
                     ownerIsWaiting = _ownerAwaitingAnswer.Contains(append.Channel.OrchId);
                 }
 
-                // TWO REFUSALS SURVIVE THE FILTER'S REMOVAL, and neither is remembered for a later
-                // release — which is why the suppressed-entry filing that used to sit here is gone.
-                //
-                // What reaches this branch now is an owner RESTATEMENT (their own words quoted back,
-                // which must not be replayed at all) or an EMPTY body. The empty one is the sharp
-                // case and it is why the filing had to go rather than merely stop mattering: it is
-                // not a restatement, so it was filed and then released five minutes later, RINGING,
-                // wearing "nothing has moved for 5 min — sending you the last thing it said". A
-                // blank message, with a notification, about nothing.
-                //
-                // The subject is still passed because Should_Push's signature carries it for the
-                // callers that predate this change.
-                if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting, entry.Subject))
+                // THE DECISION IS A VALUE (plan 03 Task 2), switched on here rather than branched on
+                // inline. DROP is an EMPTY body or an owner RESTATEMENT, in either mode, and is never
+                // filed: an empty entry that was filed was once released five minutes later, RINGING,
+                // wearing "nothing has moved for 5 min — sending you the last thing it said" — a blank
+                // message, with a notification, about nothing. HOLD is narration under
+                // phone.push = filtered, owed to the owner at turn end as one message.
+                switch (OwnerPush_Policy.Decide(pushMode, entry.RawText, ownerIsWaiting, entry.Subject))
                 {
-                    // COUNTED, THOUGH NOTHING WAS SENT. The held-append memo is POSITIONAL — the
-                    // resume skips the first `alreadyDelivered` entries of the re-emitted append —
-                    // so it has to count entries CONSUMED, not entries sent. Counting only the sent
-                    // ones left the prefix short by one for every suppressed entry ahead of a sent
-                    // one, and the resume then re-sent an entry the owner already had.
-                    deliveredHere++;
-                    continue;
-                }
+                    case OwnerPushDecisions.Drop:
+                        // COUNTED, THOUGH NOTHING WAS SENT. The held-append memo is POSITIONAL — the
+                        // resume skips the first `alreadyDelivered` entries of the re-emitted append —
+                        // so it has to count entries CONSUMED, not entries sent. Counting only the sent
+                        // ones left the prefix short by one for every suppressed entry ahead of a sent
+                        // one, and the resume then re-sent an entry the owner already had.
+                        deliveredHere++;
+                        continue;
 
-                lock (_ownerStateLock)
-                {
-                }
+                    case OwnerPushDecisions.HoldForDigest:
+                        _suppressedEntries.File(append.Channel.OrchId, entry.Subject, Format_ForTurnEndDigest(append.Channel, entry));
 
-                // The flag is deliberately NOT cleared here — it is cleared after the send below.
-                // Clearing it at this point consumed the owner's wait on an ATTEMPT: when the send
-                // then failed, the append was left unconfirmed (by design, so it retries), but the
-                // re-emitted entry now read the flag as false, re-evaluated as ordinary narration
-                // and was SUPPRESSED. The answer to a question the owner actually asked was dropped
-                // silently — they asked, the supervisor replied, and nothing ever reached them.
-                answersTheOwnersWait = true;
+                        // Counted for exactly the reason Drop is, above: a held entry is CONSUMED.
+                        deliveredHere++;
+                        continue;
+
+                    case OwnerPushDecisions.SendNow:
+                        // The flag is deliberately NOT cleared here — it is cleared after the send below.
+                        // Clearing it at this point consumed the owner's wait on an ATTEMPT: when the send
+                        // then failed, the append was left unconfirmed (by design, so it retries), but the
+                        // re-emitted entry now read the flag as false, re-evaluated as ordinary narration
+                        // and was SUPPRESSED. The answer to a question the owner actually asked was dropped
+                        // silently — they asked, the supervisor replied, and nothing ever reached them.
+                        answersTheOwnersWait = true;
+                        break;
+
+                    default:
+                        throw new Exception($"Unhandled OwnerPushDecisions for entry #{entry.Index} of '{append.Channel.FilePath}'");
+                }
             }
 
             // THE SPEAKER PREFIX IS HELD APART FROM THE AGENT'S WORDS for the whole of this block.
@@ -4294,12 +4309,17 @@ internal sealed class BridgeEngineModel(
     /// (<see cref="Is_AwaitingAnswer"/>). This set says the OWNER asked and is owed a reply.
     /// </para>
     /// <para>
-    /// Plan 03 adds the suppressed-entry clear here, when the narration filter — and the list of
-    /// entries it holds back — comes back with `phone.push = filtered`.
+    /// AND WHAT WAS HELD BEFORE IT IS FORGOTTEN (plan 03, <c>phone.push = filtered</c>). The turn-end
+    /// digest is what the session said SINCE the owner spoke: an older held entry belongs to a
+    /// conversation that has already moved on, and replaying it under their new question would answer
+    /// something they did not just ask. Master drew the same line with a timestamp against the reply's
+    /// delivery; the delivery is this moment, so forgetting here draws it without one.
     /// </para>
     /// </summary>
     void Raise_OwnerWait(string orchId)
     {
+        _suppressedEntries.Forget(orchId);
+
         lock (_ownerStateLock)
         {
             _ownerAwaitingAnswer.Add(orchId);
@@ -4343,6 +4363,32 @@ internal sealed class BridgeEngineModel(
     bool Is_TopicSilenced(string orchId)
     {
         return Resolve_EffectiveMode(orchId) == TelegramDeliveryModes.Silenced;
+    }
+
+    /// <summary>
+    /// A HELD ENTRY AS THE OWNER WILL READ IT IN THE TURN-END DIGEST — the speaker glyph kept, the
+    /// <c>STATE:</c> line taken out, the subject standing in for a body that was nothing else.
+    ///
+    /// <para>
+    /// THE SAME STEPS THE SEND PATH TAKES, on the same helpers (<see cref="MirrorText_Formatter.Format_Parts"/>,
+    /// <see cref="Extract_MarkerLines"/>), because the digest is those words arriving later. The
+    /// <c>STATE:</c> line is the one marker that matters here: every supervisor turn ends with one by
+    /// skill mandate, it rides exactly the narration this mode holds, and left in, the digest would
+    /// read it aloud once per entry. A <c>QUESTION:</c>/<c>OPTION:</c> line or a column-0 file marker
+    /// cannot reach this method — an entry carrying one is sent now, never held — which is also why a
+    /// held picture is never reduced to its path.
+    /// </para>
+    /// </summary>
+    static string Format_ForTurnEndDigest(Channels.DiscoveredChannel.IDiscoveredChannel channel, Channels.ChannelEntry.IChannelEntry entry)
+    {
+        var (speaker, text) = MirrorText_Formatter.Format_Parts(channel, entry);
+
+        Extract_MarkerLines(ref text, DeclaredState_Parser.MARKER.TrimEnd(':'));
+
+        if (text.Trim().Length == 0)
+            text = entry.Subject;
+
+        return speaker + text;
     }
 
     /// <summary>Pulls '<marker>: value' lines out of the text (which shrinks accordingly) and returns the values.</summary>
@@ -5656,6 +5702,11 @@ internal sealed class BridgeEngineModel(
             // Snapshot BEFORE closing: the topic id is needed after, to delete the topic.
             var session = _store.Get_Session(orchId);
             _store.Close_Orchestration(orchId);
+
+            // A closed orchestration's held narration has no turn end left to arrive at. Forgotten
+            // BEFORE the kill, which can throw, so a failed kill cannot leave it behind.
+            _suppressedEntries.Forget(orchId);
+
             SessionTerminator.Kill_OrchestrationSessions(_paths, orchId);
 
             if (_telegramClient != null && session.TelegramTopicId != null)
@@ -15303,13 +15354,13 @@ internal sealed class BridgeEngineModel(
     /// terminal completes the operation and stops, and I haven't received anything telling me
     /// 'done'."*
     ///
-    /// WHAT THIS USED TO DO AND NO LONGER NEEDS TO. A session's closing report ("merged, 214 tests
-    /// green") was narration by shape — no question, no marker — so OwnerPush_Policy suppressed it,
-    /// and this method rescued it from the suppressed-entry store to serve as the completion the
-    /// owner had asked for. Nothing is suppressed since 2026-09-09: the report reaches them, rung
-    /// and rendered, at the moment it is written. So what is left here is the tick itself, which is
-    /// the app saying the turn ended — silent, and only when it says something the owner does not
-    /// already have.
+    /// WHAT THIS DOES DEPENDS ON <c>phone.push</c> (plan 03). A session's closing report ("merged, 214
+    /// tests green") is narration by shape — no question, no marker — so under <c>filtered</c>
+    /// OwnerPush_Policy holds it, and Build_TurnEndedText hands it over from the suppressed-entry store
+    /// as the completion the owner asked for. Under <c>everything</c> nothing is held: the report
+    /// reaches them, rung and rendered, at the moment it is written, and what is left is the tick
+    /// itself — the app saying the turn ended, silent, and only when it says something the owner does
+    /// not already have.
     /// </summary>
     /// <summary>
     /// The FIRST busy line when the receipt was a reaction, so there is nothing to edit yet. Silent,
@@ -15335,7 +15386,16 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    (string? Text, bool IsCompletion) Build_TurnEndedText(string orchId, PendingOwnerReply pending)
+    /// <param name="pushMode">The channel's resolved <c>phone.push</c>, read by the caller at the point of effect.</param>
+    /// <param name="heldForTheDigest">
+    /// What <c>phone.push = filtered</c> held since the owner spoke, ALREADY DRAINED by the caller — so
+    /// it is spent whatever this method decides to say.
+    /// </param>
+    (string? Text, bool IsCompletion) Build_TurnEndedText(
+        string orchId,
+        PendingOwnerReply pending,
+        PhonePushModes pushMode,
+        IReadOnlyList<(string? Subject, string Text)> heldForTheDigest)
     {
         var speaker = Describe_Speaker(orchId);
 
@@ -15350,12 +15410,19 @@ internal sealed class BridgeEngineModel(
             return ($"{prefix}{speaker}: turn ended — free now, they are reading this", false);
         }
 
-        // THE "LAST WORDS" HALF IS GONE WITH THE FILTER (2026-09-09). It existed to rescue a
-        // closing report that OwnerPush_Policy had suppressed as narration — and nothing is
-        // suppressed any more, so by the time a turn ends the owner has ALREADY read those words,
-        // rung, rendered, at the moment they were written. Replaying them under a "turn ended" line
-        // would be the same message twice.
-        string? lastWords = null;
+        // THE "LAST WORDS" HALF IS BACK WITH THE FILTER (plan 03, phone.push = filtered). A session's
+        // closing report ("merged, 214 tests green") is narration by shape, so the filter held it, and
+        // at the end of the turn the owner was waiting on it is exactly what they are owed — ALL of
+        // what was held, in order, not the last line (2026-09-10: the last line was the status line,
+        // and the answer was lost).
+        //
+        // UNDER EVERYTHING IT STAYS NULL, exactly as it was while that mode was the only build:
+        // nothing is held there, so by the time a turn ends the owner has ALREADY read those words,
+        // rung, rendered — replaying them would be the same message twice. A digest held under
+        // filtered and outlived by a switch to everything is dropped here, never sent late.
+        var lastWords = pushMode == PhonePushModes.Filtered
+            ? SuppressedDigest_Builder.Build_OrNull(heldForTheDigest)
+            : null;
 
         // ANSWERED, AND NOTHING WAS LEFT UNSAID: the answer the owner is reading IS the completion,
         // and the bubble going down under it says the turn ended. "done for now — turn ended" after
@@ -15371,13 +15438,26 @@ internal sealed class BridgeEngineModel(
 
     async Task Announce_SupervisorFree_Async(string orchId, PendingOwnerReply pending, CancellationToken cancellationToken)
     {
+        // THE DIGEST IS DRAINED AT TURN END WHETHER OR NOT ANYTHING IS SENT — ahead of both early
+        // returns and of every "say nothing" branch below. This method runs once per turn the owner
+        // waited on (the caller latches TurnEndAnnounced first), so a digest left behind here would sit
+        // until some LATER turn end and arrive there hours out of context — after a mode change, a
+        // muted topic, or a turn that ended unanswered.
+        var heldForTheDigest = _suppressedEntries.Drain(orchId);
+
         if (_telegramClient == null)
             return;
 
         if (Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
-            return;
+        {
+            if (heldForTheDigest.Count > 0)
+                _log.Log_Info(orchId, $"Turn ended with {heldForTheDigest.Count} held entries for the digest, not sent — the topic is not in normal delivery; they remain in the channel file");
 
-        var (turnEndedText, isCompletion) = Build_TurnEndedText(orchId, pending);
+            return;
+        }
+
+        var pushMode = OwnerPush_Policy.Resolve_ModeForChannel(_configProvider.Get_Current().Phone.Push, orchId);
+        var (turnEndedText, isCompletion) = Build_TurnEndedText(orchId, pending, pushMode, heldForTheDigest);
 
         if (turnEndedText == null)
         {
@@ -15421,8 +15501,10 @@ internal sealed class BridgeEngineModel(
                 // RENDERED (owner's decision, 2026-09-09). This is the second of the two paths that
                 // RESEND WHAT THE SUPERVISOR ALREADY WROTE — a completion carries their last words
                 // above the tick — and it went out as plain text, so their Markdown arrived with the
-                // markers showing. It is also silent: the words themselves already rang when they
-                // were mirrored; this is the app saying the turn ended.
+                // markers showing. It is also silent: under phone.push = everything the words already
+                // rang when they were mirrored, and under filtered the answer those held words follow
+                // already rang — this is the app saying the turn ended. Whether it should ring is
+                // phone.appMessagesRing's question (plan 03 Task 3), not this one's.
                 await TelegramProse_Sender.Send_Async(
                     _telegramClient, _log, orchId, pending.ThreadId, turnEndedText, TelegramSendSounds.Silent, cancellationToken);
             }

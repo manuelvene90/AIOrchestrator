@@ -57,9 +57,13 @@ public class ThePhoneRingsOnlyForTheSupervisorTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
+        // phone.push = everything (plan 03): this file is the fork's ruling of 2026-09-09 driven through
+        // the engine — "if the supervisor writes to me, I must know it" — which is that mode by
+        // definition. Under filtered a plain report is held for the turn-end digest instead, and that
+        // mode's phone is pinned by OwnerPushDeciderTests and AStatusLineDoesNotSpendTheOwnersWaitTests.
         File.WriteAllText(
             _paths.ConfigFile,
-            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\"}}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 

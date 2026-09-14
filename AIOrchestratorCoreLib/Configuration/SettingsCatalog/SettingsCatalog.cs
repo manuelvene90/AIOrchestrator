@@ -631,8 +631,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Phone,
                 label: "What reaches the phone",
                 description:
-                    "'filtered' pushes only what asks, is blocked, carries a picture, or is THE answer (OwnerPush_Policy); " +
-                    $"'everything' mirrors every owner-channel entry. {INERT_NOTE}",
+                    "'filtered' pushes only what asks, is blocked, carries a picture, or is THE answer (OwnerPush_Policy), " +
+                    "and hands the rest over as one message when the turn the owner waited on ends; " +
+                    "'everything' mirrors every owner-channel entry. Orchestration topics only — General always gets everything.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
