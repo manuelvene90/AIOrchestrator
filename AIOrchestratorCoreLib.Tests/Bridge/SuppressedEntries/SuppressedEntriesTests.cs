@@ -103,6 +103,68 @@ public class SuppressedEntriesTests
         Assert.Equal($"entry {ISuppressedEntries.MAX_ENTRIES_PER_ORCHESTRATION + 1}", drained[^1].Subject);
 
         // Quoted, so "entry 1" cannot be satisfied by "entry 10".
-        Assert.True(log.Has_Line_Containing("'entry 1'"),$"the dropped entry was not named in the log.{Environment.NewLine}{log.Dump()}");
+        Assert.True(log.Has_Line_Containing("'entry 1'"), $"the dropped entry was not named in the log.{Environment.NewLine}{log.Dump()}");
+    }
+
+    /// <summary>
+    /// SAID ONCE PER FILL, AT INFO — never a line per entry (ruling R9, task-2 fix round 1). Entries
+    /// filed OUTSIDE a reply turn are never drained (there is no turn end they are owed to), so an
+    /// ordinary autonomous stretch under classic fills the list and stays full: a warning per entry
+    /// past the cap was a false alarm repeated for as long as the session kept working, about a
+    /// condition nobody can act on (decision 15). Drain and Forget empty the list, so the next fill
+    /// is a new fact and is said again.
+    /// </summary>
+    [Fact]
+    public void File_PastTheCap_SaysSoOncePerFill_AtInfo_AndAgainAfterADrainOrAForget()
+    {
+        var log = new RecordingLog_Fake();
+        var store = SuppressedEntries_Factory.Create(log);
+
+        Fill_PastTheCap(store, extra: 5);
+
+        Assert.Equal(1, Count_OverflowLines(log));
+        Assert.True(log.Has_Info_Containing(OVERFLOW_FRAGMENT), $"the overflow was not said at Info.{Environment.NewLine}{log.Dump()}");
+        Assert.DoesNotContain("WARN", log.Dump(), StringComparison.Ordinal);
+
+        store.Drain(ORCH_ID);
+        Fill_PastTheCap(store, extra: 3);
+
+        Assert.Equal(2, Count_OverflowLines(log));
+
+        store.Forget(ORCH_ID);
+        Fill_PastTheCap(store, extra: 1);
+
+        Assert.Equal(3, Count_OverflowLines(log));
+    }
+
+    /// <summary>One orchestration's full digest does not mute another's.</summary>
+    [Fact]
+    public void File_PastTheCap_IsSaidOncePerOrchestration()
+    {
+        var log = new RecordingLog_Fake();
+        var store = SuppressedEntries_Factory.Create(log);
+
+        for (var i = 1; i <= ISuppressedEntries.MAX_ENTRIES_PER_ORCHESTRATION + 2; i++)
+        {
+            store.File(ORCH_ID, $"mine {i}", $"🔴 Sup: mine {i}");
+            store.File("crm-2", $"theirs {i}", $"🔴 Sup: theirs {i}");
+        }
+
+        Assert.Equal(2, Count_OverflowLines(log));
+    }
+
+    const string OVERFLOW_FRAGMENT = "turn-end digest is full";
+
+    static void Fill_PastTheCap(ISuppressedEntries store, int extra)
+    {
+        for (var i = 1; i <= ISuppressedEntries.MAX_ENTRIES_PER_ORCHESTRATION + extra; i++)
+            store.File(ORCH_ID, $"entry {i}", $"🔴 Sup: progress {i}");
+    }
+
+    static int Count_OverflowLines(RecordingLog_Fake log)
+    {
+        return log.Dump()
+            .Split(Environment.NewLine)
+            .Count(line => line.Contains(OVERFLOW_FRAGMENT, StringComparison.Ordinal));
     }
 }

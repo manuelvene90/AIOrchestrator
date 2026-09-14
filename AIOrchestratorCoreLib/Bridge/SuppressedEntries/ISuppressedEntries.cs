@@ -13,10 +13,14 @@ namespace AIOrchestratorCoreLib.Bridge.SuppressedEntries;
 /// owner re-typed their question three times that morning (decision 25).
 /// </para>
 /// <para>
-/// CAPPED, OLDEST DROPPED, AND SAID. An orchestration that runs for a day with the owner away must not
-/// grow a digest nobody can read; when something has to go, the newest words are the ones worth
-/// keeping, and every drop is a log line naming the entry — which is still in the channel file and
-/// the app. The log, never the phone: the owner cannot act on it (decision 15).
+/// CAPPED, OLDEST DROPPED, AND SAID ONCE. An orchestration that runs for a day with the owner away must
+/// not grow a digest nobody can read; when something has to go, the newest words are the ones worth
+/// keeping. The overflow is ONE Info line per fill, naming the first entry dropped — every entry is
+/// still in the channel file and the app. Once, because entries filed outside a reply turn are never
+/// drained, so an ordinary autonomous stretch keeps the list full for hours: a warning per entry past
+/// the cap was a false alarm repeated for as long as the session worked (ruling R9). Drain and Forget
+/// end the fill, so the next one is said again. The log, never the phone: the owner cannot act on it
+/// (decision 15).
 /// </para>
 /// <para>
 /// WHAT IT DOES NOT DO: release anything on its own. Master also released a stalled orchestration's

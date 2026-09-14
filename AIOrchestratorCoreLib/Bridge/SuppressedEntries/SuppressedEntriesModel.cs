@@ -14,9 +14,15 @@ internal sealed class SuppressedEntriesModel(IOrchestrationLog log) : ISuppresse
     readonly Lock _gate = new();
     readonly Dictionary<string, List<(string? Subject, string Text)>> _byOrchId = [];
 
+    /// <summary>
+    /// The orchestrations whose CURRENT fill has already been said to overflow. Cleared with the list by
+    /// Drain and Forget, so it means "this fill", never "ever".
+    /// </summary>
+    readonly HashSet<string> _overflowSaid = [];
+
     public void File(string orchId, string? subject, string text)
     {
-        (string? Subject, string Text)? dropped = null;
+        (string? Subject, string Text)? firstDropOfThisFill = null;
 
         lock (_gate)
         {
@@ -30,18 +36,22 @@ internal sealed class SuppressedEntriesModel(IOrchestrationLog log) : ISuppresse
 
             if (held.Count > ISuppressedEntries.MAX_ENTRIES_PER_ORCHESTRATION)
             {
-                dropped = held[0];
+                var dropped = held[0];
                 held.RemoveAt(0);
+
+                if (_overflowSaid.Add(orchId))
+                    firstDropOfThisFill = dropped;
             }
         }
 
         // Logged outside the gate: a log sink is someone else's I/O, and holding this lock across it
         // would let a slow log stall the mirror's next filing.
-        if (dropped != null)
+        if (firstDropOfThisFill != null)
         {
-            _log.Log_Warning(
+            _log.Log_Info(
                 orchId,
-                $"The turn-end digest is full at {ISuppressedEntries.MAX_ENTRIES_PER_ORCHESTRATION} held entries — dropped the oldest, '{dropped.Value.Subject}', from it; the entry is still in the channel file");
+                $"The turn-end digest is full at {ISuppressedEntries.MAX_ENTRIES_PER_ORCHESTRATION} held entries — dropping the oldest from it, starting with '{firstDropOfThisFill.Value.Subject}'. "
+                + "Said once until the digest is handed over or forgotten; every entry is still in the channel file");
         }
     }
 
@@ -49,6 +59,8 @@ internal sealed class SuppressedEntriesModel(IOrchestrationLog log) : ISuppresse
     {
         lock (_gate)
         {
+            _overflowSaid.Remove(orchId);
+
             if (!_byOrchId.Remove(orchId, out var held))
                 return [];
 
@@ -60,6 +72,7 @@ internal sealed class SuppressedEntriesModel(IOrchestrationLog log) : ISuppresse
     {
         lock (_gate)
         {
+            _overflowSaid.Remove(orchId);
             _byOrchId.Remove(orchId);
         }
     }
