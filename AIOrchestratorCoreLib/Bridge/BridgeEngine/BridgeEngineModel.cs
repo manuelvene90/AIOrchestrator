@@ -15405,7 +15405,11 @@ internal sealed class BridgeEngineModel(
     /// What <c>phone.push = filtered</c> held since the owner spoke, ALREADY DRAINED by the caller — so
     /// it is spent whatever this method decides to say.
     /// </param>
-    (string? Text, bool IsCompletion) Build_TurnEndedText(
+    /// <returns>
+    /// The text (null: send nothing), whether it is a completion, and the sound it is SENT with — which
+    /// rings exactly when the text carries held words (ruling R8). An edit carries no sound whatever this says.
+    /// </returns>
+    (string? Text, bool IsCompletion, TelegramSendSounds Sound) Build_TurnEndedText(
         string orchId,
         PendingOwnerReply pending,
         PhonePushModes pushMode,
@@ -15421,7 +15425,7 @@ internal sealed class BridgeEngineModel(
             // edit of that tick, which makes the reference doubly wrong.
             var prefix = pending.ReceiptWasReaction ? "" : "✓✓  ·  ";
 
-            return ($"{prefix}{speaker}: turn ended — free now, they are reading this", false);
+            return ($"{prefix}{speaker}: turn ended — free now, they are reading this", false, TelegramSendSounds.Silent);
         }
 
         // THE "LAST WORDS" HALF IS BACK WITH THE FILTER (plan 03, phone.push = filtered). A session's
@@ -15443,11 +15447,17 @@ internal sealed class BridgeEngineModel(
         // it was the second of two status messages per exchange (owner, 2026-09-07). Null, not a
         // line: the caller sends nothing.
         if (string.IsNullOrWhiteSpace(lastWords))
-            return (null, true);
+            return (null, true, TelegramSendSounds.Silent);
 
         // The entry's own text carries its speaker glyph already, so this adds only the fact the
         // owner cannot see from it: that the session has STOPPED, rather than being mid-sentence.
-        return ($"{lastWords}\n\n✓✓  ·  turn ended — {speaker} is free", true);
+        //
+        // IT RINGS (ruling R8). These are the supervisor's own words reaching the owner for the FIRST
+        // time — the filter held them, so they never rang when they were written — and the common case
+        // is the one the completion exists for: "on it" spent the credit, the closing report ("merged,
+        // 214 green") was held, and this message is the only way the finished job reaches them. Sent
+        // silent, it reached them as silence.
+        return ($"{lastWords}\n\n✓✓  ·  turn ended — {speaker} is free", true, TelegramSendSounds.Rings);
     }
 
     async Task Announce_SupervisorFree_Async(string orchId, PendingOwnerReply pending, CancellationToken cancellationToken)
@@ -15471,7 +15481,7 @@ internal sealed class BridgeEngineModel(
         }
 
         var pushMode = OwnerPush_Policy.Resolve_ModeForChannel(_configProvider.Get_Current().Phone.Push, orchId);
-        var (turnEndedText, isCompletion) = Build_TurnEndedText(orchId, pending, pushMode, heldForTheDigest);
+        var (turnEndedText, isCompletion, turnEndedSound) = Build_TurnEndedText(orchId, pending, pushMode, heldForTheDigest);
 
         if (turnEndedText == null)
         {
@@ -15515,12 +15525,18 @@ internal sealed class BridgeEngineModel(
                 // RENDERED (owner's decision, 2026-09-09). This is the second of the two paths that
                 // RESEND WHAT THE SUPERVISOR ALREADY WROTE — a completion carries their last words
                 // above the tick — and it went out as plain text, so their Markdown arrived with the
-                // markers showing. It is also silent: under phone.push = everything the words already
-                // rang when they were mirrored, and under filtered the answer those held words follow
-                // already rang — this is the app saying the turn ended. Whether it should ring is
-                // phone.appMessagesRing's question (plan 03 Task 3), not this one's.
+                // markers showing.
+                //
+                // THE SOUND IS BUILD_TURNENDEDTEXT'S, and it follows the held words (ruling R8). A
+                // completion carrying them RINGS: under phone.push = filtered those words were held
+                // when written, so they have never rung — the earlier "on it" that spent the credit is
+                // not them — and a finished job must not reach the owner as silence. Everything else
+                // this block sends is SILENT: under everything nothing is held, the words already rang
+                // when they were mirrored, and an unanswered turn's line is the app talking about
+                // itself. phone.appMessagesRing (plan 03 Task 3) is, by its catalogue row, "the app's
+                // narration" around agent words — the supervisor's words carried here are not that.
                 await TelegramProse_Sender.Send_Async(
-                    _telegramClient, _log, orchId, pending.ThreadId, turnEndedText, TelegramSendSounds.Silent, cancellationToken);
+                    _telegramClient, _log, orchId, pending.ThreadId, turnEndedText, turnEndedSound, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

@@ -334,6 +334,13 @@ internal sealed class SoundRecordingTelegram_Fake : ITelegramApiClient
             return Sent.Count(sent => sent.Text.Contains(fragment, StringComparison.Ordinal));
     }
 
+    /// <summary>Under the fake's lock — the engine records from its own loops while a test counts.</summary>
+    public int Count_Sent_WithSound(TelegramSendSounds sound)
+    {
+        lock (_lock)
+            return Sent.Count(sent => sent.Sound == sound);
+    }
+
     public string Dump_Sent()
     {
         lock (_lock)
