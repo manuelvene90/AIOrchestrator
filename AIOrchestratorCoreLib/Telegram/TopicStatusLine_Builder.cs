@@ -1,11 +1,14 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Configuration.PulseSettings;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Planning;
 using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
+using AIOrchestratorCoreLib.Status.SessionModelReading;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 
 namespace AIOrchestratorCoreLib.Telegram;
@@ -24,6 +27,12 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// fields the owner specified in order: what is waiting on them, what the supervisor says it is
 /// doing, who is live and on what, the last real event, how much is merged, and when this line was
 /// last drawn.
+///
+/// WHICH OF THOSE FIELDS, AND IN WHAT ORDER, IS THE OWNER'S SINCE PLAN 03 (`pulse.fields`, spec §7.3).
+/// The six above are the catalogue's shipped list (with the closed count, seven words); classic lists
+/// five — the supervisor, the members, their model-and-effort reading as master drew it, what merged,
+/// and the heartbeat. Once there is anything to say, <see cref="Build"/> draws the header, then walks
+/// the list calling one private per word, and every field keeps its own rule for omitting itself.
 ///
 /// NOT PINNED, and the owner's reason for refusing that is the reason this file exists at all.
 /// "Working now" elsewhere in the app is FILE MTIME, which stays true for ~2 minutes after a turn
@@ -161,6 +170,20 @@ public static class TopicStatusLine_Builder
     /// default was the dangerous answer, here `default` means "nothing is known", which is exactly
     /// what an unwired caller knows.
     /// </param>
+    /// <param name="supervisorModel">
+    /// What the supervisor's own probe last reported. It rides the `sup` row, drawn only when the list
+    /// names <see cref="PulseField_Names.MODEL_EFFORT"/> — master drew it on its lead line, which was the
+    /// supervisor's only home before field 2 gave it a row, exactly as the context figure moved.
+    /// </param>
+    /// <param name="pulseFields">
+    /// `pulse.fields` as the engine resolved it: <see cref="PulseField_Names"/> words, drawn in this
+    /// order under the header. NULL IS THE CATALOGUE'S SHIPPED LIST, so the callers that predate the
+    /// setting keep today's line without naming one; the engine always passes the resolved list.
+    /// </param>
+    /// <param name="stepMinutes">
+    /// `pulse.stepMinutes` as resolved — the ONE step the member durations, the "unchanged" clause and
+    /// the heartbeat all round to. Null is the catalogue's shipped step.
+    /// </param>
     public static string Build(
         IPlanProgress? progress,
         IReadOnlyList<ITopicStatusMember> members,
@@ -169,8 +192,13 @@ public static class TopicStatusLine_Builder
         bool aMessageIsAlreadyPosted,
         TimeSpan? figuresUnchangedFor = null,
         ISessionContextUsage? supervisorContext = null,
-        TopicStatusFields fields = default)
+        TopicStatusFields fields = default,
+        ISessionModelReading? supervisorModel = null,
+        IReadOnlyList<string>? pulseFields = null,
+        int? stepMinutes = null)
     {
+        var (fieldList, step) = Resolve_FieldsAndStep(pulseFields, stepMinutes);
+
         // Resolved ONCE per member and carried, rather than asked again per field. The state decides
         // the reading order, the row's state word, the collapsed line's grouping AND whether the
         // member belongs in "waiting on you" — four readers, and MemberState_Resolver.Resolve scans
@@ -197,6 +225,10 @@ public static class TopicStatusLine_Builder
         //
         // AN ASK IS SUBSTANCE, and it is the most actionable substance there is: a supervisor's
         // question on a topic whose ledger has not been written yet must still reach the owner.
+        //
+        // AND SUBSTANCE DOES NOT READ THE FIELD LIST. It is a fact about the orchestration: an owner
+        // who left `last` off the line chose not to read it, not to be told nothing on the day it is
+        // the only thing that moved.
         var hasSubstance = live.Count > 0
             || (progress != null && progress.Total > 0)
             || !string.IsNullOrWhiteSpace(lastEvent?.Subject)
@@ -205,41 +237,91 @@ public static class TopicStatusLine_Builder
         if (!hasSubstance)
             return aMessageIsAlreadyPosted ? LEAD_WORD : "";
 
-        // THE SIX FIELDS IN THE OWNER'S OWN ORDER (2026-09-09), under a header line that carries the
-        // lead word and every MODE glyph — 🌙 🔕 ✈ 🤐 💻, all five of which left the topic name on
-        // 2026-09-10. Every field omits itself when it has nothing to say; none of them substitutes a
-        // placeholder.
+        // `modelEffort` DRAWS NO LINE OF ITS OWN: it is a field OF the rows it describes — the `sup`
+        // row and each member row — so its place in the list moves nothing, and a list without
+        // `supervisor` or `members` has nowhere to draw it. Master put it on those rows (the lead line
+        // was the supervisor's), and the owner reads it as a fact about a session, not as a section.
+        var showModelEffort = fieldList.Contains(PulseField_Names.MODEL_EFFORT, StringComparer.Ordinal);
+
+        // THE HEADER FIRST AND UNCONDITIONAL — the lead word and every MODE glyph, 🌙 🔕 ✈ 🤐 💻, all
+        // five of which left the topic name on 2026-09-10 — then THE FIELDS IN THE LISTED ORDER. Every
+        // field omits itself when it has nothing to say; none of them substitutes a placeholder.
         List<string> lines = [Build_HeaderLine(fields)];
 
-        if (asks.Count > 0)
-            lines.Add(Build_WaitingOnYouLine(asks));
+        foreach (var field in fieldList)
+        {
+            IReadOnlyList<string> drawn = field switch
+            {
+                PulseField_Names.WAITING_ON_YOU => asks.Count > 0 ? [Build_WaitingOnYouLine(asks)] : [],
 
-        var supervisorRow = Build_SupervisorRow_OrNull(fields, supervisorContext, now);
+                PulseField_Names.SUPERVISOR => Build_SupervisorRow_OrNull(
+                    fields, supervisorContext, Build_ModelEffortField_OrNull(supervisorModel, showModelEffort), now) is { } supervisorRow
+                    ? [supervisorRow]
+                    : [],
 
-        if (supervisorRow != null)
-            lines.Add(supervisorRow);
+                PulseField_Names.MEMBERS => Build_MemberLines(live, now, step, showModelEffort),
 
-        lines.AddRange(Build_MemberLines(live, now));
+                PulseField_Names.CLOSED_COUNT => closedCount > 0 ? [Build_ClosedCountLine(closedCount)] : [],
 
-        if (closedCount > 0)
-            lines.Add(Build_ClosedCountLine(closedCount));
+                // NO BULLET on this one, deliberately: it is not a member, and a `• last · …` row reads
+                // like one more session called "last". Not having the bullet is what separates it now
+                // that the divider is gone. It affords two more task words than a member row because it
+                // carries no duration — a longer field, in a shorter row.
+                PulseField_Names.LAST_EVENT => lastEvent != null && !string.IsNullOrWhiteSpace(lastEvent.Value.Subject)
+                    ? [Build_LastLine(lastEvent.Value, now)]
+                    : [],
 
-        // NO BULLET on this one, deliberately: it is not a member, and a `• last · …` row reads like
-        // one more session called "last". Not having the bullet is what separates it now that the
-        // divider is gone. It affords two more task words than a member row because it carries no
-        // duration — a longer field, in a shorter row.
-        if (lastEvent != null && !string.IsNullOrWhiteSpace(lastEvent.Value.Subject))
-            lines.Add(Build_LastLine(lastEvent.Value, now));
+                PulseField_Names.MERGED => progress != null && progress.Total > 0
+                    ? [Build_MergedLine(progress, figuresUnchangedFor, step)]
+                    : [],
 
-        if (progress != null && progress.Total > 0)
-            lines.Add(Build_MergedLine(progress, figuresUnchangedFor));
+                PulseField_Names.MODEL_EFFORT => [],
 
-        // THE HEARTBEAT, last and unconditional once there is anything to say. It is what tells the
-        // owner the difference between a quiet orchestration and a dead app — the failure this line
-        // cannot otherwise report, because a frozen status line looks exactly like a correct one.
-        lines.Add(Build_UpdatedLine(now));
+                // THE HEARTBEAT, unconditional once there is anything to say. It is what tells the owner
+                // the difference between a quiet orchestration and a dead app — the failure this line
+                // cannot otherwise report, because a frozen status line looks exactly like a correct one.
+                // The owner may leave it off (the catalogue says what that costs); it is never dropped here.
+                PulseField_Names.UPDATED => [Build_UpdatedLine(now, step)],
+
+                // UNREACHABLE FROM THE ENGINE: SettingValidators.PULSE_FIELDS refuses an unknown word at
+                // the layer that wrote it, so a word arriving here is a caller bypassing the resolver.
+                _ => throw new Exception(
+                    $"Unhandled pulse field '{field}' — {nameof(SettingValidators)}.{nameof(SettingValidators.PULSE_FIELDS)} refuses every word " +
+                    $"outside {nameof(PulseField_Names)}.{nameof(PulseField_Names.ALL)}, so this list did not come through the resolver"),
+            };
+
+            // A REPEAT IS DRAWN AS OFTEN AS IT IS LISTED. The validator refuses a repeated word, and a
+            // de-duplication here would be a second copy of that rule (CLAUDE.md decision 12).
+            lines.AddRange(drawn);
+        }
 
         return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// NULL IS THE CATALOGUE'S SHIPPED VALUE, READ FROM THE CATALOGUE — the same resolution a machine
+    /// with no config and no preset gets, rather than a copy of the seven words or a read of
+    /// <see cref="UnchangedFor_Formatter.STEP_MINUTES"/> here. A second spelling of the shipped list is
+    /// how this builder's default would come to disagree with the catalogue's the day either moved.
+    /// </summary>
+    static (IReadOnlyList<string> Fields, int StepMinutes) Resolve_FieldsAndStep(IReadOnlyList<string>? pulseFields, int? stepMinutes)
+    {
+        if (pulseFields != null && stepMinutes != null)
+            return (pulseFields, stepMinutes.Value);
+
+        var shipped = PulseSettings_Json.Parse(configRoot: null, presetTree: null);
+
+        return (pulseFields ?? shipped.Fields, stepMinutes ?? shipped.StepMinutes);
+    }
+
+    /// <summary>
+    /// THE `modelEffort` FIELD — one reading, worded by <see cref="ModelReading_Formatter"/>, or null
+    /// when the list does not name the field or the session has not reported. The `sup` row and every
+    /// member row ask this one method, so the two surfaces cannot drift apart about when it shows.
+    /// </summary>
+    static string? Build_ModelEffortField_OrNull(ISessionModelReading? reading, bool listed)
+    {
+        return listed ? ModelReading_Formatter.Describe_OrNull(reading) : null;
     }
 
     /// <summary>
@@ -431,7 +513,9 @@ public static class TopicStatusLine_Builder
     /// asked for by name, and it is what the false stall alerts of 2026-09-09 were actually looking at
     /// — *"the supervisor was not waiting for anything but PAUSED for a usage limit"*. The context
     /// reading rides here too, which is where it belongs now that the supervisor HAS a row: it used to
-    /// hang off the lead line for want of one, and its own docstring said so.
+    /// hang off the lead line for want of one, and its own docstring said so. The model-and-effort
+    /// reading moved with it, for the same reason, and sits BEFORE the context figure: the model is a
+    /// fact about the session and the context figure is an alarm, which keeps the end of the row.
     /// </para>
     /// <para>
     /// THE RESUME TIME IS NOT PUT THROUGH THE FUTURE-STAMP GUARD, and it is the one clock on this line
@@ -440,7 +524,8 @@ public static class TopicStatusLine_Builder
     /// blank the only half of the field the owner can plan around.
     /// </para>
     /// </summary>
-    static string? Build_SupervisorRow_OrNull(TopicStatusFields fields, ISessionContextUsage? supervisorContext, DateTime now)
+    static string? Build_SupervisorRow_OrNull(
+        TopicStatusFields fields, ISessionContextUsage? supervisorContext, string? modelEffortField, DateTime now)
     {
         List<string> parts = [];
 
@@ -456,6 +541,9 @@ public static class TopicStatusLine_Builder
 
         if (fields.UsageLimitResumeAt != null)
             parts.Add($"paused for usage limit until {TopicStatusWording.Clock(fields.UsageLimitResumeAt.Value)}");
+
+        if (modelEffortField != null)
+            parts.Add(modelEffortField);
 
         // Describe_OrNull rather than the bang operator: the policy and the formatter each answer the
         // null question for themselves, so neither this line nor the reader has to assert what the
@@ -489,10 +577,12 @@ public static class TopicStatusLine_Builder
     /// <para>
     /// The collapse keeps the STATES and drops the tasks, which is the right half to lose: with five
     /// sessions live the question the owner is asking is "is anybody stuck", and five truncated task
-    /// labels answer it worse than five ids grouped by state.
+    /// labels answer it worse than five ids grouped by state. The model readings go with the tasks, for
+    /// the same reason.
     /// </para>
     /// </summary>
-    static IReadOnlyList<string> Build_MemberLines(IReadOnlyList<(ITopicStatusMember Member, MemberStates State)> live, DateTime now)
+    static IReadOnlyList<string> Build_MemberLines(
+        IReadOnlyList<(ITopicStatusMember Member, MemberStates State)> live, DateTime now, int stepMinutes, bool showModelEffort)
     {
         if (live.Count == 0)
             return [];
@@ -500,7 +590,7 @@ public static class TopicStatusLine_Builder
         if (live.Count > MAX_MEMBER_ROWS)
             return [Build_CollapsedRoster(live)];
 
-        return [.. live.Select(entry => Build_MemberLine(entry.Member, entry.State, now))];
+        return [.. live.Select(entry => Build_MemberLine(entry.Member, entry.State, now, stepMinutes, showModelEffort))];
     }
 
     /// <summary>
@@ -596,11 +686,11 @@ public static class TopicStatusLine_Builder
     /// to 0."*
     /// </para>
     /// </summary>
-    static string Build_MergedLine(IPlanProgress progress, TimeSpan? figuresUnchangedFor)
+    static string Build_MergedLine(IPlanProgress progress, TimeSpan? figuresUnchangedFor, int stepMinutes)
     {
         var unchanged = figuresUnchangedFor == null
             ? null
-            : UnchangedFor_Formatter.Describe_OrNull(figuresUnchangedFor.Value);
+            : UnchangedFor_Formatter.Describe_OrNull(figuresUnchangedFor.Value, stepMinutes);
 
         var unchangedPart = unchanged == null ? "" : $"{FIELD_SEPARATOR}{unchanged}";
 
@@ -610,10 +700,11 @@ public static class TopicStatusLine_Builder
     /// <summary>
     /// FIELD 6 — the heartbeat. A status line that has stopped being redrawn looks exactly like one
     /// describing a quiet orchestration, and this is the only field that can tell them apart.
-    /// </summary>
-    /// <summary>
-    /// FIELD 6, STEPPED TO FIVE MINUTES — the same step as a member's duration, so PULSE's text
-    /// changes at most every five minutes when nothing else moves.
+    ///
+    /// <para>
+    /// STEPPED — five minutes shipped, `pulse.stepMinutes` since plan 03 — and it is the same step as a
+    /// member's duration, so PULSE's text changes at most once a step when nothing else moves.
+    /// </para>
     ///
     /// <para>
     /// MEASURED IN PRODUCTION, 2026-09-10 20:57-20:59, the first three minutes after the deploy: a
@@ -632,12 +723,13 @@ public static class TopicStatusLine_Builder
     /// THE HEARTBEAT STILL EARNS ITS PLACE at five minutes: it exists so a frozen line can be told
     /// from a quiet orchestration, and five minutes is well inside the patience of somebody asking
     /// "is this thing still alive". A stepped clock reads as a clock; what it stops being is a
-    /// per-minute write.
+    /// per-minute write. An owner who lowers the step buys the finer clock with those 429s, and one who
+    /// raises it to an hour gets a heartbeat that can be fifty-nine minutes behind a live app.
     /// </para>
     /// </summary>
-    static string Build_UpdatedLine(DateTime now)
+    static string Build_UpdatedLine(DateTime now, int stepMinutes)
     {
-        return $"{HEARTBEAT_PREFIX}{TopicStatusWording.Clock(Step_Down(now, UnchangedFor_Formatter.STEP_MINUTES))}";
+        return $"{HEARTBEAT_PREFIX}{TopicStatusWording.Clock(Step_Down(now, stepMinutes))}";
     }
 
     /// <summary>
@@ -671,9 +763,12 @@ public static class TopicStatusLine_Builder
     /// because it looks fixed.
     /// </para>
     /// <para>
-    /// It strips only the LAST line and only when that line is the heartbeat, rather than filtering
-    /// every line that starts with the prefix: the heartbeat is emitted last and unconditionally, and
-    /// a member whose task began with the word "updated" is not a heartbeat.
+    /// IT STRIPS THE HEARTBEAT WHEREVER THE LIST PUT IT (plan 03). It used to strip only the LAST line,
+    /// because the heartbeat was always drawn last; once the owner orders the fields it can be first, and
+    /// a heartbeat left in makes every step boundary read as news. Matching a WHOLE LINE by its opening
+    /// is still exact: every other line opens with something of its own — the header's lead word or a
+    /// glyph, `⏳`, `sup · `, a member's `• ` bullet or id, a count, `last · ` — so a task that begins
+    /// with the word "updated" sits after a bullet and can never open a line.
     /// </para>
     /// </summary>
     public static string? Strip_Heartbeat(string? statusText)
@@ -681,14 +776,7 @@ public static class TopicStatusLine_Builder
         if (statusText == null)
             return null;
 
-        var lastBreak = statusText.LastIndexOf('\n');
-
-        if (lastBreak < 0)
-            return statusText.StartsWith(HEARTBEAT_PREFIX, StringComparison.Ordinal) ? "" : statusText;
-
-        return statusText.AsSpan(lastBreak + 1).StartsWith(HEARTBEAT_PREFIX, StringComparison.Ordinal)
-            ? statusText[..lastBreak]
-            : statusText;
+        return string.Join('\n', statusText.Split('\n').Where(line => !line.StartsWith(HEARTBEAT_PREFIX, StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -734,8 +822,14 @@ public static class TopicStatusLine_Builder
     /// one would date a stale brief with a live duration — and "standing by" is both the state word
     /// and the whole content of the row.
     /// </para>
+    /// <para>
+    /// THE MODEL-AND-EFFORT READING, WHEN LISTED, COMES AFTER THE DURATION AND BEFORE THE CONTEXT
+    /// FIGURE — master's order: who, what, how long, on what, how full. The facts about the row first,
+    /// the alarm last, where a glance lands. A standing-by member is still running SOMETHING, so its
+    /// row names the model too.
+    /// </para>
     /// </summary>
-    static string Build_MemberLine(ITopicStatusMember member, MemberStates state, DateTime now)
+    static string Build_MemberLine(ITopicStatusMember member, MemberStates state, DateTime now, int stepMinutes, bool showModelEffort)
     {
         // ONE PATH, BUILDING A FIELD LIST, rather than a branch per combination of optional fields.
         // With a task, a state, a duration and a context reading all able to be absent independently,
@@ -759,11 +853,11 @@ public static class TopicStatusLine_Builder
             // STEPPED, NOT EXACT — the owner's ruling of 2026-09-10. A per-minute duration made
             // PULSE's text differ on every tick, so a buried line was re-posted for the minute hand
             // rather than for news: the same defect the heartbeat had, in the one field that reads a
-            // live clock. The step comes from UnchangedFor_Formatter rather than a number of its own,
-            // so this line's two ticking fields move in lockstep and cannot be tuned apart by
-            // accident.
+            // live clock. The step is the ONE resolved `pulse.stepMinutes` Build was handed, the same
+            // value the heartbeat and the "unchanged" clause round to, so this line's ticking fields
+            // move in lockstep and cannot be tuned apart by accident.
             var onTaskFor = SessionDuration_Formatter.Describe_SinceStamp_Stepped_OrNull(
-                brief.DateText, now, UnchangedFor_Formatter.STEP_MINUTES);
+                brief.DateText, now, stepMinutes);
 
             // A missing duration DROPS ITS FIELD rather than leaving the separator standing: a row
             // ending in a dangling `· ` reads as a value that failed to load, when the truth is that
@@ -771,6 +865,11 @@ public static class TopicStatusLine_Builder
             if (onTaskFor != null)
                 fields.Add(onTaskFor);
         }
+
+        var modelEffortField = Build_ModelEffortField_OrNull(member.Model, showModelEffort);
+
+        if (modelEffortField != null)
+            fields.Add(modelEffortField);
 
         var contextField = Build_ContextField_OrNull(member);
 

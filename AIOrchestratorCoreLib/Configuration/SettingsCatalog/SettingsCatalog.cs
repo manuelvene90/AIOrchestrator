@@ -808,8 +808,10 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Pulse fields",
                 description:
-                    "Which fields the pulse line carries, in this order. 'modelEffort' is a legal field and is not shipped " +
-                    $"on the line — an owner who wants it adds it. {INERT_NOTE}",
+                    "Which fields the pulse line carries, in this order, under its header. 'modelEffort' is a legal field and " +
+                    "is not shipped on the line — an owner who wants it adds it, and it rides the supervisor and member rows " +
+                    "rather than drawing a line of its own. Omitting 'updated' removes the heartbeat, which is what tells the " +
+                    "owner a quiet orchestration from a dead app — a frozen status line looks exactly like a correct one.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.PULSE_FIELDS),
 
@@ -822,10 +824,11 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Pulse step (minutes)",
                 description:
-                    "The granularity the pulse's 'unchanged for' reading steps in, and therefore how often the pulse " +
-                    "message is EDITED at all. THE FLOOR IS NOT LOWER BY DEFAULT because of the 429 evidence of " +
-                    "2026-09-10: an edit per minute across every open topic is a rate-limit, and a status line that is " +
-                    $"rate-limited tells the owner nothing at all. {INERT_NOTE}",
+                    "The granularity the pulse's clocks step in — each member's time on task, the 'unchanged for' reading " +
+                    "and the 'updated' heartbeat, all three by the same step — and therefore how often the pulse message " +
+                    "is EDITED at all. THE FLOOR IS NOT LOWER BY DEFAULT because of the 429 evidence of 2026-09-10: an " +
+                    "edit per minute across every open topic is a rate-limit, and a status line that is rate-limited tells " +
+                    "the owner nothing at all.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_StringList(

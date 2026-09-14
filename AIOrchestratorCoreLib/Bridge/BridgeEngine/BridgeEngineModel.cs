@@ -10442,6 +10442,16 @@ internal sealed class BridgeEngineModel(
             IReadOnlyList<IReadOnlyList<(string Data, string Label)>> commandButtonRows =
                 session.TelegramTopicId == null ? [] : Build_CommandButtonRows(session.TelegramTopicId.Value);
 
+            // `pulse.fields` AND `pulse.stepMinutes`, READ HERE, ONCE PER TOPIC, AT THE POINT OF EFFECT —
+            // never cached, because the provider re-reads config.json on its write stamp and the owner
+            // can change either between two ticks. The planner and the builder are pure and are handed
+            // the values.
+            var pulse = _configProvider.Get_Current().Pulse;
+
+            // A basic orchestration has no supervisor file and both readings are null, which is right:
+            // its solo carries them on its own row.
+            var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
             var plan = Telegram.TopicStatusLine_Planner.Plan(
                 ledger,
                 members,
@@ -10454,12 +10464,11 @@ internal sealed class BridgeEngineModel(
                 Find_NewestTopicMessage_OrNull(session.TelegramTopicId),
                 _repostImpossibleOrchIds.Contains(session.OrchId),
                 Note_FiguresAndDescribe_UnchangedFor(session.OrchId, ledger),
-                // The supervisor has no member row on this line, so its context rides on the title.
-                // A basic orchestration has no supervisor file and this reads null, which is right:
-                // its solo carries the figure on its own row.
-                UsageTotals_Reader.Read_ContextUsage_OrNull(
-                    Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE)),
-                Build_TopicStatusFields(session));
+                UsageTotals_Reader.Read_ContextUsage_OrNull(supervisorUsageFile),
+                Build_TopicStatusFields(session),
+                UsageTotals_Reader.Read_ModelReading_OrNull(supervisorUsageFile),
+                pulse.Fields,
+                pulse.StepMinutes);
 
             var action = plan.Action;
             var text = plan.Text;
@@ -10910,7 +10919,12 @@ internal sealed class BridgeEngineModel(
             var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
             var contextUsage = UsageTotals_Reader.Read_ContextUsage_OrNull(usageFile);
 
-            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false, contextUsage));
+            // The model and effort the session itself reports, as master read them (2026-09-09): the
+            // probe is the truth, because a session respawned before an override landed still runs the
+            // old one. Read whatever `pulse.fields` says — whether to DRAW it is the builder's call.
+            var modelReading = UsageTotals_Reader.Read_ModelReading_OrNull(usageFile);
+
+            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false, contextUsage, modelReading));
         }
 
         return members;
