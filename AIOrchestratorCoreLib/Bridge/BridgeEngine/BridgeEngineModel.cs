@@ -1525,12 +1525,7 @@ internal sealed class BridgeEngineModel(
             {
                 _tickWasSlowLastTime = true;
                 _log.Log_Warning(GLOBAL_ORCH_ID,
-                    $"Mirror tick took {elapsed.TotalSeconds:F1} s (threshold "
-                        + $"{SLOW_TICK_THRESHOLD_MILLISECONDS / 1000.0:F0} s) — the tick's own period "
-                        + "is 2 s, so something inside it (stage/15's 30 s per-message edit brake is "
-                        + "the known cause) parked the mirror, the owner's deliveries and the deadline "
-                        + "sweep behind it. Logged once per spell: silent again until a tick lands "
-                        + "back under the threshold.");
+                    $"Mirror tick took {elapsed.TotalSeconds:F1} s (normally 2 s) — Telegram mirroring was delayed");
             }
         }
         else
@@ -3616,6 +3611,12 @@ internal sealed class BridgeEngineModel(
             }
 
             _generalDashboardFailedAtUtc = DateTime.UtcNow;
+
+            // A HELD call was never made — the window is still shut — so it backs off like a failure
+            // and says nothing; see the status line's catch for why that is not a warning.
+            if (ex is TelegramHeldException)
+                return;
+
             _log.Log_Warning(GLOBAL_ORCH_ID, $"General dashboard not updated ({ex.Message}) — retrying after the backoff");
         }
     }
@@ -10579,6 +10580,18 @@ internal sealed class BridgeEngineModel(
                 _repostImpossibleOrchIds.Remove(session.OrchId);
 
                 _log.Log_Warning(session.OrchId, $"Topic status message is gone — posting a new one next tick ({exception.Message})");
+            }
+            catch (TelegramHeldException)
+            {
+                // NOT NOW, NOT A FAILURE: the call was never made, because this message's rate-limit
+                // window is still shut. Same backoff and same forget-a-deleted-id rule as a failure
+                // below, and NO WARNING — the next tick after the window redraws the line. Logging it
+                // put one orange line per open orchestration on the owner's panel every ~40 s
+                // (2026-09-14), which is the log storm TelegramHeldException exists to prevent.
+                if (oldStatusMessageDeleted)
+                    Forget_StatusLineMessage(session.OrchId);
+
+                _statusLineFailedAtByOrchId[session.OrchId] = DateTime.Now;
             }
             catch (Exception exception)
             {

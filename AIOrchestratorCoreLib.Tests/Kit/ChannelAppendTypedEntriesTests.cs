@@ -188,7 +188,8 @@ public class ChannelAppendTypedEntriesTests : IDisposable
             new Dictionary<string, string> { ["AIORCH_ROLE"] = "implementer", ["AIORCH_MEMBER"] = "imp-2" },
             "--subject", "progress", "--report", "the parser is done").ExitCode);
 
-        Assert.Contains("FROM imp-2 — ", File.ReadAllText(_channel));
+        // THE ROLE WORD, which is what ChannelEntry_Parser reads — `FROM imp-2` parsed as Unknown.
+        Assert.Contains("FROM implementer — ", File.ReadAllText(_channel));
     }
 
     /// <summary>
