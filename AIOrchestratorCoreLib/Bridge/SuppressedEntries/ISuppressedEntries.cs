@@ -48,8 +48,8 @@ public interface ISuppressedEntries
 
     /// <summary>
     /// Discards what is held for this orchestration without handing it over: the orchestration closed,
-    /// or the owner has just spoken and whatever was said before belongs to a conversation that has
-    /// moved on.
+    /// the owner has just spoken and whatever was said before belongs to a conversation that has moved
+    /// on, or an entry was just SENT to them and what was held before it is stale (ruling R7).
     /// </summary>
     void Forget(string orchId);
 }

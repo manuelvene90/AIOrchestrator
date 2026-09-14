@@ -3954,6 +3954,20 @@ internal sealed class BridgeEngineModel(
                         continue;
 
                     case OwnerPushDecisions.SendNow:
+                        // WHAT WAS HELD BEFORE A SEND IS FORGOTTEN AT THE SEND (ruling R7 — master's
+                        // clear-on-send, 58ff547). Two reasons, both real:
+                        //   - STALE WORDS. A "WAITING ON …" status line held seconds before the answer
+                        //     is out of date the moment the answer goes; replayed under it in the
+                        //     turn-end completion, the owner reads the status after the thing it was
+                        //     waiting for — decision 25's 2026-09-10 failure, by another route.
+                        //   - DUPLICATES ON RETRY. A Failed append clears the positional memo, so the
+                        //     re-emission files its held entries AGAIN; each pass reaching a send
+                        //     forgets the copies the pass before it filed.
+                        // Before the send, not after it: a failed send leaves the append unconfirmed,
+                        // and the retry re-files and re-forgets the same entries, so nothing is lost
+                        // that a success would have kept. The store owns its lock.
+                        _suppressedEntries.Forget(append.Channel.OrchId);
+
                         // The flag is deliberately NOT cleared here — it is cleared after the send below.
                         // Clearing it at this point consumed the owner's wait on an ATTEMPT: when the send
                         // then failed, the append was left unconfirmed (by design, so it retries), but the
