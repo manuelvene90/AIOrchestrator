@@ -203,8 +203,16 @@ internal sealed class BridgeEngineModel(
     /// Production evidence for the register this is logged at: build 481efc9, the hour to 22:38 on
     /// 2026-09-10, 388 HTTP 429s, of which 376 were topic status lines re-attempted at the TICK's own
     /// rate against a retry_after of 20–34 s — the downstream shape a parked tick produces.
+    ///
+    /// SIXTY SECONDS SINCE 2026-09-14, because five now fires on the design. The per-message brake no
+    /// longer waits — Hold_UnlessThisMessageMayBeEdited throws TelegramHeldException instead — so what
+    /// still lengthens a tick is the SEND budget (TokenBucket_Gate: 10 tokens refilled per 60 s, about
+    /// one send per 6 s once a burst drains it), which the tick awaits on purpose. The owner's panel
+    /// showed 31.6 s at startup catch-up and 5.7 s / 8.4 s while two orchestrations were closed: all
+    /// pacing, none actionable, all orange. A tick past a full refill window is more than the budget
+    /// can explain, so that is still a finding.
     /// </summary>
-    const int SLOW_TICK_THRESHOLD_MILLISECONDS = 5000;
+    const int SLOW_TICK_THRESHOLD_MILLISECONDS = 60000;
 
     /// <summary>Below this age /cost prints no burn rate — dividing by minutes invents a number.</summary>
     const double MINIMUM_BURN_RATE_HOURS = 0.25;
