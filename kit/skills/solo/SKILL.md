@@ -577,7 +577,10 @@ discovery made while working became work.
   a one-line question to them, and work only if they say yes).
 - **"It is two lines" is the sentence to distrust**, and in this mode nobody else is there to hear
   it. The cost of a discovery is never the fix; it is the horizon it opens.
-- **Say the numbers when you report**: *"3 asked, 2 done, 6 parked."*
+- **Say the numbers when you report**: *"3 asked, 2 done."* **The parked count waits for the close**
+  (owner, 2026-09-11): a total that climbs at every report — `fincanva-5` sent 30, 40, 70, 77 in one
+  night — reads as problems piling up, not as notes put aside. At the close, one line: how many, and
+  the two or three worth their attention.
 
 ## Closing this orchestration — YOU can do it, so do not send them to the app
 

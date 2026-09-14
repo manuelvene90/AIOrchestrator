@@ -46,6 +46,30 @@ public class LiveLimitStillAlertsTests : IDisposable
         Assert.Equal(100, Assert.Single(windows).Percent);
     }
 
+    /// <summary>
+    /// THE SAME HAZARD, NOW THAT RECENCY DECIDES WHICH WINDOW IS IN FORCE. The stopped session's
+    /// probe is the stale one AND the one carrying the 100%, and a live session keeps writing a
+    /// lower reading of THE SAME window. Recency must not get a say here: same instance means the
+    /// percentage rule decides, so the 100% still wins however old its file is.
+    ///
+    /// Written because the 2026-09-12 fix is one step away from re-creating the very failure this
+    /// class exists to prevent — "believe the freshest file" would have reported 40%.
+    /// </summary>
+    [Fact]
+    public void ASessionStoppedAtItsLimit_StillOutranksAFresherLowerReadingOfTheSameWindow()
+    {
+        var resetsAt = NOW.AddHours(3);
+
+        var stoppedAtTheLimit = Write_ProbeFile("five_hour", 100, resetsAt);
+        var stillRunning = Write_ProbeFile("five_hour", 40, resetsAt);
+
+        File.SetLastWriteTimeUtc(stoppedAtTheLimit, NOW.AddDays(-2));
+        File.SetLastWriteTimeUtc(stillRunning, NOW.AddMinutes(-1));
+
+        Assert.Equal(100, Assert.Single(RateLimits_Reader.Read_WorstAcrossSessions([stoppedAtTheLimit, stillRunning], NOW)).Percent);
+        Assert.Equal(100, Assert.Single(RateLimits_Reader.Read_WorstAcrossSessions([stillRunning, stoppedAtTheLimit], NOW)).Percent);
+    }
+
     /// <summary>The same file must survive the ALERT path's gate, which is where silence would bite.</summary>
     [Fact]
     public void ASessionStoppedAtItsLimit_IsStillSelectedForTheAlertScan()

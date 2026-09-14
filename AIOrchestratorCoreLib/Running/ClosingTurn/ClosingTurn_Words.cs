@@ -22,6 +22,22 @@ namespace AIOrchestratorCoreLib.Running.ClosingTurn;
 public static class ClosingTurn_Words
 {
     /// <summary>
+    /// HOW THE WORK TURN DIED, in the words every record of it uses: "killed at the deadline", "killed
+    /// by the silence brake" or "killed by the loop detector". All earn the same closing turn, and
+    /// before 2026-09-11 there was
+    /// only the first — so every line below was written saying "deadline", and a silence kill reported
+    /// through them unchanged would tell the supervisor the turn ran out of time when it had stopped
+    /// showing any sign of life, which is the opposite advice (split the brief vs. look for a hang).
+    /// </summary>
+    public static string Describe_Kill(TurnResult.ITurnResult killed)
+    {
+        if (killed.BrakeKill == null)
+            return "killed at the deadline";
+
+        return TurnLiveness.TurnSilenceBrake_Factory.Is_LoopKill(killed.BrakeKill) ? "killed by the loop detector" : "killed by the silence brake";
+    }
+
+    /// <summary>
     /// The CLI flag that makes the cap real rather than advisory. Verified present in
     /// <c>claude --help</c> on 2.1.266 (2026-09-09): "<c>--max-budget-usd &lt;amount&gt;</c> Maximum
     /// dollar amount to spend on API calls (only works with --print)" — which is why the closing

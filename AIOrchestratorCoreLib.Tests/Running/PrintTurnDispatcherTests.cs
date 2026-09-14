@@ -292,7 +292,7 @@ public class PrintTurnDispatcherTests
         Assert.Equal(3, entries.Count(entry => entry.Subject.Contains($"{PrintTurn_Words.TURN_ENDED_SUBJECT} {memberId} turn 1 — timeout")));
         var alert = Assert.Single(entries, entry => entry.Subject.Contains(PrintTurn_Words.TURN_STALLED_SUBJECT));
         Assert.True(AppEntryAudience_Tag.Is_AgentTagged(alert.Subject));
-        Assert.Contains("(killed on timeout)", entries.First(entry => entry.Subject.Contains("timeout")).Body);
+        Assert.Contains("(killed at the deadline)", entries.First(entry => entry.Subject.Contains("timeout")).Body);
         Assert.Empty(entries.Where(entry => entry.Author == ChannelAuthors.Implementer));
         Assert.Equal(1, harness.Read_State(SessionRoles.Implementer, orchId, memberId).NextTurnNumber);
 

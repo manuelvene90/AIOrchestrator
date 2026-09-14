@@ -114,9 +114,6 @@ internal sealed class BridgeEngineModel(
     /// <summary>Channel silence that counts as a stall once nobody is mid-turn.</summary>
     const int STALL_ALERT_MINUTES = 25;
 
-    /// <summary>How long an implementer may leave a brief unanswered before the app nudges it.</summary>
-    const int IMPLEMENTER_NUDGE_MINUTES = 8;
-
     /// <summary>How long the owner may wait for their supervisor's acknowledgement before the app steps in.</summary>
     const int OWNER_REPLY_GRACE_SECONDS = 150;
 
@@ -830,6 +827,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<long, long> _reactedOwnerMessageIdByThread = [];
 
+    /// <summary>Per owner channel, the latest Telegram message routed into it. Guarded by <c>_deliveryLock</c>.</summary>
+    readonly Dictionary<string, long> _lastOwnerMessageIdByChannel = [];
+
     readonly Lock _receiptLock = new();
 
     /// <summary>
@@ -967,6 +967,21 @@ internal sealed class BridgeEngineModel(
     /// </para>
     /// </summary>
     readonly Dictionary<long, string> _closedQuestionReasons = [];
+
+    /// <summary>
+    /// The questions the owner has RESOLVED, newest last, so the same words are not sent again a
+    /// minute later. Bounded by <see cref="CLOSED_QUESTION_MEMORY"/> like the reasons beside it, and
+    /// in memory only — see <see cref="Decisions.ClosedQuestionRecord"/> for the trade.
+    /// </summary>
+    readonly Queue<Decisions.ClosedQuestionRecord> _closedQuestions = [];
+
+    /// <summary>
+    /// The verbatim re-asks already refused once, keyed orchestration + question line. It is what
+    /// keeps the guard from being a wall: a session told its question repeats a decided one and
+    /// asking it AGAIN is no longer making the owner's mistake, it is insisting, and the owner is
+    /// better served by the question than by a decision that dangles for ever.
+    /// </summary>
+    readonly HashSet<string> _reaskRefusedOnce = [];
 
     readonly Queue<long> _closedQuestionOrder = new();
 
@@ -1267,6 +1282,12 @@ internal sealed class BridgeEngineModel(
         // decision 21's rule (the line goes to orchestrator.log.jsonl, which the app tails) applied
         // to the thing every append now passes through.
         ChannelLock_Diagnostics.Set_Sink(message => _log.Log_Warning(GLOBAL_ORCH_ID, message));
+
+        // A REFUSED SETTING IS SAID AT BOOT, not on the dispatcher's first tick. Same dedupe, so a
+        // later config reload still reports anything NEW and nothing twice; what changes is that an
+        // operator who mistyped a value reads it in the log beside the startup banner, where they are
+        // already looking, instead of a tick later among session traffic.
+        _printTurns.Report_ConfigRejections();
 
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
@@ -1696,6 +1717,12 @@ internal sealed class BridgeEngineModel(
         Flag_IdleMembers();
         Report_GuardsNotInForce();
 
+        // BEFORE THE TAILER, so an orchestration created this tick has its topic by the time anything
+        // it wrote is mirrored. Below the DND gate on purpose: creating a topic is visible in the
+        // group, and 🌙 means the owner is not to be disturbed — a topic deferred by a mute is still
+        // created by the first mirrorable entry after the unmute, as it always was.
+        await Ensure_TopicsForNewOrchestrations_Async(cancellationToken);
+
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
 
@@ -1879,7 +1906,7 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
+            var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel.OrchId, cancellationToken);
 
             await client.Send_Document_Async(
                 threadId,
@@ -2487,7 +2514,7 @@ internal sealed class BridgeEngineModel(
                 // this member is working, and the expensive mistake is the one that stays quiet: the
                 // gate below still holds it to one nudge per unanswered thing, so the cost of being
                 // wrong here is a single wake.
-                if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+                if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES)
                     continue;
 
                 // WORKING MEANS DO NOT DISTURB — and the app now answers that from its OWN dispatcher
@@ -2951,7 +2978,7 @@ internal sealed class BridgeEngineModel(
             // rather than left to assume silence means nothing is waiting.
             var memberQuietFor = Nudge_Decider.Measure_QuietFor(entries, DateTime.Now);
 
-            if (memberQuietFor != null && memberQuietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+            if (memberQuietFor != null && memberQuietFor.Value.TotalMinutes < Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES)
                 continue;
 
             waitingMembers.Add(member.MemberId);
@@ -3407,7 +3434,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> Read_CurrentLimitWindows()
     {
-        Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> maxPercents = [];
+        // TakenAtUtc rides along only to pick the window instance in force; it is projected away
+        // below, because no consumer of this method has any business with a file's write time.
+        Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc, DateTime TakenAtUtc)> maxPercents = [];
 
         // FROM THE INJECTED CLOCK, both readings, because this method decides which windows are still
         // live and the pause decides what to do about them — two clocks for one decision is two ways
@@ -3427,6 +3456,9 @@ internal sealed class BridgeEngineModel(
         {
             var windows = Limits.LimitData_Parser.Extract_LimitWindows(UsageTotals_Reader.Read_Text_Safe(usageFile));
 
+            // When this probe last learned anything — see WindowInstance_Order.Compare_Reading.
+            var takenAtUtc = UsageTotals_Reader.Read_LastWriteUtc_Safe(usageFile);
+
             foreach (var pair in windows)
             {
                 // PER WINDOW, not per file. The file-level gate above keeps a file when ANY of
@@ -3438,21 +3470,43 @@ internal sealed class BridgeEngineModel(
 
                 if (!maxPercents.TryGetValue(pair.Key, out var known))
                 {
-                    maxPercents[pair.Key] = pair.Value;
+                    maxPercents[pair.Key] = (pair.Value.Percent, pair.Value.WindowResetsAtUtc, takenAtUtc);
                     continue;
                 }
 
-                // The same rule /limits uses, through the same comparison: a newer window
-                // replaces an older one outright, and only readings of the SAME window compete
-                // on percentage.
-                var instance = Limits.WindowInstance_Order.Compare_Instance(pair.Value.WindowResetsAtUtc, known.WindowResetsAtUtc);
+                // The same rule /limits uses, through the same comparison: the window instance
+                // named by the more recently WRITTEN probe replaces the other outright, and only
+                // readings of the SAME window compete on percentage. Ordering these by reset stamp
+                // instead is what froze both this scan and /limits on 2026-09-11 — the latch pinned
+                // to a window nothing live was reporting, so the real weekly climbed past 90%
+                // without an alert.
+                var instance = Limits.WindowInstance_Order.Compare_Reading(pair.Value.WindowResetsAtUtc, takenAtUtc, known.WindowResetsAtUtc, known.TakenAtUtc);
 
-                if (instance > 0 || (instance == 0 && pair.Value.Percent > known.Percent))
-                    maxPercents[pair.Key] = pair.Value;
+                if (instance > 0)
+                {
+                    maxPercents[pair.Key] = (pair.Value.Percent, pair.Value.WindowResetsAtUtc, takenAtUtc);
+                    continue;
+                }
+
+                if (instance < 0)
+                    continue;
+
+                // Same instance: the highest reading constrains the account, and the instance keeps
+                // the latest moment anything confirmed it, so the fold cannot depend on file order.
+                var confirmedAtUtc = takenAtUtc > known.TakenAtUtc ? takenAtUtc : known.TakenAtUtc;
+
+                maxPercents[pair.Key] = pair.Value.Percent > known.Percent
+                    ? (pair.Value.Percent, pair.Value.WindowResetsAtUtc, confirmedAtUtc)
+                    : (known.Percent, known.WindowResetsAtUtc, confirmedAtUtc);
             }
         }
 
-        return maxPercents;
+        Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> current = [];
+
+        foreach (var pair in maxPercents)
+            current[pair.Key] = (pair.Value.Percent, pair.Value.WindowResetsAtUtc);
+
+        return current;
     }
 
     async Task Check_UsageLimits_Async(CancellationToken cancellationToken)
@@ -3857,7 +3911,7 @@ internal sealed class BridgeEngineModel(
         if (Is_TopicSilenced(append.Channel.OrchId))
             return MirrorOutcomes.Delivered;
 
-        var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
+        var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel.OrchId, cancellationToken);
 
         // Entries of THIS append that already reached the phone before an earlier tick held it. They
         // are re-emitted by the tailer because the append was never confirmed; sending them again
@@ -4023,10 +4077,19 @@ internal sealed class BridgeEngineModel(
             var prose = _configProvider.Get_Current().TelegramProse;
             var pieces = OwnerMessage_Folder.Fold_ForOwner(text, prose.FoldLongEntriesAbove);
 
+            // THREADED ONTO THE OWNER MESSAGE IT ANSWERS, when a turn said which one that was — the
+            // first piece only; the rest follow it as they always did (Running.ReplyLinks).
+            long? replyTo = append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author)
+                ? _printTurns.ReplyLinks.Find_AnsweredTelegramMessage_OrNull(append.Channel.FilePath, entry.Index)
+                : null;
+
             try
             {
                 foreach (var piece in pieces)
-                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, Resolve_EntrySound(entry), cancellationToken));
+                {
+                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, Resolve_EntrySound(entry), replyTo, cancellationToken));
+                    replyTo = null;
+                }
 
                 // ALSO, never INSTEAD. Every piece above has already been sent; the file is a
                 // convenience for an entry long enough that reading it in the chat is the work.
@@ -4165,13 +4228,13 @@ internal sealed class BridgeEngineModel(
         return ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) ? TelegramSendSounds.Rings : TelegramSendSounds.Silent;
     }
 
-    async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, TelegramSendSounds sound, CancellationToken cancellationToken)
+    async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, TelegramSendSounds sound, long? replyToMessageId, CancellationToken cancellationToken)
     {
         var client = _telegramClient
             ?? throw new Exception("Send_MirrorPiece_Async called without a Telegram client");
 
         return await TelegramProse_Sender.Send_Rendered_Async(
-            client, _log, GLOBAL_ORCH_ID, threadId, piece.Html, piece.Markdown, sound, cancellationToken);
+            client, _log, GLOBAL_ORCH_ID, threadId, piece.Html, piece.Markdown, sound, cancellationToken, replyToMessageId: replyToMessageId);
     }
 
     /// <summary>
@@ -4390,7 +4453,48 @@ internal sealed class BridgeEngineModel(
         // reachable — terminal presence raises no flag, the ten-minute cap expires one with the
         // question still open, and /pc lifts a standing block — but those are the app's own routes,
         // not something to coach an asker about at the moment it asks.
+
+        // THE SAME QUESTION IS NOT ASKED TWICE. A session that re-asks what is still open on the
+        // phone — word for word, buttons live, perhaps already tapped and waiting for its code —
+        // would put a second copy under the first, and the owner reads that as being asked twice
+        // (fincanva-6, 2026-09-11, 10:35 and 10:43). The open one stands; the session is told why
+        // nothing new went out, and it stops exactly as if it had asked.
+        var repeated = Find_RepeatedQuestion_OrNull(channel.OrchId, questionPrompt);
+
+        if (repeated != null)
+        {
+            Handle_RepeatedQuestion(channel, repeated);
+            return;
+        }
+
+        // AND NOT ONE THE OWNER HAS JUST DEALT WITH EITHER. The guard above only sees questions still
+        // open, which is blind to the way it actually happened to the owner on 2026-09-12: a tap on
+        // "💬 Let's talk" CLOSES the question, the protocol then tells the session to ask it again once
+        // the discussion has settled, and a session that re-asks word for word puts the identical
+        // question on their phone a second time — *"per esempio in sta chat mi hai fatto la stessa
+        // domanda 2 volte"*. Same for a question they answered by tapping or in words.
         //
+        // REFUSED ONCE, then allowed: see _reaskRefusedOnce. The session is told what the owner
+        // decided and when, which is usually the fact it was missing; if it asks the same thing again
+        // anyway it is no longer making the owner's mistake, and a decision that never reaches them is
+        // worse than one duplicate.
+        var decidedAlready = Find_ClosedRepeat_OrNull(channel.OrchId, questionPrompt);
+
+        // THE MEMORY IS TOUCHED ONLY WHEN THERE IS A REPEAT, and that is not tidiness. Recording every
+        // question that goes out would mark its own FIRST asking as "already withheld once", so the day
+        // it was genuinely re-asked after being decided it would sail straight through — the guard
+        // would be armed by nothing and disarmed by everything.
+        if (decidedAlready != null)
+        {
+            var withheldOnceAlready = Note_ReaskWithheld(channel.OrchId, questionPrompt);
+
+            if (QuestionSupersede_Decider.Should_Withhold_Reask(decidedAlready, withheldOnceAlready))
+            {
+                Handle_ReaskOfADecidedQuestion(channel, decidedAlready);
+                return;
+            }
+        }
+
         // DECIDED BEFORE THE SEND, so what is swept is not a question this send is about to close —
         // and swept AFTER it, so a send that fails leaves the older ones open.
         var toSupersede = Find_QuestionsToSupersede(channel.OrchId);
@@ -4473,6 +4577,7 @@ internal sealed class BridgeEngineModel(
                     MessageId = messageId.Value,
                     OrchId = channel.OrchId,
                     Text = promptWithTerms,
+                    Prompt = questionPrompt,
                     AskedUtc = askedUtc,
                     ButtonGroupId = buttonGroupId,
                     DeadlineUtc = deadlineUtc,
@@ -4839,16 +4944,27 @@ internal sealed class BridgeEngineModel(
         return deduplicated;
     }
 
-    /// <summary>General channel → the General topic (null thread id). Orchestrations get a topic on first mirror.</summary>
-    async Task<long?> Resolve_ThreadId_OrNull_Async(IDiscoveredChannel channel, CancellationToken cancellationToken)
+    /// <summary>
+    /// General channel → the General topic (null thread id). An orchestration's topic is created here
+    /// and nowhere else — this is the ONE implementation, called both by the mirror and by the sweep
+    /// that gives a new orchestration its topic at creation (see
+    /// <see cref="Ensure_TopicsForNewOrchestrations_Async"/>).
+    ///
+    /// <para>
+    /// IT TAKES AN ORCH ID RATHER THAN A CHANNEL, because the sweep has no append to point at: a
+    /// brand-new orchestration's only entry is the owner's own, which is never mirrored. The body
+    /// never read anything else off the channel.
+    /// </para>
+    /// </summary>
+    async Task<long?> Resolve_ThreadId_OrNull_Async(string orchId, CancellationToken cancellationToken)
     {
-        if (channel.OrchId == ChannelDiscovery.GENERAL_ORCH_ID)
+        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
             return null;
 
         if (_telegramClient == null)
             return null;
 
-        var session = _store.Get_Session_OrNull(channel.OrchId);
+        var session = _store.Get_Session_OrNull(orchId);
         if (session == null)
             return null;
 
@@ -4857,10 +4973,10 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var topicId = await _telegramClient.Create_ForumTopic_Async(channel.OrchId, Resolve_TopicColour_OrNull(session.RepoName), cancellationToken);
-            _store.Set_TelegramTopicId(channel.OrchId, topicId);
-            _log.Log_Info(channel.OrchId, $"Telegram topic created (thread id {topicId})");
-            Remove_TopicCreationPin_FireAndForget(channel.OrchId, topicId);
+            var topicId = await _telegramClient.Create_ForumTopic_Async(orchId, Resolve_TopicColour_OrNull(session.RepoName), cancellationToken);
+            _store.Set_TelegramTopicId(orchId, topicId);
+            _log.Log_Info(orchId, $"Telegram topic created (thread id {topicId})");
+            Remove_TopicCreationPin_FireAndForget(orchId, topicId);
             return topicId;
         }
         // DELIBERATELY NOT FILTERED, AND THIS COMMENT IS THE REASON — DO NOT "COMPLETE" THE SWEEP HERE.
@@ -4901,8 +5017,51 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Error(channel.OrchId, "Telegram topic creation failed — mirroring to the General topic for now", ex);
+            _log.Log_Error(orchId, "Telegram topic creation failed — mirroring to the General topic for now", ex);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// A NEW ORCHESTRATION GETS ITS TOPIC WHEN IT IS CREATED, not when one of its sessions first
+    /// speaks. The owner's directive of 2026-09-12, after watching a topic fail to appear for twenty
+    /// minutes: *"c'è qualcosa che non va con l'apertura dei topic, non so se un topic è stato aperto
+    /// silente o se le cose si sono perse o cosa."*
+    ///
+    /// <para>
+    /// WHAT IT WAS. Topic creation hung off the mirror: <c>Mirror_Append_Async</c> returns before
+    /// resolving a thread id when an append carries nothing mirrorable, and an owner-authored entry is
+    /// never mirrored (it came FROM Telegram). So an orchestration whose only entry is the owner's own
+    /// message had no topic at all — and a session that takes twenty minutes over its first turn, which
+    /// a print-run solo routinely does, left the owner looking at a topic list with nothing in it and
+    /// no way to tell a slow start from a lost one. Nothing was lost and nothing was logged either:
+    /// the skip is silent and correct, and the absence looked exactly like a failure.
+    /// </para>
+    /// <para>
+    /// SILENCED TOPICS ARE SKIPPED, like every other outbound site in this file. Creating a forum topic
+    /// puts a service message in the group, and Silenced means the owner is reading this orchestration
+    /// in its terminal. It costs nothing: the first mirrorable entry still creates the topic exactly as
+    /// it did before, through the same one implementation.
+    /// </para>
+    /// <para>
+    /// BEST EFFORT, ONE AT A TIME. The resolver already logs and swallows its own failure, so a
+    /// Telegram outage costs a log line and a retry next tick.
+    /// </para>
+    /// </summary>
+    async Task Ensure_TopicsForNewOrchestrations_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        foreach (var session in Sessions_ThisTick())
+        {
+            if (session.ClosedUtc != null || session.TelegramTopicId != null)
+                continue;
+
+            if (Is_TopicSilenced(session.OrchId))
+                continue;
+
+            await Resolve_ThreadId_OrNull_Async(session.OrchId, cancellationToken);
         }
     }
 
@@ -5543,7 +5702,9 @@ internal sealed class BridgeEngineModel(
         {
             // SAID BEFORE THE SPOKE STOPS BEING A SOURCE — see UndeliveredSpokeTraffic_Reporter for
             // why a line and not a drain, and for what the member digest widened.
-            UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, _log, orchId, memberId);
+            // The dispatcher is asked what the supervisor's turn is carrying RIGHT NOW: without it the
+            // reporter reads a cursor that only advances at turn end and calls a report in flight lost.
+            UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, _log, orchId, memberId, _printTurns.Get_DeliveringIdentities(orchId, Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID));
 
             _store.Close_Member(orchId, memberId);
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, memberId));
@@ -11331,13 +11492,17 @@ internal sealed class BridgeEngineModel(
             // Answered — it must never be marked "parked" by a later away-mode sweep.
             lock (_ownerStateLock)
             {
-                if (_openQuestions.Remove(tap.MessageId.Value))
+                if (_openQuestions.Remove(tap.MessageId.Value, out var closedByTheTap))
                 {
                     Note_QuestionClosed(
                         tap.MessageId.Value,
                         registered.AnswersNothing
                             ? QuestionClosure_Wording.TALK_REQUEST
-                            : QuestionClosure_Wording.TAPPED_OPTION);
+                            : QuestionClosure_Wording.TAPPED_OPTION,
+                        closedByTheTap,
+
+                        // A "let's talk" records no choice, because none was made.
+                        registered.AnswersNothing ? null : registered.OptionText);
                 }
             }
 
@@ -11580,8 +11745,8 @@ internal sealed class BridgeEngineModel(
 
                 // The decision is taken, so the question it belongs to is answered. It was left OPEN
                 // while the read-back ran, on purpose — see Begin_HighRiskConfirmation_Async.
-                if (confirmation.MessageId != null && _openQuestions.Remove(confirmation.MessageId.Value))
-                    Note_QuestionClosed(confirmation.MessageId.Value, QuestionClosure_Wording.CONFIRMED_HIGH_RISK);
+                if (confirmation.MessageId != null && _openQuestions.Remove(confirmation.MessageId.Value, out var confirmedQuestion))
+                    Note_QuestionClosed(confirmation.MessageId.Value, QuestionClosure_Wording.CONFIRMED_HIGH_RISK, confirmedQuestion, confirmation.OptionText);
             }
         }
 
@@ -11788,10 +11953,10 @@ internal sealed class BridgeEngineModel(
 
         lock (_ownerStateLock)
         {
-            if (!_openQuestions.Remove(question.MessageId))
+            if (!_openQuestions.Remove(question.MessageId, out var lapsedQuestion))
                 return;
 
-            Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.DEADLINE);
+            Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.DEADLINE, lapsedQuestion);
 
             // A READ-BACK BELONGS TO ITS QUESTION AND DIES WITH IT. Left behind, it would keep a live
             // code for a decision that has just been denied on timeout — the owner types the code
@@ -12649,19 +12814,29 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// The open questions of this topic asked BEFORE the owner last replied in words — the ones a
-    /// newer question from the same asker will close as superseded. Empty when the owner has not
-    /// spoken since the oldest of them: two parallel questions with no reply between stay open.
+    /// The open questions of this topic a newer question from the same asker will close as
+    /// superseded — the rule is <see cref="QuestionSupersede_Decider.Select_ToSupersede"/>; this only
+    /// gathers its inputs under the lock that guards them.
     /// </summary>
     IReadOnlyList<OpenQuestionRecord> Find_QuestionsToSupersede(string orchId)
     {
         lock (_ownerStateLock)
         {
-            if (!_ownerRepliedInWordsUtcByOrchId.TryGetValue(orchId, out var repliedUtc))
-                return [];
+            DateTime? repliedUtc = _ownerRepliedInWordsUtcByOrchId.TryGetValue(orchId, out var replied) ? replied : null;
+            HashSet<long> awaitingReadBack = [.. _pendingConfirmations.Where(confirmation => confirmation.MessageId != null).Select(confirmation => confirmation.MessageId!.Value)];
 
-            return [.. _openQuestions.Values.Where(question => question.OrchId == orchId && question.AskedUtc < repliedUtc)];
+            return QuestionSupersede_Decider.Select_ToSupersede(
+                _openQuestions.Values.Where(question => question.OrchId == orchId),
+                repliedUtc,
+                awaitingReadBack);
         }
+    }
+
+    /// <summary>The open question of this orchestration that <paramref name="questionPrompt"/> repeats word for word, or null.</summary>
+    OpenQuestionRecord? Find_RepeatedQuestion_OrNull(string orchId, string questionPrompt)
+    {
+        lock (_ownerStateLock)
+            return QuestionSupersede_Decider.Find_Repeat_OrNull(_openQuestions.Values.Where(question => question.OrchId == orchId), questionPrompt);
     }
 
     /// <summary>
@@ -12734,11 +12909,91 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// A repeat stays unsent, and the session is told which question is still open and in what
+    /// state — "tapped, waiting for the code" is the fact that session was missing the day this was
+    /// written. The awaiting-answer flag is raised as for any question: it asked, so it stops.
+    /// </summary>
+    Decisions.ClosedQuestionRecord? Find_ClosedRepeat_OrNull(string orchId, string questionPrompt)
+    {
+        lock (_ownerStateLock)
+            return QuestionSupersede_Decider.Find_ClosedRepeat_OrNull(_closedQuestions, orchId, questionPrompt, _clock.UtcNow);
+    }
+
+    /// <summary>
+    /// Records that this question line has been withheld once in this orchestration, and answers
+    /// whether it HAD been before — the memory half of
+    /// <see cref="QuestionSupersede_Decider.Should_Withhold_Reask"/>, which holds the rule.
+    /// </summary>
+    bool Note_ReaskWithheld(string orchId, string questionPrompt)
+    {
+        lock (_ownerStateLock)
+            return !_reaskRefusedOnce.Add($"{orchId}\n{questionPrompt.Trim().ToLowerInvariant()}");
+    }
+
+    /// <summary>
+    /// Tells the session what the owner already decided, and that nothing went out. The audience is
+    /// Agent: the owner must not be told twice about a message they never received — decision 15, and
+    /// the same reading <see cref="Handle_RepeatedQuestion"/> gives it.
+    /// </summary>
+    void Handle_ReaskOfADecidedQuestion(Channels.DiscoveredChannel.IDiscoveredChannel channel, Decisions.ClosedQuestionRecord decided)
+    {
+        var whatTheyDid = decided.AnswerLabel == null
+            ? $"they closed it — {decided.Closure}"
+            : $"they chose «{decided.AnswerLabel}»";
+
+        _log.Log_Info(
+            channel.OrchId,
+            $"a question repeating one already decided at {decided.ClosedUtc:HH:mm} UTC ({decided.Closure}) was not sent again — the session was told what the owner decided");
+
+        ChannelAppender.Append_AppEntry(
+            channel.FilePath,
+            AppEntryAudiences.Agent,
+            "you already asked this and the owner dealt with it — not sent again",
+            $"This question repeats, word for word, one the owner resolved at {decided.ClosedUtc.ToLocalTime():HH:mm}: {whatTheyDid}. "
+            + "A second identical copy reads on their phone as being asked twice, so nothing went out. "
+            + "If the discussion since then changed what you need to know, ASK THAT — a question that is "
+            + "not the same sentence goes through immediately, and so does this one if you send it again.",
+            DateTime.Now);
+    }
+
+    void Handle_RepeatedQuestion(Channels.DiscoveredChannel.IDiscoveredChannel channel, OpenQuestionRecord repeated)
+    {
+        bool awaitingReadBack;
+
+        lock (_ownerStateLock)
+            awaitingReadBack = _pendingConfirmations.Any(confirmation => confirmation.MessageId == repeated.MessageId);
+
+        var state = awaitingReadBack
+            ? "the owner has already TAPPED an answer and the app is holding it until they type the read-back code shown on their phone — it reaches you when they do"
+            : "its buttons are still live on the owner's phone";
+
+        _log.Log_Info(channel.OrchId, $"a question repeating one still open (asked {repeated.AskedUtc:HH:mm} UTC) was not sent again — {(awaitingReadBack ? "tapped, awaiting its read-back code" : "still unanswered")}");
+
+        ChannelAppender.Append_AppEntry(
+            channel.FilePath,
+            AppEntryAudiences.Agent,
+            "this question is already open — not sent again",
+            $"You asked a question the owner already has open, word for word (asked {repeated.AskedUtc.ToLocalTime():HH:mm}), and {state}. "
+            + "A second copy would read on the phone as being asked twice, so nothing new went out. Do not ask it again.",
+            DateTime.Now);
+
+        if (channel.IsOwnerChannel && OwnerPresence_Policy.Should_RaiseAwaitingAnswer(Resolve_Presence(channel.OrchId)))
+            Raise_AwaitingAnswerFlag(channel.OrchId);
+    }
+
+    /// <summary>
     /// Remembers WHAT closed a question. Callers hold <c>_ownerStateLock</c> — it is written at the
     /// same instant as the removal it explains, because a reason recorded a few lines later is a
     /// reason that can be missed by an early return.
     /// </summary>
-    void Note_QuestionClosed(long messageId, string reason)
+    /// <param name="question">
+    /// The record being closed, when the caller has it. Passing it is what lets a verbatim re-ask be
+    /// recognised after the buttons are gone; passing null keeps the old behaviour for the two
+    /// closures where a re-ask is legitimate — a SUPERSEDED question was replaced rather than decided,
+    /// and an AWAY-PARKED one was never put to the owner at all.
+    /// </param>
+    /// <param name="answerLabel">The option the owner chose, when they chose one.</param>
+    void Note_QuestionClosed(long messageId, string reason, OpenQuestionRecord? question = null, string? answerLabel = null)
     {
         if (!_closedQuestionReasons.ContainsKey(messageId))
             _closedQuestionOrder.Enqueue(messageId);
@@ -12747,6 +13002,23 @@ internal sealed class BridgeEngineModel(
 
         while (_closedQuestionOrder.Count > CLOSED_QUESTION_MEMORY)
             _closedQuestionReasons.Remove(_closedQuestionOrder.Dequeue());
+
+        // NOTHING TO COMPARE IS NOT A MATCH: a record saved before question lines were remembered has
+        // no prompt, and inventing one from the whole message would match on the options too.
+        if (question?.Prompt == null)
+            return;
+
+        _closedQuestions.Enqueue(new Decisions.ClosedQuestionRecord
+        {
+            OrchId = question.OrchId,
+            Prompt = question.Prompt,
+            ClosedUtc = _clock.UtcNow,
+            Closure = reason,
+            AnswerLabel = answerLabel,
+        });
+
+        while (_closedQuestions.Count > CLOSED_QUESTION_MEMORY)
+            _closedQuestions.Dequeue();
     }
 
     /// <summary>
@@ -12767,7 +13039,8 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    List<(long MessageId, long ButtonGroupId, string QuestionText)> Clear_OpenQuestions(string orchId)
+    /// <param name="onlyMessageId">When set, only that question — the one the owner replied to — is cleared.</param>
+    List<(long MessageId, long ButtonGroupId, string QuestionText)> Clear_OpenQuestions(string orchId, long? onlyMessageId = null)
     {
         List<(long MessageId, long ButtonGroupId, string QuestionText)> answered = [];
 
@@ -12775,14 +13048,14 @@ internal sealed class BridgeEngineModel(
         {
             foreach (var pair in _openQuestions)
             {
-                if (pair.Value.OrchId == orchId)
+                if (pair.Value.OrchId == orchId && (onlyMessageId == null || pair.Key == onlyMessageId.Value))
                     answered.Add((pair.Key, pair.Value.ButtonGroupId, pair.Value.Text));
             }
 
             foreach (var question in answered)
             {
-                _openQuestions.Remove(question.MessageId);
-                Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.TYPED_ANSWER);
+                _openQuestions.Remove(question.MessageId, out var answeredInWords);
+                Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.TYPED_ANSWER, answeredInWords);
             }
         }
 
@@ -12830,18 +13103,28 @@ internal sealed class BridgeEngineModel(
     /// decider stops that too, since a tap echo arriving with two questions still open reads as
     /// ambiguous rather than as an answer to both.
     /// </summary>
-    async Task Close_AnsweredQuestions_Async(string orchId, string answerText, CancellationToken cancellationToken)
+    async Task Close_AnsweredQuestions_Async(string orchId, string answerText, long? replyToMessageId, CancellationToken cancellationToken)
     {
         int openCount;
+        var replyTarget = OwnerReplyTargets.None;
 
         // OPEN IS BINDABLE AGAIN, and there is no longer a third state between them. A question the
         // owner asked to talk about used to stay open-but-not-bindable; that tap now closes it, so
         // the count and the removal below read the same registry with the same rule — which is what
         // stops a decider and a remover from agreeing only by coincidence.
         lock (_ownerStateLock)
+        {
             openCount = _openQuestions.Values.Count(question => question.OrchId == orchId);
 
-        var binding = AnswerBinding_Decider.Decide(openCount, answerText);
+            if (replyToMessageId != null)
+            {
+                replyTarget = _openQuestions.TryGetValue(replyToMessageId.Value, out var repliedTo) && repliedTo.OrchId == orchId
+                    ? OwnerReplyTargets.AnOpenQuestion
+                    : OwnerReplyTargets.AnotherMessage;
+            }
+        }
+
+        var binding = AnswerBinding_Decider.Decide(openCount, answerText, replyTarget);
 
         if (!AnswerBinding_Decider.Binds(binding))
         {
@@ -12854,10 +13137,15 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        var answered = Clear_OpenQuestions(orchId);
+        var answered = binding == AnswerBindings.TheQuestionItRepliesTo
+            ? Clear_OpenQuestions(orchId, onlyMessageId: replyToMessageId)
+            : Clear_OpenQuestions(orchId);
 
         if (answered.Count == 0)
             return;
+
+        if (binding == AnswerBindings.TheQuestionItRepliesTo)
+            _log.Log_Info(orchId, AnswerBinding_Decider.Describe(binding, openCount));
 
         lock (_buttonLock)
         {
@@ -13463,6 +13751,10 @@ internal sealed class BridgeEngineModel(
             segmentText = message.Text;
         }
 
+        // THE OWNER'S OWN WORDS, kept before the quote goes on: whether they answer a question is a
+        // question about what THEY wrote, and a quoted question ends in "?" (see AnswerBinding_Decider).
+        var ownerWords = segmentText;
+
         // AFTER the three paths, not inside one: the owner can reply with text, a voice note or a
         // photo, and the quote is what they were pointing at in every case.
         segmentText = OwnerReplyContext_Formatter.Prepend_OrSame(segmentText, message.ReplyToText);
@@ -13470,6 +13762,12 @@ internal sealed class BridgeEngineModel(
         lock (_deliveryLock)
         {
             _deliveryTargets[channelFile] = (orchId, message.MessageThreadId);
+
+            // The Telegram message the next owner entry of this channel is written from — what a
+            // session's answer to it is threaded onto (Running.ReplyLinks). The LATEST, since
+            // messages a few seconds apart are delivered as one entry and the answer is to all of them.
+            if (!message.IsAppComposed && message.MessageId != null)
+                _lastOwnerMessageIdByChannel[channelFile] = message.MessageId.Value;
         }
 
         // Any word from the owner — including a button tap — means they are back.
@@ -13488,12 +13786,17 @@ internal sealed class BridgeEngineModel(
         // stamped a talk request onto an orphaned-processes question nobody ever decided.
         if (!message.IsAppComposed)
         {
-            await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
+            await Close_AnsweredQuestions_Async(orchId, ownerWords, message.ReplyToMessageId, cancellationToken);
 
-            // Stamped whether or not the reply bound: what matters later is that the owner SPOKE
+            // Stamped whether or not the reply bound: what matters later is that the owner REPLIED
             // after a question was asked, and a bound reply leaves nothing open to supersede anyway.
-            lock (_ownerStateLock)
-                _ownerRepliedInWordsUtcByOrchId[orchId] = _clock.UtcNow;
+            // NOT when the owner ASKED something: a question answers nothing, so it cannot make an
+            // older question obsolete (fincanva-6, 2026-09-11 — see QuestionSupersede_Decider).
+            if (QuestionSupersede_Decider.Counts_AsAReply(ownerWords))
+            {
+                lock (_ownerStateLock)
+                    _ownerRepliedInWordsUtcByOrchId[orchId] = _clock.UtcNow;
+            }
         }
         Clear_AwaitingAnswerFlag(orchId);
 
@@ -13631,7 +13934,9 @@ internal sealed class BridgeEngineModel(
         // of the owner's message is the local variable. A failed append that simply fell through
         // would destroy it — which is worse than the collision the lock exists to prevent, and is
         // why "fail the write" cannot mean "drop the write" on this path.
-        if (!ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now))
+        var ownerEntryIndex = ChannelAppender.Append_OwnerEntry_OrNull(delivery.Key, deliveryText, DateTime.Now);
+
+        if (ownerEntryIndex == null)
         {
             // Put it back and mark it ready: the owner has already waited out one aggregation
             // window and must not serve a second one for a lock they know nothing about.
@@ -13657,6 +13962,14 @@ internal sealed class BridgeEngineModel(
         Raise_OwnerWait(target.OrchId);
 
         Raise_OrchestrationActivity(target.OrchId);
+
+        long? ownerMessageId;
+
+        lock (_deliveryLock)
+            ownerMessageId = _lastOwnerMessageIdByChannel.TryGetValue(delivery.Key, out var lastId) ? lastId : null;
+
+        if (ownerMessageId != null)
+            _printTurns.ReplyLinks.Record_OwnerMessage(delivery.Key, ownerEntryIndex.Value, ownerMessageId.Value);
 
         // AN OWNER MESSAGE PUTS THE LEDGER IN DEBT, exactly as a verdict does, and this is the half
         // that was missing (owner, 2026-08-14). They asked for six things over two hours and the bar
@@ -15540,17 +15853,19 @@ internal sealed class BridgeEngineModel(
             if (!pending.Answered && ownerAnswerCount > pending.OwnerAnswerCountAtDelivery)
                 pending.Answered = true;
 
-            var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
+            var ownerFacingSession = _store.Get_Session_OrNull(orchId);
+            var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, ownerFacingSession);
 
-            var supervisorBusy = Is_Working(
-                Running.SessionRoles.Supervisor, orchId,
-                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsageFile);
+            // The dispatcher is asked about the session the owner is waiting on — a solo or the general
+            // supervisor as well as a crew's supervisor. Asking about "supervisor" read every headless
+            // solo as idle mid-turn, and the nudge below told it and the owner its turn had ended.
+            var (ownerFacingRole, ownerFacingMemberId) = OwnerFacingSession_Locator.Resolve_Session(orchId, ownerFacingSession);
+
+            var supervisorBusy = Is_Working(ownerFacingRole, orchId, ownerFacingMemberId, supervisorUsageFile);
 
             // ASKED SEPARATELY, because Is_Working folds Queued into "occupied" on purpose (a queued
             // session cannot be disturbed either) — but what the owner is TOLD must not.
-            var supervisorQueued = Resolve_MemberWorking(
-                Running.SessionRoles.Supervisor, orchId,
-                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID) == WorkingVerdicts.Queued;
+            var supervisorQueued = Resolve_MemberWorking(ownerFacingRole, orchId, ownerFacingMemberId) == WorkingVerdicts.Queued;
 
             // THE BUBBLE IS THE WHOLE "THINKING…" STORY NOW: up while the session is mid-turn, and
             // while a free session has not yet picked the message up — down at the nudge, the one
@@ -15672,7 +15987,21 @@ internal sealed class BridgeEngineModel(
             // which has no supervisor at all — kept telling the owner about one. Every other
             // owner-facing line here already asks Describe_Speaker; a literal beside them is a copy
             // that cannot be kept in step.
-            var text = $"✓✓  ·  {Describe_Speaker(orchId)}: turn ended without a reply — nudged, an answer is coming";
+            //
+            // AND THE PROMISE ONLY WHEN THE TURN BEHIND IT CAN KEEP IT — OwnerNudgeReceipt_Decider
+            // (2026-09-11: promised twice to an owner whose supervisor could not log in).
+            var turnFailures = OwnerFacingTurn_Reader.Read_CurrentTurnFailures(_paths, orchId, ownerFacingSession);
+
+            if (turnFailures.ReadFailure != null)
+                _log.Log_Warning(orchId, OwnerNudgeReceipt_Decider.Describe_Unreadable(turnFailures.ReadFailure));
+
+            var text = OwnerNudgeReceipt_Decider.Build_Receipt_OrNull(Describe_Speaker(orchId), turnFailures.FailedAttempts);
+
+            if (text == null)
+            {
+                _log.Log_Info(orchId, OwnerNudgeReceipt_Decider.Describe_Withheld(turnFailures.FailedAttempts));
+                continue;
+            }
 
             // The same canvas the busy narration draws on: a receipt that was never published (a
             // free recipient gets none now) does not turn this into a second message when a

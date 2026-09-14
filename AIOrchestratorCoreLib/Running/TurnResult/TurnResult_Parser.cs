@@ -50,7 +50,7 @@ public static class TurnResult_Parser
     public static (JsonObject? Document, IReadOnlyList<string> FinalLookingTexts) Read_Stream(string stdout)
     {
         JsonObject? document = null;
-        List<string> finalLooking = [];
+        List<(string? MessageId, string Text)> finalLooking = [];
 
         foreach (var raw in (stdout ?? string.Empty).Split('\n'))
         {
@@ -67,11 +67,10 @@ public static class TurnResult_Parser
                 continue;
             }
 
-            if (SupersededFinals_Rule.Is_FinalLooking(json))
-                finalLooking.Add(StreamEvent_Reader.Read_AssistantText(json));
+            SupersededFinals_Rule.Track(finalLooking, json);
         }
 
-        return (document, finalLooking);
+        return (document, SupersededFinals_Rule.Texts(finalLooking));
     }
 
     static ITurnResult Build(int exitCode, bool timedOut, JsonObject? document, string stdout, string stderr, TimeSpan elapsed, IReadOnlyList<string>? finalLookingTexts)

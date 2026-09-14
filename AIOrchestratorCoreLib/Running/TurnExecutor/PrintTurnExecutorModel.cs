@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Running.TurnLiveness;
 using AIOrchestratorCoreLib.Running.ClosingTurn;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
@@ -36,6 +37,7 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
+        TimeSpan memberSilenceLimit,
         CancellationToken cancellationToken)
     {
         var arguments = PrintTurnCommand_Builder.Build_Arguments(state, roleConfig, sessionId, resumeTranscript, null);
@@ -50,12 +52,22 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         var fresh = roleConfig.Resume == ResumeModes.Fresh;
         string? prompt = null;
 
+        // A NEW TASK RETIRES THE OLD NOTE IN EVERY RESUME MODE, not only where a pack is written: a
+        // member in transcript mode keeps appending too, and a later switch to fresh would otherwise
+        // hand it a note from tasks long finished (simplify review, 2026-09-11).
+        StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, state.Role, state.OrchId, state.MemberId, pending.Select(item => item.Entry).ToList());
+
         if (resumeTranscript)
             prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
         else if (fresh && pending.Count > 0)
             Write_StatePack(state, requestId, pending, sources);
 
-        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
+        // THE WORK TURN IS BRAKED, the closing turn below is not: that one has its own short timeout
+        // and a spend cap, and a brake on the turn that exists to salvage a killed one would only
+        // add a second way for the salvage to die.
+        var brake = TurnSilenceBrake_Factory.Create_ForTurn_OrNull(state.Role, memberSilenceLimit, sessionId, environment);
+
+        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, brake, cancellationToken);
 
         TurnLog_Store.Append_TurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), requestId, result);
 
@@ -81,7 +93,7 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         var arguments = PrintTurnCommand_Builder.Build_ClosingTurnArguments(state, roleConfig, resumeSessionId, null);
         var prompt = ClosingTurnPrompt_Builder.Build(closingRequestId, sources);
 
-        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
+        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, null, cancellationToken);
 
         TurnLog_Store.Append_ClosingTurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), closingRequestId, result);
 

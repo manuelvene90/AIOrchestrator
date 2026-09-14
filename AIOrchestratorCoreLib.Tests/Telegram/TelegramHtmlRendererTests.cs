@@ -272,6 +272,88 @@ public class TelegramHtmlRendererTests
         Assert.Equal("<pre>**not bold**</pre>", TelegramHtml_Renderer.Render("```\n**not bold**\n```"));
     }
 
+    [Theory]
+    [InlineData("3*5 e **uno**", "3*5 e <b>uno</b>")]
+    [InlineData("vedi punto * poi **801**", "vedi punto * poi <b>801</b>")]
+    [InlineData("It will be the **801** of 999", "It will be the <b>801</b> of 999")]
+    [InlineData("a*b **one** and **two**", "a*b <b>one</b> and <b>two</b>")]
+    public void Render_AStraySingleAsteriskBeforeBold_NeverStealsHalfOfTheBoldPair(string markdown, string expected)
+    {
+        // The owner's phone, 2026-09-11: `**uno**` arrived as `*uno**` and `**801**` as `*801**`.
+        // The single-star scan used to take the second asterisk of the pair as its closer —
+        // `3*5 e **uno**` rendered `3<i>5 e *</i>uno**`.
+        Assert.Equal(expected, TelegramHtml_Renderer.Render(markdown));
+    }
+
+    [Theory]
+    [InlineData("*nota* e **uno**", "<i>nota</i> e <b>uno</b>")]
+    [InlineData("**uno** e *nota*", "<b>uno</b> e <i>nota</i>")]
+    [InlineData("3*5 e **uno** e *nota*", "3*5 e <b>uno</b> e <i>nota</i>")]
+    [InlineData("*italic **bold** inside*", "<i>italic <b>bold</b> inside</i>")]
+    public void Render_ALegitimateSingleStarItalic_StillRendersBesideBold(string markdown, string expected)
+    {
+        // The third case is the reason the forward search stops at a star that can only open: the
+        // stray `*` of `3*5` would otherwise pair with the closer of `*nota*` and italicise the
+        // whole middle of the line.
+        Assert.Equal(expected, TelegramHtml_Renderer.Render(markdown));
+    }
+
+    [Fact]
+    public void Render_AStrayUnderscoreBeforeUnderscoreBold_NeverStealsHalfOfThePairEither()
+    {
+        // The same scan serves `_` and `__`, so the same rule holds for them.
+        Assert.Equal("see _this <b>uno</b>", TelegramHtml_Renderer.Render("see _this __uno__"));
+    }
+
+    [Fact]
+    public void Render_AMarkdownTable_BecomesABoldHeaderLineAndOneLinePerRow()
+    {
+        // The owner's chat, 2026-09-11: Telegram has no table, and the raw pipes and the dash row
+        // reached the phone as written.
+        var markdown = "| Ticket | What it is | State |\n|---|---|---|\n| FIN-D-279 | Price table | ✅ closed |\n| FIN-D-280 | Screener | 🔄 open |";
+
+        var html = TelegramHtml_Renderer.Render(markdown);
+
+        Assert.Equal(
+            "<b>Ticket</b> · <b>What it is</b> · <b>State</b>\nFIN-D-279 · Price table · ✅ closed\nFIN-D-280 · Screener · 🔄 open",
+            html);
+    }
+
+    [Fact]
+    public void Render_ATableInsideALongerMessage_OnlyTheTableIsReshaped()
+    {
+        var markdown = "**Status** of the week:\n\n| Ticket | State |\n|:---|---:|\n| FIN-D-279 | ✅ closed |\n\nThen prose | with a pipe.";
+
+        var html = TelegramHtml_Renderer.Render(markdown);
+
+        Assert.Equal(
+            "<b>Status</b> of the week:\n\n<b>Ticket</b> · <b>State</b>\nFIN-D-279 · ✅ closed\n\nThen prose | with a pipe.",
+            html);
+    }
+
+    [Fact]
+    public void Render_TableCells_AreEscapedAndRenderTheirInlineMarkup_AndEmptyCellsAreSkipped()
+    {
+        var markdown = "| Name | `code` | Note |\n|---|---|---|\n| **a < b** |  | x & y |";
+
+        var html = TelegramHtml_Renderer.Render(markdown);
+
+        // The `code` header cell is NOT bolded: Telegram refuses <code> nested inside <b>.
+        Assert.Equal("<b>Name</b> · <code>code</code> · <b>Note</b>\n<b>a &lt; b</b> · x &amp; y", html);
+    }
+
+    [Theory]
+    [InlineData("tail -f log | grep error")]
+    [InlineData("| a | b |")]
+    [InlineData("| a | b |\nnot a separator")]
+    [InlineData("| a | b |\n|---|---|---|")]
+    public void Render_APipeLineThatIsNotATable_IsLeftAlone(string markdown)
+    {
+        // A table needs a header AND a separator row with the same number of cells. Anything less is
+        // prose that happens to contain a pipe.
+        Assert.Equal(markdown, TelegramHtml_Renderer.Render(markdown));
+    }
+
     static int Count_Occurrences(string text, string needle)
     {
         var count = 0;

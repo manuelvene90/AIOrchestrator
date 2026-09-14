@@ -38,7 +38,7 @@ sealed class BridgeHost_Service(
     /// the sessions are killed anyway, because a hung drain must not hold up a service stop.
     /// </summary>
     /// <summary>When the configuration cannot be read: the grace for the default turn timeout (ShutdownGrace_Rule).</summary>
-    static readonly TimeSpan ENGINE_STOP_GRACE_FALLBACK = ShutdownGrace_Rule.Compute_EngineStopGrace(ShutdownGrace_Rule.DEFAULT_TURN_TIMEOUT);
+    static readonly TimeSpan ENGINE_STOP_GRACE_FALLBACK = ShutdownGrace_Rule.Compute_EngineStopGrace(ShutdownGrace_Rule.DEFAULT_LONGEST_TURN_TIMEOUT);
 
     readonly IHostOptions _options = options;
     readonly IHostApplicationLifetime _lifetime = lifetime;
@@ -107,7 +107,7 @@ sealed class BridgeHost_Service(
         // Program.cs for the default turn timeout; a configuration that raised the turn timeout would
         // have its drain cut again, silently, exactly like 2026-09-09. Warned, never refused: a daemon
         // that will not start over a config value takes every session down with it.
-        var mismatch = ShutdownGrace_Rule.Describe_Mismatch_OrNull(services.ConfigProvider.Get_Current().Runners.TurnTimeout, ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT);
+        var mismatch = ShutdownGrace_Rule.Describe_Mismatch_OrNull(TurnTimeout_Rule.Resolve_Longest(services.ConfigProvider.Get_Current().Runners), ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT);
 
         if (mismatch != null)
             services.Log.Log_Warning("", $"Shutdown grace: {mismatch}");
@@ -179,7 +179,7 @@ sealed class BridgeHost_Service(
     {
         try
         {
-            return ShutdownGrace_Rule.Compute_EngineStopGrace(services.ConfigProvider.Get_Current().Runners.TurnTimeout);
+            return ShutdownGrace_Rule.Compute_EngineStopGrace(TurnTimeout_Rule.Resolve_Longest(services.ConfigProvider.Get_Current().Runners));
         }
         catch
         {

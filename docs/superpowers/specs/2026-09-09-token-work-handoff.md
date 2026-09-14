@@ -141,3 +141,85 @@ Headline so far (spec §5f): **tokens per call for members 345 k → ~100 k and 
 *Nothing here is certified by its author: the suite numbers are `dotnet test AIOrchestratorCoreLib.Tests`
 (2 756 passed / 9 skipped / 0 red on `f5d6b76`), the VPS facts are reads of the running box, and the
 before/after that proves the plan is the gate in §5f–§5g.*
+
+## 7. What the three changes actually did in production (measured 2026-09-10, VPS reads)
+
+Read this before believing §5's design claims: the three changes shipped on 2026-09-09 went live
+before anyone had seen them fire on a real session. Two now have production evidence, one does not.
+
+- **The soft boundary (mid-turn advisory)** — **8 sessions** received a real advisory. Counted as
+  `hook_additional_context` AND `IT HAS READ NO CLOCK` present in the same transcript
+  (`~/.claude/projects/*/*.jsonl` on the VPS, metadata + field presence only, never message text).
+  **Do not count the phrase `SOFT BOUNDARY`**: it is now in the skills that every session loads, so
+  it matches sessions the hook never touched. Only the attachment field proves delivery.
+- **The member digest** — 4 releases, of which **1 carried two entries in one turn**
+  (`'sup': entries: imp-2 [116], imp-3 [52] — the 5 min member digest elapsed`, `fincanva-5`,
+  12:01:12Z). That single release is the whole saving observed so far: one supervisor turn not taken,
+  worth **~607 k tokens of carried context** (measured: mean of the 171 turns that session made that
+  day, `input + cache_read + cache_creation` of the largest call per `promptId`). ~98 % of that is
+  cache-read [estimate, from the 97.8 % measured on 09-08], so the billed saving is a small fraction
+  of the raw number — but the unit saved is the most expensive turn in the system.
+  **CORRECTED AT END OF DAY, and the earlier reading here was too pessimistic.** The full day was
+  **12 releases, 3 of them carrying two entries** = 3 supervisor turns not taken; the nine
+  single-entry releases saved nothing and cost 5 minutes of latency each. The three multi-entry
+  releases clustered in the busiest stretch (12:01, 13:13, 13:33, two of them inside 20 minutes),
+  which is why the earlier "1 of 3, mostly idle" was a sample and not a rate. [CLAIMED] that
+  coalescence rises with workload density — three points, so re-measure before building on it. Before widening it, note the ceiling: `IMPLEMENTER_NUDGE_MINUTES = 8`, past
+  which the app nudges a supervisor for a report the app itself is holding. The better variant is to
+  release when no member has a turn in flight — in this workload that releases immediately, i.e. the
+  digest switches itself off when it cannot help, which is the right shape.
+- **The closing-spoke report** — **fired once, and said the false thing.** At 14:12:43 it announced
+  `imp-3`'s final report [72] as never handed; the supervisor turn carrying it had started at
+  14:11:15 and succeeded at 14:12:58. The cursor advances only when a turn COMPLETES, so entries
+  being delivered still read as pending. Fixed on `stage/11` (`41531e0`): the dispatcher records what
+  each in-flight turn launched with, and the line now separates "nothing is carrying this" (warning)
+  from "a turn is carrying this" (info naming the condition, because a failed turn leaves them
+  pending). It also settled the owner's open question — closing a member with unread traffic must NOT
+  be prevented, since prevention would have refused exactly that close.
+
+### The measuring mistake this cost, twice
+
+Two of the advisory deliveries were reported as **false positives of the detector** and were not: the
+transcripts were read while the session was still writing them, so the field was absent when the grep
+ran and present ten minutes later. The detector never produced a false positive; the clock did.
+
+**On a file another process is still writing, absence is not a measurement.** Presence is — it cannot
+appear by mistiming. So a check of this kind may conclude "it is there", never "it is not there":
+for the negative you need a closed file, or two reads far enough apart to say which. This is
+CLAUDE.md decision 18's temporal sibling — 18 asks *which copy* you read, this asks *when*.
+
+
+## 8. The day's gate reading (2026-09-10) — and the denominator that does not exist
+
+[MEASURED, deduped by `(sessionId, requestId)`, VPS metadata only. Caveats are part of the numbers,
+not a footnote: different orchestrations were active on the two days, so part of this is task mix;
+97.6 M tokens of 09-10 (16 %) could not be attributed to a role without reading message text; and the
+gate scripts were ADAPTED, not run as shipped — see below.]
+
+| | 2026-09-08 (before) | 2026-09-10 (after) |
+|---|---|---|
+| Tokens, whole day | 773.1 M | **597.0 M** (−23 %) |
+| Model calls | 3,406 | 4,606 (+35 %) |
+| Member first-call context, median | 290 k | **60 k** (−79 %) |
+| Member tokens | 421.4 M | **105.3 M** (−75 %, same call count) |
+| Supervisor tokens | 228.1 M | 157.1 M (−31 %) |
+| Sub-agent tokens | 123.5 M | **237.0 M** (+92 %) |
+| Member calls per turn, median | 1.0 | 12.0 |
+
+The state pack did what it was built for: a member starts a turn carrying a fifth of what it used to,
+and the day cost 23 % less while making 35 % MORE calls. **And the cost did not vanish, it moved** —
+a member's turn went from 1 call to 12 (no transcript to resume, so the work sits inside one long
+turn) and sub-agent tokens nearly doubled. That is precisely where the mid-turn advisory watches and
+where nothing brakes; whether anything should is the largest question left.
+
+**"Tokens per delivered item" is NOT computable and should stop being promised.** There is no
+ledger-close event in `orchestrator.log.jsonl`, and the orchestrations' `PLAN.md` is not under git, so
+no per-day delta exists. The only structured proxy is member closures: 9 on each day, over 3 distinct
+tickets on 09-08 and 4 on 09-10 — which gives 258 M vs 149 M per ticket (−42 %) if one accepts that
+tickets are comparable units, and they are not. Either the app emits such an event, or the question
+gets reframed.
+
+**`tools/token-gate/` needs fixing before the next reading:** both scripts hardcode the cut timestamp
+and two supervisor session ids from an earlier single-orchestration run, so they cannot measure two
+arbitrary days. Every number above came from adapted copies that preserved their fields, dedupe and
+formulas. Parameterise the window first, then re-measure — §6's instructions are otherwise a trap.

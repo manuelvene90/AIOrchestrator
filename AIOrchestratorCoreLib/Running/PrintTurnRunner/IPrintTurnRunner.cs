@@ -13,6 +13,9 @@ public interface IPrintTurnRunner
     /// <paramref name="stdinPrompt"/> null means stdin is closed at once (the prompt is positional);
     /// otherwise the text is written and stdin closed. A turn that outlives <paramref name="timeout"/>
     /// — or the token — is killed as a tree and comes back with <c>TimedOut</c> set.
+    /// <paramref name="brake"/>, when given, is asked while the turn runs whether it still shows a
+    /// sign of life; a turn it condemns is killed the same way and comes back with <c>TimedOut</c> AND
+    /// <c>BrakeKill</c> set. Null is the deadline alone, which is every role but the working members.
     /// </summary>
     Task<ITurnResult> Run_Async(
         IReadOnlyList<string> arguments,
@@ -20,5 +23,6 @@ public interface IPrintTurnRunner
         string workingDirectory,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
+        TurnLiveness.ITurnSilenceBrake? brake,
         CancellationToken cancellationToken);
 }

@@ -65,6 +65,48 @@ public static class SupersededFinals_Rule
     }
 
     /// <summary>
+    /// ONE EVENT AT A TIME, the way both transports read the stream: a final-looking text joins
+    /// <paramref name="candidates"/>, and a tool call arriving under the SAME message id takes it
+    /// back out.
+    ///
+    /// <para>
+    /// THE CLI SPLITS ONE MESSAGE INTO SEVERAL EVENTS — one per content block, all with the message's
+    /// id and all with <c>stop_reason</c> null — so a message that says "checking the merge" and then
+    /// calls a tool arrives as a text-only event followed by a tool-only one. Read one event at a time,
+    /// the text looked final, and it was filed as an entry: measured 2026-09-11 in fincanva-6,
+    /// "He's asked twice — answering first…", "Verifying the merge before I tell Nathan it's live.",
+    /// "Nathan said yes. Checking the main checkout is clean…" each shared its message id with the
+    /// tool call right after it, and each reached the owner's phone as a message — in English, about
+    /// them, in an Italian conversation. The model did not end on them; neither may the bridge.
+    /// A report the session wrote as a message of its own (the case this rule exists for) has no tool
+    /// call under its id and is untouched.
+    /// </para>
+    /// </summary>
+    public static void Track(List<(string? MessageId, string Text)> candidates, JsonObject json)
+    {
+        if (Is_FinalLooking(json))
+        {
+            candidates.Add((Read_MessageId_OrNull(json), StreamEvent_Reader.Read_AssistantText(json)));
+            return;
+        }
+
+        if (StreamEvent_Reader.Read_Type(json) != StreamEvent_Reader.TYPE_ASSISTANT || Is_SubAgentMessage(json))
+            return;
+
+        if (StreamEvent_Reader.Read_ToolNames(json).Count == 0)
+            return;
+
+        if (Read_MessageId_OrNull(json) is string messageId)
+            candidates.RemoveAll(candidate => candidate.MessageId == messageId);
+    }
+
+    /// <summary>The texts of <see cref="Track"/>'s candidates, in order — what <see cref="Select_Superseded"/> reads.</summary>
+    public static IReadOnlyList<string> Texts(IReadOnlyList<(string? MessageId, string Text)> candidates)
+    {
+        return [.. candidates.Select(candidate => candidate.Text)];
+    }
+
+    /// <summary>
     /// The final-looking texts, in the order they arrived, that the result did NOT keep — see the
     /// dedupe rule in the class remark. Empty whenever the turn ended on the message it wrote.
     /// </summary>
@@ -109,6 +151,18 @@ public static class SupersededFinals_Rule
         catch
         {
             return false;
+        }
+    }
+
+    static string? Read_MessageId_OrNull(JsonObject json)
+    {
+        try
+        {
+            return (json["message"] as JsonObject)?["id"]?.GetValue<string>();
+        }
+        catch
+        {
+            return null;
         }
     }
 

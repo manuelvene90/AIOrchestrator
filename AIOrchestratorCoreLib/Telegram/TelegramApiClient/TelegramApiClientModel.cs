@@ -216,6 +216,22 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         payload["link_preview_options"] = new JsonObject { ["is_disabled"] = true };
     }
 
+    /// <summary>
+    /// THE THREAD LINK (owner directive 2026-09-11, after a fincanva-5 reply landed after the
+    /// owner's next message and read as the answer to the wrong one). <c>allow_sending_without_reply</c>
+    /// is not a nicety — without it Telegram refuses the WHOLE send the instant the target message is
+    /// gone (owner deleted it, or Telegram's own retention dropped it), and losing the send is worse
+    /// than losing the link it would have carried.
+    /// </summary>
+    static void Stamp_ReplyParameters(JsonObject payload, long replyToMessageId)
+    {
+        payload["reply_parameters"] = new JsonObject
+        {
+            ["message_id"] = replyToMessageId,
+            ["allow_sending_without_reply"] = true,
+        };
+    }
+
     public async Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
@@ -247,6 +263,43 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             payload["message_thread_id"] = messageThreadId.Value;
 
         Stamp_DeliveryOptions(payload, sound);
+
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message));
+    }
+
+    public async Task<long?> Send_MessageReply_Async(long? messageThreadId, string text, long replyToMessageId, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["text"] = text,
+        };
+
+        if (messageThreadId != null)
+            payload["message_thread_id"] = messageThreadId.Value;
+
+        Stamp_DeliveryOptions(payload, sound);
+        Stamp_ReplyParameters(payload, replyToMessageId);
+
+        var responseJson = await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message);
+
+        return Read_MessageId_OrNull(responseJson);
+    }
+
+    public async Task<long?> Send_HtmlReply_Async(long? messageThreadId, string html, long replyToMessageId, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["text"] = html,
+            ["parse_mode"] = "HTML",
+        };
+
+        if (messageThreadId != null)
+            payload["message_thread_id"] = messageThreadId.Value;
+
+        Stamp_DeliveryOptions(payload, sound);
+        Stamp_ReplyParameters(payload, replyToMessageId);
 
         return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message));
     }

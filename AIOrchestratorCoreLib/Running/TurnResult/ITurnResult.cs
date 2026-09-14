@@ -30,6 +30,15 @@ public interface ITurnResult
     /// </summary>
     bool NothingToClose { get; }
 
+    /// <summary>
+    /// THE LINE THE MEMBER SILENCE BRAKE WROTE when it killed this turn, null for every other ending —
+    /// a deadline kill included. <see cref="TimedOut"/> is set either way, because both are kills of a
+    /// turn that had been WORKING and both earn the closing turn; this is what lets the log and the
+    /// channel say which of the two happened instead of calling a silence a deadline
+    /// (<see cref="TurnLiveness.ITurnSilenceBrake"/>).
+    /// </summary>
+    string? BrakeKill { get; }
+
     /// <summary>The CLI's own verdict (<c>is_error</c>); false when the JSON was absent.</summary>
     bool IsError { get; }
     string? Subtype { get; }

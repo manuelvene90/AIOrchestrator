@@ -133,4 +133,52 @@ public class LimitAlertIdentityTests
     {
         Assert.Equal(expected, WindowInstance_Order.Compare_Instance(candidate, known));
     }
+
+    static readonly DateTime EARLIER_READING = new(2026, 9, 10, 16, 29, 0, DateTimeKind.Utc);
+    static readonly DateTime LATER_READING = new(2026, 9, 12, 0, 2, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// Which reading describes the window in force. The stamps are the two the live machine actually
+    /// reported for its weekly window — 5.0 standing for the LATER reset (09-16) that the OLDER
+    /// probe named, 4.0 for the earlier one (09-14) that every live probe named. The stamp rule
+    /// answered +1 to the first row and froze /limits for a day; recency answers -1.
+    /// </summary>
+    [Theory]
+    // Different windows: the reading taken later decides, whichever stamp is larger.
+    [InlineData(5.0, false, 4.0, true, -1)]
+    [InlineData(4.0, true, 5.0, false, 1)]
+    // Same window: no contest — the caller's percentage rule decides, which is what keeps a stopped
+    // session's 100% winning against a fresher, lower reading of its own window.
+    [InlineData(4.0, false, 4.0, true, 0)]
+    [InlineData(null, false, null, true, 0)]
+    // An unidentifiable reading never displaces an identified one, however recent it is.
+    [InlineData(null, true, 4.0, false, -1)]
+    [InlineData(4.0, false, null, true, 1)]
+    public void Compare_Reading_OrdersByWhenTheReadingWasTaken_NotByWhichStampIsLater(
+        double? candidateStamp,
+        bool candidateIsLater,
+        double? knownStamp,
+        bool knownIsLater,
+        int expected)
+    {
+        var actual = WindowInstance_Order.Compare_Reading(
+            candidateStamp,
+            candidateIsLater ? LATER_READING : EARLIER_READING,
+            knownStamp,
+            knownIsLater ? LATER_READING : EARLIER_READING);
+
+        Assert.Equal(expected, Math.Sign(actual));
+    }
+
+    /// <summary>
+    /// Two identified windows written at the very same instant is not a real case, only a reachable
+    /// one. It falls back to the stamp so the answer can never depend on the order the files are
+    /// enumerated in.
+    /// </summary>
+    [Fact]
+    public void Compare_Reading_WithBothReadingsTakenAtTheSameInstant_FallsBackToTheStamp()
+    {
+        Assert.Equal(1, Math.Sign(WindowInstance_Order.Compare_Reading<double>(5.0, LATER_READING, 4.0, LATER_READING)));
+        Assert.Equal(-1, Math.Sign(WindowInstance_Order.Compare_Reading<double>(4.0, LATER_READING, 5.0, LATER_READING)));
+    }
 }

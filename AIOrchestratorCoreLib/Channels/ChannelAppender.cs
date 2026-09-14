@@ -23,6 +23,16 @@ public static class ChannelAppender
     /// <summary>Returns whether the entry was appended; false means the channel stayed locked.</summary>
     public static bool Append_OwnerEntry(string channelFilePath, string messageText, DateTime nowLocal)
     {
+        return Append_OwnerEntry_OrNull(channelFilePath, messageText, nowLocal) != null;
+    }
+
+    /// <summary>
+    /// The same append, returning the index it allocated — null when the channel stayed locked. For a
+    /// caller that has to name the entry afterwards (Running.ReplyLinks), which a re-read cannot do
+    /// safely: another writer may have appended in between.
+    /// </summary>
+    public static int? Append_OwnerEntry_OrNull(string channelFilePath, string messageText, DateTime nowLocal)
+    {
         return Append_Entry(channelFilePath, "owner", "via Telegram", messageText, nowLocal);
     }
 
@@ -37,7 +47,7 @@ public static class ChannelAppender
     /// </summary>
     public static bool Append_AppEntry(string channelFilePath, AppEntryAudiences audience, string subject, string body, DateTime nowLocal)
     {
-        return Append_Entry(channelFilePath, "app", AppEntryAudience_Tag.Apply(subject, audience), body, nowLocal);
+        return Append_Entry(channelFilePath, "app", AppEntryAudience_Tag.Apply(subject, audience), body, nowLocal) != null;
     }
 
     /// <summary>
@@ -49,17 +59,26 @@ public static class ChannelAppender
     /// </summary>
     public static bool Append_SessionEntry(string channelFilePath, ChannelAuthors author, string subject, string body, DateTime nowLocal)
     {
+        return Append_SessionEntry_OrNull(channelFilePath, author, subject, body, nowLocal) != null;
+    }
+
+    /// <summary>The same append, returning the index it allocated — null when the channel stayed locked.</summary>
+    public static int? Append_SessionEntry_OrNull(string channelFilePath, ChannelAuthors author, string subject, string body, DateTime nowLocal)
+    {
         if (!ChannelAuthor_Kinds.Is_Session(author))
             throw new ArgumentException($"Append_SessionEntry is for session authors, not {author} (subject '{subject}')");
 
         return Append_Entry(channelFilePath, ChannelAuthor_Words.Get_Word(author), subject, body, nowLocal);
     }
 
-    static bool Append_Entry(string channelFilePath, string authorWord, string subject, string body, DateTime nowLocal)
+    /// <summary>The index the entry was written under, or null when the channel stayed locked for the whole budget.</summary>
+    static int? Append_Entry(string channelFilePath, string authorWord, string subject, string body, DateTime nowLocal)
     {
+        int? writtenIndex = null;
+
         // The index comes from a read, so the read and the append have to be one indivisible step:
         // split them and two appenders pick the same index.
-        return ChannelWrite_Lock.Try_Run_Serialised(channelFilePath, ChannelWrite_Lock.DEFAULT_BUDGET, () =>
+        var landed = ChannelWrite_Lock.Try_Run_Serialised(channelFilePath, ChannelWrite_Lock.DEFAULT_BUDGET, () =>
         {
             var existingText = File.Exists(channelFilePath)
                 ? File.ReadAllText(channelFilePath)
@@ -77,6 +96,9 @@ public static class ChannelAppender
                 $"\n{body.Trim()}\n";
 
             File.AppendAllText(channelFilePath, entry);
+            writtenIndex = nextIndex;
         }, out _);
+
+        return landed ? writtenIndex : null;
     }
 }

@@ -33,10 +33,14 @@ public static class TelegramProse_Sender
         long? messageThreadId,
         string markdown,
         TelegramSendSounds sound,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+
+        // See Send_Rendered_Async below — trailing and optional so every caller written before
+        // reply threading existed keeps behaving exactly as before.
+        long? replyToMessageId = null)
     {
         return Send_Rendered_Async(
-            client, log, orchId, messageThreadId, TelegramHtml_Renderer.Render(markdown), markdown, sound, cancellationToken);
+            client, log, orchId, messageThreadId, TelegramHtml_Renderer.Render(markdown), markdown, sound, cancellationToken, replyToMessageId);
     }
 
     /// <summary>
@@ -65,17 +69,28 @@ public static class TelegramProse_Sender
         // these are. The fallback must ring exactly as the HTML would have — a refused render is not
         // a reason to downgrade a supervisor's message to a silent one.
         TelegramSendSounds sound,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+
+        // TELEGRAM'S NATIVE REPLY (owner directive 2026-09-11): non-null threads this send onto the
+        // message it answers, via the client's *_Reply_Async methods, and the fallback threads onto
+        // the SAME id — a refusal must cost only the formatting, never the link. Null (every caller
+        // written before this existed, and any send that answers nothing in particular) behaves
+        // exactly as it always has.
+        long? replyToMessageId = null)
     {
         try
         {
-            return await client.Send_HtmlMessage_Async(messageThreadId, html, sound, cancellationToken);
+            return replyToMessageId == null
+                ? await client.Send_HtmlMessage_Async(messageThreadId, html, sound, cancellationToken)
+                : await client.Send_HtmlReply_Async(messageThreadId, html, replyToMessageId.Value, sound, cancellationToken);
         }
         catch (TelegramApiException ex) when (Is_ParseRefusal(ex))
         {
             log.Log_Warning(orchId, Describe_Refusal("sendMessage", plainFallback, ex));
 
-            return await client.Send_Message_Async(messageThreadId, plainFallback, sound, cancellationToken);
+            return replyToMessageId == null
+                ? await client.Send_Message_Async(messageThreadId, plainFallback, sound, cancellationToken)
+                : await client.Send_MessageReply_Async(messageThreadId, plainFallback, replyToMessageId.Value, sound, cancellationToken);
         }
     }
 

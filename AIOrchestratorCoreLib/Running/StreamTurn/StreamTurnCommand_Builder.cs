@@ -36,6 +36,7 @@ public static class StreamTurnCommand_Builder
             "--output-format", StreamJson_Words.OUTPUT_FORMAT,
             "--verbose",
             "--include-hook-events",
+            StreamJson_Words.REPLAY_USER_MESSAGES_FLAG,
             "--name", PrintTurnCommand_Builder.Build_SessionName(state),
         ];
 
@@ -75,9 +76,22 @@ public static class StreamTurnCommand_Builder
     }
 }
 
-/// <summary>The two format words of the transport, spelled once for the builder and the tests.</summary>
+/// <summary>The words of the transport, spelled once for the builder and the tests.</summary>
 public static class StreamJson_Words
 {
     public const string INPUT_FORMAT = "stream-json";
     public const string OUTPUT_FORMAT = "stream-json";
+
+    /// <summary>
+    /// THE ECHO THAT SAYS WHICH REPLY IS WHOSE. With it the CLI writes each of our messages back, as
+    /// a <c>user</c> event carrying <c>isReplay: true</c>, at the moment it takes the message into a
+    /// turn. A session can also answer something WE never sent — a background task finishing wakes
+    /// it — and that turn carries no echo. Without the flag nothing on the wire tells the two apart,
+    /// and <see cref="StreamSessionProcess"/> took the first result as the answer to the message it
+    /// had just written: on 2026-09-11 fincanva-5 answered each of sixteen owner messages with its
+    /// reply to the one before. Measured on 2.1.268 the same day, both orderings: idle, the echo
+    /// follows <c>init</c>; sent while an unprompted turn is running, the message is merged into
+    /// that turn and its echo precedes the one result that answers both.
+    /// </summary>
+    public const string REPLAY_USER_MESSAGES_FLAG = "--replay-user-messages";
 }

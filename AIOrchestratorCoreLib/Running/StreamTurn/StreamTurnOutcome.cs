@@ -33,10 +33,17 @@ public sealed class StreamTurnOutcome
 
     public string Stderr { get; }
 
+    /// <summary>
+    /// How many messages the session wrote since its last turn that answered nothing we sent — a
+    /// background task woke it. They ride at the front of <see cref="ITurnResult.SupersededFinals"/>;
+    /// the count is here so the log can say why they are there.
+    /// </summary>
+    public int UnpromptedReplies { get; }
+
     /// <summary>True when the transport itself failed — the only thing a fallback may be decided on.</summary>
     public bool IsStructuralFailure => ProcessDied;
 
-    StreamTurnOutcome(ITurnResult result, bool processDied, bool wentSilent, TimeSpan silence, JsonObject? rateLimitInfo, string stderr)
+    StreamTurnOutcome(ITurnResult result, bool processDied, bool wentSilent, TimeSpan silence, JsonObject? rateLimitInfo, string stderr, int unpromptedReplies)
     {
         Result = result;
         ProcessDied = processDied;
@@ -44,16 +51,17 @@ public sealed class StreamTurnOutcome
         Silence = silence;
         RateLimitInfo = rateLimitInfo;
         Stderr = stderr;
+        UnpromptedReplies = unpromptedReplies;
     }
 
-    public static StreamTurnOutcome Completed(ITurnResult result, JsonObject? rateLimitInfo)
+    public static StreamTurnOutcome Completed(ITurnResult result, JsonObject? rateLimitInfo, int unpromptedReplies = 0)
     {
-        return new StreamTurnOutcome(result, processDied: false, wentSilent: false, TimeSpan.Zero, rateLimitInfo, string.Empty);
+        return new StreamTurnOutcome(result, processDied: false, wentSilent: false, TimeSpan.Zero, rateLimitInfo, string.Empty, unpromptedReplies);
     }
 
     public static StreamTurnOutcome Died(ITurnResult result, string stderr)
     {
-        return new StreamTurnOutcome(result, processDied: true, wentSilent: false, TimeSpan.Zero, null, stderr);
+        return new StreamTurnOutcome(result, processDied: true, wentSilent: false, TimeSpan.Zero, null, stderr, unpromptedReplies: 0);
     }
 
     /// <summary>
@@ -64,6 +72,6 @@ public sealed class StreamTurnOutcome
     /// </summary>
     public static StreamTurnOutcome Silent(ITurnResult result, bool mute, TimeSpan silence)
     {
-        return new StreamTurnOutcome(result, processDied: false, wentSilent: mute, silence, null, string.Empty);
+        return new StreamTurnOutcome(result, processDied: false, wentSilent: mute, silence, null, string.Empty, unpromptedReplies: 0);
     }
 }

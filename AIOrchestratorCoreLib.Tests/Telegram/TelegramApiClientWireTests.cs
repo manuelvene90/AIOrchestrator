@@ -74,6 +74,46 @@ public class TelegramApiClientWireTests
     }
 
     /// <summary>
+    /// THE THREAD LINK ON THE WIRE (owner directive 2026-09-11, after a fincanva-5 reply landed
+    /// after the owner's NEXT message and read as the answer to the wrong one). Both the target id
+    /// and <c>allow_sending_without_reply</c> have to be on the request — the flag is not optional:
+    /// without it Telegram refuses the WHOLE send the moment the target message is gone (owner
+    /// deleted it, or it fell out of retention), and losing the send is worse than losing the link.
+    /// </summary>
+    [Fact]
+    public async Task AReply_CarriesReplyParameters_WithAllowSendingWithoutReply()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":61}}""");
+
+        await Build_Client(transport).Send_MessageReply_Async(5, "hello", 4242, TelegramSendSounds.Rings, CancellationToken.None);
+
+        var request = Assert.Single(transport.Requests);
+        var payload = JsonNode.Parse(request.Body)!.AsObject();
+        var replyParameters = payload["reply_parameters"]!.AsObject();
+
+        Assert.Equal(4242, replyParameters["message_id"]!.GetValue<long>());
+        Assert.True(replyParameters["allow_sending_without_reply"]!.GetValue<bool>());
+    }
+
+    /// <summary>The HTML reply carries the same two keys — a second call site, easy to drift from the plain one above.</summary>
+    [Fact]
+    public async Task AHtmlReply_AlsoCarriesReplyParameters()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":62}}""");
+
+        await Build_Client(transport).Send_HtmlReply_Async(5, "<b>hi</b>", 4343, TelegramSendSounds.Rings, CancellationToken.None);
+
+        var request = Assert.Single(transport.Requests);
+        var payload = JsonNode.Parse(request.Body)!.AsObject();
+        var replyParameters = payload["reply_parameters"]!.AsObject();
+
+        Assert.Equal(4343, replyParameters["message_id"]!.GetValue<long>());
+        Assert.True(replyParameters["allow_sending_without_reply"]!.GetValue<bool>());
+    }
+
+    /// <summary>
     /// THE QUERY STRING THAT DECIDES WHETHER TAPS ARRIVE. <c>allowed_updates</c> is URL-encoded, so
     /// it is decoded and read as the JSON array it is rather than matched as an opaque blob — a
     /// test that pinned the encoded literal would pass just as happily on a wrongly-encoded one.

@@ -27,11 +27,12 @@ public static class RunnerConfigs_Factory
     /// <para>
     /// THE COUPLING, MEASURED BY A REVIEW ON 2026-09-09. <c>BridgeEngineModel</c> tells a supervisor it
     /// owes a member a verdict once that member's channel has been quiet for
-    /// <c>IMPLEMENTER_NUDGE_MINUTES</c> = 8 (read in that file on 2026-09-09; it is a private
-    /// <c>const int</c> there and this stage did not touch it, so the number is restated here rather
-    /// than referenced — giving that constant a shared home is the fix for the other half, and it is
-    /// reported rather than done). The quiet clock runs from the member's REPORT, so a digest of D
-    /// minutes leaves 8 − D for the supervisor's turn to be released, run and file its verdict. Probed
+    /// <see cref="Status.Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES"/> — REFERENCED, not restated, since
+    /// 2026-09-10: it was a private <c>const int</c> in that file and this doc carried a second copy of
+    /// the number, which is the copy nobody updates. The relationship between the two is now pinned by a
+    /// test (<c>RunnerConfigsJsonTests</c>) rather than by this sentence. The quiet clock runs from the
+    /// member's REPORT, so a digest of D minutes leaves that window minus D for the supervisor's turn to
+    /// be released, run and file its verdict. Probed
     /// at D = 10: at minute 9 the app considered the supervisor 9.6 min late on a verdict for a report
     /// IT WAS ITSELF HOLDING, and spent that quiet spell's single nudge token on the false alarm — so a
     /// genuinely stalled supervisor in the same spell got nothing. The nudge is agent-audience and the
@@ -66,6 +67,33 @@ public static class RunnerConfigs_Factory
     public static readonly TimeSpan DEFAULT_SILENCE_LIMIT = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// FIFTEEN MINUTES, from the members' own numbers (VPS, all sessions 2026-09-07 → 09-11): 95 % of
+    /// member sessions never go quiet for more than 10 minutes, counting their sub-agents' calls. A
+    /// limit in that region leaves essentially every healthy turn alone — and it is quiet with NO
+    /// command running as well, which the 10-minute figure did not even subtract.
+    /// </summary>
+    public static readonly TimeSpan DEFAULT_MEMBER_SILENCE_LIMIT = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// TWO HOURS — the owner's choice of 2026-09-11 ("implement the best practice"), after the
+    /// research that the ceiling be longer than the longest legitimate run. Nobody has measured how
+    /// long the 58 cut turns needed [not measured]: the successful ones topped out at 28.5 min
+    /// only because 30 was the wall, so the real distribution is unknown and the number is a
+    /// generous backstop, not a fit. The cost the owner accepted: a service stop may wait this long
+    /// for a member turn to finish (<see cref="ShutdownGrace_Rule"/>).
+    /// </summary>
+    public static readonly TimeSpan DEFAULT_MEMBER_TURN_TIMEOUT = TimeSpan.FromHours(2);
+
+    /// <summary>
+    /// A DAY, past which the member silence limit and the member ceiling are refused at the config
+    /// reader: neither is a policy anyone can mean beyond it, and the reader compares the NUMBER
+    /// against this before any <c>TimeSpan</c> exists (<c>TimeSpan.FromMinutes(1e11)</c> throws).
+    /// </summary>
+    public static readonly TimeSpan MAX_MEMBER_SILENCE_LIMIT = TimeSpan.FromDays(1);
+
+    public static readonly TimeSpan MAX_MEMBER_TURN_TIMEOUT = TimeSpan.FromDays(1);
+
+    /// <summary>
     /// Three gigabytes per session. Measured against the shape the VPS actually runs: 8 GB total,
     /// the daemon and its bridge under 300 MB, and <c>printRunner.maxConcurrentTurns</c> defaulting
     /// to 10 — so this is not a budget that adds up to the machine, it is the point past which ONE
@@ -83,7 +111,9 @@ public static class RunnerConfigs_Factory
         TimeSpan? silenceLimit = null,
         IReadOnlyList<string>? rejections = null,
         string? sessionMemoryMax = null,
-        TimeSpan? memberDigestWindow = null)
+        TimeSpan? memberDigestWindow = null,
+        TimeSpan? memberSilenceLimit = null,
+        TimeSpan? memberTurnTimeout = null)
     {
         if (maxConcurrentTurns < 1)
             throw new ArgumentException($"maxConcurrentTurns must be >= 1, got {maxConcurrentTurns}");
@@ -95,6 +125,8 @@ public static class RunnerConfigs_Factory
             throw new ArgumentException($"coalesceWindow must not be negative, got {coalesceWindow}");
         if (silenceLimit != null && silenceLimit.Value <= TimeSpan.Zero)
             throw new ArgumentException($"silenceLimit must be positive, got {silenceLimit}");
+        if (memberTurnTimeout != null && memberTurnTimeout.Value <= TimeSpan.Zero)
+            throw new ArgumentException($"memberTurnTimeout must be positive, got {memberTurnTimeout}");
 
         // A NEGATIVE DIGEST IS NOT REFUSED, IT IS OFF. Zero and below both mean "one entry, one turn"
         // — the behaviour before 2026-09-09 — and the policy reads them that way (WakeUp_Policy tests
@@ -106,7 +138,15 @@ public static class RunnerConfigs_Factory
         return new RunnerConfigsModel(
             roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow,
             memberDigestWindow ?? DEFAULT_MEMBER_DIGEST_WINDOW,
-            silenceLimit ?? DEFAULT_SILENCE_LIMIT, sessionMemoryMax ?? DEFAULT_SESSION_MEMORY_MAX, rejections ?? []);
+            silenceLimit ?? DEFAULT_SILENCE_LIMIT, sessionMemoryMax ?? DEFAULT_SESSION_MEMORY_MAX, rejections ?? [],
+            Normalise_MemberSilenceLimit(memberSilenceLimit ?? DEFAULT_MEMBER_SILENCE_LIMIT),
+            memberTurnTimeout ?? DEFAULT_MEMBER_TURN_TIMEOUT);
+    }
+
+    /// <summary>A negative limit is OFF, like zero — the same reading the digest window gets above.</summary>
+    static TimeSpan Normalise_MemberSilenceLimit(TimeSpan limit)
+    {
+        return limit < TimeSpan.Zero ? TimeSpan.Zero : limit;
     }
 
     /// <summary>Terminal for every role, default limits — what an absent block means.</summary>
@@ -125,7 +165,7 @@ public static class RunnerConfigs_Factory
 
         roles[role] = roleConfig;
 
-        return Create(roles, source.MaxConcurrentTurns, source.MaxConcurrentTurnsPerOrchestration, source.TurnTimeout, source.CoalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, source.MemberDigestWindow);
+        return Create(roles, source.MaxConcurrentTurns, source.MaxConcurrentTurnsPerOrchestration, source.TurnTimeout, source.CoalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, source.MemberDigestWindow, source.MemberSilenceLimit, source.MemberTurnTimeout);
     }
 
     /// <summary>
@@ -140,6 +180,6 @@ public static class RunnerConfigs_Factory
         foreach (var known in SessionRole_Names.ALL)
             roles[known] = source.Get_ForRole(known);
 
-        return Create(roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, memberDigestWindow ?? source.MemberDigestWindow);
+        return Create(roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, memberDigestWindow ?? source.MemberDigestWindow, source.MemberSilenceLimit, source.MemberTurnTimeout);
     }
 }

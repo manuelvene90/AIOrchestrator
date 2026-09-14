@@ -14,7 +14,7 @@ namespace AIOrchestratorCoreLib.Running.RunnerConfigs;
 /// },
 /// "printRunner": { "maxConcurrentTurns": 10, "maxConcurrentTurnsPerOrchestration": 3,
 ///                  "turnTimeoutMinutes": 30, "coalesceSeconds": 3, "streamSilenceSeconds": 120,
-///                  "memberDigestMinutes": 5 }
+///                  "memberDigestMinutes": 5, "memberSilenceMinutes": 15, "memberTurnTimeoutMinutes": 120 }
 /// </code>
 /// Tolerant on the way in — an absent block, an absent role, an unknown word all read as the
 /// default, because a typo in a hand-edited file must not stop the app from starting — and
@@ -34,6 +34,8 @@ public static class RunnerConfigs_Json
     public const string TURN_TIMEOUT_MINUTES_KEY = "turnTimeoutMinutes";
     public const string COALESCE_SECONDS_KEY = "coalesceSeconds";
     public const string STREAM_SILENCE_SECONDS_KEY = "streamSilenceSeconds";
+    public const string MEMBER_SILENCE_MINUTES_KEY = "memberSilenceMinutes";
+    public const string MEMBER_TURN_TIMEOUT_MINUTES_KEY = "memberTurnTimeoutMinutes";
 
     /// <summary>
     /// The digest window of <see cref="PendingTraffic.WakeUp_Policy"/>, in minutes — how long a
@@ -93,7 +95,9 @@ public static class RunnerConfigs_Json
             TimeSpan.FromSeconds(Read_PositiveDouble_OrDefault(limits, STREAM_SILENCE_SECONDS_KEY, defaults.SilenceLimit.TotalSeconds)),
             rejections,
             sessionMemoryMax,
-            Read_MemberDigestWindow_OrDefault(limits, rejections));
+            Read_MemberDigestWindow_OrDefault(limits, rejections),
+            Read_MemberSilenceLimit_OrDefault(limits, rejections),
+            Read_MemberTurnTimeout_OrDefault(limits, rejections));
     }
 
     /// <summary>
@@ -145,6 +149,8 @@ public static class RunnerConfigs_Json
             [COALESCE_SECONDS_KEY] = configs.CoalesceWindow.TotalSeconds,
             [STREAM_SILENCE_SECONDS_KEY] = configs.SilenceLimit.TotalSeconds,
             [MEMBER_DIGEST_MINUTES_KEY] = configs.MemberDigestWindow.TotalMinutes,
+            [MEMBER_SILENCE_MINUTES_KEY] = configs.MemberSilenceLimit.TotalMinutes,
+            [MEMBER_TURN_TIMEOUT_MINUTES_KEY] = configs.MemberTurnTimeout.TotalMinutes,
         };
     }
 
@@ -292,6 +298,58 @@ public static class RunnerConfigs_Json
     {
         var value = Read_NonNegativeDouble_OrDefault(node, key, fallback);
         return value > 0 ? value : fallback;
+    }
+
+    /// <summary>
+    /// THE MEMBER SILENCE LIMIT, READ THE WAY THE DIGEST WINDOW IS AND FOR THE SAME TWO REASONS.
+    /// Zero or below is OFF — a minus sign asks for no brake, never for the default one. And the
+    /// comparison is made on the NUMBER, before any <c>TimeSpan</c> exists: <c>TimeSpan.FromMinutes</c>
+    /// throws on <c>1e11</c>, and a throw here takes the whole config read down on every tick (the
+    /// review finding of 2026-09-10 on the digest reader above). Past a day the value is refused with
+    /// a line and the default applies — a limit longer than any turn can live is a typo, not a policy.
+    /// </summary>
+    static TimeSpan Read_MemberSilenceLimit_OrDefault(JsonObject? limits, List<string> rejections)
+    {
+        var written = Read_Double_OrNull(limits, MEMBER_SILENCE_MINUTES_KEY);
+
+        if (written == null)
+            return RunnerConfigs_Factory.DEFAULT_MEMBER_SILENCE_LIMIT;
+
+        if (written.Value <= 0)
+            return TimeSpan.Zero;
+
+        if (written.Value <= RunnerConfigs_Factory.MAX_MEMBER_SILENCE_LIMIT.TotalMinutes)
+            return TimeSpan.FromMinutes(written.Value);
+
+        rejections.Add(
+            $"'{LIMITS_KEY}.{MEMBER_SILENCE_MINUTES_KEY}' is {written.Value:0.#}, more than a day — "
+            + $"refused, the member silence brake stays at {RunnerConfigs_Factory.DEFAULT_MEMBER_SILENCE_LIMIT.TotalMinutes:0.#} minutes "
+            + "(0 or less turns it off)");
+
+        return RunnerConfigs_Factory.DEFAULT_MEMBER_SILENCE_LIMIT;
+    }
+
+    /// <summary>
+    /// THE MEMBER CEILING, WHICH HAS NO "OFF". A ceiling of zero would be a turn killed at once, and a
+    /// missing one a hung turn that holds its slot for ever — neither is something an operator can
+    /// mean, so zero, a minus sign and anything past a day are refused with a line and the default
+    /// applies. Compared as a number first, for the overflow reason the silence reader gives.
+    /// </summary>
+    static TimeSpan Read_MemberTurnTimeout_OrDefault(JsonObject? limits, List<string> rejections)
+    {
+        var written = Read_Double_OrNull(limits, MEMBER_TURN_TIMEOUT_MINUTES_KEY);
+
+        if (written == null)
+            return RunnerConfigs_Factory.DEFAULT_MEMBER_TURN_TIMEOUT;
+
+        if (written.Value > 0 && written.Value <= RunnerConfigs_Factory.MAX_MEMBER_TURN_TIMEOUT.TotalMinutes)
+            return TimeSpan.FromMinutes(written.Value);
+
+        rejections.Add(
+            $"'{LIMITS_KEY}.{MEMBER_TURN_TIMEOUT_MINUTES_KEY}' is {written.Value:0.#}, which is not a ceiling a turn can have "
+            + $"(more than zero, at most a day) — refused, member turns keep {RunnerConfigs_Factory.DEFAULT_MEMBER_TURN_TIMEOUT.TotalMinutes:0.#} minutes");
+
+        return RunnerConfigs_Factory.DEFAULT_MEMBER_TURN_TIMEOUT;
     }
 
     static double Read_NonNegativeDouble_OrDefault(JsonObject? node, string key, double fallback)

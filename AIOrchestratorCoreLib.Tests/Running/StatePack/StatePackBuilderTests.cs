@@ -86,10 +86,10 @@ public class StatePackBuilderTests
 
     static StatePackInputs Inputs(IChannelEntry? brief, IChannelEntry? last, IReadOnlyList<IChannelEntry> woke, IReadOnlyList<ITurnSource> sources,
         IReadOnlyList<string>? ledger = null, string? plan = null, IReadOnlyList<string>? git = null, IReadOnlyList<IChannelEntry>? ownerTail = null,
-        IReadOnlyList<string>? unavailable = null, SessionRoles role = SessionRoles.Implementer, string memberId = "imp-1")
+        IReadOnlyList<string>? unavailable = null, SessionRoles role = SessionRoles.Implementer, string memberId = "imp-1", string? progress = null)
     {
         var pending = woke.Select(entry => new PendingEntry(sources.Last(), entry)).ToList();
-        return new StatePackInputs("repo-1", memberId, role, $"repo-1/{memberId}/4", pending, sources, brief, last, ledger ?? [], plan, git ?? [], ownerTail ?? [], unavailable ?? []);
+        return new StatePackInputs("repo-1", memberId, role, $"repo-1/{memberId}/4", pending, sources, brief, last, ledger ?? [], plan, git ?? [], ownerTail ?? [], unavailable ?? [], progress);
     }
 
     static IChannelEntry Entry(int index, ChannelAuthors author, string subject, string body)
@@ -104,5 +104,45 @@ public class StatePackBuilderTests
         public string Key => key;
         public string ChannelFilePath => path;
         public bool IsOwnerChannel => isOwner;
+    }
+
+    /// <summary>
+    /// A CUT TURN RESUMES FROM ITS OWN NOTE. The note is the member's record of how far it got while
+    /// it worked — the one thing a print turn can leave mid-turn — and it rides the next pack.
+    /// </summary>
+    [Fact]
+    public void Build_WithAProgressNote_HandsItBack_UnderItsHeading()
+    {
+        var source = new StubSource("imp-1", "/x/imp-1/channel.md", false);
+        var woke = Entry(1, ChannelAuthors.Supervisor, "BRIEF — first", "start");
+
+        var pack = StatePack_Builder.Build(Inputs(woke, null, [woke], [source], progress: "- parser done (abc1234); next: Parse_All"));
+
+        Assert.Contains(StatePack_Builder.PROGRESS_HEADING, pack);
+        Assert.Contains("- parser done (abc1234); next: Parse_All", pack);
+    }
+
+    /// <summary>An outgrown note keeps its END — the last lines are where the member got to.</summary>
+    [Fact]
+    public void Build_WithAProgressNoteOverItsCap_KeepsTheNewestLines()
+    {
+        var source = new StubSource("imp-1", "/x/imp-1/channel.md", false);
+        var woke = Entry(1, ChannelAuthors.Supervisor, "BRIEF — first", "start");
+        var note = "OLDEST STEP\n" + new string('x', StatePack_Builder.PROGRESS_CAP) + "\nNEWEST STEP";
+
+        var pack = StatePack_Builder.Build(Inputs(woke, null, [woke], [source], progress: note));
+
+        Assert.Contains("NEWEST STEP", pack);
+        Assert.DoesNotContain("OLDEST STEP", pack);
+        Assert.Contains("characters truncated by the bridge", pack);
+    }
+
+    [Fact]
+    public void Build_WithoutAProgressNote_HasNoProgressSection()
+    {
+        var source = new StubSource("imp-1", "/x/imp-1/channel.md", false);
+        var woke = Entry(1, ChannelAuthors.Supervisor, "BRIEF — first", "start");
+
+        Assert.DoesNotContain(StatePack_Builder.PROGRESS_HEADING, StatePack_Builder.Build(Inputs(woke, null, [woke], [source])));
     }
 }

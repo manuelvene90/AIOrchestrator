@@ -135,4 +135,52 @@ public class StatePackInputsReaderTests : IDisposable
         public string ChannelFilePath => path;
         public bool IsOwnerChannel => key == "owner";
     }
+
+    [Fact]
+    public void Read_ForAMember_PicksUpTheProgressNoteBesideItsPack()
+    {
+        var channel = _paths.Get_ImplementerChannelFile("repo-1", "imp-1");
+        Directory.CreateDirectory(Path.GetDirectoryName(channel)!);
+        File.WriteAllText(channel, Entries(("supervisor", 1, "BRIEF — port the ledger")));
+        var note = StatePack_Locator.Get_ProgressFile_OrNull(_paths, SessionRoles.Implementer, "repo-1", "imp-1")!;
+        File.WriteAllText(note, "- ledger ported (abc1234)\n- next: the parser\n");
+
+        var state = PrintSessionState_Factory.Create_New("sid", SessionRoles.Implementer, "repo-1", "imp-1", Path.Combine(_root, "not-a-repo"), null, channel, []);
+        var inputs = StatePackInputs_Reader.Read(_paths, state, "repo-1/imp-1/6", [], [new Source("imp-1", channel)]);
+
+        Assert.Equal("- ledger ported (abc1234)\n- next: the parser", inputs.ProgressNote);
+        Assert.Equal(Path.GetDirectoryName(StatePack_Locator.Get_File(_paths, SessionRoles.Implementer, "repo-1", "imp-1")), Path.GetDirectoryName(note));
+    }
+
+    [Fact]
+    public void Read_WithNoProgressNote_LeavesItNull_AndTheSupervisorHasNone()
+    {
+        Assert.Null(StatePack_Locator.Get_ProgressFile_OrNull(_paths, SessionRoles.Supervisor, "repo-1", "sup"));
+        Assert.Null(StatePack_Locator.Get_ProgressFile_OrNull(_paths, SessionRoles.General, "general", "general"));
+    }
+
+    /// <summary>
+    /// A NEW BRIEF STARTS A NEW NOTE (review finding, 2026-09-11): the old task's note is archived, not
+    /// handed to a member starting a different task as "resume from here" — and ordinary traffic,
+    /// which is not a new task, leaves the note alone.
+    /// </summary>
+    [Fact]
+    public void Archive_ProgressNote_OnANewBrief_MovesTheOldNoteAside_AndOrdinaryTrafficDoesNot()
+    {
+        var channel = _paths.Get_ImplementerChannelFile("repo-1", "imp-1");
+        Directory.CreateDirectory(Path.GetDirectoryName(channel)!);
+        var note = StatePack_Locator.Get_ProgressFile_OrNull(_paths, SessionRoles.Implementer, "repo-1", "imp-1")!;
+        var archive = Path.Combine(Path.GetDirectoryName(note)!, StatePack_Locator.PROGRESS_ARCHIVE_FILE_NAME);
+        File.WriteAllText(note, "- task A: parser done (abc1234)\n");
+
+        File.WriteAllText(channel, Entries(("supervisor", 1, "Accepted — carry on")));
+        StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, SessionRoles.Implementer, "repo-1", "imp-1", ChannelEntry_Parser.Parse_All(File.ReadAllText(channel)));
+        Assert.True(File.Exists(note));
+
+        File.WriteAllText(channel, Entries(("supervisor", 2, "BRIEF — task B")));
+        StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, SessionRoles.Implementer, "repo-1", "imp-1", ChannelEntry_Parser.Parse_All(File.ReadAllText(channel)));
+
+        Assert.False(File.Exists(note));
+        Assert.Contains("- task A: parser done (abc1234)", File.ReadAllText(archive));
+    }
 }

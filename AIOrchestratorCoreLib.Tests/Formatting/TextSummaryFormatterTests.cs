@@ -5,7 +5,9 @@ namespace AIOrchestratorCoreLib.Tests.Formatting;
 
 /// <summary>
 /// The card's task label. The bar is "would a person glance at this and know what is happening" —
-/// so no ellipsis, no mid-sentence cut, and never an empty or one-word label.
+/// so summarise before cutting, never an empty or one-word label, plain text only, and a cut that
+/// still has to happen says so with an ellipsis (owner, 2026-09-11: an unmarked cut read as a
+/// broken sentence).
 /// </summary>
 public class TextSummaryFormatterTests
 {
@@ -42,13 +44,64 @@ public class TextSummaryFormatterTests
     }
 
     [Fact]
-    public void Summarize_NeverEndsWithAnEllipsis()
+    public void Summarize_AHardCut_EndsWithAnEllipsis_AndStaysWithinTheBudget()
     {
+        // Was Summarize_NeverEndsWithAnEllipsis. Reversed 2026-09-11: the owner read an unmarked cut
+        // on PULSE ("GO.** 278e14d35 is final. deep") as a sentence broken off, i.e. as a defect.
         var summary = TextSummary_Formatter.Summarize_Task(
             "investigate whether background watcher processes die and leave orphaned implementer sessions unreachable forever", MAX);
 
-        Assert.DoesNotContain("…", summary);
+        Assert.EndsWith("…", summary);
         Assert.True(summary.Split(' ').Length <= MAX, $"'{summary}' should be at most {MAX} words");
+    }
+
+    [Fact]
+    public void Summarize_NoCut_NoEllipsis()
+    {
+        // The mark means "words were cut away" — a summary that fits, or one shortened only by
+        // dropping the justification clause, must not claim there is more.
+        Assert.Equal("fix the screener",
+            TextSummary_Formatter.Summarize_Task("fix the screener so greedy discovery starts after the download", MAX));
+    }
+
+    [Fact]
+    public void Summarize_TheSubjectFromTheOwnersPulse_ArrivesAsPlainTextWithAnEllipsis()
+    {
+        // Verbatim shape from 2026-09-11: PULSE is sent without parse_mode, so the markers reached
+        // the phone literally, and the word cut left one half of the bold pair dangling.
+        var summary = TextSummary_Formatter.Summarize_Task(
+            "**GO.** 278e14d35 is final. deep review found nothing blocking the merge to staging tonight", MAX);
+
+        Assert.DoesNotContain("*", summary);
+        Assert.StartsWith("GO. 278e14d35 is final. deep", summary);
+        Assert.EndsWith("…", summary);
+    }
+
+    [Theory]
+    [InlineData("GO.** 278e14d35 is final", "GO. 278e14d35 is final")]
+    [InlineData("**fix** the `Channel_Parser` header", "fix the Channel_Parser header")]
+    [InlineData("__wire__ the settings window", "wire the settings window")]
+    [InlineData("## Wire the settings window", "Wire the settings window")]
+    [InlineData("***both*** markers", "both markers")]
+    [InlineData("**Verdict:** accepted, the pid fix holds", "accepted")]
+    public void Summarize_StripsMarkdownMarkers_SoOnlyPlainTextRemains(string subject, string expected)
+    {
+        Assert.Equal(expected, TextSummary_Formatter.Summarize_Task(subject, MAX));
+    }
+
+    [Theory]
+    [InlineData("rename snake__case_name and __init__ helpers", "rename snake__case_name and init helpers")]
+    [InlineData("check 2 * 3 in the ratio", "check 2 * 3 in the ratio")]
+    public void Summarize_LeavesWhatIsNotAMarker(string subject, string expected)
+    {
+        // An underscore run inside a word is an identifier, and a lone star is arithmetic.
+        Assert.Equal(expected, TextSummary_Formatter.Summarize_Task(subject, MAX));
+    }
+
+    [Fact]
+    public void Summarize_ASubjectThatIsOnlyMarkers_ReturnsEmpty_NotTheMarkers()
+    {
+        Assert.Equal(string.Empty, TextSummary_Formatter.Summarize_Task("****", MAX));
     }
 
     [Fact]

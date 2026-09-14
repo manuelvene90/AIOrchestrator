@@ -97,6 +97,9 @@ public static class StreamJson_Responder
                 return turn.ExitCode.Value;
             }
 
+            if (turn.UnpromptedResultBefore != null)
+                cumulativeCostUsd = Write_UnpromptedTurn(output, parsed, turn, turn.UnpromptedResultBefore, sessionId, model, workingDirectory, cumulativeCostUsd);
+
             if (turn.DelayMilliseconds > 0)
                 Thread.Sleep(turn.DelayMilliseconds);
 
@@ -118,6 +121,9 @@ public static class StreamJson_Responder
             if (turn.RateLimit != null)
                 Write_Event(output, StreamEventJson_Builder.Build_RateLimitEvent(sessionId, turn.RateLimit));
 
+            if (parsed.ReplayUserMessages && !turn.NoReplay)
+                Write_Event(output, StreamEventJson_Builder.Build_UserReplay(sessionId, text));
+
             foreach (var assistantEvent in StreamEventJson_Builder.Build_AssistantSequence(turn, sessionId, model))
                 Write_Event(output, assistantEvent);
 
@@ -133,10 +139,31 @@ public static class StreamJson_Responder
 
             if (parsed.IncludeHookEvents)
                 Write_Event(output, StreamEventJson_Builder.Build_HookResponse(sessionId, HOOK_AFTER_TURN));
+
+            if (turn.UnpromptedResultAfter != null)
+                cumulativeCostUsd = Write_UnpromptedTurn(output, parsed, turn, turn.UnpromptedResultAfter, sessionId, model, workingDirectory, cumulativeCostUsd);
         }
 
         // Stdin closed — measured: EXIT 0.
         return 0;
+    }
+
+    /// <summary>
+    /// A TURN NOBODY ASKED FOR, in the measured shape: the task notification, <c>init</c>, the text,
+    /// the result — and no echo, because no message of the bridge's started it. Returns the new
+    /// running cost: the unprompted turn spends like any other.
+    /// </summary>
+    static double Write_UnpromptedTurn(TextWriter output, FakeClaudeArguments parsed, FakeClaudeTurn turn, string text, string sessionId, string model, string workingDirectory, double cumulativeCostUsd)
+    {
+        Write_Event(output, StreamEventJson_Builder.Build_TaskNotification(sessionId, $"bg{Guid.NewGuid():N}"[..10]));
+        Write_Event(output, StreamEventJson_Builder.Build_Init(sessionId, model, workingDirectory, parsed.PermissionMode));
+        Write_Event(output, StreamEventJson_Builder.Build_Assistant(sessionId, model, text));
+
+        var unpromptedTurn = new FakeClaudeTurn { Result = text, TotalCostUsd = turn.UnpromptedCostUsd };
+        cumulativeCostUsd += unpromptedTurn.TotalCostUsd;
+        Write_Event(output, ResultJson_Builder.Build(unpromptedTurn, sessionId, model, numTurns: 1, cumulativeCostUsd));
+
+        return cumulativeCostUsd;
     }
 
     /// <summary>

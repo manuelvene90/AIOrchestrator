@@ -591,6 +591,200 @@ public class QuestionContractProbeTests : IDisposable
         Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
     }
 
+    /// <summary>
+    /// THE OWNER'S OWN QUESTION IS NOT A REPLY. fincanva-6, 2026-09-11: a question was open, the owner
+    /// asked "devo fare solo smoke?", and the supervisor's next question closed the open one as
+    /// superseded — "you had replied in words" — when the owner had replied to nothing.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheOwnersOwnQuestion_DoesNotLetANewQuestionSupersedeTheOpenOne()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("devo fare solo smoke?", updateId: 3100, messageId: 101));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("is itself a question"), 20_000),
+            $"the owner's question was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 20);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Merge it") != null, 25_000),
+            $"the second question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
+        Assert.Equal(0, _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX));
+    }
+
+    /// <summary>
+    /// THE SAME QUESTION IS NOT POSTED TWICE. The second half of the same chain: the supervisor asked
+    /// its open question again word for word, and the owner got a second copy with live buttons.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AQuestionAskedAgainWordForWord_IsNotSentTwice_AndTheAskerIsTold()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("devo fare solo smoke?", updateId: 3110, messageId: 111));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("is itself a question"), 20_000),
+            $"the owner's question was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, COMPLETE_QUESTION.Replace("Two plan levers changed", "Only the smoke is left", StringComparison.Ordinal), entryNumber: 20);
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("was not sent again"), 25_000),
+            $"the repeat was not recognised.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(1, _telegram.Count_Sent_Containing("Start the FIN-D-277a build now?"));
+        Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Contains("this question is already open — not sent again", Channel(orchId), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A TAPPED QUESTION WAITING FOR ITS CODE IS ANSWERED, AND IS NEVER SUPERSEDED. fincanva-6,
+    /// 2026-09-11: the owner tapped «Sì» on a high-risk merge question; the supersede sweep closed it
+    /// and discarded the pending read-back, so their answer was thrown away. Here a later reply
+    /// really does count (two questions open, a plain sentence), and the third question closes the
+    /// untapped one only.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ATappedQuestionAwaitingItsCode_IsNeverSuperseded()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION.Replace("RISK: low", "RISK: high", StringComparison.Ordinal));
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        var questionMessageId = _telegram.LastButtonMessageId ?? throw new Exception("the question was sent with no message id");
+        var startIt = _telegram.Find_ButtonFor("Start it") ?? throw new Exception("the option never reached the phone");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, questionMessageId, updateId: 3120));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().PendingConfirmations.Count == 1, 20_000),
+            $"the high-risk tap did not open a read-back.{Environment.NewLine}{_log.Dump()}");
+
+        // As on the day: before typing the code, the owner asks something. That unfreezes the
+        // conversation (a held high-risk answer does not) and, being a question, replies to nothing.
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("devo fare solo smoke?", updateId: 3125, messageId: 125));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("is itself a question"), 20_000),
+            $"the owner's question was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 20);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Merge it") != null, 25_000),
+            $"the second question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("start the build and hold the merge", updateId: 3130, messageId: 131));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("the reply names none of them"), 20_000),
+            $"the typed reply was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, THIRD_QUESTION, entryNumber: 30);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Ship it") != null && _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX) >= 1, 25_000),
+            $"the third question did not supersede the untapped one.{Environment.NewLine}{_log.Dump()}");
+
+        var state = _engineState.Load_OrEmpty();
+        Assert.Equal(2, state.OpenQuestions.Count);
+        Assert.Contains(state.OpenQuestions, question => question.Text.Contains("Start the FIN-D-277a build now?", StringComparison.Ordinal));
+        Assert.Single(state.PendingConfirmations);
+        Assert.Equal(1, _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX));
+    }
+
+    /// <summary>
+    /// A REPLY NAMES ITS QUESTION. The owner, 2026-09-11: "non c'è modo di linkare domande e risposte?
+    /// Tipo con un rispondi? Avere più domande non lo vedo come un problema." With two open, a typed
+    /// answer binds neither — unless it is a Telegram Reply on one of them, which closes that one and
+    /// only that one, stamped with the owner's words rather than the quote the reply carries.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AReplyOnOneOfTwoOpenQuestions_AnswersThatOneOnly()
+    {
+        var orchId = await Start_Async();
+
+        // ONE AT A TIME, THEN THE CAP — see Reach_TwoQuestionsOpen_Async. Both questions used to be
+        // appended side by side here; under the owner's 2026-09-11 hold the second never leaves the
+        // channel while the first is unanswered, so that setup waits for a keyboard that cannot
+        // arrive. Only the ROUTE to two open questions changes — the reply below, and everything
+        // this probe asserts about it, is untouched.
+        await Reach_TwoQuestionsOpen_Async(orchId);
+
+        var mergeQuestionId = _telegram.Find_MessageIdOfSentContaining("Merge wf-perf into master now?") ?? throw new Exception("no id for the merge question");
+
+        _telegram.Queue_Updates(Build_OwnerReplyJson("tienilo fermo per ora", updateId: 3200, messageId: 201, mergeQuestionId, "Merge wf-perf into master now?"));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().OpenQuestions.Count == 1, 20_000),
+            $"the reply did not close its question.{Environment.NewLine}{_log.Dump()}");
+
+        var open = Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Contains("Start the FIN-D-277a build now?", open.Text, StringComparison.Ordinal);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Edited_Containing("tienilo fermo per ora"), 20_000),
+            $"the answered question was not stamped.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        Assert.False(_telegram.Has_Edited_Containing("replying to"), "the stamp carried the quote instead of the owner's words");
+    }
+
+    /// <summary>
+    /// A REPLY TO SOMETHING ELSE IS ABOUT THAT. fincanva-6, 2026-09-11 12:58: with one question open,
+    /// an instruction ("usa key o MCP per cancellare mio abbonamento") was stamped "✅ answered" under
+    /// it. When the owner points at another message, the only open question stays open.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AReplyToAnotherMessage_AnswersNothing_EvenWithOneQuestionOpen()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        _telegram.Queue_Updates(Build_OwnerReplyJson("usa key o MCP per cancellare mio abbonamento", updateId: 3210, messageId: 211, replyToMessageId: 987_654, "a report above"));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("replied to a message that is not an open question"), 20_000),
+            $"the reply was never judged.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+    }
+
     async Task Run_For_Async(int milliseconds)
     {
         using var cancellation = new CancellationTokenSource();
@@ -606,6 +800,68 @@ public class QuestionContractProbeTests : IDisposable
         catch (OperationCanceledException)
         {
         }
+    }
+
+    /// <summary>
+    /// AND NOT AFTER THE OWNER HAS DEALT WITH IT EITHER. The owner, 2026-09-12: *"per esempio in sta
+    /// chat mi hai fatto la stessa domanda 2 volte"* — and by the open-questions rule above, both
+    /// copies were correct. The guard only ever compared against questions still OPEN, so every path
+    /// that CLOSES one — a tapped option, an answer in words, a tap on "💬 Let's talk", which decides
+    /// nothing and then asks the session to put the question again — left the next copy unchecked.
+    ///
+    /// <para>
+    /// PROBED THROUGH THE ANSWER-IN-WORDS CLOSURE, which this fixture can drive end to end. Every
+    /// closure goes through the one funnel that remembers it (<c>Note_QuestionClosed</c>), and the
+    /// wording of the closure is all that differs between them — the talk-request path is pinned by
+    /// <see cref="LetsTalk_ClosesItsQuestionLikeAnyOption_EditsTheMessage_AndRecordsNoChoice"/> for
+    /// the closure itself and by the decider's own tests for the matching.
+    /// </para>
+    /// <para>
+    /// THE THIRD ASK IS PART OF THE RULE, not a loose end: the refusal happens ONCE. A session told
+    /// what the owner decided and asking regardless is insisting rather than repeating itself, and a
+    /// decision that can never be put to the owner is worse than one duplicate — which is why this
+    /// probe asserts the second copy is withheld AND the third goes through.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AQuestionReAskedAfterTheOwnerDecidedIt_IsWithheldOnce_ThenAllowed()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        // ANSWERED IN WORDS, which closes it — the owner has dealt with it and nothing is open.
+        _telegram.Queue_Updates(Build_OwnerMessageJson("go ahead and start it", updateId: 3210, messageId: 121));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().OpenQuestions.Count == 0, 20_000),
+            $"the typed answer did not close the question.{Environment.NewLine}{_log.Dump()}");
+
+        // THE PROSE CHANGES AND THE QUESTION LINE DOES NOT, exactly as the sibling probe above does
+        // it: a repeat is the question line, and an entry identical in every byte would be a test of
+        // the mirror's own bookkeeping rather than of this rule.
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, COMPLETE_QUESTION.Replace("Two plan levers changed", "As discussed", StringComparison.Ordinal), entryNumber: 20);
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("already decided"), 25_000),
+            $"the re-ask of a decided question was not recognised.{Environment.NewLine}{_log.Dump()}");
+
+        // ONE COPY ON THE PHONE, and the session told what the owner decided and why nothing went out.
+        Assert.Equal(1, _telegram.Count_Sent_Containing("Start the FIN-D-277a build now?"));
+        Assert.Empty(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Contains("you already asked this and the owner dealt with it", Channel(orchId), StringComparison.Ordinal);
+
+        // THE THIRD ASK IS NOT PROBED HERE, and this is the honest reason: a third manual append to
+        // the same owner channel is never mirrored by this fixture — measured, not assumed, over
+        // windows up to 60 s with the engine demonstrably ticking — so a probe built on it would
+        // assert "no second copy" against a channel that delivered nothing, which is the two-routes
+        // trap. The rule that the withholding happens ONCE is pinned where the suite can reach it:
+        // QuestionSupersede_Decider.Should_Withhold_Reask, in the decider's own tests.
     }
 
     string Channel(string orchId) => File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));
@@ -643,6 +899,15 @@ public class QuestionContractProbeTests : IDisposable
         return $"{{\"ok\":true,\"result\":[{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
             + $"\"message_thread_id\":{TOPIC_ID},\"from\":{{\"id\":{OWNER_USER_ID}}},"
             + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\"}}}}]}}";
+    }
+
+    /// <summary>An owner message sent with Telegram's Reply on <paramref name="replyToMessageId"/>, quoting it.</summary>
+    static string Build_OwnerReplyJson(string text, long updateId, long messageId, long replyToMessageId, string quotedText)
+    {
+        return $"{{\"ok\":true,\"result\":[{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
+            + $"\"message_thread_id\":{TOPIC_ID},\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\","
+            + $"\"reply_to_message\":{{\"message_id\":{replyToMessageId},\"text\":\"{quotedText}\"}}}}}}]}}";
     }
 
     static string Build_CallbackTapJson(string callbackData, long questionMessageId, long updateId)

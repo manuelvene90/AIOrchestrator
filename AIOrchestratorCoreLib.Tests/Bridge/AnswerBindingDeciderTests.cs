@@ -107,6 +107,36 @@ public class AnswerBindingDeciderTests
             AnswerBinding_Decider.Decide(1, "le 4 piu fammi le domande per 274")));
     }
 
+    /// <summary>
+    /// A TELEGRAM REPLY NAMES ITS QUESTION (owner, 2026-09-11: several open questions are fine, as
+    /// long as a reply links to one). It binds however many are open.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void AReplyOnAnOpenQuestion_BindsToIt_HoweverManyAreOpen(int openQuestions)
+    {
+        Assert.Equal(AnswerBindings.TheQuestionItRepliesTo, AnswerBinding_Decider.Decide(openQuestions, "tienilo fermo per ora", OwnerReplyTargets.AnOpenQuestion));
+        Assert.True(AnswerBinding_Decider.Binds(AnswerBindings.TheQuestionItRepliesTo));
+    }
+
+    /// <summary>fincanva-6, 2026-09-11 12:58 — an instruction pointing elsewhere was stamped as the only open question's answer.</summary>
+    [Fact]
+    public void AReplyToAnotherMessage_BindsNothing_EvenWithOneQuestionOpen()
+    {
+        var binding = AnswerBinding_Decider.Decide(1, "usa key o MCP per cancellare mio abbonamento", OwnerReplyTargets.AnotherMessage);
+
+        Assert.Equal(AnswerBindings.NothingItRepliesToSomethingElse, binding);
+        Assert.False(AnswerBinding_Decider.Binds(binding));
+    }
+
+    /// <summary>A reply that asks is a question about the question, not an answer to it.</summary>
+    [Fact]
+    public void AReplyThatAsks_BindsNothing()
+    {
+        Assert.Equal(AnswerBindings.NothingItIsAQuestion, AnswerBinding_Decider.Decide(2, "e se lo facessimo domani?", OwnerReplyTargets.AnOpenQuestion));
+    }
+
     /// <summary>Empty and whitespace must not crash the path every inbound message runs through.</summary>
     [Theory]
     [InlineData("")]
@@ -123,6 +153,8 @@ public class AnswerBindingDeciderTests
     [InlineData(AnswerBindings.TheOnlyOpenQuestion)]
     [InlineData(AnswerBindings.NothingItIsAQuestion)]
     [InlineData(AnswerBindings.NothingItIsAmbiguous)]
+    [InlineData(AnswerBindings.TheQuestionItRepliesTo)]
+    [InlineData(AnswerBindings.NothingItRepliesToSomethingElse)]
     public void EveryOutcome_Describes(AnswerBindings binding)
     {
         Assert.False(string.IsNullOrWhiteSpace(AnswerBinding_Decider.Describe(binding, 2)));

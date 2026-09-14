@@ -252,6 +252,36 @@ public static partial class UsageTotals_Reader
         }
     }
 
+    /// <summary>
+    /// WHEN THIS PROBE'S READING WAS TAKEN — the file's last write, because every producer writes
+    /// the whole file at the moment it learns the figures (the status line dumps the raw payload on
+    /// each render; RateLimitEvent_Translator writes when the stream reports a change). It is the
+    /// only evidence of recency these files carry: the payload itself has no "as of" field.
+    ///
+    /// It answers ONE question, in WindowInstance_Order.Compare_Reading: when two probes disagree
+    /// about which limit window exists, which of them was written more recently. It is NOT a
+    /// freshness gate and must never become one — a session that hits 100% stops rewriting its
+    /// probe, so discarding readings for age would throw away the true one at the moment it became
+    /// true (LiveLimitStillAlertsTests).
+    ///
+    /// DateTime.MinValue when the file is gone or unreadable: unknown recency loses every contest
+    /// rather than winning one it cannot support.
+    /// </summary>
+    public static DateTime Read_LastWriteUtc_Safe(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+                return DateTime.MinValue;
+
+            return File.GetLastWriteTimeUtc(filePath);
+        }
+        catch
+        {
+            return DateTime.MinValue;
+        }
+    }
+
     /// <summary>Shared-read: these files are rewritten by live sessions on every status-line render.</summary>
     public static string Read_Text_Safe(string filePath)
     {

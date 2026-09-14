@@ -49,7 +49,10 @@ KillMode=mixed
 # first: this is that drain plus the engine's own margin. Measured 2026-09-06→08: 17 turns died
 # within four minutes of a stop under the old 30 s.
 # 2026-09-09: the .NET host's own ShutdownTimeout is now 39 min (ShutdownGrace_Rule: turn 30 + closing 5 + margins); systemd must SIGKILL LAST, so this stays above it.
-TimeoutStopSec=2400
+# 2026-09-11: a braked member turn (implementer/reviewer) may now run 120 min (printRunner.memberTurnTimeoutMinutes),
+# so the host's ShutdownTimeout is 129 min (120 + closing 5 + margins 4) and this is 130. A stop can wait that long for
+# a member turn to finish — the cost the owner accepted for a ceiling longer than the longest legitimate turn.
+TimeoutStopSec=7800
 
 # The bot token lives in $HOME/.claude/supervision/secrets.json, read by the bridge alone — never
 # in this unit, never in the journal.

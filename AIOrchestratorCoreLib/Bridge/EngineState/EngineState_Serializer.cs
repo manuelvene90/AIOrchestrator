@@ -118,6 +118,7 @@ public static class EngineState_Serializer
                 ["messageId"] = question.MessageId,
                 ["orchId"] = question.OrchId,
                 ["text"] = question.Text,
+                ["prompt"] = question.Prompt,
                 ["askedUtc"] = Write_Instant(question.AskedUtc),
                 ["buttonGroupId"] = question.ButtonGroupId,
                 ["deadlineUtc"] = question.DeadlineUtc == null ? null : Write_Instant(question.DeadlineUtc.Value),
@@ -256,6 +257,10 @@ public static class EngineState_Serializer
             MessageId = messageId.Value,
             OrchId = orchId,
             Text = text,
+
+            // Absent in a file written before it existed: that question simply cannot be recognised
+            // as repeated, which is the old behaviour and nothing worse.
+            Prompt = Read_String_OrNull(entry["prompt"]),
             AskedUtc = askedUtc.Value,
             ButtonGroupId = Read_Long_OrNull(entry["buttonGroupId"]) ?? 0,
             DeadlineUtc = Read_Instant_OrNull(entry["deadlineUtc"]),

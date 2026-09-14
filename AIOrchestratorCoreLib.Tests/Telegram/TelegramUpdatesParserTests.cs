@@ -137,6 +137,82 @@ public class TelegramUpdatesParserTests
         Assert.Equal(201, batch.MaxUpdateId);
     }
 
+    /// <summary>
+    /// A REAL REPLY (target message_id differs from the topic's own thread id) yields the id of the
+    /// message the owner pointed at — the inbound half of native-reply threading, owner directive
+    /// 2026-09-11.
+    /// </summary>
+    [Fact]
+    public void Parse_ARealReply_CarriesTheRepliedToMessageId()
+    {
+        var json = """
+            {
+              "ok": true,
+              "result": [
+                {
+                  "update_id": 400,
+                  "message": {
+                    "message_id": 12,
+                    "from": { "id": 42 },
+                    "chat": { "id": -1001234567890 },
+                    "message_thread_id": 7,
+                    "text": "yes go ahead",
+                    "reply_to_message": { "message_id": 9, "text": "should I proceed?" }
+                  }
+                }
+              ]
+            }
+            """;
+
+        var batch = TelegramUpdates_Parser.Parse_OwnerMessages(json, SUPERGROUP_ID, OWNER_ID);
+
+        Assert.Single(batch.OwnerMessages);
+        Assert.Equal(9, batch.OwnerMessages[0].ReplyToMessageId);
+    }
+
+    /// <summary>
+    /// A REPLY POINTING AT THE THREAD ROOT is Telegram's own bookkeeping (every message in a forum
+    /// topic carries one), not the owner replying to anything — must read null, the same rule
+    /// Get_ReplyToMessageId_OrNull shares with its text sibling, Get_ReplyToText_OrNull.
+    /// </summary>
+    [Fact]
+    public void Parse_AReplyPointingAtTheThreadRoot_YieldsNullReplyToMessageId()
+    {
+        var json = """
+            {
+              "ok": true,
+              "result": [
+                {
+                  "update_id": 401,
+                  "message": {
+                    "message_id": 13,
+                    "from": { "id": 42 },
+                    "chat": { "id": -1001234567890 },
+                    "message_thread_id": 7,
+                    "text": "just a normal message in the topic",
+                    "reply_to_message": { "message_id": 7, "text": "topic root" }
+                  }
+                }
+              ]
+            }
+            """;
+
+        var batch = TelegramUpdates_Parser.Parse_OwnerMessages(json, SUPERGROUP_ID, OWNER_ID);
+
+        Assert.Single(batch.OwnerMessages);
+        Assert.Null(batch.OwnerMessages[0].ReplyToMessageId);
+    }
+
+    /// <summary>No reply_to_message at all — the ordinary case — yields null, not a missing field throwing.</summary>
+    [Fact]
+    public void Parse_NoReplyToMessage_YieldsNullReplyToMessageId()
+    {
+        var batch = TelegramUpdates_Parser.Parse_OwnerMessages(MIXED_UPDATES_JSON, SUPERGROUP_ID, OWNER_ID);
+
+        Assert.Null(batch.OwnerMessages[0].ReplyToMessageId);
+        Assert.Null(batch.OwnerMessages[1].ReplyToMessageId);
+    }
+
     [Fact]
     public void Parse_VoiceMessage_CarriesTheVoiceFileId()
     {

@@ -1,9 +1,12 @@
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.SessionLaunch;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationMember;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram;
+using AIOrchestratorCoreLib.Tests.Running;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Sessions;
@@ -117,5 +120,63 @@ public class OwnerFacingSessionLocatorTests : IDisposable
         var usageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, "arb-fix", session: null);
 
         Assert.Equal(Path.Combine(_paths.Get_OrchestrationFolder("arb-fix"), ".usage.json"), usageFile);
+    }
+
+    // WHOSE TURN THE DISPATCHER IS ASKED ABOUT — the same three shapes, for the readers of its record.
+
+    [Fact]
+    public void ACrew_IsAskedAboutAsTheSupervisor()
+    {
+        var session = Session(DateTime.UtcNow, Member("imp-1"));
+
+        Assert.Equal((SessionRoles.Supervisor, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID), OwnerFacingSession_Locator.Resolve_Session("arb-fix", session));
+    }
+
+    [Fact]
+    public void ABasicOrchestration_IsAskedAboutAsItsSolo()
+    {
+        var session = Session(supervisorSpawnedUtc: null, Member("solo-1"));
+
+        Assert.Equal((SessionRoles.Solo, "solo-1"), OwnerFacingSession_Locator.Resolve_Session("arb-fix", session));
+    }
+
+    [Fact]
+    public void APromotedOrchestration_IsAskedAboutAsTheSupervisor_NotTheRetiredSolo()
+    {
+        var session = Session(DateTime.UtcNow, Member("solo-1", closedUtc: DateTime.UtcNow), Member("imp-1"));
+
+        Assert.Equal((SessionRoles.Supervisor, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID), OwnerFacingSession_Locator.Resolve_Session("arb-fix", session));
+    }
+
+    [Fact]
+    public void TheGeneralSupervisor_IsAskedAboutAsItself()
+    {
+        Assert.Equal((SessionRoles.General, SessionLaunch_Factory.GENERAL_MEMBER_ID), OwnerFacingSession_Locator.Resolve_Session(ChannelDiscovery.GENERAL_ORCH_ID, session: null));
+    }
+
+    /// <summary>
+    /// The incident, through the real dispatcher (ai-orch-2, 2026-09-11: "your turn ended without
+    /// answering" 2 minutes into a running turn). A headless solo is mid-turn; the key the owner-reply
+    /// loop now asks about sees it, and the key it used to ask about — a supervisor a basic
+    /// orchestration never registers — does not. The second assertion is the control: without it the
+    /// first would pass for a dispatcher that answered true to anything.
+    /// </summary>
+    [Fact]
+    public async Task AHeadlessSoloMidTurn_IsInFlightUnderTheResolvedKey_AndNotUnderTheSupervisors()
+    {
+        using var harness = new PrintRunnerTestHarness("solo");
+        var (orchId, _) = harness.Register_Member(MemberKinds.Solo);
+        harness.Write_Scenario("""{"default":{"result":"online","delay_ms":20000}}""");
+
+        var (_, memberId) = OwnerFacingSession_Locator.Resolve_Session(orchId, harness.Store.Get_Session_OrNull(orchId));
+
+        // The solo's boot turn is its first turn and needs nothing said to it.
+        var dispatcher = harness.Create_Dispatcher();
+        var started = PrintRunnerTestHarness.Drive_Until(dispatcher, () => dispatcher.Is_TurnInFlight(orchId, memberId) && !dispatcher.Is_TurnQueued(orchId, memberId), PrintRunnerTestHarness.GENEROUS);
+        var supervisorKeyInFlight = dispatcher.Is_TurnInFlight(orchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID);
+        await dispatcher.Stop_Async();
+
+        Assert.True(started, $"the solo's turn was never seen running under '{memberId}'");
+        Assert.False(supervisorKeyInFlight, "the supervisor key reported a turn a basic orchestration never registers");
     }
 }

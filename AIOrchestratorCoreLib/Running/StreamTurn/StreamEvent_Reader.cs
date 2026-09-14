@@ -30,6 +30,7 @@ public static class StreamEvent_Reader
     public const string SUBTYPE_HOOK_STARTED = "hook_started";
     public const string SUBTYPE_HOOK_RESPONSE = "hook_response";
     public const string RATE_LIMIT_INFO_KEY = "rate_limit_info";
+    public const string REPLAY_KEY = "isReplay";
 
     public static JsonObject? Parse_OrNull(string line)
     {
@@ -64,6 +65,28 @@ public static class StreamEvent_Reader
     public static bool Is_RateLimitEvent(JsonObject json)
     {
         return Read_Type(json) == TYPE_RATE_LIMIT_EVENT;
+    }
+
+    /// <summary>
+    /// One of OUR messages written back by the CLI (<see cref="StreamJson_Words.REPLAY_USER_MESSAGES_FLAG"/>).
+    /// A tool result is a <c>user</c> event too, and carries no flag — which is why the flag, not the
+    /// type, is the test.
+    /// </summary>
+    public static bool Is_UserReplay(JsonObject json)
+    {
+        return Read_Type(json) == TYPE_USER && Read_Bool(json, REPLAY_KEY);
+    }
+
+    /// <summary>The text a result event closed its turn on. Empty when it carried none.</summary>
+    public static string Read_ResultText(JsonObject json)
+    {
+        return Is_Result(json) ? Read_String_OrNull(json, "result") ?? string.Empty : string.Empty;
+    }
+
+    /// <summary>A result the CLI itself flagged as an error — a login failure, an API error — rather than an answer.</summary>
+    public static bool Is_ErrorResult(JsonObject json)
+    {
+        return Is_Result(json) && Read_Bool(json, "is_error");
     }
 
     public static string? Read_SessionId(JsonObject json)
@@ -125,6 +148,19 @@ public static class StreamEvent_Reader
         }
 
         return blocks;
+    }
+
+    /// <summary>False for a missing or non-boolean value: an event we cannot read as flagged is read as not flagged.</summary>
+    static bool Read_Bool(JsonObject json, string key)
+    {
+        try
+        {
+            return json[key] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     static string? Read_String_OrNull(JsonObject json, string key)

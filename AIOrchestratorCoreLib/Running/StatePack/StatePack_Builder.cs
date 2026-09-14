@@ -29,6 +29,9 @@ public static class StatePack_Builder
     public const int PLAN_CAP = 24_000;
     public const int GIT_CAP = 3_000;
     public const int OWNER_TAIL_CAP = 8_000;
+    public const int PROGRESS_CAP = 6_000;
+
+    public const string PROGRESS_HEADING = "## Your progress note — progress.md, what you saved while working (resume from here)";
 
     public const string TITLE_PREFIX = "# State pack — ";
     public const string OPENING =
@@ -53,6 +56,9 @@ public static class StatePack_Builder
 
         if (inputs.LastOwnEntry != null)
             Append_Entry(text, "## Your last report (your state as you left it)", inputs.LastOwnEntry, LAST_OWN_CAP);
+
+        if (inputs.ProgressNote != null)
+            Append_Block(text, PROGRESS_HEADING, inputs.ProgressNote, PROGRESS_CAP, StatePack_Locator.PROGRESS_FILE_NAME, keepTail: true);
 
         if (inputs.PlanText != null)
             Append_Block(text, "## The ledger — PLAN.md", inputs.PlanText, PLAN_CAP, "PLAN.md");
@@ -87,12 +93,18 @@ public static class StatePack_Builder
         Append_Block(text, $"{heading} — entry [{entry.Index}], {entry.DateText}", entry.RawText.Trim(), cap, $"entry [{entry.Index}] in your channel");
     }
 
-    static void Append_Block(StringBuilder text, string heading, string body, int cap, string whereToReadTheRest)
+    /// <param name="keepTail">
+    /// Keep the END of a body over its cap rather than its start — for the progress note, whose last
+    /// lines are where the member got to while its first are the oldest steps.
+    /// </param>
+    static void Append_Block(StringBuilder text, string heading, string body, int cap, string whereToReadTheRest, bool keepTail = false)
     {
         text.Append(heading).Append('\n').Append('\n');
 
         if (body.Length <= cap)
             text.Append(body).Append('\n').Append('\n');
+        else if (keepTail)
+            text.Append(Describe_Truncation(body.Length - cap, whereToReadTheRest)).Append('\n').Append(body, body.Length - cap, cap).Append('\n').Append('\n');
         else
             text.Append(body, 0, cap).Append('\n').Append(Describe_Truncation(body.Length - cap, whereToReadTheRest)).Append('\n').Append('\n');
     }

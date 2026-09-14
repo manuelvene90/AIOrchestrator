@@ -14,6 +14,28 @@ public enum AnswerBindings
 
     /// <summary>Two or more were open, so a message carrying no question id cannot say which.</summary>
     NothingItIsAmbiguous,
+
+    /// <summary>
+    /// The owner used Telegram's Reply on an open question: the one message that DOES carry a
+    /// question id. It answers that question, however many others are open.
+    /// </summary>
+    TheQuestionItRepliesTo,
+
+    /// <summary>The owner replied to some other message — they are pointing at that, not at a question.</summary>
+    NothingItRepliesToSomethingElse,
+}
+
+/// <summary>What the owner's message was a Telegram reply to, as far as the question registry can tell.</summary>
+public enum OwnerReplyTargets
+{
+    /// <summary>Not a reply (or a reply to the topic root, which Telegram attaches to everything).</summary>
+    None,
+
+    /// <summary>A reply to a question that is still open in this orchestration.</summary>
+    AnOpenQuestion,
+
+    /// <summary>A reply to anything else — a report, a closed question, their own message.</summary>
+    AnotherMessage,
 }
 
 /// <summary>
@@ -62,13 +84,37 @@ public static class AnswerBinding_Decider
     /// <param name="ownerMessageText">The owner's words, exactly as they arrived.</param>
     public static AnswerBindings Decide(int openQuestionCount, string ownerMessageText)
     {
+        return Decide(openQuestionCount, ownerMessageText, OwnerReplyTargets.None);
+    }
+
+    /// <summary>
+    /// THE REPLY IS THE LINK THE OWNER ASKED FOR. 2026-09-11, after two exported chats in which
+    /// answers and questions had come apart: <i>"non c'è modo di linkare domande e risposte? Tipo con
+    /// un rispondi? Avere più domande non lo vedo come un problema."</i> Telegram's Reply names the
+    /// message it answers, so it is the one typed answer that needs no inference: it binds to that
+    /// question even with several open — which is what makes several open questions fine. And a
+    /// reply pointing at a report or at their own message is about THAT: it binds to nothing, even
+    /// with a single question open (fincanva-6, 12:58, an instruction was stamped "✅ answered" under
+    /// the only open question).
+    /// </summary>
+    /// <param name="ownerMessageText">The owner's own words — WITHOUT the quote a reply carries: the quoted question ends in "?" and would make every reply read as a question.</param>
+    /// <param name="replyTarget">What the message was a Telegram reply to.</param>
+    public static AnswerBindings Decide(int openQuestionCount, string ownerMessageText, OwnerReplyTargets replyTarget)
+    {
         if (openQuestionCount <= 0)
             return AnswerBindings.NothingWasOpen;
 
         // ASK-SHAPED FIRST, so it reads the same whether one question is open or five. A message
-        // that asks something is not an answer to anything, and the count cannot make it one.
+        // that asks something is not an answer to anything, and the count cannot make it one — nor
+        // can a Reply: "e se lo facessimo domani?" on a question is a question about it.
         if (OwnerPush_Policy.Asks_InProse(ownerMessageText))
             return AnswerBindings.NothingItIsAQuestion;
+
+        if (replyTarget == OwnerReplyTargets.AnOpenQuestion)
+            return AnswerBindings.TheQuestionItRepliesTo;
+
+        if (replyTarget == OwnerReplyTargets.AnotherMessage)
+            return AnswerBindings.NothingItRepliesToSomethingElse;
 
         if (openQuestionCount == 1)
             return AnswerBindings.TheOnlyOpenQuestion;
@@ -82,7 +128,7 @@ public static class AnswerBinding_Decider
     /// </summary>
     public static bool Binds(AnswerBindings binding)
     {
-        return binding == AnswerBindings.TheOnlyOpenQuestion;
+        return binding is AnswerBindings.TheOnlyOpenQuestion or AnswerBindings.TheQuestionItRepliesTo;
     }
 
     /// <summary>
@@ -98,6 +144,10 @@ public static class AnswerBinding_Decider
                 "the owner's message closed the one question that was open",
             AnswerBindings.NothingItIsAQuestion =>
                 $"the owner's message is itself a question — {openQuestionCount} question(s) stay open",
+            AnswerBindings.TheQuestionItRepliesTo =>
+                "the owner replied to one open question — it closed that one",
+            AnswerBindings.NothingItRepliesToSomethingElse =>
+                $"the owner replied to a message that is not an open question — {openQuestionCount} question(s) stay open",
             AnswerBindings.NothingItIsAmbiguous =>
                 $"{openQuestionCount} questions were open and the reply names none of them — all stay open, "
                 + "the owner can tap the one they meant",

@@ -13,7 +13,7 @@ namespace AIOrchestratorCoreLib.Running.ClosingTurn;
 /// a process that has said nothing for the silence limit — it produced no bytes at all, so there is
 /// nothing to close down and today's retry is the right answer. Both come back with
 /// <see cref="ITurnResult.TimedOut"/> set and exit -1, which is why the silence kill has to be
-/// MARKED at the place that knows (<see cref="TurnResult_Factory.CreateFrom_SilenceKill"/>, called
+/// MARKED at the place that knows (<see cref="TurnResult_Factory.CreateFrom_NothingToClose"/>, called
 /// by the stream executor) rather than guessed at from a duration here.
 /// </para>
 /// </summary>

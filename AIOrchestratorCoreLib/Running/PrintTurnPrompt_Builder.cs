@@ -150,12 +150,28 @@ public static class PrintTurnPrompt_Builder
     const string SINGLE_SOURCE_CONTRACT =
         "Act on it per your role command. Your final message IS your channel entry — the bridge appends it under your author word with the header, the index and the time: first line the subject, then a blank line, then the body. A question ends the turn exactly as an answer does.\n";
 
+    /// <summary>
+    /// Said whenever an app note rides the turn (<see cref="PrintTurn_Trigger.Select_AgentNotes"/>): the
+    /// session must know these are the app's words to it, not the owner's, and that they did not start
+    /// this turn — or it answers a nudge on the owner's phone as though the owner had written it.
+    /// </summary>
+    public const string AGENT_NOTES_LINE =
+        "Entries FROM app tagged [agent] are the app's notes to you, not the owner's words — they never start a turn, so they ride this one. Take them into account; never answer them as though the owner had spoken.\n\n";
+
+    static void Append_AgentNotesLine_IfAny(StringBuilder prompt, IReadOnlyList<PendingEntry> pending)
+    {
+        if (pending.Any(item => PrintTurn_Trigger.Is_AgentNote(item.Entry)))
+            prompt.Append(AGENT_NOTES_LINE);
+    }
+
     static void Append_SingleSourceTraffic(StringBuilder prompt, IReadOnlyList<PendingEntry> pending)
     {
         prompt.Append("New traffic in your channel — ").Append(pending.Count).Append(pending.Count == 1 ? " entry" : " entries").Append(":\n\n");
 
         foreach (var item in pending)
             prompt.Append(item.Entry.RawText.Trim()).Append("\n\n");
+
+        Append_AgentNotesLine_IfAny(prompt, pending);
     }
 
     /// <summary>
@@ -182,6 +198,8 @@ public static class PrintTurnPrompt_Builder
 
             prompt.Append(item.Entry.RawText.Trim()).Append("\n\n");
         }
+
+        Append_AgentNotesLine_IfAny(prompt, pending);
     }
 
     static string Describe_MultiSourceContract(IReadOnlyList<ITurnSource> sources)

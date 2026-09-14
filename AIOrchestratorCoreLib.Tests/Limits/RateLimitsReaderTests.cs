@@ -14,10 +14,25 @@ namespace AIOrchestratorCoreLib.Tests.Limits;
 /// five_hour 99% while every live session sat at 19%, and 99% is the number the owner was shown.
 /// The same stale reading latched `.limit-alerts.json` at 100% and, because a window only re-arms
 /// below 50%, silently killed every future limit alert.
+///
+/// The second incident, 2026-09-11, is the same decision taken by the wrong evidence. The rule that
+/// fixed the first one — "a LATER reset stamp is a NEWER window" — assumed the stamp grows with
+/// time. It does not: measured across nine probe files on the live machine, the weekly window's
+/// reset instant moved BACKWARDS from 09-16 05:00 to 09-14 10:00. So a two-day-old probe reporting
+/// 60% outranked four live sessions reporting 90%, and the weekly figure froze there — it could not
+/// move again until 09-16, whatever the account did. The owner reported it as a stuck counter.
+/// The rule now orders readings by WHEN THEY WERE TAKEN.
 /// </summary>
 public class RateLimitsReaderTests : IDisposable
 {
     static readonly DateTime NOW = new(2026, 8, 11, 22, 0, 0);
+
+    // WHEN THE READING WAS TAKEN, which is now what decides between two window instances. Always
+    // set explicitly: letting it fall out of the order the fixtures happen to be written is how a
+    // test ends up with two routes to its answer and pins neither (CLAUDE.md item 20).
+    static readonly DateTime TAKEN_TWO_DAYS_AGO = new DateTime(2026, 8, 9, 22, 0, 0, DateTimeKind.Utc);
+    static readonly DateTime TAKEN_AN_HOUR_AGO = new DateTime(2026, 8, 11, 21, 0, 0, DateTimeKind.Utc);
+    static readonly DateTime TAKEN_A_MINUTE_AGO = new DateTime(2026, 8, 11, 21, 59, 0, DateTimeKind.Utc);
 
     readonly string _tempFolder;
 
@@ -51,35 +66,82 @@ public class RateLimitsReaderTests : IDisposable
 
     /// <summary>
     /// The subtler half, and the one a pure expiry check misses: BOTH windows are unexpired, but
-    /// they are different instances. The older one's percentage says nothing about the newer one,
-    /// so it must not win on being larger.
+    /// they are different instances. The abandoned one's percentage says nothing about the window in
+    /// force, so it must not win on being larger.
+    ///
+    /// THE TWO SIGNALS ARE DELIBERATELY SET AGAINST EACH OTHER, so only one route reaches the
+    /// answer: the file that was WRITTEN LAST names the EARLIER reset stamp, and it is also the
+    /// lower reading. Under the stamp rule this test fails with 99; under the recency rule it
+    /// passes with 12. That is the 2026-09-11 incident in miniature.
     /// </summary>
     [Fact]
-    public void Read_Worst_ANewerWindowInstanceReplacesAnOlderOne_RatherThanCompetingOnPercent()
+    public void Read_Worst_TheInstanceNamedByTheLatestReading_ReplacesTheOther_WhateverItsResetStampSays()
     {
-        var older = Write_ProbeFile("five_hour", 99, NOW.AddMinutes(30), "Opus 5");
-        var newer = Write_ProbeFile("five_hour", 12, NOW.AddHours(5), "Sonnet 5");
+        var abandoned = Write_ProbeFile("five_hour", 99, NOW.AddHours(5), "Opus 5", TAKEN_TWO_DAYS_AGO);
+        var live = Write_ProbeFile("five_hour", 12, NOW.AddMinutes(30), "Sonnet 5", TAKEN_A_MINUTE_AGO);
 
-        var windows = RateLimits_Reader.Read_WorstAcrossSessions([older, newer], NOW);
+        var windows = RateLimits_Reader.Read_WorstAcrossSessions([abandoned, live], NOW);
 
         var window = Assert.Single(windows);
         Assert.Equal(12, window.Percent);
-        Assert.Equal(NOW.AddHours(5), window.ResetsAtLocal);
+        Assert.Equal(NOW.AddMinutes(30), window.ResetsAtLocal);
         Assert.Equal("Sonnet 5", window.Models);
     }
 
-    /// <summary>Order must not decide the answer — the newer instance wins from either direction.</summary>
+    /// <summary>Order must not decide the answer — the latest reading wins from either direction.</summary>
     [Fact]
-    public void Read_Worst_TheNewerInstanceWins_WhicheverFileIsReadFirst()
+    public void Read_Worst_TheLatestReadingWins_WhicheverFileIsReadFirst()
     {
-        var older = Write_ProbeFile("five_hour", 99, NOW.AddMinutes(30), "Opus 5");
-        var newer = Write_ProbeFile("five_hour", 12, NOW.AddHours(5), "Sonnet 5");
+        var abandoned = Write_ProbeFile("five_hour", 99, NOW.AddHours(5), "Opus 5", TAKEN_TWO_DAYS_AGO);
+        var live = Write_ProbeFile("five_hour", 12, NOW.AddMinutes(30), "Sonnet 5", TAKEN_A_MINUTE_AGO);
 
-        var forwards = RateLimits_Reader.Read_WorstAcrossSessions([older, newer], NOW);
-        var backwards = RateLimits_Reader.Read_WorstAcrossSessions([newer, older], NOW);
+        var forwards = RateLimits_Reader.Read_WorstAcrossSessions([abandoned, live], NOW);
+        var backwards = RateLimits_Reader.Read_WorstAcrossSessions([live, abandoned], NOW);
 
         Assert.Equal(12, Assert.Single(forwards).Percent);
         Assert.Equal(12, Assert.Single(backwards).Percent);
+    }
+
+    /// <summary>
+    /// THE REPORTED DEFECT, with the live figures. Nine probe files, one account: two idle
+    /// orchestrations still name the weekly window that ended on 09-16, four live ones name the one
+    /// that ends on 09-14. The 09-16 stamp is later, so the stamp rule elected `fincanva-2`'s
+    /// two-day-old 60% and held it against every live session's 90% — under-reporting a weekly
+    /// allowance that was nearly spent, and frozen there until 09-16 whatever the account did.
+    /// </summary>
+    [Fact]
+    public void Read_Worst_AnIdleProbeNamingALaterWeeklyReset_NoLongerFreezesTheLiveReading()
+    {
+        var idleNamingALaterReset = Write_ProbeFile("seven_day", 60, NOW.AddDays(4), "Opus 5", TAKEN_TWO_DAYS_AGO);
+        var alsoIdle = Write_ProbeFile("seven_day", 7, NOW.AddDays(4), "Opus 5", TAKEN_TWO_DAYS_AGO);
+        var live = Write_ProbeFile("seven_day", 90, NOW.AddDays(2), "Opus 5", TAKEN_A_MINUTE_AGO);
+        var alsoLive = Write_ProbeFile("seven_day", 90, NOW.AddDays(2), "Opus 5", TAKEN_A_MINUTE_AGO);
+
+        var window = Assert.Single(RateLimits_Reader.Read_WorstAcrossSessions([idleNamingALaterReset, alsoIdle, live, alsoLive], NOW));
+
+        Assert.Equal(90, window.Percent);
+        Assert.Equal(NOW.AddDays(2), window.ResetsAtLocal);
+    }
+
+    /// <summary>
+    /// And it must not merely have swapped which stale file wins. Three instances, and the answer is
+    /// the one the most recent reading names — not the earliest stamp, not the latest, not the
+    /// highest percent.
+    /// </summary>
+    [Fact]
+    public void Read_Worst_WithThreeCompetingInstances_ReportsTheOneTheLatestReadingNames()
+    {
+        var oldest = Write_ProbeFile("five_hour", 99, NOW.AddHours(1), "Opus 5", TAKEN_TWO_DAYS_AGO);
+        var middle = Write_ProbeFile("five_hour", 80, NOW.AddHours(9), "Opus 5", TAKEN_AN_HOUR_AGO);
+        var latest = Write_ProbeFile("five_hour", 33, NOW.AddHours(4), "Opus 5", TAKEN_A_MINUTE_AGO);
+
+        foreach (var order in new[] { new[] { oldest, middle, latest }, [latest, middle, oldest], [middle, latest, oldest] })
+        {
+            var window = Assert.Single(RateLimits_Reader.Read_WorstAcrossSessions(order, NOW));
+
+            Assert.Equal(33, window.Percent);
+            Assert.Equal(NOW.AddHours(4), window.ResetsAtLocal);
+        }
     }
 
     /// <summary>
@@ -324,6 +386,16 @@ public class RateLimitsReaderTests : IDisposable
     string Write_ProbeFile(string windowKey, double percent, DateTime resetsAtLocal, string modelName)
     {
         return Write_UsageFile(Build_ProbeJson(windowKey, percent, resetsAtLocal, modelName));
+    }
+
+    /// <summary>The same probe, with the moment its reading was taken stated rather than implied.</summary>
+    string Write_ProbeFile(string windowKey, double percent, DateTime resetsAtLocal, string modelName, DateTime takenAtUtc)
+    {
+        var path = Write_ProbeFile(windowKey, percent, resetsAtLocal, modelName);
+
+        File.SetLastWriteTimeUtc(path, takenAtUtc);
+
+        return path;
     }
 
     string Write_ProbeFile_WithoutResetStamp(string windowKey, double percent, string modelName)

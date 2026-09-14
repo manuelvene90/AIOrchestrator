@@ -41,6 +41,17 @@ public sealed class PrintRunnerTestHarness : IDisposable
     readonly double _streamSilenceSeconds;
     readonly double _memberDigestMinutes;
 
+    /// <summary>Null writes no key, so the suite runs on the production default — see memberDigestMinutes.</summary>
+    readonly double? _memberSilenceMinutes;
+
+    /// <summary>
+    /// THE TURN TIMEOUT A TEST NAMES IS MEANT FOR EVERY ROLE, members included, unless it names the
+    /// member ceiling separately. Since 2026-09-11 a braked member has its own two-hour ceiling, so a
+    /// deadline test driving an implementer at five seconds would otherwise wait for the silence brake
+    /// and pass or fail for the wrong reason.
+    /// </summary>
+    readonly double _memberTurnTimeoutMinutes;
+
     /// <param name="memberDigestMinutes">
     /// The supervisor's wake-up digest (<c>WakeUp_Policy</c>) — THE PRODUCTION WINDOW by default, so
     /// the suite observes what ships.
@@ -60,7 +71,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
     /// the pre-digest behaviour passes <c>0</c> and says why.
     /// </para>
     /// </param>
-    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript", double memberDigestMinutes = 5)
+    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript", double memberDigestMinutes = 5, double? memberSilenceMinutes = null, double? memberTurnTimeoutMinutes = null)
     {
         TempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-print-runner-{Guid.NewGuid():N}");
         RepoPath = Path.Combine(TempRoot, "repo");
@@ -77,6 +88,8 @@ public sealed class PrintRunnerTestHarness : IDisposable
         _resumeForMembers = resumeForMembers;
         _streamSilenceSeconds = streamSilenceSeconds;
         _memberDigestMinutes = memberDigestMinutes;
+        _memberSilenceMinutes = memberSilenceMinutes;
+        _memberTurnTimeoutMinutes = memberTurnTimeoutMinutes ?? turnTimeoutMinutes;
 
         Directory.CreateDirectory(Paths.Root);
         Write_Config(printRoles);
@@ -121,8 +134,12 @@ public sealed class PrintRunnerTestHarness : IDisposable
                 ["coalesceSeconds"] = _coalesceSeconds,
                 ["streamSilenceSeconds"] = _streamSilenceSeconds,
                 ["memberDigestMinutes"] = _memberDigestMinutes,
+                ["memberTurnTimeoutMinutes"] = _memberTurnTimeoutMinutes,
             },
         };
+
+        if (_memberSilenceMinutes != null)
+            config["printRunner"]!["memberSilenceMinutes"] = _memberSilenceMinutes.Value;
 
         File.WriteAllText(Paths.ConfigFile, config.ToJsonString());
         File.SetLastWriteTimeUtc(Paths.ConfigFile, DateTime.UtcNow.AddSeconds(1));

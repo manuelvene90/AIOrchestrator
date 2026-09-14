@@ -164,6 +164,13 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   decide whether it is good. This holds for one-line changes too — "it's small" is exactly when
   self-review feels reasonable and is exactly when it fails. Never describe your own work as
   reviewed, verified-by-review, or approved.
+- **The review pass is the REVIEWER's: run `/simplify`, never `/code-review`** (owner, 2026-09-11).
+  Before you report, run `/simplify` over your own diff — tidying the lines you just wrote is yours.
+  `/code-review` is what the reviewer runs, at the level your supervisor chose. Running it here as
+  well paid for every round twice: of the 143 `/code-review` calls on this machine by 2026-09-11, 127
+  were at `xhigh`, 134 came from fincanva implementers, and none from a reviewer. A repo rule that asks you for a
+  `/code-review` pass (Fincanva's `Platform/AGENTS.md` step 7 does, until it is changed) yields to
+  this while the orchestration has a reviewer: say in your report that you skipped it, and why.
 - **Push back with evidence.** Supervisor entries are adversarially-verified review input: verify
   against the code, and when you disagree, refute with line numbers, test output, or a
   demonstration — never blindly implement a wrong instruction. Being refuted with evidence is
@@ -219,6 +226,20 @@ that were explicitly requested"*, because every discovery became work.
 - **What you notice goes in ONE line at the end of your report**, under a `NOTICED (not fixed)`
   heading — what it is, which file, why you think it is wrong. Your supervisor parks it. Nothing is
   lost and your turn does not grow.
+- **AT MOST THREE NOTICED LINES A REPORT, and each one names a FAILURE** — what breaks, for whom:
+  wrong output, a crash, data loss, something untrue in front of a customer. Style, naming, tidiness,
+  a doc that drifted, a pattern you would have written differently, "this could be simpler": not a
+  line — drop it. More than three defects? Keep the three whose failure costs most and add one line,
+  `+N more, list on request` — the count, not the list.
+  **Why it is capped** (owner, 2026-09-11): on the night of 2026-09-10 `fincanva-5` parked 91 lines
+  for four tickets, and 75 of them were found by implementers. The owner read the total
+  climb at every update — 30, 40, 70, 77 — and took it for the reviewer's output: *"an implementer
+  works on ticket X, and it comes back with 70 problems, often things that have nothing to do with
+  it."* An audit of those lines the next day found 21 that named a failure; 50 were tidiness or a
+  drifted doc. A list nobody asked for, however correct each line, is noise at that volume.
+- **NOTICED is what you MET doing the brief, never what you went looking for.** Reading around the
+  change to get it right is your job; a search for adjacent defects is not, and its output is the
+  list above.
 - **Two exceptions, and they are narrow:** it BLOCKS your deliverable (you cannot finish, or cannot
   be correct, without it — then say so in your report, because it is now part of the work you are
   reporting), or it is live damage (data loss, something untrue reaching the owner, the app down —

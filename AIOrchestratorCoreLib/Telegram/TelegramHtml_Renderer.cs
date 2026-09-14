@@ -110,6 +110,12 @@ public static class TelegramHtml_Renderer
                 continue;
             }
 
+            if (Is_TableStart(lines, lineIndex))
+            {
+                lineIndex = Append_Table(html, lines, lineIndex);
+                continue;
+            }
+
             Append_Line(html, lines[lineIndex]);
             lineIndex++;
         }
@@ -220,6 +226,148 @@ public static class TelegramHtml_Renderer
         var afterMarker = line.TrimStart()[1..];
 
         return afterMarker.StartsWith(' ') ? afterMarker[1..] : afterMarker;
+    }
+
+    /// <summary>
+    /// The separator a table row's cells are joined with. The same middle dot PULSE uses between its
+    /// fields, so a row reads like every other multi-field line the owner already knows.
+    /// </summary>
+    const string TABLE_CELL_SEPARATOR = " · ";
+
+    /// <summary>
+    /// A table is a HEADER ROW immediately followed by a SEPARATOR ROW with the same number of cells —
+    /// both required. A lone line that merely contains a pipe (<c>tail log | grep x</c>, <c>a | b</c>
+    /// as prose) is not a table and must reach the phone exactly as written.
+    /// </summary>
+    static bool Is_TableStart(string[] lines, int lineIndex)
+    {
+        if (lineIndex + 1 >= lines.Length || !lines[lineIndex].Contains('|'))
+            return false;
+
+        var separator = lines[lineIndex + 1];
+
+        if (!separator.Contains('|') || !Is_TableSeparator(separator))
+            return false;
+
+        return Split_TableCells(lines[lineIndex]).Count == Split_TableCells(separator).Count;
+    }
+
+    /// <summary>Every cell is dashes with an optional alignment colon at either end: <c>|---|:--:|</c>.</summary>
+    static bool Is_TableSeparator(string line)
+    {
+        var cells = Split_TableCells(line);
+
+        foreach (var cell in cells)
+        {
+            var dashes = cell.Trim().Trim(':');
+
+            if (dashes.Length == 0 || dashes.Any(character => character != '-'))
+                return false;
+        }
+
+        return cells.Count > 0;
+    }
+
+    /// <summary>
+    /// TELEGRAM HAS NO TABLE, so a table becomes lines. Observed 2026-09-11 on the owner's phone: a
+    /// supervisor's ticket summary arrived as raw <c>| FIN-D-279 | Price table | ✅ closed |</c> rows
+    /// under a <c>|---|---|---|</c> line — pipes and dashes where a list of tickets should have been.
+    ///
+    /// <para>
+    /// The separator row is dropped (it is drawing, not content); the header's cells are bold; every
+    /// row is one line with its cells joined by <see cref="TABLE_CELL_SEPARATOR"/>, and an empty cell
+    /// is skipped rather than leaving two separators back to back. Cell text goes through the same
+    /// inline scanner as any prose, so escaping and emphasis inside a cell follow the rules everything
+    /// else follows. The table ends at the first line without a pipe.
+    /// </para>
+    /// </summary>
+    static int Append_Table(StringBuilder html, string[] lines, int headerIndex)
+    {
+        var rendered = new List<string> { Render_TableRow(lines[headerIndex], isHeader: true) };
+        var lineIndex = headerIndex + 2;
+
+        while (lineIndex < lines.Length && lines[lineIndex].Contains('|'))
+        {
+            rendered.Add(Render_TableRow(lines[lineIndex], isHeader: false));
+            lineIndex++;
+        }
+
+        html.Append(string.Join('\n', rendered));
+
+        return lineIndex;
+    }
+
+    /// <param name="isHeader">
+    /// A header cell holding a code span is NOT wrapped in <c>&lt;b&gt;</c>, for the reason
+    /// <see cref="Try_AppendRun"/> gives: Telegram refuses <c>&lt;code&gt;</c> nested inside bold.
+    /// </param>
+    static string Render_TableRow(string line, bool isHeader)
+    {
+        var cells = new List<string>();
+
+        foreach (var cell in Split_TableCells(line))
+        {
+            var text = cell.Trim();
+
+            if (text.Length == 0)
+                continue;
+
+            var cellHtml = new StringBuilder();
+            var bold = isHeader && !Contains_CodeSpan(text);
+
+            if (bold)
+                cellHtml.Append("<b>");
+
+            Append_Inline(cellHtml, text);
+
+            if (bold)
+                cellHtml.Append("</b>");
+
+            cells.Add(cellHtml.ToString());
+        }
+
+        return string.Join(TABLE_CELL_SEPARATOR, cells);
+    }
+
+    /// <summary>
+    /// The outer pipes are optional in Markdown (<c>a | b</c> is a row), so one leading and one
+    /// trailing pipe are dropped before splitting. <c>\|</c> is a literal pipe inside a cell.
+    /// </summary>
+    static List<string> Split_TableCells(string line)
+    {
+        var trimmed = line.Trim();
+
+        if (trimmed.StartsWith('|'))
+            trimmed = trimmed[1..];
+
+        if (trimmed.EndsWith('|') && !trimmed.EndsWith("\\|", StringComparison.Ordinal))
+            trimmed = trimmed[..^1];
+
+        var cells = new List<string>();
+        var current = new StringBuilder();
+
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (trimmed[i] == '\\' && i + 1 < trimmed.Length && trimmed[i + 1] == '|')
+            {
+                current.Append('|');
+                i++;
+                continue;
+            }
+
+            if (trimmed[i] == '|')
+            {
+                cells.Add(current.ToString());
+                current.Clear();
+                continue;
+            }
+
+            current.Append(trimmed[i]);
+        }
+
+        cells.Add(current.ToString());
+
+        return cells;
     }
 
     /// <summary>
@@ -359,6 +507,22 @@ public static class TelegramHtml_Renderer
     /// becomes half an italic run, and <c>PlanLedger_Parser and PlanLedger_Sections</c> renders as
     /// one italic blob.
     /// </para>
+    /// <para>
+    /// A SINGLE-CHARACTER MARKER NEVER USES HALF OF A DOUBLED ONE, as opener or as closer. Observed
+    /// 2026-09-11 on the owner's phone: <c>**uno**</c> arrived as <c>*uno**</c> and <c>**801**</c>
+    /// as <c>*801**</c>. A stray <c>*</c> earlier on the line (<c>3*5 e **uno**</c>) opened an italic
+    /// run, its first candidate closer failed, and the forward search took the SECOND asterisk of
+    /// <c>**uno**</c> as its closer — <c>3&lt;i&gt;5 e *&lt;/i&gt;uno**</c>, the bold destroyed and
+    /// both of its halves left on screen. A <c>**</c> (or <c>__</c>) is a token of its own: the
+    /// single-marker scan steps over it, so the bold pairs with itself and the stray star stays
+    /// literal.
+    /// </para>
+    /// <para>
+    /// AND THE SEARCH STOPS AT A MARKER THAT CAN ONLY OPEN — whitespace before it, a word after it.
+    /// That one begins a run of its own, and a later closer is its partner, not ours: without the
+    /// stop, <c>3*5 e **uno** e *nota*</c> pairs the stray star with the closer of <c>*nota*</c> and
+    /// italicises the whole middle of the line instead of the one word its author marked.
+    /// </para>
     /// </summary>
     static bool Try_AppendRun(StringBuilder html, string text, int position, string marker, string openTag, string closeTag, out int nextPosition)
     {
@@ -368,8 +532,12 @@ public static class TelegramHtml_Renderer
             return false;
 
         var isUnderscore = marker[0] == '_';
+        var isSingleCharacter = marker.Length == 1;
 
         if (isUnderscore && position > 0 && Is_WordCharacter(text[position - 1]))
+            return false;
+
+        if (isSingleCharacter && Is_PartOfDoubledMarker(text, position))
             return false;
 
         var contentStart = position + marker.Length;
@@ -380,6 +548,15 @@ public static class TelegramHtml_Renderer
             var closing = text.IndexOf(marker, searchFrom, StringComparison.Ordinal);
 
             if (closing < 0)
+                return false;
+
+            if (isSingleCharacter && Is_PartOfDoubledMarker(text, closing))
+            {
+                searchFrom = closing + 1;
+                continue;
+            }
+
+            if (isSingleCharacter && Can_OnlyOpen(text, closing))
                 return false;
 
             var content = text[contentStart..closing];
@@ -419,6 +596,31 @@ public static class TelegramHtml_Renderer
             // than giving up, so "_a b_c_" still finds the run its author meant.
             searchFrom = closing + 1;
         }
+    }
+
+    /// <summary>
+    /// Whether the marker character at <paramref name="index"/> has a twin beside it — i.e. it is
+    /// half of a <c>**</c> or <c>__</c> (or longer run), which the single-marker scan must neither
+    /// open from nor close on. See <see cref="Try_AppendRun"/> for the 2026-09-11 report.
+    /// </summary>
+    static bool Is_PartOfDoubledMarker(string text, int index)
+    {
+        var marker = text[index];
+
+        return (index > 0 && text[index - 1] == marker)
+            || (index + 1 < text.Length && text[index + 1] == marker);
+    }
+
+    /// <summary>
+    /// A marker with whitespace before it and text after it cannot close anything — it can only
+    /// open a run of its own. Only reached for a candidate AFTER the opener, so the character
+    /// before it always exists.
+    /// </summary>
+    static bool Can_OnlyOpen(string text, int index)
+    {
+        return char.IsWhiteSpace(text[index - 1])
+            && index + 1 < text.Length
+            && !char.IsWhiteSpace(text[index + 1]);
     }
 
     /// <summary>

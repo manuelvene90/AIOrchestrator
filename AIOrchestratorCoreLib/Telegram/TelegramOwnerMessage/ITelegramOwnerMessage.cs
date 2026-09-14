@@ -64,4 +64,24 @@ public interface ITelegramOwnerMessage
     /// thread root — see TelegramUpdates_Parser, where that test lives.
     /// </summary>
     string? ReplyToText { get; }
+
+    /// <summary>
+    /// The message_id of the message the owner replied to (Telegram's own <c>reply_to_message</c>),
+    /// or null when this is not a real reply — SAME thread-root rule as <see cref="ReplyToText"/>,
+    /// applied by <c>TelegramUpdates_Parser.Get_ReplyToMessageId_OrNull</c>: in a forum topic every
+    /// message carries a reply pointing at the topic's root, so a target equal to the thread id is
+    /// bookkeeping, not the owner pointing at anything.
+    ///
+    /// <para>
+    /// Owner directive 2026-09-11, after a supervisor's reply in fincanva-5 landed after the owner's
+    /// NEXT message and read as the answer to that one — this is the inbound half of native-reply
+    /// threading; the id lets the SUPERVISOR'S reply thread back onto the owner's own message.
+    /// </para>
+    /// <para>
+    /// CAN BE SET WHILE <see cref="ReplyToText"/> IS NULL — a reply to a message with no text (a
+    /// photo with no caption, say) carries an id but no text to quote. That is correct, not a bug: the
+    /// two fields answer different questions.
+    /// </para>
+    /// </summary>
+    long? ReplyToMessageId { get; }
 }

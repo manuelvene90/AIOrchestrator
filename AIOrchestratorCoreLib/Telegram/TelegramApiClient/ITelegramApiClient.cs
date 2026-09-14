@@ -50,6 +50,25 @@ public interface ITelegramApiClient
     Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The same send, threaded onto another message via Telegram's native reply (Bot API
+    /// <c>reply_parameters</c>) — owner directive 2026-09-11, after a supervisor's reply in
+    /// fincanva-5 landed after the owner's NEXT message and read as the answer to that one instead.
+    ///
+    /// <para>
+    /// DEFAULT-IMPLEMENTED as the unthreaded send, on purpose: the ~12 fakes across the suite that
+    /// implement this interface predate reply threading, and a client (real or fake) that has not
+    /// been taught to thread still SENDS — it just loses the link, never the message. Only
+    /// <see cref="TelegramApiClientModel"/> overrides it for real.
+    /// </para>
+    /// </summary>
+    Task<long?> Send_HtmlReply_Async(long? messageThreadId, string html, long replyToMessageId, TelegramSendSounds sound, CancellationToken cancellationToken)
+        => Send_HtmlMessage_Async(messageThreadId, html, sound, cancellationToken);
+
+    /// <summary>The plain-text twin of <see cref="Send_HtmlReply_Async"/> — the HTML fallback's own fallback.</summary>
+    Task<long?> Send_MessageReply_Async(long? messageThreadId, string text, long replyToMessageId, TelegramSendSounds sound, CancellationToken cancellationToken)
+        => Send_Message_Async(messageThreadId, text, sound, cancellationToken);
+
+    /// <summary>
     /// Telegram's own "is typing…" bubble (<c>sendChatAction</c>). It is not a message: nothing lands
     /// in the topic and nobody is notified. The client shows it in the chat header for about five
     /// seconds and clears it the moment the bot's next message arrives, so a wait longer than that

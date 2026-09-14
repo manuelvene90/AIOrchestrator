@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Tests.Kit;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Running;
@@ -11,9 +12,9 @@ namespace AIOrchestratorCoreLib.Tests.Running;
 public class ShutdownGraceRuleTests
 {
     [Fact]
-    public void TheThreeWaits_AreStrictlyNested_ForTheDefaultTurnTimeout()
+    public void TheThreeWaits_AreStrictlyNested_ForTheLongestDefaultTurn()
     {
-        var turn = ShutdownGrace_Rule.DEFAULT_TURN_TIMEOUT;
+        var turn = ShutdownGrace_Rule.DEFAULT_LONGEST_TURN_TIMEOUT;
 
         var drain = ShutdownGrace_Rule.Compute_DrainGrace(turn);
         var engine = ShutdownGrace_Rule.Compute_EngineStopGrace(turn);
@@ -25,12 +26,32 @@ public class ShutdownGraceRuleTests
         Assert.Equal(host, ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT);
     }
 
+    /// <summary>
+    /// THE HOST IS SIZED FOR THE LONGEST TURN, NOT THE COMMON ONE — a braked member's two hours since
+    /// 2026-09-11. Sized for thirty minutes, a stop during a long member turn would cut its drain.
+    /// </summary>
     [Fact]
-    public void TheInstalledHostTimeout_IsWellAboveTheDefault30Seconds_AndBelowTheSystemdUnit()
+    public void TheHostTimeout_CoversTheLongestDefaultTurn_WhichIsTheMemberCeiling()
     {
-        // deploy/systemd/aiorchestrator.service: TimeoutStopSec=2400 — systemd must SIGKILL last.
-        Assert.True(ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT > TimeSpan.FromMinutes(35), $"host timeout is {ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT}");
-        Assert.True(ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT < TimeSpan.FromSeconds(2400), $"host timeout is {ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT}");
+        Assert.Equal(AIOrchestratorCoreLib.Running.RunnerConfigs.RunnerConfigs_Factory.DEFAULT_MEMBER_TURN_TIMEOUT, ShutdownGrace_Rule.DEFAULT_LONGEST_TURN_TIMEOUT);
+        Assert.Null(ShutdownGrace_Rule.Describe_Mismatch_OrNull(ShutdownGrace_Rule.DEFAULT_LONGEST_TURN_TIMEOUT, ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT));
+    }
+
+    /// <summary>
+    /// SYSTEMD MUST SIGKILL LAST, read from the unit itself rather than from a number copied into this
+    /// file — the copy said 2400 while the rule it guarded moved, which is the second-copy failure
+    /// CLAUDE.md decision 12 names.
+    /// </summary>
+    [Fact]
+    public void TheSystemdUnit_OutlastsTheHostTimeout()
+    {
+        var unit = KitRepoFiles.Find(Path.Combine("deploy", "systemd", "aiorchestrator.service"));
+        Assert.NotNull(unit);
+
+        var line = File.ReadAllLines(unit!).Single(text => text.StartsWith("TimeoutStopSec=", StringComparison.Ordinal));
+        var unitTimeout = TimeSpan.FromSeconds(int.Parse(line["TimeoutStopSec=".Length..]));
+
+        Assert.True(ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT < unitTimeout, $"host timeout {ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT} is not below the unit's {unitTimeout}");
     }
 
     [Fact]
@@ -39,9 +60,11 @@ public class ShutdownGraceRuleTests
         Assert.Null(ShutdownGrace_Rule.Describe_Mismatch_OrNull(TimeSpan.FromMinutes(30), ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT));
         Assert.Null(ShutdownGrace_Rule.Describe_Mismatch_OrNull(TimeSpan.FromMinutes(10), ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT));
 
-        var warning = ShutdownGrace_Rule.Describe_Mismatch_OrNull(TimeSpan.FromMinutes(60), ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT);
+        Assert.Null(ShutdownGrace_Rule.Describe_Mismatch_OrNull(TimeSpan.FromMinutes(120), ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT));
+
+        var warning = ShutdownGrace_Rule.Describe_Mismatch_OrNull(TimeSpan.FromMinutes(180), ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT);
         Assert.NotNull(warning);
-        Assert.Contains("60 min", warning);
+        Assert.Contains("180 min", warning);
         Assert.Contains("will cut the drain", warning);
     }
 }

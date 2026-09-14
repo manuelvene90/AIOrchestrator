@@ -44,6 +44,9 @@ internal sealed class StreamSessionProcess : IDisposable
     long _lastByteTicksUtc = DateTime.UtcNow.Ticks;
     double _costBaselineUsd;
 
+    /// <summary>Set by the first echo of one of our messages, never cleared — see <c>Read_Line</c> in <see cref="Send_AndAwaitResult_Async"/>.</summary>
+    bool _echoesOurMessages;
+
     public string SessionId { get; }
     public DateTime StartedUtc { get; } = DateTime.UtcNow;
 
@@ -143,6 +146,29 @@ internal sealed class StreamSessionProcess : IDisposable
     {
         var stopwatch = Stopwatch.StartNew();
 
+        // Per TURN, deliberately: the event is emitted at the CHANGE, not every turn (measured 1 in
+        // 6 and 1 in 3), so remembering the last value seen is the caller's job — here it must be
+        // possible to say "nothing new arrived in this turn" and mean it.
+        JsonObject? rateLimitInfo = null;
+
+        // EVERY MESSAGE THIS TURN COULD HAVE ENDED ON, in order. Kept because this loop is the last
+        // place they are visible: once the result event arrives, the earlier ones are gone from
+        // everything downstream, and a background sub-agent returning after the report re-opens the
+        // turn and hands the entry to a later message. SupersededFinals_Rule decides which of these
+        // the result did not keep.
+        List<(string? MessageId, string Text)> finalLooking = [];
+
+        // WHAT THE SESSION SAID WHEN NOBODY HAD ASKED — see Read_Line below. Filed ahead of this
+        // turn's answer, never as it.
+        List<string> unprompted = [];
+        var promptWritten = false;
+        var ourMessageEchoed = false;
+
+        // (1) Whatever the process wrote since the last turn ended was written while no message of
+        // ours was outstanding, so none of it can be this message's answer.
+        while (_lines.Reader.TryRead(out var waiting))
+            Read_Line(waiting);
+
         try
         {
             await _process.StandardInput.WriteAsync(StreamUserMessage_Json.Build_Line(prompt).AsMemory(), cancellationToken);
@@ -162,19 +188,8 @@ internal sealed class StreamSessionProcess : IDisposable
         // start. Silence means "nothing since we asked", never "nothing since the turn before".
         Interlocked.Exchange(ref _lastByteTicksUtc, DateTime.UtcNow.Ticks);
 
+        promptWritten = true;
         var deadline = DateTime.UtcNow + timeout;
-
-        // Per TURN, deliberately: the event is emitted at the CHANGE, not every turn (measured 1 in
-        // 6 and 1 in 3), so remembering the last value seen is the caller's job — here it must be
-        // possible to say "nothing new arrived in this turn" and mean it.
-        JsonObject? rateLimitInfo = null;
-
-        // EVERY MESSAGE THIS TURN COULD HAVE ENDED ON, in order. Kept because this loop is the last
-        // place they are visible: once the result event arrives, the earlier ones are gone from
-        // everything downstream, and a background sub-agent returning after the report re-opens the
-        // turn and hands the entry to a later message. SupersededFinals_Rule decides which of these
-        // the result did not keep.
-        List<string> finalLooking = [];
 
         while (true)
         {
@@ -182,44 +197,19 @@ internal sealed class StreamSessionProcess : IDisposable
 
             if (_lines.Reader.TryRead(out var line))
             {
-                var json = StreamEvent_Reader.Parse_OrNull(line);
+                var json = Read_Line(line);
 
-                // The result is logged ENRICHED, everything else verbatim. The event states the
-                // PROCESS's running cost, and a reader of the log (/tail, /log) has no baseline to
-                // difference it against — so the turn's own figure is stamped on here, beside the
-                // raw one, where it is known. CLAUDE.md decision 10: one reader, one number. Without
-                // it /tail showed 0.0366 then 0.0422 for two turns the channel recorded as 0.0366
-                // and 0.0056, which is the kind of disagreement that costs an afternoon.
-                if (json == null || !StreamEvent_Reader.Is_Result(json))
-                    _onRawLine(line);
-
-                // Not JSON, or JSON this version does not know: skipped, never fatal. The format is
-                // undocumented and a line we cannot read is the expected cost of that.
                 if (json == null)
                     continue;
 
-                if (StreamEvent_Reader.Is_RateLimitEvent(json))
-                {
-                    rateLimitInfo = StreamEvent_Reader.Read_RateLimitInfo_OrNull(json) ?? rateLimitInfo;
-                    continue;
-                }
-
-                if (!StreamEvent_Reader.Is_Result(json))
-                {
-                    if (TurnResult.SupersededFinals_Rule.Is_FinalLooking(json))
-                        finalLooking.Add(StreamEvent_Reader.Read_AssistantText(json));
-
-                    continue;
-                }
-
                 stopwatch.Stop();
 
-                var result = Build_Result(0, timedOut: false, json, stopwatch.Elapsed, finalLooking);
+                var result = Build_Result(0, timedOut: false, json, stopwatch.Elapsed, TurnResult.SupersededFinals_Rule.Texts(finalLooking), unprompted);
 
                 json[StreamSessionProcess_Words.TURN_COST_KEY] = result.TotalCostUsd;
                 _onRawLine(json.ToJsonString());
 
-                return StreamTurnOutcome.Completed(result, rateLimitInfo);
+                return StreamTurnOutcome.Completed(result, rateLimitInfo, unprompted.Count);
             }
 
             if (!IsAlive)
@@ -240,6 +230,92 @@ internal sealed class StreamSessionProcess : IDisposable
             }
 
             await Wait_ForALine_Async(cancellationToken);
+        }
+
+        // THE RESULT EVENT WHEN IT ANSWERS THE MESSAGE WE WROTE, null for every other line.
+        //
+        // A SESSION CAN ANSWER SOMETHING WE NEVER SENT. A background task it started finishes, the
+        // CLI wakes it, and it runs a whole turn on its own — init, text, result — with nobody
+        // awaiting. Observed 2026-09-11 on fincanva-5: a staging watcher finished at 12:51, the
+        // supervisor wrote "Staging now serves the corrected table", and that result sat in the pipe
+        // until the owner's next message, whose turn took it as its answer. Each turn after that
+        // returned the reply to the message before it, sixteen in a row, until the daemon restarted —
+        // and the last real answer was never posted at all.
+        //
+        // So a result is this message's only once the CLI has echoed the message back (the echo is
+        // taken at the moment the message enters a turn, so a message merged into a running
+        // unprompted turn is echoed inside it and the one result that follows answers both).
+        // A result before the echo answered something else: it is set aside, and filed ahead of the
+        // real answer so the owner still gets what the session wrote.
+        //
+        // A CLI THAT NEVER ECHOES KEEPS THE OLD RULE — first result wins — because demanding an echo
+        // it will never send would turn every answer into an unprompted one. _echoesOurMessages is
+        // set by the first echo this process sends; before it, only (1) above protects the turn.
+        //
+        // The unprompted turn's cost is not differenced here: the baseline stays where it was, so it
+        // lands in this turn's figure — spent by this session, reported once, never lost.
+        JsonObject? Read_Line(string line)
+        {
+            var json = StreamEvent_Reader.Parse_OrNull(line);
+
+            // The result is logged ENRICHED, everything else verbatim. The event states the
+            // PROCESS's running cost, and a reader of the log (/tail, /log) has no baseline to
+            // difference it against — so the turn's own figure is stamped on here, beside the
+            // raw one, where it is known. CLAUDE.md decision 10: one reader, one number. Without
+            // it /tail showed 0.0366 then 0.0422 for two turns the channel recorded as 0.0366
+            // and 0.0056, which is the kind of disagreement that costs an afternoon.
+            if (json == null || !StreamEvent_Reader.Is_Result(json))
+                _onRawLine(line);
+
+            // Not JSON, or JSON this version does not know: skipped, never fatal. The format is
+            // undocumented and a line we cannot read is the expected cost of that.
+            if (json == null)
+                return null;
+
+            if (StreamEvent_Reader.Is_UserReplay(json))
+            {
+                if (promptWritten)
+                {
+                    ourMessageEchoed = true;
+                    _echoesOurMessages = true;
+                }
+
+                return null;
+            }
+
+            if (StreamEvent_Reader.Is_RateLimitEvent(json))
+            {
+                rateLimitInfo = StreamEvent_Reader.Read_RateLimitInfo_OrNull(json) ?? rateLimitInfo;
+                return null;
+            }
+
+            if (!StreamEvent_Reader.Is_Result(json))
+            {
+                TurnResult.SupersededFinals_Rule.Track(finalLooking, json);
+                return null;
+            }
+
+            if (promptWritten && (ourMessageEchoed || !_echoesOurMessages))
+                return json;
+
+            // An error result answered nobody either, and its text is the CLI's ("Not logged in"),
+            // not the session's: it is logged, never filed as something the session said.
+            if (!StreamEvent_Reader.Is_ErrorResult(json))
+            {
+                var text = StreamEvent_Reader.Read_ResultText(json);
+
+                unprompted.AddRange(TurnResult.SupersededFinals_Rule.Select_Superseded(TurnResult.SupersededFinals_Rule.Texts(finalLooking), text));
+
+                if (text.Trim().Length > 0)
+                    unprompted.Add(text);
+            }
+
+            finalLooking.Clear();
+
+            json[StreamSessionProcess_Words.UNPROMPTED_KEY] = true;
+            _onRawLine(json.ToJsonString());
+
+            return null;
         }
     }
 
@@ -293,27 +369,38 @@ internal sealed class StreamSessionProcess : IDisposable
         }
     }
 
-    ITurnResult Build_Result(int exitCode, bool timedOut, JsonObject? resultJson, TimeSpan elapsed, IReadOnlyList<string>? finalLooking = null)
+    /// <remarks>
+    /// <paramref name="unprompted"/> rides in FRONT of the superseded finals: both are things the
+    /// session wrote that are not this turn's answer, both must be filed before it, and the
+    /// unprompted ones were written first.
+    /// </remarks>
+    ITurnResult Build_Result(int exitCode, bool timedOut, JsonObject? resultJson, TimeSpan elapsed, IReadOnlyList<string>? finalLooking = null, IReadOnlyList<string>? unprompted = null)
     {
         if (resultJson == null)
             return TurnResult_Parser.Parse(exitCode, timedOut, string.Empty, Stderr, elapsed);
 
         var parsed = TurnResult_Parser.Parse(exitCode, timedOut, resultJson.ToJsonString(), Stderr, elapsed, finalLooking);
+        IReadOnlyList<string> notTheAnswer = unprompted is { Count: > 0 } ? [.. unprompted, .. parsed.SupersededFinals] : parsed.SupersededFinals;
 
         // THE COST IS THE PROCESS'S RUNNING TOTAL, not this turn's — measured, and the reason this
         // class keeps a baseline at all. Reported straight through, one turn would carry the sum of
         // every turn before it; and because a NEW process resuming the same transcript starts again
         // from zero, the baseline belongs to the process rather than to the session.
-        if (parsed.TotalCostUsd == null)
-            return parsed;
+        var turnCost = parsed.TotalCostUsd;
 
-        var turnCost = Math.Max(0, parsed.TotalCostUsd.Value - _costBaselineUsd);
-        _costBaselineUsd = parsed.TotalCostUsd.Value;
+        if (parsed.TotalCostUsd != null)
+        {
+            turnCost = Math.Max(0, parsed.TotalCostUsd.Value - _costBaselineUsd);
+            _costBaselineUsd = parsed.TotalCostUsd.Value;
+        }
+
+        if (parsed.TotalCostUsd == null && ReferenceEquals(notTheAnswer, parsed.SupersededFinals))
+            return parsed;
 
         return TurnResult_Factory.Create(
             parsed.ExitCode, parsed.TimedOut, parsed.IsError, parsed.Subtype, parsed.ResultText, parsed.SessionId,
             turnCost, parsed.DurationMs, parsed.DurationApiMs, parsed.NumTurns, parsed.ApiErrorStatus,
-            parsed.RawStdout, parsed.RawStderr, parsed.Elapsed, supersededFinals: parsed.SupersededFinals);
+            parsed.RawStdout, parsed.RawStderr, parsed.Elapsed, supersededFinals: notTheAnswer);
     }
 
     int Read_ExitCode()

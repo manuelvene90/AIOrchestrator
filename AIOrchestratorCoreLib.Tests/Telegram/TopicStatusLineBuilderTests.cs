@@ -373,8 +373,9 @@ public class TopicStatusLineBuilderTests
             Last(sevenWords),
             NOW, aMessageIsAlreadyPosted: false).Split('\n');
 
-        Assert.Equal("• imp-9 · migrate every supervisor session · working · under 5 min", lines[1]);
-        Assert.Equal("last · migrate every supervisor session onto worktree", lines[2]);
+        // The ellipsis is new on 2026-09-11: an unmarked cut read on the phone as a broken sentence.
+        Assert.Equal("• imp-9 · migrate every supervisor session… · working · under 5 min", lines[1]);
+        Assert.Equal("last · migrate every supervisor session onto worktree…", lines[2]);
     }
 
     /// <summary>

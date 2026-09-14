@@ -178,6 +178,41 @@ public static class StreamEventJson_Builder
         };
     }
 
+    /// <summary>
+    /// ONE OF THE BRIDGE'S MESSAGES WRITTEN BACK, as <c>--replay-user-messages</c> makes the real CLI
+    /// do. Measured 2026-09-11 on 2.1.268: it follows <c>init</c> (and the rate-limit event when
+    /// there is one) and precedes the turn's first assistant event.
+    /// </summary>
+    public static string Build_UserReplay(string sessionId, string text)
+    {
+        return Serialise(new JsonObject
+        {
+            ["type"] = "user",
+            ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
+            ["parent_tool_use_id"] = null,
+            ["session_id"] = sessionId,
+            ["uuid"] = Guid.NewGuid().ToString(),
+            ["isReplay"] = true,
+        });
+    }
+
+    /// <summary>
+    /// A BACKGROUND TASK FINISHING — what makes the real CLI start a turn nobody asked for. Measured
+    /// 2026-09-11 on 2.1.268: this event, then <c>init</c>, then the turn, with no echo in it.
+    /// </summary>
+    public static string Build_TaskNotification(string sessionId, string taskId)
+    {
+        return Serialise(new JsonObject
+        {
+            ["type"] = TYPE_SYSTEM,
+            ["subtype"] = "task_notification",
+            ["task_id"] = taskId,
+            ["status"] = "completed",
+            ["uuid"] = Guid.NewGuid().ToString(),
+            ["session_id"] = sessionId,
+        });
+    }
+
     /// <summary>`PreToolUse:Bash` names event `PreToolUse`; a bare name is its own event.</summary>
     static string Read_HookEvent(string hookName)
     {

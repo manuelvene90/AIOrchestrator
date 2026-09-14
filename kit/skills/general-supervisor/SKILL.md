@@ -458,6 +458,25 @@ Lead with the orchestrations that need the owner (blocked/questions), end with t
 one line each. Never append to other orchestrations' channels — the owner answers in each
 orchestration's own Telegram topic; the bridge routes per-topic.
 
+**A STATE IS READ NOW, NEVER COPIED FROM YOUR OWN CHANNEL.** Your earlier entries are history: an
+orchestration you called stuck an hour ago may have worked ever since. Before you tell the owner
+another orchestration is blocked, idle or not answering — in a digest or in passing — read its
+state in THIS turn:
+
+- **Mid-turn is WORKING.** In its `orchestrator.log.jsonl`, a `print turn <orch>/<member>/<n>
+  started` (or `stream turn …`) with no later `turn_ended <member> turn <n>` means that member is in
+  the middle of a turn right now, however quiet its channel looks.
+- **An app `[agent]` entry is not evidence of a stall.** "The owner is still waiting for your
+  reply", "unread traffic" and the like are coaching the app sends a session, and they have fired
+  against sessions that were mid-turn.
+- **Blocked on the owner means a line that says so** — a `- [?]` in its PLAN.md, a `BLOCKED ON
+  OWNER`, or a question still open in its topic — and then say WHAT they are waiting for.
+
+Observed 2026-09-11: the general supervisor told the owner twice that two AI-Orch solos were
+"blocked without an answer", repeating its own entry from 15:20 at 16:54 without re-reading either
+of them. One was two minutes into a turn; the other was holding, as the owner had asked, for the
+owner's go on a deploy.
+
 ## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
 
 **Your boot command printed `AIORCH_RUNNER`. If it says `print`, READ `reference/print-runner.md`

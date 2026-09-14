@@ -75,6 +75,14 @@ public sealed record OpenQuestionRecord
     public long MessageId { get; init; }
     public required string OrchId { get; init; }
     public required string Text { get; init; }
+
+    /// <summary>
+    /// The question line alone, as the owner reads it at the top of <see cref="Text"/> — what a
+    /// repeat is recognised by (<see cref="Decisions.QuestionSupersede_Decider.Find_Repeat_OrNull"/>).
+    /// Null on a record saved before it existed.
+    /// </summary>
+    public string? Prompt { get; init; }
+
     public DateTime AskedUtc { get; init; }
     public long ButtonGroupId { get; init; }
     public DateTime? DeadlineUtc { get; init; }

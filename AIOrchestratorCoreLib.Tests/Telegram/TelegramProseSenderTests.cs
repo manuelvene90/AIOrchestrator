@@ -169,6 +169,52 @@ public class TelegramProseSenderTests
         Assert.Equal(MARKDOWN, Assert.Single(client.PlainSends));
     }
 
+    /// <summary>
+    /// THE REPLY THREADS — owner directive 2026-09-11: without an id nothing changes (the two
+    /// existing methods are hit, never the reply ones), and with one the reply methods are hit
+    /// carrying that same id.
+    /// </summary>
+    [Fact]
+    public async Task Send_WithAReplyId_GoesThroughTheReplyMethod_CarryingThatId()
+    {
+        var client = new ScriptedTelegram_Fake();
+        var log = new CollectingLog_Fake();
+
+        await TelegramProse_Sender.Send_Rendered_Async(
+            client, log, "orch-1", 99, RENDERED, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None, replyToMessageId: 555);
+
+        Assert.Equal(RENDERED, Assert.Single(client.HtmlReplySends));
+        Assert.Equal(555, client.LastHtmlReplyToMessageId);
+        Assert.Empty(client.HtmlSends);
+    }
+
+    [Fact]
+    public async Task Send_WithNoReplyId_BehavesExactlyAsBefore_HittingThePlainSendMethods()
+    {
+        var client = new ScriptedTelegram_Fake();
+        var log = new CollectingLog_Fake();
+
+        await TelegramProse_Sender.Send_Rendered_Async(
+            client, log, "orch-1", 99, RENDERED, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None);
+
+        Assert.Equal(RENDERED, Assert.Single(client.HtmlSends));
+        Assert.Empty(client.HtmlReplySends);
+    }
+
+    [Fact]
+    public async Task Send_WithAReplyId_WhenTelegramRefusesTheHtml_FallsBackToThePlainReply_WithTheSameId()
+    {
+        var client = new ScriptedTelegram_Fake { HtmlFailure = Parse_Refusal() };
+        var log = new CollectingLog_Fake();
+
+        await TelegramProse_Sender.Send_Rendered_Async(
+            client, log, "orch-1", 99, RENDERED, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None, replyToMessageId: 555);
+
+        Assert.Equal(MARKDOWN, Assert.Single(client.PlainReplySends));
+        Assert.Equal(555, client.LastPlainReplyToMessageId);
+        Assert.Empty(client.PlainSends);
+    }
+
     static TelegramApiException Parse_Refusal()
     {
         return new TelegramApiException(
@@ -208,6 +254,14 @@ internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
     public int HtmlAttempts { get; private set; }
     public int LastPlainButtonCount { get; private set; }
 
+    // THE REPLY TWIN OF EACH SEND, recorded separately from the plain lists above — the only way a
+    // test can tell "went out threaded" from "went out unthreaded" apart, since both land in the
+    // same chat as far as the payload's TEXT goes.
+    public List<string> HtmlReplySends { get; } = [];
+    public List<string> PlainReplySends { get; } = [];
+    public long? LastHtmlReplyToMessageId { get; private set; }
+    public long? LastPlainReplyToMessageId { get; private set; }
+
     public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         HtmlAttempts++;
@@ -221,6 +275,30 @@ internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
         HtmlSends.Add(html);
 
         return Task.FromResult<long?>(11);
+    }
+
+    public Task<long?> Send_HtmlReply_Async(long? messageThreadId, string html, long replyToMessageId, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        HtmlAttempts++;
+        LastHtmlReplyToMessageId = replyToMessageId;
+
+        if (HtmlThrowsCancellation)
+            throw new OperationCanceledException();
+
+        if (HtmlFailure != null)
+            throw HtmlFailure;
+
+        HtmlReplySends.Add(html);
+
+        return Task.FromResult<long?>(11);
+    }
+
+    public Task<long?> Send_MessageReply_Async(long? messageThreadId, string text, long replyToMessageId, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        LastPlainReplyToMessageId = replyToMessageId;
+        PlainReplySends.Add(text);
+
+        return Task.FromResult<long?>(12);
     }
 
     public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)

@@ -11,7 +11,9 @@ internal sealed class RunnerConfigsModel(
     TimeSpan memberDigestWindow,
     TimeSpan silenceLimit,
     string sessionMemoryMax,
-    IReadOnlyList<string> rejections) : IRunnerConfigs
+    IReadOnlyList<string> rejections,
+    TimeSpan memberSilenceLimit,
+    TimeSpan memberTurnTimeout) : IRunnerConfigs
 {
     readonly IReadOnlyDictionary<SessionRoles, IRoleRunnerConfig> _roles = roles;
 
@@ -21,6 +23,8 @@ internal sealed class RunnerConfigsModel(
     public TimeSpan CoalesceWindow { get; } = coalesceWindow;
     public TimeSpan MemberDigestWindow { get; } = memberDigestWindow;
     public TimeSpan SilenceLimit { get; } = silenceLimit;
+    public TimeSpan MemberSilenceLimit { get; } = memberSilenceLimit;
+    public TimeSpan MemberTurnTimeout { get; } = memberTurnTimeout;
     public string SessionMemoryMax { get; } = sessionMemoryMax;
     public IReadOnlyList<string> Rejections { get; } = rejections;
 

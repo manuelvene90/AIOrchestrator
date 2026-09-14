@@ -96,4 +96,60 @@ public class PrintTurnTriggerTests
     {
         Assert.Equal(inbound, PrintTurn_Trigger.Is_Inbound(role, author));
     }
+    // ----- app notes ride a turn, and never start one (ai-orch-1, 2026-09-11) -----
+
+    static readonly DateTime NOW = new(2026, 9, 11, 16, 0, 0, DateTimeKind.Local);
+
+    const string NOTES =
+        "## [1] FROM owner — 2026-09-11 15:38 — via Telegram\n\nfai tutto\n" +
+        "## [2] FROM app — 2026-09-11 15:40 — [agent] PLAN.md is behind your verdicts\n\nUpdate PLAN.md.\n" +
+        "## [3] FROM app — 2026-09-11 15:41 — [agent] the owner is still waiting for your reply\n\nReply now.\n" +
+        "## [4] FROM app — 2026-09-11 15:48 — [agent] turn_ended solo-1 turn 5 — success\n\nrequest_id: o/solo-1/5\n" +
+        "## [5] FROM app — 2026-09-11 15:49 — orchestration 'ai-orch-2' started\n\nthe owner saw this one\n" +
+        "## [6] FROM app — 2026-09-11 12:00 — [agent] an old note\n\nfrom this morning\n";
+
+    [Fact]
+    public void AnAgentNote_IsTheAppsTaggedEntry_NotItsTurnRecord_NorWhatTheOwnerSaw()
+    {
+        var entries = ChannelEntry_Parser.Parse_All(NOTES);
+
+        Assert.Equal([2, 3, 6], entries.Where(PrintTurn_Trigger.Is_AgentNote).Select(entry => entry.Index));
+    }
+
+    [Fact]
+    public void TheNotesThatRide_AreUndelivered_Recent_AndNeverInbound()
+    {
+        var entries = ChannelEntry_Parser.Parse_All(NOTES);
+
+        // [6] is past the window; [2] and [3] ride — and none of them would ever START a turn.
+        Assert.Equal([2, 3], PrintTurn_Trigger.Select_AgentNotes(entries, Cursor(), NOW).Select(entry => entry.Index));
+        Assert.Equal([1], PrintTurn_Trigger.Select_Pending(SessionRoles.Solo, entries, Cursor()).Select(entry => entry.Index));
+
+        // Delivered once, never again.
+        Assert.Equal([3], PrintTurn_Trigger.Select_AgentNotes(entries, Cursor(entries[1]), NOW).Select(entry => entry.Index));
+    }
+
+    [Fact]
+    public void AtMostTheNewestFiveNotesRide()
+    {
+        var text = string.Concat(Enumerable.Range(1, 8).Select(index => $"## [{index}] FROM app — 2026-09-11 15:{index:00} — [agent] note {index}\n\nbody\n"));
+
+        Assert.Equal([4, 5, 6, 7, 8], PrintTurn_Trigger.Select_AgentNotes(ChannelEntry_Parser.Parse_All(text), Cursor(), NOW).Select(entry => entry.Index));
+    }
+
+    [Fact]
+    public void ADeliveredNote_SurvivesTheCursorsPrune_SoItDoesNotRideAgain()
+    {
+        var entries = ChannelEntry_Parser.Parse_All(NOTES);
+        var cursor = TurnCursor_Factory.CreateFrom_Delivered(Cursor(), SessionRoles.Solo, entries, [entries[0], entries[2]]);
+
+        // The NEXT turn's advance is where the prune runs over what was delivered before it — a note
+        // it did not recognise as deliverable would be dropped there and ride the turn after.
+        cursor = TurnCursor_Factory.CreateFrom_Delivered(cursor, SessionRoles.Solo, entries, []);
+
+        Assert.Equal([2], PrintTurn_Trigger.Select_AgentNotes(entries, cursor, NOW).Select(entry => entry.Index));
+
+        // And a note does not move the high-water mark, which is about traffic.
+        Assert.Equal(1, cursor.HighWaterIndex);
+    }
 }

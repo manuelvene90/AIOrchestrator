@@ -10,6 +10,13 @@ namespace AIOrchestratorCoreLib.Formatting;
 /// drop the protocol prefix, keep the leading clause (which is the task; everything after "so",
 /// "because", a comma or a dash is justification or detail), then drop filler words if it is still
 /// long. Deterministic: no model call on a UI refresh path.
+///
+/// <para>
+/// THE RESULT IS PLAIN TEXT. PULSE sends it with no <c>parse_mode</c>, so any Markdown marker in an
+/// agent's subject reaches the phone literally — and a word-count cut can split a <c>**…**</c> pair,
+/// leaving half of it dangling. Observed 2026-09-11: <c>rev-7: idle — GO.** 278e14d35 is final.
+/// deep</c>. The emphasis and code markers are stripped BEFORE anything else reads the subject.
+/// </para>
 /// </summary>
 public static partial class TextSummary_Formatter
 {
@@ -37,6 +44,31 @@ public static partial class TextSummary_Formatter
     [GeneratedRegex(@"\s+(so that|so|because|since|in order to|which|while|after|before|when|then)\s+|[,;:]|\s+[—–-]\s+|\s*\(", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
     private static partial Regex ClauseBreak_Regex();
 
+    /// <summary>
+    /// Bold/bold-italic asterisk runs, removed wherever they stand. A SINGLE <c>*</c> is left alone:
+    /// without its partner it cannot be told apart from "2 * 3", and it is the doubled marker that
+    /// reached the phone.
+    /// </summary>
+    [GeneratedRegex(@"\*{2,}", RegexOptions.Compiled)]
+    private static partial Regex AsteriskRun_Regex();
+
+    /// <summary>
+    /// <c>__bold__</c> markers, removed only at a word's EDGE. An underscore run inside a word is part
+    /// of an identifier (<c>snake__case</c>), and agents write identifiers constantly.
+    /// </summary>
+    [GeneratedRegex(@"(?<![\p{L}\p{N}_])_{2,}|_{2,}(?![\p{L}\p{N}_])", RegexOptions.Compiled)]
+    private static partial Regex UnderscoreRun_Regex();
+
+    [GeneratedRegex(@"^\s*#{1,6}\s+", RegexOptions.Compiled)]
+    private static partial Regex LeadingHeading_Regex();
+
+    /// <summary>
+    /// What a hard cut ends with. It used to end with nothing — the full text is in the activity feed —
+    /// and the owner read <c>GO.** 278e14d35 is final. deep</c> (2026-09-11) as a sentence broken off
+    /// mid-thought, i.e. as a defect. The ellipsis says "there is more", which is the truth.
+    /// </summary>
+    const string TRUNCATION_MARK = "…";
+
     /// <summary>Words that carry no meaning at a glance; dropped only when the label is still too long.</summary>
     static readonly IReadOnlySet<string> FILLER_WORDS = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -49,10 +81,17 @@ public static partial class TextSummary_Formatter
         if (string.IsNullOrWhiteSpace(subject) || maxWords <= 0)
             return string.Empty;
 
-        var stripped = Strip_Bookkeeping(subject.Trim());
+        // FIRST, so neither the bookkeeping patterns nor the word count ever see a marker — and so
+        // the fallback below falls back to plain text, not to the raw subject.
+        var plain = Strip_Markdown(subject);
+
+        if (plain.Length == 0)
+            return string.Empty;
+
+        var stripped = Strip_Bookkeeping(plain);
 
         if (stripped.Length == 0)
-            stripped = subject.Trim();
+            stripped = plain;
 
         var leadingClause = ClauseBreak_Regex().Split(stripped)[0].Trim();
         var words = Split_Words(leadingClause);
@@ -73,11 +112,32 @@ public static partial class TextSummary_Formatter
                 words = withoutFiller;
         }
 
-        // Still long: a hard stop, without an ellipsis — the full text is in the activity feed.
-        if (words.Count > maxWords)
+        // Still long: a hard stop, and it SAYS it is one — see TRUNCATION_MARK for the 2026-09-11
+        // report that retired the old "no ellipsis" rule. Summarising above is unchanged and still
+        // comes first; the mark only ever appears where words were actually cut away.
+        var truncated = words.Count > maxWords;
+
+        if (truncated)
             words = [.. words.Take(maxWords)];
 
-        return string.Join(' ', words).TrimEnd('.', ',', ';', ':', '-', '—', '–');
+        var summary = string.Join(' ', words).TrimEnd('.', ',', ';', ':', '-', '—', '–');
+
+        return truncated ? summary + TRUNCATION_MARK : summary;
+    }
+
+    /// <summary>
+    /// Removes the Markdown an agent's subject carries — emphasis runs, backticks, a heading marker —
+    /// and collapses the spaces they leave, so the rest of this class works on words alone.
+    /// </summary>
+    static string Strip_Markdown(string subject)
+    {
+        var text = subject.Replace("`", string.Empty);
+
+        text = AsteriskRun_Regex().Replace(text, string.Empty);
+        text = UnderscoreRun_Regex().Replace(text, string.Empty);
+        text = LeadingHeading_Regex().Replace(text, string.Empty);
+
+        return string.Join(' ', Split_Words(text));
     }
 
     /// <summary>Peels every bookkeeping layer, so "[imp-2] Task 3: brief — do X" reduces to "do X".</summary>

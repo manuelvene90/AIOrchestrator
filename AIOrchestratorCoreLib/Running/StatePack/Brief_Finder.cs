@@ -91,6 +91,25 @@ public static class Brief_Finder
         return longest;
     }
 
+    /// <summary>
+    /// Whether ONE entry hands the member a NEW task — what retires its progress note
+    /// (<see cref="StatePack_Locator.Archive_ProgressNote_IfNewTask"/>). Stricter than
+    /// <see cref="Find_OrNull"/>: no "longest recent entry" fallback, which would retire a note on any
+    /// long message; and not <c>GO AHEAD</c>, which says carry on with the task already in hand.
+    /// </summary>
+    public static bool Is_NewTask(IChannelEntry entry)
+    {
+        if (entry.Author != ChannelAuthors.Supervisor)
+            return false;
+
+        if (entry.Type != null)
+            return BRIEF_TYPES.Contains(entry.Type, StringComparer.OrdinalIgnoreCase);
+
+        return Has_TaskMarker(entry.Subject) && !entry.Subject.TrimStart().StartsWith(CARRY_ON_MARKER, StringComparison.OrdinalIgnoreCase);
+    }
+
+    const string CARRY_ON_MARKER = "GO AHEAD";
+
     public static bool Has_TaskMarker(string subject)
     {
         var trimmed = subject.TrimStart();

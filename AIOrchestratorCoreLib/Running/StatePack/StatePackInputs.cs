@@ -24,7 +24,8 @@ public sealed class StatePackInputs(
     string? planText,
     IReadOnlyList<string> gitLines,
     IReadOnlyList<IChannelEntry> ownerTail,
-    IReadOnlyList<string> unavailable)
+    IReadOnlyList<string> unavailable,
+    string? progressNote = null)
 {
     public string OrchId { get; } = orchId;
     public string MemberId { get; } = memberId;
@@ -53,4 +54,7 @@ public sealed class StatePackInputs(
 
     /// <summary>"<section>: <why>" for every input the reader could not produce.</summary>
     public IReadOnlyList<string> Unavailable { get; } = unavailable;
+
+    /// <summary>The member's own progress note (<see cref="StatePack_Locator.PROGRESS_FILE_NAME"/>), null when it kept none.</summary>
+    public string? ProgressNote { get; } = progressNote;
 }

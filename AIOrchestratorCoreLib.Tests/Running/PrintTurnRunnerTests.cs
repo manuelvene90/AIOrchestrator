@@ -38,7 +38,7 @@ public class PrintTurnRunnerTests
         try
         {
             using var cancellation = new CancellationTokenSource();
-            var turn = runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromMinutes(5), cancellation.Token);
+            var turn = runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromMinutes(5), null, cancellation.Token);
 
             await Task.Delay(1500);
             cancellation.Cancel();
@@ -59,7 +59,7 @@ public class PrintTurnRunnerTests
 
         try
         {
-            var result = await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(2), CancellationToken.None);
+            var result = await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(2), null, CancellationToken.None);
 
             Assert.True(result.TimedOut);
             Assert.Equal("timeout", AIOrchestratorCoreLib.Running.TurnOutcomes.Describe(result));
@@ -99,8 +99,8 @@ public class PrintTurnRunnerTests
 
         try
         {
-            await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(30), CancellationToken.None);
-            await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(30), CancellationToken.None);
+            await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(30), null, CancellationToken.None);
+            await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(30), null, CancellationToken.None);
 
             Assert.Equal(2, sandbox.Calls);
         }

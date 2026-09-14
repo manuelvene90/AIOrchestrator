@@ -13,4 +13,7 @@ public static class StreamSessionProcess_Words
     /// disagreement CLAUDE.md decision 10 exists to prevent.
     /// </summary>
     public const string TURN_COST_KEY = "aiorch_turn_cost_usd";
+
+    /// <summary>Stamped on a result that answered no message of ours, so /tail shows it was set aside and why.</summary>
+    public const string UNPROMPTED_KEY = "aiorch_unprompted";
 }

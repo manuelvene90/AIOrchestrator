@@ -56,6 +56,26 @@ public sealed class FakeClaudeTurn
     /// </summary>
     public bool ToolUseBetween { get; init; }
 
+    /// <summary>
+    /// A WHOLE TURN THE SESSION RUNS ON ITS OWN, right after this one's result — a background task
+    /// it started finishing and waking it. Its text, or null for none. The bridge's next message
+    /// finds it already waiting in the pipe (fincanva-5, 2026-09-11).
+    /// </summary>
+    public string? UnpromptedResultAfter { get; init; }
+
+    /// <summary>
+    /// The same, but emitted when this turn's MESSAGE arrives and before the turn itself: the
+    /// unprompted turn finished while the bridge's message sat queued, so its result reaches the
+    /// bridge after the message was written and before the message's echo.
+    /// </summary>
+    public string? UnpromptedResultBefore { get; init; }
+
+    /// <summary>What an unprompted turn adds to the process's running cost.</summary>
+    public double UnpromptedCostUsd { get; init; } = 0.0042;
+
+    /// <summary>Suppresses the <c>--replay-user-messages</c> echo: a CLI that does not honour the flag.</summary>
+    public bool NoReplay { get; init; }
+
     public int Resolve_ExitCode()
     {
         if (ExitCode != null)
@@ -83,6 +103,10 @@ public sealed class FakeClaudeTurn
             RateLimit = node["rate_limit"] as JsonObject ?? defaults.RateLimit,
             AssistantMessages = Read_Strings(node["assistant_messages"]) ?? defaults.AssistantMessages,
             ToolUseBetween = node["tool_use_between"]?.GetValue<bool>() ?? defaults.ToolUseBetween,
+            UnpromptedResultAfter = node["unprompted_result_after"]?.GetValue<string>() ?? defaults.UnpromptedResultAfter,
+            UnpromptedResultBefore = node["unprompted_result_before"]?.GetValue<string>() ?? defaults.UnpromptedResultBefore,
+            UnpromptedCostUsd = node["unprompted_cost_usd"]?.GetValue<double>() ?? defaults.UnpromptedCostUsd,
+            NoReplay = node["no_replay"]?.GetValue<bool>() ?? defaults.NoReplay,
         };
     }
 

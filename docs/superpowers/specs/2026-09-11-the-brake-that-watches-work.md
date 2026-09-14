@@ -1,6 +1,7 @@
 # The brake that watches work, not the clock — and the advisory that does not arrive
 
 **Date:** 2026-09-11 · **Status:** PROPOSED, nothing built · **Owner:** Nathan
+**Revision 3 (same day):** §9 added — §5.1 and §5.2 measured, and the design built on `stage/28`: the silence brake for members, a two-hour member ceiling, loop detection and a progress note. §9 supersedes §4.0's "nothing has to be invented" and §5's hope that a delivered advisory would stop the kills.
 **Revision 2 (same day):** §4.0 added — the silence brake ALREADY EXISTS on the stream runner and the two brakes are swapped between the roles, so this is a reuse and not a design. The supervisor argument in §4.1 as first written was a wrong-altitude measurement and is corrected in place.
 **Provenance:** measured on the VPS on 2026-09-11 while verifying the night's consumption, as a
 follow-on to `2026-09-10-independent-review/REPORT.md`. Not part of the token plan
@@ -267,3 +268,48 @@ that were correctly parked.
   than it looks: §4.0 proposes reusing that mechanism.
 - **Nobody has reviewed this spec.** On this line of work, six consecutive changes were found
   defective by review after their author had read the diff and seen green. Including this author's.
+
+---
+
+## 9. Revision 3 — measured, then built (2026-09-11, solo of ai-orch-2)
+
+**Copies read.** Live data on the VPS, read-only, metadata only (journal, `print-session.json`,
+transcript structure, `/tmp/aiorch-soft-boundary` counters). Code: `stage/28-the-print-brake-watches-life`,
+forked from `ours/integration` at `9394971`.
+
+### 9.1 §5.1 — the advisory is delivered; it does not stop the kills
+- **58 deadline kills** since 09-09 [measured]. **29 came before the hook was deployed at all**: the
+  service ran unrestarted from 09-09 20:08Z to 09-10 09:43Z and the hook was merged 09-10 09:39Z
+  [measured]. "25 of 57" was a measurement window, not a delivery fault.
+- With the hook installed, **26 of 29** killed turns received it [measured]. The 3 misses were each
+  inside one long call (a sub-agent 17 min, a Bash 29 min, a Skill 5 min): a PreToolUse advisory needs
+  a next call to ride on.
+- It lands a median **7.1 min** into the turn and the turn then runs a median **22.9 min** more to the
+  kill [measured]. Delivery is not the problem; the turns keep working.
+- Two defects found on the way, parked: the hook counts **0 of 2,574** sub-agent calls, contrary to
+  its header [measured]; and a `resume = transcript` print turn (solo, communicator) loses every
+  skill-frontmatter hook after turn 1, Stop hooks included [measured on the solo's own session].
+
+### 9.2 §5.2 — the 17 supervisor silence-kills were all false, from a bug already fixed
+- **17 of 17** fired about 5 s after a new prompt, on an idle supervisor, with the "silence" equal to
+  the time since the previous turn [measured]; fixed by `b5f7607` (the clock starts at the prompt) and
+  **none since** the 09-09 13:10Z restart [measured]. Neither brake had ever caught a real hang.
+
+### 9.3 What §4.0 missed
+The print runner read the child's output only at exit, and the stream brake counts bytes only — a
+running build or a parent waiting on a sub-agent writes none. So the stream brake could not be
+"given" to members as it was: liveness had to come from more than bytes.
+
+### 9.4 Built on stage/28 — the owner's choices of 16:19 and 16:31: "implement the best practice"
+| piece | what it does |
+|---|---|
+| silence brake (members) | an implementer/reviewer print turn is killed only after `printRunner.memberSilenceMinutes` (15) with no output, no write to its transcript or a sub-agent's, and no process running below it; "cannot tell" counts as alive |
+| member ceiling | `printRunner.memberTurnTimeoutMinutes` (120) while the brake is on; everyone else keeps 30; shutdown, host and the systemd unit (`TimeoutStopSec=7800`) are sized for the longest |
+| loop detection | OpenHands' stuck-detector rules on the turn's own transcript: same call + same result ×4, same call failing ×3, A/B alternating ×3 |
+| progress note | members append one line per verified step to `<orch>/<member>/progress.md`; the next pack hands it back |
+| closing turn | every brake kill gets the deadline kill's closing turn, and the records say which brake fired |
+
+**Not measured yet:** how long the cut turns actually needed; whether the loop thresholds fit our
+turns; the Windows process-tree reader (no Windows machine). The §6 "done when" error-rate target can
+only be read after a deploy.
+

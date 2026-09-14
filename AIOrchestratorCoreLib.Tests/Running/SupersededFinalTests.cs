@@ -181,6 +181,55 @@ public class SupersededFinalTests
         Assert.Equal(["one", "two"], SupersededFinals_Rule.Select_Superseded(["one", "two", "three"], "three"));
     }
 
+    /// <summary>One content block of message <paramref name="messageId"/>, as the CLI streams it: its own event, stop_reason null.</summary>
+    static string Block(string messageId, JsonObject content)
+    {
+        return new JsonObject
+        {
+            ["type"] = "assistant",
+            ["message"] = new JsonObject { ["id"] = messageId, ["role"] = "assistant", ["content"] = new JsonArray(content), ["stop_reason"] = null },
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// NARRATION IS NOT A FINAL MESSAGE. fincanva-6, 2026-09-11: "Verifying the merge before I tell
+    /// Nathan it's live." arrived as a text-only event and then a tool call under the SAME message id;
+    /// read one event at a time it looked final, and it reached the owner's phone as a message.
+    /// </summary>
+    [Fact]
+    public void ATextFollowedByAToolCallInTheSameMessage_IsNarration_NotAFinal()
+    {
+        var stdout = string.Join('\n',
+            Block("msg_1", new JsonObject { ["type"] = "text", ["text"] = "Verifying the merge before I tell Nathan it's live." }),
+            Block("msg_1", new JsonObject { ["type"] = "tool_use", ["id"] = "toolu_1", ["name"] = "Bash" }),
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}""",
+            Block("msg_2", new JsonObject { ["type"] = "text", ["text"] = "Ho controllato io il merge." }),
+            """{"type":"result","subtype":"success","is_error":false,"result":"Ho controllato io il merge.","session_id":"s","num_turns":2}""");
+
+        var result = TurnResult_Parser.Parse_Stream(0, timedOut: false, stdout, string.Empty, TimeSpan.FromSeconds(3));
+
+        Assert.Empty(result.SupersededFinals);
+    }
+
+    /// <summary>
+    /// The case the rule exists for is untouched: a report written as a message of its own — nothing
+    /// else under its id — and then replaced by a later message is still filed.
+    /// </summary>
+    [Fact]
+    public void AReportThatWasAMessageOfItsOwn_IsStillSuperseded_WhenALaterMessageReplacesIt()
+    {
+        var stdout = string.Join('\n',
+            Block("msg_1", new JsonObject { ["type"] = "text", ["text"] = "REPORT — the parser, all nineteen thousand characters" }),
+            Block("msg_2", new JsonObject { ["type"] = "tool_use", ["id"] = "toolu_2", ["name"] = "Read" }),
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"ok"}]}}""",
+            Block("msg_3", new JsonObject { ["type"] = "text", ["text"] = "LATE — the sub-agent came back" }),
+            """{"type":"result","subtype":"success","is_error":false,"result":"LATE — the sub-agent came back","session_id":"s","num_turns":3}""");
+
+        var result = TurnResult_Parser.Parse_Stream(0, timedOut: false, stdout, string.Empty, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["REPORT — the parser, all nineteen thousand characters"], result.SupersededFinals);
+    }
+
     [Fact]
     public void TheStreamReader_TakesTheRESULTLine_NotTheLastJsonLine()
     {

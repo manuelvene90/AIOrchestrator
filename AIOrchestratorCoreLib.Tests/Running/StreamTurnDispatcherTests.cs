@@ -56,7 +56,7 @@ public class StreamTurnDispatcherTests
         // A1b.2 — the command line, in full. --verbose is not decoration: the CLI refuses
         // --output-format stream-json without it.
         Assert.Equal(
-            ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-hook-events",
+            ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-hook-events", "--replay-user-messages",
              "--name", $"{orchId}-{memberId}", "--session-id", state.SessionId, "--model", "haiku", "--dangerously-skip-permissions"],
             args);
 
@@ -308,6 +308,98 @@ public class StreamTurnDispatcherTests
 
         Assert.DoesNotContain(afterFirstTurn, message => message.Contains("said nothing for", StringComparison.Ordinal));
         Assert.Equal(startsWhenTheFirstTurnEnded, Lines(harness, STREAM_START).Count);
+    }
+
+    /// <summary>
+    /// Two briefs, and between them the session answers something nobody sent — a background task it
+    /// started finishing (<paramref name="scenario"/> says when the reply reaches the bridge). What the
+    /// implementer's channel must hold afterwards, in order: the first report, the unprompted reply
+    /// filed on its own, the second report. The defect put the unprompted reply in the second
+    /// report's place and left the second report in the pipe for the turn after.
+    /// </summary>
+    static async Task<(IReadOnlyList<AIOrchestratorCoreLib.Channels.ChannelEntry.IChannelEntry> Entries, IReadOnlyList<string> Logged)> Run_TwoBriefs_WithAnUnpromptedReply(string scenario)
+    {
+        using var harness = new PrintRunnerTestHarness("implementer:stream");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer, runner: SessionRunners.Stream);
+
+        List<string> logged = [];
+        harness.Log.EntryLogged += entry => logged.Add(entry.Message);
+
+        harness.Write_Scenario(scenario);
+        var dispatcher = harness.Create_Dispatcher();
+
+        Append_Supervisor(harness, orchId, memberId, "BRIEF", "first");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
+
+        Append_Supervisor(harness, orchId, memberId, "GO AHEAD", "second");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 2, PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        var entries = ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId)).Where(entry => entry.Author == ChannelAuthors.Implementer).ToList();
+        return (entries, logged);
+    }
+
+    [Fact]
+    public async Task AReplyNobodyWaitedFor_IsFiledOnItsOwn_AndTheNextBriefGetsITSAnswer()
+    {
+        // fincanva-5, 2026-09-11: the unprompted reply was written at 12:51 and was already waiting
+        // in the pipe when the owner's next message went in at 12:56.
+        var (entries, logged) = await Run_TwoBriefs_WithAnUnpromptedReply(
+            """{"turns":[{"result":"online"},{"result":"REPORT — one\n\nfirst","unprompted_result_after":"UNPROMPTED — staging\n\nnow serves the table"},{"result":"REPORT — two\n\nsecond"}]}""");
+
+        Assert.Equal(["REPORT — one", "UNPROMPTED — staging", "REPORT — two"], entries.Select(entry => entry.Subject));
+        Assert.Contains(logged, message => message.Contains("had written 1 message(s) on its own", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AReplyThatLandsAfterTheMessageButBeforeItsEcho_IsNotItsAnswer()
+    {
+        // The other ordering: the unprompted turn finished while the bridge's message sat queued, so
+        // its result arrives AFTER the write — nothing was waiting to be drained, and only the echo
+        // says the result is not this message's.
+        var (entries, _) = await Run_TwoBriefs_WithAnUnpromptedReply(
+            """{"turns":[{"result":"online"},{"result":"REPORT — one\n\nfirst"},{"result":"REPORT — two\n\nsecond","unprompted_result_before":"UNPROMPTED — staging\n\nnow serves the table"}]}""");
+
+        Assert.Equal(["REPORT — one", "UNPROMPTED — staging", "REPORT — two"], entries.Select(entry => entry.Subject));
+    }
+
+    [Fact]
+    public async Task ACliThatNeverEchoes_StillGetsEveryAnswer_AndAWaitingReplyIsStillSetAside()
+    {
+        // The direction that must not break: demanding an echo from a CLI that never sends one would
+        // turn every answer into an "unprompted" reply. Without the echo the first result is the
+        // answer, as before — and a reply already waiting before the write is still not one.
+        var (entries, _) = await Run_TwoBriefs_WithAnUnpromptedReply(
+            """{"default":{"no_replay":true},"turns":[{"result":"online"},{"result":"REPORT — one\n\nfirst","unprompted_result_after":"UNPROMPTED — staging\n\nnow serves the table"},{"result":"REPORT — two\n\nsecond"}]}""");
+
+        Assert.Equal(["REPORT — one", "UNPROMPTED — staging", "REPORT — two"], entries.Select(entry => entry.Subject));
+    }
+
+    /// <summary>
+    /// THE TURN SAYS WHICH OWNER MESSAGE ITS ANSWER ANSWERS, so the phone can thread it (owner,
+    /// 2026-09-11: "non c'è modo di linkare domande e risposte? Tipo con un rispondi?"). The bridge's
+    /// half — which Telegram message became the owner entry — is seeded here as the bridge would.
+    /// </summary>
+    [Fact]
+    public async Task TheSupervisorsAnswer_IsLinkedToTheOwnerMessageItsTurnWasGiven()
+    {
+        using var harness = new PrintRunnerTestHarness("supervisor:stream");
+        var memberId = harness.Register_Supervisor();
+        harness.Write_Scenario("""{"default":{"result":"ack\n\nnoted"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+        var ownerChannel = harness.Paths.Get_OwnerChannelFile("repo-1");
+
+        Append_Owner(harness, "repo-1", "start on the parser");
+        var ownerEntry = Assert.Single(ChannelEntry_Parser.Parse_All(File.ReadAllText(ownerChannel)), entry => entry.Author == ChannelAuthors.Owner);
+        dispatcher.ReplyLinks.Record_OwnerMessage(ownerChannel, ownerEntry.Index, telegramMessageId: 4242);
+
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Supervisor, "repo-1", memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        var answer = Assert.Single(ChannelEntry_Parser.Parse_All(File.ReadAllText(ownerChannel)), entry => entry.Author == ChannelAuthors.Supervisor);
+
+        Assert.Equal(4242, dispatcher.ReplyLinks.Find_AnsweredTelegramMessage_OrNull(ownerChannel, answer.Index));
+        Assert.Null(dispatcher.ReplyLinks.Find_AnsweredTelegramMessage_OrNull(ownerChannel, ownerEntry.Index));
     }
 
     [Fact]

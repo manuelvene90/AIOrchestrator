@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
@@ -34,22 +35,60 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// than inventing a verdict (decision 21).
 /// </para>
 /// <para>
+/// "PENDING" IS NOT A MEASUREMENT WHILE A TURN IS IN FLIGHT — measured in production 2026-09-10, the
+/// first time this line ever fired, and it was FALSE. <c>imp-3</c> filed entry [72] ("Done. F1 closed,
+/// origin/dev merged, all gates re-run") at 14:06:13; the digest released it at 14:11:15 and the
+/// supervisor turn started carrying it; this said at 14:12:43 that the supervisor "was never handed"
+/// [72]; that turn ended in success at 14:12:58. The cursor advances beside
+/// <c>Advance_Cursors</c> — i.e. when a turn COMPLETES — so for the whole of a turn's run the entries
+/// it is delivering still read as pending. So the pending set alone cannot answer this, and the
+/// caller passes what the dispatcher alone knows: the identities the in-flight turn is carrying.
+/// </para>
+/// <para>
+/// AND THE ANSWER IS A CONDITIONAL, NOT A SUPPRESSION. An in-flight turn that FAILS leaves its
+/// entries pending, and the member is gone by then — so hiding the line whenever a turn is in flight
+/// would trade a false alarm for a silent drop. Entries nothing is carrying are a WARNING (they are
+/// being left behind, full stop); entries a turn is carrying are an INFO naming the condition, which
+/// is what the caller distinguishes with <c>AnythingDropped</c>.
+/// </para>
+/// <para>
+/// BUT NOTHING RESOLVES THAT CONDITIONAL, AND THE COMMIT THAT ADDED IT OVERSOLD THIS (review finding,
+/// 2026-09-10). Once <c>Close_Member</c> has run, <c>TurnSources_Resolver</c> skips the member for
+/// good: the entries can never be pending again, the archived-undelivered warning only iterates
+/// RESOLVED sources, and no later close re-examines them. So if that turn does fail, the INFO line
+/// above is the only record that will ever exist — better than a WARNING with a false claim, and not
+/// the same thing as the drop being caught. Closing it properly means one warning on the turn's
+/// failure path, which already holds the pending set and can ask the store which members are closed;
+/// that is left as an OPEN item rather than added untested at the end of a long session, and it is
+/// written down in <c>docs/superpowers/specs/2026-09-10-brief-for-a-fresh-agent.md</c>.
+/// </para>
+/// <para>
 /// It lives here rather than in <c>BridgeEngineModel</c> because that file takes no new lines by
 /// inertia (`.claude/rules/code-conventions.md`): the engine keeps the one call.
 /// </para>
 /// </summary>
 public static class UndeliveredSpokeTraffic_Reporter
 {
-    public static void Log_BeforeClosing(ISupervisionPaths paths, IOrchestrationLog log, string orchId, string memberId)
+    /// <param name="deliveringIdentities">
+    /// The entry identities the supervisor's IN-FLIGHT turn is carrying right now, from
+    /// <c>IPrintTurnDispatcher.Get_DeliveringIdentities</c> — empty when no turn is running. Passed in
+    /// rather than read here so this stays a pure function over the files plus one fact, and so a
+    /// caller has to state what it knows: a caller that passed nothing would resurrect the false
+    /// alarm of 2026-09-10 silently, which is why there is no default.
+    /// </param>
+    public static void Log_BeforeClosing(ISupervisionPaths paths, IOrchestrationLog log, string orchId, string memberId, IReadOnlySet<string> deliveringIdentities)
     {
         try
         {
-            var describedPending = Describe_Pending_OrNull(paths, orchId, memberId);
+            var describedPending = Describe_Pending_OrNull(paths, orchId, memberId, deliveringIdentities);
 
             if (describedPending == null)
                 return;
 
-            log.Log_Warning(orchId, describedPending);
+            if (describedPending.Value.AnythingDropped)
+                log.Log_Warning(orchId, describedPending.Value.Line);
+            else
+                log.Log_Info(orchId, describedPending.Value.Line);
         }
         catch (Exception ex)
         {
@@ -64,7 +103,7 @@ public static class UndeliveredSpokeTraffic_Reporter
     /// orchestration (nobody was going to be handed anything), no cursor for this spoke, or an empty
     /// pending set. Split out so a test can read the sentence without a log sink.
     /// </summary>
-    public static string? Describe_Pending_OrNull(ISupervisionPaths paths, string orchId, string memberId)
+    public static (string Line, bool AnythingDropped)? Describe_Pending_OrNull(ISupervisionPaths paths, string orchId, string memberId, IReadOnlySet<string> deliveringIdentities)
     {
         var stateFile = PrintSessionState_Store.Get_StateFile(paths, SessionRoles.Supervisor, orchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID);
         var state = PrintSessionState_Store.Read_OrNull(stateFile);
@@ -84,7 +123,31 @@ public static class UndeliveredSpokeTraffic_Reporter
         if (pending.Count == 0)
             return null;
 
-        return $"'{memberId}' is being closed with {pending.Count} entr{(pending.Count == 1 ? "y" : "ies")} its supervisor was never handed — the spoke stops being a source, so these stay in its channel file and reach nobody: "
-            + string.Join("; ", pending.Select(entry => $"[{entry.Index}] {entry.Subject}"));
+        // The same identity the cursor is keyed on (ChannelEntry_Digest), never the agent-written
+        // [n] — decision 12. The dispatcher computed these from the very entries it launched with.
+        var inFlight = pending.Where(entry => deliveringIdentities.Contains(ChannelEntry_Digest.Compute(entry))).ToList();
+        var dropped = pending.Where(entry => !deliveringIdentities.Contains(ChannelEntry_Digest.Compute(entry))).ToList();
+
+        if (dropped.Count == 0)
+            return ($"'{memberId}' is being closed while a supervisor turn in flight is already carrying {Describe_Count(inFlight.Count)} of its channel — nothing is dropped if that turn completes, and if it fails these stay in the channel file and reach nobody: "
+                + Describe_Entries(inFlight), false);
+
+        var line = $"'{memberId}' is being closed with {Describe_Count(dropped.Count)} its supervisor was never handed — the spoke stops being a source, so these stay in its channel file and reach nobody: "
+            + Describe_Entries(dropped);
+
+        if (inFlight.Count > 0)
+            line += $" — and a supervisor turn in flight is carrying {Describe_Count(inFlight.Count)} more, which arrive only if that turn completes: " + Describe_Entries(inFlight);
+
+        return (line, true);
+    }
+
+    static string Describe_Count(int count)
+    {
+        return $"{count} entr{(count == 1 ? "y" : "ies")}";
+    }
+
+    static string Describe_Entries(IEnumerable<IChannelEntry> entries)
+    {
+        return string.Join("; ", entries.Select(entry => $"[{entry.Index}] {entry.Subject}"));
     }
 }

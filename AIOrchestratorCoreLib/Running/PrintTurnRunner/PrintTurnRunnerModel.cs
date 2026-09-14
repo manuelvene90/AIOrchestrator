@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using AIOrchestratorCoreLib.Running.ClaudeInvocation;
 using AIOrchestratorCoreLib.Running.SessionSandbox;
+using AIOrchestratorCoreLib.Running.TurnLiveness;
 using AIOrchestratorCoreLib.Running.TurnResult;
 
 namespace AIOrchestratorCoreLib.Running.PrintTurnRunner;
@@ -29,17 +30,24 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation, ISessio
         string workingDirectory,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
+        ITurnSilenceBrake? brake,
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
+        var startedUtc = DateTime.UtcNow;
 
         var invocation = _sandbox.Wrap(_invocation);
 
         using var process = Process.Start(Build_StartInfo(invocation, arguments, workingDirectory, environment))
             ?? throw new Exception($"Process.Start returned null for '{invocation.Executable}'");
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        // READ AS IT ARRIVES, NOT AT EXIT, so the silence brake can see output go by. Chunks rather
+        // than lines: the text handed to the parser must be byte-for-byte what the process wrote, and
+        // a line reader would normalise the newlines. The stamp is shared by both pipes — the stream
+        // brake counts stderr as a sign of life too, and so does this one.
+        long lastOutputTicks = 0;
+        var stdoutTask = Drain_Async(process.StandardOutput, () => Interlocked.Exchange(ref lastOutputTicks, DateTime.UtcNow.Ticks));
+        var stderrTask = Drain_Async(process.StandardError, () => Interlocked.Exchange(ref lastOutputTicks, DateTime.UtcNow.Ticks));
 
         try
         {
@@ -58,10 +66,24 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation, ISessio
 
         var timedOut = false;
         var cancelled = false;
+        string? brakeKill = null;
 
         try
         {
-            await process.WaitForExitAsync(timeoutSource.Token);
+            if (brake == null)
+                await process.WaitForExitAsync(timeoutSource.Token);
+            else
+                brakeKill = await Wait_UnderBrake_OrKillLine_Async(process, brake, startedUtc, () => Interlocked.Read(ref lastOutputTicks), timeoutSource.Token);
+
+            if (brakeKill != null)
+            {
+                // KILLED LIKE A TIMEOUT, BECAUSE IT IS ONE — same tree kill, same exit -1, and a turn
+                // that had been working before it went silent earns the same closing turn. Only the
+                // reason differs, and the result carries it.
+                timedOut = true;
+                Kill_Tree_BestEffort(process);
+                process.WaitForExit();
+            }
         }
         catch (OperationCanceledException)
         {
@@ -90,7 +112,65 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation, ISessio
         // reader falls back to the legacy single-document reading when there is no `result` line, so
         // a caller that still passes `--output-format json` — the runner's own unit tests do — is
         // parsed exactly as it always was.
-        return TurnResult_Parser.Parse_Stream(timedOut ? -1 : process.ExitCode, timedOut, stdout, stderr, stopwatch.Elapsed);
+        var result = TurnResult_Parser.Parse_Stream(timedOut ? -1 : process.ExitCode, timedOut, stdout, stderr, stopwatch.Elapsed);
+
+        return brakeKill == null ? result : TurnResult_Factory.CreateFrom_BrakeKill(result, brakeKill);
+    }
+
+    /// <summary>
+    /// Waits for the process to exit, asking the brake every <see cref="ITurnSilenceBrake.PollInterval"/>
+    /// whether the turn is still alive. Returns the brake's kill line, or null when the process exited
+    /// on its own. The deadline and the app's shutdown both arrive through <paramref name="token"/>
+    /// and leave as the same <see cref="OperationCanceledException"/> they always did, so the caller's
+    /// reading of which one it was is untouched.
+    /// </summary>
+    static async Task<string?> Wait_UnderBrake_OrKillLine_Async(
+        Process process, ITurnSilenceBrake brake, DateTime startedUtc, Func<long> readLastOutputTicks, CancellationToken token)
+    {
+        while (true)
+        {
+            using var tick = CancellationTokenSource.CreateLinkedTokenSource(token);
+            tick.CancelAfter(brake.PollInterval);
+
+            try
+            {
+                await process.WaitForExitAsync(tick.Token);
+                return null;
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                // Only the tick: time to look.
+            }
+
+            var lastOutputTicks = readLastOutputTicks();
+            DateTime? lastOutputUtc = lastOutputTicks == 0 ? null : new DateTime(lastOutputTicks, DateTimeKind.Utc);
+
+            var killLine = brake.Decide_Kill_OrNull(DateTime.UtcNow, startedUtc, lastOutputUtc, process.Id);
+
+            if (killLine != null)
+                return killLine;
+        }
+    }
+
+    /// <summary>
+    /// Everything the pipe carries, exactly as written, stamping each chunk as it lands. Ends when the
+    /// process closes the pipe, which it does by exiting or by being killed.
+    /// </summary>
+    static async Task<string> Drain_Async(StreamReader reader, Action onChunk)
+    {
+        var text = new StringBuilder();
+        var buffer = new char[8192];
+
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer, CancellationToken.None);
+
+            if (read == 0)
+                return text.ToString();
+
+            text.Append(buffer, 0, read);
+            onChunk();
+        }
     }
 
     static ProcessStartInfo Build_StartInfo(IClaudeInvocation invocation, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlyDictionary<string, string> environment)

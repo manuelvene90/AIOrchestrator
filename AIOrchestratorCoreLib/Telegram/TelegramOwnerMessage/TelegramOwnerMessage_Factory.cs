@@ -23,9 +23,13 @@ public static class TelegramOwnerMessage_Factory
 
         // Trailing and optional like the two above it: every caller that predates documents means
         // "no document", and only the parser has one to pass.
-        TelegramDocumentRef? document = null)
+        TelegramDocumentRef? document = null,
+
+        // Trailing and optional like the rest: every caller that predates reply threading means
+        // "not a reply" — see ITelegramOwnerMessage.ReplyToMessageId.
+        long? replyToMessageId = null)
     {
         return new TelegramOwnerMessageModel(
-            updateId, messageId, chatId, fromUserId, messageThreadId, text, photoFileId, voiceFileId, replyToText, isAppComposed, document);
+            updateId, messageId, chatId, fromUserId, messageThreadId, text, photoFileId, voiceFileId, replyToText, isAppComposed, document, replyToMessageId);
     }
 }

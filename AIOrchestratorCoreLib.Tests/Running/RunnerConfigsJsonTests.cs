@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Status;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Running;
@@ -106,8 +107,8 @@ public class RunnerConfigsJsonTests : IDisposable
     ///
     /// <para>
     /// <c>BridgeEngineModel</c> tells a supervisor it owes a member a verdict once that member's
-    /// channel has been quiet for <c>IMPLEMENTER_NUDGE_MINUTES</c> = 8, and that clock runs from the
-    /// member's REPORT — so a digest of D minutes leaves 8 − D for the turn to be released, run and
+    /// channel has been quiet for <see cref="Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES"/>, and that clock
+    /// runs from the member's REPORT — so a digest of D minutes leaves that window minus D for the turn to be released, run and
     /// answer. Probed by the review at D = 10: at minute 9 the app called the supervisor 9.6 min late
     /// on a verdict for a report IT WAS HOLDING, and spent that quiet spell's single nudge token on
     /// the false alarm, so a genuinely stalled supervisor got nothing.
@@ -118,6 +119,35 @@ public class RunnerConfigsJsonTests : IDisposable
     /// digest DOWN is always allowed — that is the direction of today's behaviour.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// THE COUPLING ITSELF, PINNED — the half that was prose until 2026-09-10.
+    ///
+    /// <para>
+    /// The ceiling exists only because of the nudge window, and while that window was a private
+    /// <c>const int</c> in <c>BridgeEngineModel</c> the relationship could only be RESTATED in two
+    /// docstrings. Now it is asserted: raise the nudge and this stays green, lower it to at or below the
+    /// digest ceiling and this goes red — which is the whole point, because at that moment the app
+    /// would start nudging a supervisor for a report it is itself holding at the DEFAULT setting, with
+    /// nothing in <c>config.json</c> to refuse.
+    /// </para>
+    /// <para>
+    /// It asserts the INEQUALITY and not a formula: the three minutes of headroom are a judgement about
+    /// how long a released turn needs to run and answer, not an arithmetic identity, so a test that
+    /// recomputed the ceiling would only restate the code (`.claude/rules/code-conventions.md`).
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheDigestCeiling_LeavesTimeForTheTurnItDelays_BeforeTheAppNudgesForIt()
+    {
+        Assert.True(
+            RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW.TotalMinutes < Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES,
+            $"a digest ceiling of {RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW.TotalMinutes:0.#} min against a nudge window of {Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES} min leaves a held report to be nudged for while the app is holding it");
+
+        Assert.True(
+            RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW <= RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW,
+            "the shipped default must be inside the ceiling the config reader enforces");
+    }
+
     [Fact]
     public void ADigestAboveTheCeiling_IsRefusedWithALine_AndTheDefaultIsApplied()
     {
@@ -294,5 +324,46 @@ public class RunnerConfigsJsonTests : IDisposable
         var config = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null, null, null);
 
         Assert.Equal(SessionRunners.Terminal, config.Runners.Get_ForRole(SessionRoles.Implementer).Runner);
+    }
+
+    /// <summary>
+    /// THE MEMBER SILENCE BRAKE'S KEY, read the way the digest window is: absent is the default,
+    /// zero and below are OFF (a minus sign never gives the brake back), an absurd number is refused
+    /// with a line rather than thrown — <c>TimeSpan.FromMinutes(1e11)</c> overflows, and a throw here
+    /// takes the whole config read down on every tick — and a save writes it back.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"printRunner":{}}""", 15.0, false)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":20}}""", 20.0, false)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":0}}""", 0.0, false)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":-3}}""", 0.0, false)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":1e11}}""", 15.0, true)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":"soon"}}""", 15.0, false)]
+    public void TheMemberSilenceLimit_IsReadWithBothEndsDecided(string json, double expectedMinutes, bool refused)
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse(json) as JsonObject);
+
+        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), configs.MemberSilenceLimit);
+        Assert.Equal(refused, configs.Rejections.Any(line => line.Contains(RunnerConfigs_Json.MEMBER_SILENCE_MINUTES_KEY)));
+    }
+
+    [Fact]
+    public void TheMemberSilenceLimit_SurvivesASave()
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""{"printRunner":{"memberSilenceMinutes":22}}""") as JsonObject);
+        var root = new JsonObject();
+
+        RunnerConfigs_Json.Write(root, configs);
+
+        Assert.Equal(TimeSpan.FromMinutes(22), RunnerConfigs_Json.Parse(root).MemberSilenceLimit);
+    }
+
+    [Fact]
+    public void TheMemberSilenceLimit_SurvivesTheCopyFactories()
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""{"printRunner":{"memberSilenceMinutes":22}}""") as JsonObject);
+
+        Assert.Equal(TimeSpan.FromMinutes(22), RunnerConfigs_Factory.Create_WithRole(configs, SessionRoles.Implementer, configs.Get_ForRole(SessionRoles.Implementer)).MemberSilenceLimit);
+        Assert.Equal(TimeSpan.FromMinutes(22), RunnerConfigs_Factory.Create_WithLimits(configs, 4, 2, TimeSpan.FromMinutes(30), TimeSpan.Zero).MemberSilenceLimit);
     }
 }

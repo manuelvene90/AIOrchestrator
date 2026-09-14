@@ -43,7 +43,32 @@ public static class StatePackInputs_Reader
         var gitLines = state.Role == SessionRoles.General ? [] : Read_Git(state.WorkingDirectory, unavailable);
         var ownerTail = ownsTheEndeavour ? Read_OwnerTail(paths, state, unavailable) : [];
 
-        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable);
+        var progressNote = Read_ProgressNote_OrNull(StatePack_Locator.Get_ProgressFile_OrNull(paths, state.Role, state.OrchId, state.MemberId), unavailable);
+
+        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, progressNote);
+    }
+
+    /// <summary>
+    /// The note as the member left it; null when there is none, which is the ordinary case for a
+    /// member that has not started one. An unreadable note is named in the pack's unavailable list
+    /// rather than dropped silently — a member told nothing would re-explore what it had saved.
+    /// </summary>
+    static string? Read_ProgressNote_OrNull(string? progressFile, List<string> unavailable)
+    {
+        if (progressFile == null || !File.Exists(progressFile))
+            return null;
+
+        try
+        {
+            var text = File.ReadAllText(progressFile).Trim();
+
+            return text.Length == 0 ? null : text;
+        }
+        catch (Exception ex)
+        {
+            unavailable.Add($"{StatePack_Locator.PROGRESS_FILE_NAME}: {ex.Message}");
+            return null;
+        }
     }
 
     static IReadOnlyList<IChannelEntry> Read_History(string channelFilePath, List<string> unavailable)

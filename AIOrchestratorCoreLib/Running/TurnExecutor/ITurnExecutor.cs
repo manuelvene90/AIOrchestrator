@@ -44,6 +44,7 @@ public interface ITurnExecutor
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
+        TimeSpan memberSilenceLimit,
         CancellationToken cancellationToken);
 
     /// <summary>

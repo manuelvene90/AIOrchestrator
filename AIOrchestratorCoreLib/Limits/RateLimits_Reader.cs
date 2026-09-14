@@ -163,19 +163,29 @@ public static class RateLimits_Reader
     /// distinct limit WINDOWS. Comparing readings across them is what made /limits lie: on
     /// 2026-08-11 a closed `crm-2` from five days earlier still reported five_hour 99% while every
     /// live session sat at 19%, and 99% is the number the owner was shown. Two rules fix it — an
-    /// expired window is discarded, and a newer window instance REPLACES an older one instead of
-    /// competing with it on percentage.
+    /// expired window is discarded, and the window instance named by the MOST RECENTLY WRITTEN
+    /// probe REPLACES any other instead of competing with it on percentage.
+    ///
+    /// "Most recently written" and not "latest reset stamp": that was the rule until 2026-09-12 and
+    /// it is what made the counter STICK. The weekly window's reset instant moves backwards in
+    /// practice, so a two-day-old probe naming a later reset outranked four live ones and froze the
+    /// weekly reading at 60% while the account sat at 90%. The argument, and the measurement behind
+    /// it, are in <see cref="WindowInstance_Order.Compare_Reading"/>.
     /// </summary>
     public static IReadOnlyList<(string Window, double Percent, DateTime? ResetsAtLocal, string Models)> Read_WorstAcrossSessions(
         IReadOnlyList<string> usageFilePaths,
         DateTime nowLocal)
     {
-        Dictionary<string, (double Percent, DateTime? ResetsAtLocal, SortedSet<string> Models)> worst = [];
+        Dictionary<string, (double Percent, DateTime? ResetsAtLocal, DateTime TakenAtUtc, SortedSet<string> Models)> worst = [];
 
         foreach (var usageFile in usageFilePaths)
         {
             var rawJson = UsageTotals_Reader.Read_Text_Safe(usageFile);
             var modelName = Read_ModelName_OrNull(rawJson) ?? "unknown model";
+
+            // When this probe last learned anything — the tie-breaker between two files that name
+            // different window instances. Never a reason to drop a reading; see Compare_Reading.
+            var takenAtUtc = UsageTotals_Reader.Read_LastWriteUtc_Safe(usageFile);
 
             foreach (var window in Read_Windows(rawJson))
             {
@@ -185,18 +195,18 @@ public static class RateLimits_Reader
 
                 if (!worst.TryGetValue(window.Window, out var known))
                 {
-                    worst[window.Window] = (window.Percent, window.ResetsAtLocal, [modelName]);
+                    worst[window.Window] = (window.Percent, window.ResetsAtLocal, takenAtUtc, [modelName]);
                     continue;
                 }
 
-                var instance = WindowInstance_Order.Compare_Instance(window.ResetsAtLocal, known.ResetsAtLocal);
+                var instance = WindowInstance_Order.Compare_Reading(window.ResetsAtLocal, takenAtUtc, known.ResetsAtLocal, known.TakenAtUtc);
 
-                // A LATER reset stamp is a DIFFERENT, newer window. The percentage being held
-                // describes a window that has since rolled over, so it is not evidence about this
+                // A DIFFERENT window, named by a MORE RECENT reading. The percentage being held
+                // describes a window nothing current is reporting, so it is not evidence about this
                 // one — it is replaced outright rather than max-ed against.
                 if (instance > 0)
                 {
-                    worst[window.Window] = (window.Percent, window.ResetsAtLocal, [modelName]);
+                    worst[window.Window] = (window.Percent, window.ResetsAtLocal, takenAtUtc, [modelName]);
                     continue;
                 }
 
@@ -205,13 +215,19 @@ public static class RateLimits_Reader
 
                 known.Models.Add(modelName);
 
+                // The instance keeps the LATEST moment anything confirmed it, whichever reading wins
+                // on percentage. That is what makes the fold independent of the order the files come
+                // in: a losing instance cannot outrank this one later just because its own newest
+                // reading happened to be visited after our oldest.
+                var confirmedAtUtc = takenAtUtc > known.TakenAtUtc ? takenAtUtc : known.TakenAtUtc;
+
                 // SAME window instance: usage inside one window is cumulative and account-wide, so
                 // the highest reading is the one that constrains you. The stamp always travels with
                 // the percent it came from.
                 if (window.Percent > known.Percent)
-                    worst[window.Window] = (window.Percent, window.ResetsAtLocal, known.Models);
+                    worst[window.Window] = (window.Percent, window.ResetsAtLocal, confirmedAtUtc, known.Models);
                 else
-                    worst[window.Window] = (known.Percent, known.ResetsAtLocal, known.Models);
+                    worst[window.Window] = (known.Percent, known.ResetsAtLocal, confirmedAtUtc, known.Models);
             }
         }
 

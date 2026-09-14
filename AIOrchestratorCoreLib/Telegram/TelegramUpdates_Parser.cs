@@ -200,7 +200,8 @@ public static class TelegramUpdates_Parser
             photoFileId,
             voiceFileId,
             Get_ReplyToText_OrNull(message, threadId),
-            document: document);
+            document: document,
+            replyToMessageId: Get_ReplyToMessageId_OrNull(message, threadId));
     }
 
     /// <summary>
@@ -257,6 +258,31 @@ public static class TelegramUpdates_Parser
         var text = Get_TextOrCaption_OrNull(repliedTo);
 
         return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    /// <summary>
+    /// The message_id of the message this one replies to, or null when it is not a real reply —
+    /// EXACTLY the thread-root rule <see cref="Get_ReplyToText_OrNull"/> already applies, kept as
+    /// its own function rather than folded into that one because a caller wants the id without
+    /// paying for <see cref="Get_TextOrCaption_OrNull"/> on the target, and because the two can
+    /// legitimately disagree: a reply to a message with no text carries an id here and null there.
+    /// </summary>
+    static long? Get_ReplyToMessageId_OrNull(JsonObject message, long? threadId)
+    {
+        if (message["reply_to_message"] is not JsonObject repliedTo)
+            return null;
+
+        var repliedToIdNode = repliedTo["message_id"];
+
+        if (repliedToIdNode == null)
+            return null;
+
+        var repliedToId = repliedToIdNode.GetValue<long>();
+
+        if (threadId != null && repliedToId == threadId.Value)
+            return null;
+
+        return repliedToId;
     }
 
     static string? Get_TextOrCaption_OrNull(JsonObject message)

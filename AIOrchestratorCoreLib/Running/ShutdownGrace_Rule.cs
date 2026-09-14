@@ -50,7 +50,17 @@ public static class ShutdownGrace_Rule
     }
 
     /// <summary>The value Program.cs installs: sized for the default turn timeout. A longer configured timeout is reported at startup (<see cref="Describe_Mismatch_OrNull"/>).</summary>
-    public static TimeSpan HOST_SHUTDOWN_TIMEOUT => Compute_HostShutdownTimeout(DEFAULT_TURN_TIMEOUT);
+    /// <summary>
+    /// THE LONGEST TURN THE DEFAULTS ALLOW — a braked member's two-hour ceiling since 2026-09-11, not
+    /// the thirty minutes everybody else keeps. The host is sized for this, because sizing it for the
+    /// shorter one is exactly how a stop would cut a member's drain (<see cref="TurnTimeout_Rule"/>).
+    /// </summary>
+    public static readonly TimeSpan DEFAULT_LONGEST_TURN_TIMEOUT =
+        RunnerConfigs.RunnerConfigs_Factory.DEFAULT_MEMBER_TURN_TIMEOUT > DEFAULT_TURN_TIMEOUT
+            ? RunnerConfigs.RunnerConfigs_Factory.DEFAULT_MEMBER_TURN_TIMEOUT
+            : DEFAULT_TURN_TIMEOUT;
+
+    public static TimeSpan HOST_SHUTDOWN_TIMEOUT => Compute_HostShutdownTimeout(DEFAULT_LONGEST_TURN_TIMEOUT);
 
     /// <summary>
     /// Null when the installed host timeout covers the configured turn timeout; otherwise one line
@@ -64,6 +74,6 @@ public static class ShutdownGrace_Rule
         if (needed <= installedHostTimeout)
             return null;
 
-        return $"the configured turn timeout ({configuredTurnTimeout.TotalMinutes:0} min) needs a host shutdown timeout of {needed.TotalMinutes:0} min to drain, but the host is installed with {installedHostTimeout.TotalMinutes:0} min — a stop during a long turn will cut the drain. Lower printRunner.turnTimeoutMinutes or raise ShutdownGrace_Rule.DEFAULT_TURN_TIMEOUT (and the unit's TimeoutStopSec above it).";
+        return $"the longest configured turn timeout ({configuredTurnTimeout.TotalMinutes:0} min) needs a host shutdown timeout of {needed.TotalMinutes:0} min to drain, but the host is installed with {installedHostTimeout.TotalMinutes:0} min — a stop during a long turn will cut the drain. Lower printRunner.turnTimeoutMinutes / printRunner.memberTurnTimeoutMinutes, or raise the defaults in RunnerConfigs_Factory (and the unit's TimeoutStopSec above them).";
     }
 }
