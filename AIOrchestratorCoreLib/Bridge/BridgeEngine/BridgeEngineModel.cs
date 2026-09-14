@@ -3880,10 +3880,12 @@ internal sealed class BridgeEngineModel(
 
         var deliveredHere = 0;
 
-        // phone.push, READ ONCE PER APPEND at the point of effect — never cached on this engine, because
-        // the provider re-reads config.json on its write stamp. General is exempt (D8): see
-        // OwnerPush_Policy.Resolve_ModeForChannel for why the concierge's narration is never filtered.
-        var pushMode = OwnerPush_Policy.Resolve_ModeForChannel(_configProvider.Get_Current().Phone.Push, append.Channel.OrchId);
+        // phone.push AND phone.appMessagesRing, READ ONCE PER APPEND at the point of effect, from one
+        // snapshot — never cached on this engine, because the provider re-reads config.json on its write
+        // stamp. General is exempt from the push (D8): see OwnerPush_Policy.Resolve_ModeForChannel for why
+        // the concierge's narration is never filtered. It is not exempt from the sound: EntrySound_Resolver.
+        var phone = _configProvider.Get_Current().Phone;
+        var pushMode = OwnerPush_Policy.Resolve_ModeForChannel(phone.Push, append.Channel.OrchId);
 
         foreach (var entry in mirrorableEntries)
         {
@@ -3910,6 +3912,11 @@ internal sealed class BridgeEngineModel(
             // send below has succeeded. The wait is not consumed by an attempt.
             var answersTheOwnersWait = false;
 
+            // The owner's credit as the push block below reads it for THIS entry, and the value the entry's
+            // SOUND is judged on too — read once, so delivery and sound cannot disagree about whether this
+            // entry is the answer. Stays false off an owner channel, where no credit exists.
+            var ownerIsWaiting = false;
+
             // WHAT REACHES THE PHONE, owner's rule: "I answer the sup a question, and then the sup
             // doesn't disturb me anymore unless it has another question. A brief every 30 minutes
             // is fine, but not the waterfall." So a supervisor entry is pushed only when it asks
@@ -3922,8 +3929,6 @@ internal sealed class BridgeEngineModel(
                 // answer reached this line the flag was already false, so every answer to the owner
                 // was silently suppressed — they asked, the supervisor replied, and they never saw
                 // it. This flag is owned solely by this path and cannot race.
-                var ownerIsWaiting = false;
-
                 lock (_ownerStateLock)
                 {
                     ownerIsWaiting = _ownerAwaitingAnswer.Contains(append.Channel.OrchId);
@@ -4054,19 +4059,23 @@ internal sealed class BridgeEngineModel(
             // COMPOSED BACK HERE, and nowhere earlier: everything above reads the agent's own words.
             text = speaker + text;
 
+            // ONE SOUND FOR EVERYTHING THIS ENTRY SENDS — its pieces, its document, its photos, its files
+            // (plan 03 Task 3, phone.appMessagesRing; D7 answer (b)). Judged once, on the credit read above.
+            var entrySound = EntrySound_Resolver.Resolve(entry, ownerIsWaiting, phone.AppMessagesRing);
+
             var prose = _configProvider.Get_Current().TelegramProse;
             var pieces = OwnerMessage_Folder.Fold_ForOwner(text, prose.FoldLongEntriesAbove);
 
             try
             {
                 foreach (var piece in pieces)
-                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, Resolve_EntrySound(entry), cancellationToken));
+                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, entrySound, cancellationToken));
 
                 // ALSO, never INSTEAD. Every piece above has already been sent; the file is a
                 // convenience for an entry long enough that reading it in the chat is the work.
                 await Send_EntryDocument_BestEffort_Async(
                     threadId, pieces.Count, prose.AttachEntriesAbove, entry.Subject, text,
-                    append.Channel.OrchId, Resolve_EntrySound(entry), cancellationToken);
+                    append.Channel.OrchId, entrySound, cancellationToken);
 
                 // Counts toward away detection: a supervisor message that reached the phone and is
                 // so far unanswered. Only the supervisor's own voice counts — app notices and
@@ -4091,10 +4100,10 @@ internal sealed class BridgeEngineModel(
                 }
 
                 foreach (var photoPath in photoPaths)
-                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel, Resolve_EntrySound(entry), cancellationToken);
+                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel, entrySound, cancellationToken);
 
                 foreach (var attachmentPath in attachmentPaths)
-                    await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, Resolve_EntrySound(entry), cancellationToken);
+                    await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, entrySound, cancellationToken);
 
                 // ONLY NOW is the owner's wait consumed: everything this entry had to say is on the
                 // phone, so what follows is narration again. Anything that threw above skipped this
@@ -4179,26 +4188,6 @@ internal sealed class BridgeEngineModel(
     /// interchangeable once a fold is involved — the HTML carries a collapsed quotation that has no
     /// Markdown source — which is why the pair travels together instead of being re-derived here.
     /// </param>
-    /// <summary>
-    /// WHO WROTE IT DECIDES WHETHER IT RINGS — the owner's ruling of 2026-09-09, in one place.
-    ///
-    /// <para>
-    /// *"If the supervisor writes to me, I must know it — that rings. Status, receipts and app
-    /// bookkeeping do not ring."* So an entry whose author SPEAKS TO THE OWNER (the supervisor, or
-    /// the solo that stands in for one) arrives with a notification; an App entry — a confirmation,
-    /// a coaching line, a status post — arrives silently and is there when they next look.
-    /// </para>
-    /// <para>
-    /// <see cref="ChannelAuthor_Kinds.Speaks_ToOwner"/> is the same predicate the away-detection and
-    /// the stall alert already use for "was that the supervisor talking", so a new author kind
-    /// cannot ring here while counting as silence there.
-    /// </para>
-    /// </summary>
-    static TelegramSendSounds Resolve_EntrySound(Channels.ChannelEntry.IChannelEntry entry)
-    {
-        return ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) ? TelegramSendSounds.Rings : TelegramSendSounds.Silent;
-    }
-
     async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         var client = _telegramClient
@@ -15533,8 +15522,11 @@ internal sealed class BridgeEngineModel(
                 // not them — and a finished job must not reach the owner as silence. Everything else
                 // this block sends is SILENT: under everything nothing is held, the words already rang
                 // when they were mirrored, and an unanswered turn's line is the app talking about
-                // itself. phone.appMessagesRing (plan 03 Task 3) is, by its catalogue row, "the app's
-                // narration" around agent words — the supervisor's words carried here are not that.
+                // itself. phone.appMessagesRing is NOT read here (plan 03 Task 3, D7 answer (b)): it
+                // governs the sound of mirrored entries (EntrySound_Resolver), and neither shipped
+                // preset reaches this completion with it false — quiet holds nothing, so it never has
+                // held words to carry. WhoRingsUnderEachPresetTests pins both: the ring of a completion
+                // carrying held words under classic, and a bare turn end sending nothing under quiet.
                 await TelegramProse_Sender.Send_Async(
                     _telegramClient, _log, orchId, pending.ThreadId, turnEndedText, turnEndedSound, cancellationToken);
             }

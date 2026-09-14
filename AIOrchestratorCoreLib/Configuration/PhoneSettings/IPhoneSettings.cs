@@ -36,7 +36,11 @@ public interface IPhoneSettings
     /// <summary><c>phone.status.intervalMinutes</c> — minutes between periodic statuses, when they are on (5–120).</summary>
     int PeriodicStatusIntervalMinutes { get; }
 
-    /// <summary><c>phone.appMessagesRing</c> — whether the app's own narration arrives with a notification or silently.</summary>
+    /// <summary>
+    /// <c>phone.appMessagesRing</c> — whether the owner's session's NARRATION rings (D7 answer (b), 2026-09-14).
+    /// False keeps a question, a BLOCKED, a file, the greeting and the answer ringing; read by
+    /// <c>EntrySound_Resolver</c>.
+    /// </summary>
     bool AppMessagesRing { get; }
 
     /// <summary><c>phone.replyKeyboard</c> — whether a bar of slash commands sits above the input box.</summary>

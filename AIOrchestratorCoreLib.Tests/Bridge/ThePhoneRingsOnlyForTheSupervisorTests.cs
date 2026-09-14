@@ -57,13 +57,17 @@ public class ThePhoneRingsOnlyForTheSupervisorTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        // phone.push = everything (plan 03): this file is the fork's ruling of 2026-09-09 driven through
-        // the engine — "if the supervisor writes to me, I must know it" — which is that mode by
-        // definition. Under filtered a plain report is held for the turn-end digest instead, and that
-        // mode's phone is pinned by OwnerPushDeciderTests and AStatusLineDoesNotSpendTheOwnersWaitTests.
+        // phone.push = everything AND phone.appMessagesRing = true (plan 03): this file is the fork's
+        // ruling of 2026-09-09 driven through the engine — "if the supervisor writes to me, I must know
+        // it — that rings" — and that sentence is BOTH keys: everything sent, and a plain report ringing.
+        // The ring is STATED rather than inherited from classic's default, because under D7's answer (b)
+        // the other value silences exactly the plain report this file measures. Neither preset is this
+        // pair: under filtered a plain report is held for the turn-end digest (OwnerPushDeciderTests,
+        // AStatusLineDoesNotSpendTheOwnersWaitTests), and under quiet it is sent SILENT — both presets'
+        // phones are pinned by WhoRingsUnderEachPresetTests.
         File.WriteAllText(
             _paths.ConfigFile,
-            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\"}}}}");
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\",\"appMessagesRing\":true}}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 

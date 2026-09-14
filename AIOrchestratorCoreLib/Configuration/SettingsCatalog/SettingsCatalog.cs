@@ -663,8 +663,10 @@ public static class SettingsCatalog
                 category: SettingCategories.Phone,
                 label: "App messages ring",
                 description:
-                    "Whether the app's own messages arrive with a notification or silently. An agent's question always " +
-                    $"rings; this governs the app's narration around it. {INERT_NOTE}",
+                    "Whether your supervisor's (or solo's) narration rings as it arrives. When off, only a question, a " +
+                    "BLOCKED ON OWNER, a file, the boot greeting and the answer to what you asked ring; the rest arrives " +
+                    "silently. Under phone.push = filtered, narration held for the turn-end summary still rings once, " +
+                    "with that summary. Receipts, the busy line and a bare turn-ended line are silent either way.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Enum(

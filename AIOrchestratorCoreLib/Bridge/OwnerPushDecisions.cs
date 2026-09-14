@@ -15,7 +15,10 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// </summary>
 public enum OwnerPushDecisions
 {
-    /// <summary>Mirrored to the phone now, ringing — a question, a BLOCKED, a file, the greeting, THE answer; or anything at all under <c>everything</c>.</summary>
+    /// <summary>
+    /// Mirrored to the phone now — a question, a BLOCKED, a file, the greeting, THE answer; or anything at all
+    /// under <c>everything</c>. Whether it RINGS is a separate question, <see cref="EntrySound_Resolver"/>'s.
+    /// </summary>
     SendNow,
 
     /// <summary>
