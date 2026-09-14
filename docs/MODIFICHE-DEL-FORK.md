@@ -1335,6 +1335,11 @@ risolvibile da sola» che tre sonde pinnano. Scelta del proprietario, la variant
 Questa sezione è l'unica che parla al futuro, quindi invecchia in fretta: **aggiornata al
 2026-09-10, notte**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
 
+**Aggiornamento 2026-09-11: il fork è stato fuso nel master a monte (piano 01).** La struttura del
+fork ha vinto su ogni file in conflitto; le funzionalità e le decisioni di master sono state
+riportate a mano in una serie di task numerati, con il resoconto in
+`docs/superpowers/plans/2026-09-11-fork-merge-01-report.md`.
+
 **Sei rami fusi e non ancora in produzione — un solo riavvio, quando i batch in corso hanno finito
 (decisione del proprietario, 2026-09-10 sera).** `stage/15` (la PULSE ogni cinque minuti, il freno
 per messaggio), `16` (il supervisore non fa la fila; il tocco ritenta; la PULSE rispetta il suo freno;

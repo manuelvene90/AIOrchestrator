@@ -14,6 +14,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Master-only tests whose feature is NOT in this tree yet. Plan 01 re-ported everything it
+         owned and deleted `_pending-reports`; what is left here is deferred to a named later plan.
+         See `_deferred/README.md` — each file says which plan un-parks it. -->
+    <Compile Remove="_deferred\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\AIOrchestratorCoreLib\AIOrchestratorCoreLib.csproj" />
     <!-- The stand-in for the claude CLI (tools/claude-contract): the print-runner tests launch it
          instead of the real binary, with injected delays and errors. -->

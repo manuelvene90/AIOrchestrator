@@ -48,5 +48,13 @@
          The same file also ships in the kit (AIOrchestrator.csproj) because kit/bin/channel-append.sh
          reads it with jq — one file, two readers, and ChannelGrammarTests fails if they differ. -->
     <EmbeddedResource Include="..\kit\grammar\channel-grammar.json" LogicalName="AIOrchestratorCoreLib.kit.grammar.channel-grammar.json" />
+
+    <!-- THE PRESETS ARE EMBEDDED for the reason the grammar is: Presets_Loader reads them as resources,
+         so a missing preset is a broken BUILD rather than an app that starts with nobody's settings.
+         The same two files also ship in the kit (AIOrchestrator.csproj, AIOrchestrator.Daemon.csproj)
+         so an installer on a fresh machine can seed config.json from one; PresetsLoaderTests fails if
+         the two copies differ by a byte. -->
+    <EmbeddedResource Include="..\kit\presets\classic.json" LogicalName="AIOrchestratorCoreLib.kit.presets.classic.json" />
+    <EmbeddedResource Include="..\kit\presets\quiet.json" LogicalName="AIOrchestratorCoreLib.kit.presets.quiet.json" />
   </ItemGroup>
 </Project>

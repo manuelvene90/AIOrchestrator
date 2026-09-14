@@ -35,6 +35,53 @@ public class OwnerPushPolicyTests
     }
 
     /// <summary>
+    /// THE OWNER'S WAIT IS NOT SPENT ON A STATUS LINE. Sessions write a "WAITING ON …" turn-end
+    /// declaration in the seconds before the actual answer, and on 2026-09-10 the declaration took
+    /// the one-shot credit three times in one topic; the answer that followed was filed as narration
+    /// and never reached the phone. The subject is the run-to-the-end hook's own marker, boundary
+    /// included.
+    ///
+    /// <para>
+    /// ONLY THE PREDICATE IS PINNED HERE, not <see cref="OwnerPush_Policy.Should_Push"/>: this build
+    /// pushes everything the supervisor writes (owner's ruling, 2026-09-09), so the credit decides
+    /// nothing about the push and a Should_Push assertion would pin the opposite of what it did on
+    /// master. The engine is the reader — it refuses to CONSUME the credit on a turn-end subject.
+    /// The push half returns when the filter does (plan 03, `phone.push = filtered`).
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("WAITING ON the task 6 re-review - fix landed 7af0aafe, 116 tests")]
+    [InlineData("fix landed — WAITING ON the suite")]
+    [InlineData("WAITING ON: the build")]
+    [InlineData("WAITING ON")]
+    public void AWaitingOnSubject_IsATurnEndDeclaration(string subject)
+    {
+        Assert.True(OwnerPush_Policy.Is_TurnEndDeclaration(subject));
+    }
+
+    /// <summary>"WAITING ONLY" contains "WAITING ON" — the boundary the hook enforces, kept here.</summary>
+    [Theory]
+    [InlineData("WAITING ONLY for the reviewer")]
+    [InlineData("defaults per root, C is the continuous automatically")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void AnythingElse_IsNotATurnEndDeclaration(string? subject)
+    {
+        Assert.False(OwnerPush_Policy.Is_TurnEndDeclaration(subject));
+    }
+
+    /// <summary>
+    /// The body says nothing about what an entry IS: sessions end nearly every entry — answers
+    /// included — with a "WAITING ON …" line to satisfy the turn-end hook. Only the subject counts,
+    /// which is why the predicate takes a subject and never the raw text.
+    /// </summary>
+    [Fact]
+    public void AWaitingOnLineInTheBody_DoesNotMakeTheEntryAStatusLine()
+    {
+        Assert.False(OwnerPush_Policy.Is_TurnEndDeclaration("defaults per root, C is the continuous automatically"));
+    }
+
+    /// <summary>
     /// The waterfall. Every one of these is real narration from the transcript that prompted this —
     /// useful in the channel, noise on a phone.
     /// </summary>

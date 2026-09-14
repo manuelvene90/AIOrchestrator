@@ -80,6 +80,54 @@ public static class OwnerPush_Policy
     }
 
     /// <summary>
+    /// The turn-end declaration the run-to-the-end hook accepts: "WAITING ON &lt;what&gt;" in the
+    /// subject means the session is ending its turn on a machine — a build, a suite, a sub-agent.
+    /// It is a STATUS LINE by definition, never the answer to anything.
+    /// </summary>
+    public const string WAITING_ON_MARKER = "WAITING ON";
+
+    /// <summary>
+    /// Whether the SUBJECT declares a turn end. Matched on the subject only: the hook also accepts
+    /// the marker at the start of a body line, but sessions end nearly every entry — answers
+    /// included — with a "WAITING ON …" line to satisfy it, so the body says nothing about what the
+    /// entry IS. The boundary is the hook's own ("WAITING ONLY" contains "WAITING ON"): the marker
+    /// must be followed by a non-letter or the end of the subject. The hook
+    /// (kit/hooks/run-to-the-end-check.sh) is the other reader of this marker; the two must agree.
+    ///
+    /// <para>
+    /// ITS READER IS THE ENGINE, not <see cref="Should_Push"/>. This build pushes everything the
+    /// supervisor writes, so a turn-end declaration reaches the phone like any other entry — what it
+    /// must NOT do is CONSUME the owner's answer credit. That credit is one-shot, and on 2026-09-10
+    /// a "WAITING ON the re-review — fix landed" written seconds before the real answer spent it
+    /// three times in one topic; the answer that followed was narration by shape and never arrived.
+    /// The owner re-typed their question each time. The engine asks this before removing the
+    /// orchestration from its awaiting-answer set.
+    /// </para>
+    /// </summary>
+    public static bool Is_TurnEndDeclaration(string? subject)
+    {
+        if (string.IsNullOrWhiteSpace(subject))
+            return false;
+
+        var searchFrom = 0;
+
+        while (true)
+        {
+            var start = subject.IndexOf(WAITING_ON_MARKER, searchFrom, StringComparison.Ordinal);
+
+            if (start < 0)
+                return false;
+
+            var end = start + WAITING_ON_MARKER.Length;
+
+            if (end >= subject.Length || !char.IsLetter(subject[end]))
+                return true;
+
+            searchFrom = end;
+        }
+    }
+
+    /// <summary>
     /// WHETHER A SUPERVISOR ENTRY REACHES THE PHONE — and since 2026-09-09 the answer is YES, for
     /// every entry the supervisor writes on the owner channel.
     ///
@@ -107,6 +155,15 @@ public static class OwnerPush_Policy
     /// spent their wait — the real answer that followed then read as narration.
     /// </para>
     /// </summary>
+    /// <param name="ownerIsWaitingForAReply">
+    /// CURRENTLY UNREAD — kept so the call sites do not have to be rebuilt when the filter returns.
+    /// It was the filter's "the owner is waiting for this one" arm, and on this build the credit it
+    /// carries is inert AT THE PUSH: the credit machinery is live in the engine (raised at delivery,
+    /// one-shot, never spent by a `WAITING ON` subject), but nothing here consults it. The filter and
+    /// the turn-end digest belong to plan 03 (`phone.push = filtered`); this parameter is what makes
+    /// the surrounding prose read as though they were already here.
+    /// </param>
+    /// <param name="subject">Also unread on this build, and for the same reason.</param>
     public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply, string? subject = null)
     {
         // An entry with no body is nothing to read. Not a filter — a guard against sending an empty

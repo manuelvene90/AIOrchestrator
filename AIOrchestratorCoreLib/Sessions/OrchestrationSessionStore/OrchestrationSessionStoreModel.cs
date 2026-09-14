@@ -237,6 +237,15 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_Paused(string orchId, bool paused)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithPaused(session, paused));
+        }
+    }
+
     public void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence)
     {
         lock (_writeLock)
@@ -311,6 +320,24 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         {
             var session = Get_Session(orchId);
             Save(OrchestrationSession_Factory.CreateFrom_Existing_WithImplementerModelOverride(session, model));
+        }
+    }
+
+    public void Set_SupervisorEffortOverride(string orchId, string? effort)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithSupervisorEffortOverride(session, effort));
+        }
+    }
+
+    public void Set_ImplementerEffortOverride(string orchId, string? effort)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithImplementerEffortOverride(session, effort));
         }
     }
 

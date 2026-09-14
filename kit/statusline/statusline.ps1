@@ -9,6 +9,15 @@
 #    the orchestrator app reads for per-member cost display and usage-limit Telegram alerts.
 # Configured in ~/.claude/settings.json by install.ps1; env vars are set by the spawner.
 
+# stdout leaves powershell.exe in the console's OEM code page unless told otherwise; the host reads
+# it as UTF-8 and '·' arrives as U+FFFD, the replacement character (measured 2026-09-11, the first
+# Windows run of the suite). Wrapped in try/catch because a host that owns no console — a redirected
+# child under a service — throws on the setter, and a status line must never be the thing that fails.
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch { }
+
 $raw = $null
 $json = $null
 try {
@@ -17,9 +26,11 @@ try {
 } catch { }
 
 $model = ""
+$effort = ""
 $cwd = ""
 if ($null -ne $json) {
     try { $model = $json.model.display_name } catch { }
+    try { $effort = $json.effort.level } catch { }
     try { $cwd = Split-Path -Leaf $json.workspace.current_dir } catch { }
 }
 
@@ -160,9 +171,17 @@ if ($null -ne $json) {
     } catch { }
 }
 
+# The effort level rides NEXT TO THE MODEL — "Fable 5.1 · xhigh" — because the owner asked to see it
+# there (2026-09-09). Claude Code reports it as `effort.level` (low/medium/high/xhigh/max) and omits
+# the block when the model has no such dial, so an absent value leaves the line exactly as it was.
+$effortSuffix = ''
+if ($effort) {
+    $effortSuffix = " $esc[90m·$esc[0m $effort"
+}
+
 # --- Render ---
 if ($role -eq 'supervisor') {
-    Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$effortSuffix$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -eq 'solo') {
     # THE SOLO CARRIES THE PROGRESS TOO, and it was the one role that did not. The suffix was wired
@@ -179,22 +198,22 @@ elseif ($role -eq 'solo') {
     # 208 is the orange that matches the 🟠 this session already speaks with in the Telegram mirror,
     # so the two surfaces name the same voice the same way.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'SOLO' }
-    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$effortSuffix$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -in @('implementer','reviewer')) {
     # NOT the members: an implementer's terminal showing the orchestration's overall percentage would
     # invite it to reason about work that is not its own. The ledger belongs to whoever talks to the
     # owner.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'IMPLEMENTER' }
-    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$contextSuffix"
+    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$effortSuffix$contextSuffix"
 }
 elseif ($role -eq 'communicator') {
-    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$contextSuffix"
+    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$effortSuffix$contextSuffix"
 }
 elseif ($role -eq 'general') {
-    Write-Output "$esc[1;93m GENERAL SUPERVISOR $esc[0m $model$contextSuffix"
+    Write-Output "$esc[1;93m GENERAL SUPERVISOR $esc[0m $model$effortSuffix$contextSuffix"
 }
 else {
     # A session the app did not spawn still has a context window, and the owner reads these too.
-    Write-Output "$model · $cwd$contextSuffix"
+    Write-Output "$model$effortSuffix · $cwd$contextSuffix"
 }

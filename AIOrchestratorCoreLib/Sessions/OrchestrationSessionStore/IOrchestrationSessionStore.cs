@@ -46,12 +46,24 @@ public interface IOrchestrationSessionStore
     /// <summary>Finished, and kept open on purpose — see IOrchestrationSession.Done.</summary>
     void Set_Done(string orchId, bool done);
 
+    /// <summary>Asleep for now, and reversibly — see IOrchestrationSession.Paused.</summary>
+    void Set_Paused(string orchId, bool paused);
+
     /// <summary>Where the owner is for this orchestration — see IOrchestrationSession.OwnerPresence.</summary>
     void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence);
     void Set_MemberPid(string orchId, string memberId, int? pid);
     void Set_DisplayName(string orchId, string displayName);
     void Set_SupervisorModelOverride(string orchId, string? model);
     void Set_ImplementerModelOverride(string orchId, string? model);
+
+    /// <summary>
+    /// Per-orchestration --effort level; null resets to the ROLE DEFAULT (<c>effort.&lt;role&gt;</c>
+    /// from the catalogue — xhigh for the supervisor and the solo under `classic`, null and so no flag
+    /// at all under `quiet`). Corrected 2026-09-12: "resets to no flag" was the truth only while the
+    /// default was a compiled constant, which plan 02 task 7 replaced with data.
+    /// </summary>
+    void Set_SupervisorEffortOverride(string orchId, string? effort);
+    void Set_ImplementerEffortOverride(string orchId, string? effort);
 
     /// <summary>
     /// Records that a <c>deleteForumTopic</c> has been asked for and not yet confirmed. Written

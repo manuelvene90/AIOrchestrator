@@ -61,6 +61,15 @@ any code.
 
 1. Read the channel top to bottom. **You may be resuming** — it is the full history; an unanswered
    trailing `FROM owner` entry is your task.
+
+   **You may also have been RESUMED — same conversation, new process.** Since 2026-09-10 the app
+   respawns a solo with `claude --resume <your own session id>` whenever your transcript survives,
+   so you can remember everything up to the moment you were killed (a `/model` or `/effort`
+   change, an app restart, a crash). **Trust the CHANNEL over that memory for anything you were in
+   the middle of DOING**: a request file you remember dropping, a commit, an entry, a window you
+   opened — check whether it actually landed before redoing it. The app confirms every request
+   with a `FROM app` entry; if there is none, the request never arrived. Your Monitor died with the
+   old process — arm it again at step 3 as on any boot.
 2. Append a SHORT greeting: subject `solo online — <repo> — <last two folders>`, empty body.
 3. Arm the monitor (below) and end your turn, unless there is unanswered traffic — then do that
    first.
@@ -200,6 +209,21 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 - **Everything you write lands on a PHONE. THREE lines is the norm, FIVE the hard ceiling, 600
   characters.** The app measures it and tells you when you go over. Lead with the result or the
   question; drop your reasoning unless asked.
+- **ONE OPEN QUESTION AT A TIME — ask, then STOP (HARD RULE, owner 2026-09-09).** *"I have just
+  received like 10 questions in a row, without the session waiting for my answers to each question
+  before sending the next. This was a mess."* That was a SOLO session, and this rule had only ever
+  been written down for supervisors, which is exactly why it happened.
+  1. **Only ask what BLOCKS you.** If you can keep working without the answer, keep working.
+  2. **Ask ONE thing, then end your turn.** Never queue a second question behind the first — the
+     owner cannot answer a moving target, and by the time they reply your third message has changed
+     the subject.
+  3. **Wait.** Your monitor wakes you when the answer lands.
+
+  **The app now enforces both halves, so working around them gains you nothing.** A PreToolUse hook
+  denies your tool calls while an answer is outstanding (it covers solo sessions as of 2026-09-09 —
+  it did not before), and the app HOLDS this channel: while your question is unanswered, nothing else
+  you write here is texted. It is kept, in order, and delivered the moment they answer or after ten
+  minutes. A second question does not reach them sooner — it only makes the thread harder to answer.
 - Discrete choice? A question is FIVE lines and the app REFUSES to send one missing any of them:
   `QUESTION:` (one short, self-contained question), 2–4 `OPTION:` lines (they become tappable
   buttons), `RECOMMEND:` (what you would do and why, one line — printed with the question),

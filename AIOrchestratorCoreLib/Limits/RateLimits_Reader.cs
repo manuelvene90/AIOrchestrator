@@ -90,11 +90,58 @@ public static class RateLimits_Reader
         }
     }
 
+    /// <summary>
+    /// The session's own id, straight from the status line — the value `claude --resume` takes.
+    /// Sits beside <see cref="Read_TranscriptPath_OrNull"/> because a respawn reads the two
+    /// together: the id to resume, the transcript to prove there is still a conversation behind it
+    /// (see ResumableSession_Resolver). Absent or malformed is UNKNOWN, never a throw.
+    /// </summary>
+    public static string? Read_SessionId_OrNull(string rawStatuslineJson)
+    {
+        try
+        {
+            var node = (JsonNode.Parse(rawStatuslineJson) as JsonObject)?["session_id"];
+
+            if (node == null)
+                return null;
+
+            return node.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static string? Read_ModelName_OrNull(string rawStatuslineJson)
     {
         try
         {
             var node = (JsonNode.Parse(rawStatuslineJson) as JsonObject)?["model"]?["display_name"];
+
+            if (node == null)
+                return null;
+
+            return node.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The effort dial this session runs at — `effort.level`, one of low / medium / high / xhigh /
+    /// max (verified against Claude Code 2.1.266). The block is ABSENT on an older Claude Code and on
+    /// a model without the dial, and absent is UNKNOWN: never a default the owner could mistake for
+    /// a setting they chose. Sits beside <see cref="Read_ModelName_OrNull"/> because the two are
+    /// read together — a model name without its effort is half a reading.
+    /// </summary>
+    public static string? Read_EffortLevel_OrNull(string rawStatuslineJson)
+    {
+        try
+        {
+            var node = (JsonNode.Parse(rawStatuslineJson) as JsonObject)?["effort"]?["level"];
 
             if (node == null)
                 return null;

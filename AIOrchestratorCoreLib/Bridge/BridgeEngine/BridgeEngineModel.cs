@@ -666,6 +666,40 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// How many mirrorable entries of a HELD append were already DEALT WITH, per channel file. The
+    /// tailer confirms whole appends, so a partially delivered one is re-emitted in full; without
+    /// this the entries sent before the hold would be texted again on every poll for as long as the
+    /// owner took to answer.
+    ///
+    /// <para>
+    /// DEALT WITH, NOT SENT, and the difference is the whole correctness of it: the resume skips this
+    /// many entries POSITIONALLY, without looking at them, so an entry the push policy refused counts
+    /// here exactly like one that was texted. Counting only the sent ones left the prefix short by
+    /// one per suppressed entry and re-sent something the owner already had.
+    /// </para>
+    ///
+    /// In memory, like the rest of the mirror's in-flight state: losing it on a restart costs a
+    /// duplicate message, which is the at-least-once contract this component already documents,
+    /// while persisting it would risk skipping entries nobody ever received.
+    /// </summary>
+    readonly Dictionary<string, int> _deliveredEntriesOfHeldAppend = [];
+
+    /// <summary>
+    /// When each orchestration was paused, so a SECOND /pause inside the rename lag re-asserts the
+    /// pause rather than lifting it. In memory on purpose: it guards a double-tap, which happens in
+    /// seconds, and an app restart that forgot one would at worst make the next tap an honest
+    /// toggle. The pause itself is on the session, where it survives everything.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _pausedAtUtc = [];
+
+    /// <summary>
+    /// How long a repeat of /pause counts as "I did not see it happen" rather than "un-pause".
+    /// Sized from the /done evidence, where every toggle in this machine's history was undone by a
+    /// second press 17-23 seconds after the first.
+    /// </summary>
+    const int PAUSE_REASSERT_SECONDS = 60;
+
+    /// <summary>
     /// When the belief above was last thrown away on purpose. It is a BELIEF and never an
     /// observation — the sync skips any topic whose wanted name matches it, and nothing reads the
     /// real name back from Telegram — so once it is wrong it is wrong for the life of the process.
@@ -1570,6 +1604,11 @@ internal sealed class BridgeEngineModel(
         // watcher silent, and a tick that appends before reconciling it would litter the meeting.
         Sync_MeetingFlags();
 
+        // Same reason, same place: the .paused marker is what lets a paused session END ITS TURN,
+        // so it must be true before anything in this tick can write to a channel — and reconciling
+        // it here is what stops a flag surviving a crash into an orchestration nobody paused.
+        Sync_PausedFlags();
+
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
@@ -1688,7 +1727,13 @@ internal sealed class BridgeEngineModel(
         var pollResult = _tailer.Poll(channels);
 
         foreach (var truncatedFile in pollResult.TruncatedFiles)
+        {
+            // The prefix memo counts entries of a batch that no longer exists — compaction moved
+            // them into the archive — so keeping it would skip the first entries of whatever the
+            // file holds now.
+            _deliveredEntriesOfHeldAppend.Remove(truncatedFile);
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Channel file shrank (append-only protocol anomaly), offset reset: {truncatedFile}");
+        }
 
         // The tailer has no logger of its own. A channel it cannot read is a session the owner
         // silently stops hearing from, so the failure is surfaced here and the next poll retries it.
@@ -1708,14 +1753,44 @@ internal sealed class BridgeEngineModel(
 
         _heldTrailingEntryFiles.IntersectWith(pollResult.HeldTrailingEntryFiles);
 
+        // ONE QUESTION AT A TIME (owner, 2026-09-09: "I have just received like 10 questions in a
+        // row ... This was a mess"; re-affirmed 2026-09-11 as the ONLY way, because when three or
+        // four questions arrive at once their answers conflict). A channel whose orchestration is
+        // already waiting on an answer is HELD: neither delivered nor settled, so its cursor does
+        // not move and the tailer re-emits it on the next poll. Not Settle_MirrorAttempt_Async(false)
+        // — that is the FAILURE path, which gives up after MIRROR_RETRY_WINDOW_MINUTES and drops the
+        // entries with an error.
+        //
+        // ONCE HELD, THE REST OF THAT CHANNEL IS HELD WITH IT. The cursor is per FILE, so confirming
+        // a later entry confirms the held one along with it — holding the question while letting the
+        // next entry through would lose the question outright, which is the failure this exists to
+        // prevent arriving by the door left open for it. It also keeps the conversation in order.
+        HashSet<string> heldChannels = [];
+
         foreach (var append in pollResult.CompletedAppends)
         {
             if (!Is_MirrorAttemptDue(append.Channel.FilePath))
                 continue;
 
-            var delivered = await Mirror_Append_Async(append, cancellationToken);
+            // A channel held earlier in THIS tick stays held: a second append for the same file
+            // (the tailer can emit one per poll, but the loop outlives a single poll's worth when
+            // several channels are in play) must not jump the queue in front of the entries the
+            // hold just left behind.
+            if (heldChannels.Contains(append.Channel.FilePath))
+                continue;
+
+            var outcome = await Mirror_Append_Async(append, cancellationToken);
             Raise_OrchestrationActivity(append.Channel.OrchId);
-            await Settle_MirrorAttempt_Async(append, delivered, cancellationToken);
+
+            // HELD is neither settled nor confirmed: the cursor stays put, the failure clock never
+            // starts, and everything still queued for this channel waits its turn.
+            if (outcome == MirrorOutcomes.Held)
+            {
+                heldChannels.Add(append.Channel.FilePath);
+                continue;
+            }
+
+            await Settle_MirrorAttempt_Async(append, outcome == MirrorOutcomes.Delivered, cancellationToken);
         }
 
         await Check_UsageLimits_Async(cancellationToken);
@@ -2371,7 +2446,11 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var session in Sessions_ThisTick())
         {
-            if (session.ClosedUtc != null)
+            // PAUSED is checked beside ClosedUtc in every sweep that WRITES to a channel. The
+            // supervisor half is stopped at the choke point, but members are deliberately outside
+            // it (they are not in the owner's meeting), and a nudged member starts working — which
+            // is exactly what pause promised would not happen.
+            if (session.ClosedUtc != null || session.Paused)
                 continue;
 
             Nudge_IdleSupervisor(session);
@@ -3048,7 +3127,10 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var session in Sessions_ThisTick())
         {
-            if (session.ClosedUtc != null)
+            // PAUSED: the ledger debt is real and survives the pause — it is the PRESSURE that
+            // stops, not the obligation. Raising .ledger-behind while paused would also block the
+            // turn end of a session that has been told to sleep.
+            if (session.ClosedUtc != null || session.Paused)
                 continue;
 
             _ledgerDebtSinceUtc.TryGetValue(session.OrchId, out var ledgerDebtSinceUtc);
@@ -3695,11 +3777,14 @@ internal sealed class BridgeEngineModel(
             if (channel.IsOwnerChannel && _ownerDeliveryBuffer.Is_Holding(channel.FilePath))
                 continue;
 
-            // NOTE: a pending question does NOT freeze this channel. Queueing the supervisor's
-            // output would hide the real problem rather than fix it — the supervisor would still be
-            // working, briefing implementers and moving the state while the owner's answer was
-            // pending, so the answer would land against a world that had already changed. The
-            // supervisor is STOPPED instead, by the awaiting-answer hook (see Raise_AwaitingAnswerFlag).
+            // A pending owner question HOLDS the owner channel at the mirror (QuestionHold_Policy,
+            // owner ruling 2026-09-11: one question at a time is the only way). The hold is not an
+            // offset freeze — the file is still polled, the held append is simply not settled — so
+            // the fork's "the supervisor is STOPPED instead" remains true as well: both halves
+            // apply. The stop (the awaiting-answer hook, see Raise_AwaitingAnswerFlag) keeps the
+            // supervisor from moving the world the answer will land against; the hold keeps the
+            // phone from receiving a second question while the first is unanswered, which is the
+            // half a hook running in the session can never enforce (decision 21).
 
             activeChannels.Add(channel);
         }
@@ -3719,12 +3804,65 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Mirrors one append to Telegram. Returns whether the caller may confirm it — TRUE when every
-    /// entry reached the phone AND when there was deliberately nothing to send (no client, a
-    /// silenced topic, nothing mirrorable); FALSE only when a send actually failed, which leaves
-    /// the append unconfirmed so the tailer re-emits it and the retry can happen.
+    /// What became of one append. DELIVERED and FAILED are the original pair — confirm, or leave it
+    /// for the retry. HELD is neither: the entries are fine and the endpoint is fine, the owner is
+    /// simply still answering the last question, so the append must NOT be confirmed and must NOT
+    /// start the failure clock that gives up and drops after MIRROR_RETRY_WINDOW_MINUTES.
     /// </summary>
-    async Task<bool> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
+    enum MirrorOutcomes
+    {
+        Delivered,
+        Failed,
+        Held,
+    }
+
+    /// <summary>
+    /// Mirrors one append to Telegram. DELIVERED when every entry reached the phone AND when there
+    /// was deliberately nothing to send (no client, a silenced topic, nothing mirrorable); FAILED
+    /// only when a send actually failed, which leaves the append unconfirmed so the tailer re-emits
+    /// it and the retry can happen; HELD when this orchestration is waiting on the owner's answer.
+    ///
+    /// <para>
+    /// THE HOLD IS PER ENTRY, NOT PER APPEND, and that distinction is the whole bug. One poll builds
+    /// ONE append carrying every entry it read, and the owner's waterfall was six questions written
+    /// 20 milliseconds apart — a single append. A check before this method sees the flag unraised,
+    /// because the first question has not been sent yet; by the time it is raised, the remaining
+    /// entries are already inside this loop. So the flag is re-read before every entry, and the rest
+    /// of the append is left undelivered.
+    /// </para>
+    /// <para>
+    /// WHICH MEANS AN APPEND CAN BE PARTIALLY DELIVERED, and the tailer confirms whole appends only.
+    /// <see cref="_deliveredEntriesOfHeldAppend"/> remembers how many mirrorable entries of a HELD
+    /// append already went out, so the next poll — which re-emits the same entries at the front, in
+    /// order — skips them instead of texting the owner the same question twice.
+    /// </para>
+    /// </summary>
+    async Task<MirrorOutcomes> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
+    {
+        var outcome = await Mirror_AppendEntries_Async(append, cancellationToken);
+
+        // THE MEMO IS A POSITIONAL SKIP — "ignore the first N mirrorable entries of this file's
+        // re-emitted append" — so it is only valid while the cursor has NOT advanced. Every outcome
+        // except HELD lets the caller settle the append, which confirms it and moves the cursor; the
+        // batch those N entries were counted against is then gone for ever, and anything left over
+        // would silently count off the front of an UNRELATED later batch, with no log line at all.
+        //
+        // Cleared HERE, once, rather than at each exit: two of them (nothing mirrorable, silenced
+        // topic) return Delivered above the entry loop and used to leave the memo behind. That is an
+        // ordinary sequence, not a corner: a question is held, the owner walks to the PC, presence
+        // silences the topic, the held append is confirmed and dropped — and the next thing the
+        // supervisor writes to the owner loses its first N entries.
+        if (outcome != MirrorOutcomes.Held)
+            _deliveredEntriesOfHeldAppend.Remove(append.Channel.FilePath);
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// The body of <see cref="Mirror_Append_Async"/>. Split out so the held-prefix memo has exactly
+    /// one clearing point (see there) instead of one per exit.
+    /// </summary>
+    async Task<MirrorOutcomes> Mirror_AppendEntries_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
         List<int> supervisorEntryIndexes = [];
 
@@ -3758,25 +3896,53 @@ internal sealed class BridgeEngineModel(
         }
 
         // File-only mode: there is no phone to reach, so the entries are as delivered as they will
-        // ever be. Returning false here would freeze the cursor forever on a machine with no bot.
+        // ever be. Failing here would freeze the cursor forever on a machine with no bot.
         if (_telegramClient == null)
-            return true;
+            return MirrorOutcomes.Delivered;
 
         var mirrorableEntries = Select_MirrorableEntries(append);
 
         if (mirrorableEntries.Count == 0)
-            return true;
+            return MirrorOutcomes.Delivered;
 
         // TOPIC SILENCE ("I'm at the PC, talking to this supervisor in its terminal"): drop this
         // orchestration's outbound traffic entirely. Unlike DND, nothing is queued for later —
         // the owner is already reading it live in the terminal, and offsets keep advancing.
         if (Is_TopicSilenced(append.Channel.OrchId))
-            return true;
+            return MirrorOutcomes.Delivered;
 
         var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel.OrchId, cancellationToken);
 
+        // Entries of THIS append that already reached the phone before an earlier tick held it. They
+        // are re-emitted by the tailer because the append was never confirmed; sending them again
+        // would be the waterfall arriving by the door built to stop it.
+        var alreadyDelivered = _deliveredEntriesOfHeldAppend.TryGetValue(append.Channel.FilePath, out var previouslyDelivered)
+            ? previouslyDelivered
+            : 0;
+
+        var deliveredHere = 0;
+
         foreach (var entry in mirrorableEntries)
         {
+            if (deliveredHere < alreadyDelivered)
+            {
+                deliveredHere++;
+                continue;
+            }
+
+            // ONE QUESTION AT A TIME, re-read per entry — see this method's docstring for why a
+            // check outside the loop cannot see a flag its own first entry is about to raise.
+            if (QuestionHold_Policy.Should_Hold(append.Channel.IsOwnerChannel, Is_AwaitingAnswer(append.Channel.OrchId)))
+            {
+                _deliveredEntriesOfHeldAppend[append.Channel.FilePath] = deliveredHere;
+
+                _log.Log_Info(
+                    append.Channel.OrchId,
+                    $"held entry #{entry.Index} and everything after it — the owner is still answering the last question (delivered so far from this batch: {deliveredHere})");
+
+                return MirrorOutcomes.Held;
+            }
+
             // Set when this entry is the answer the owner is waiting for, and ACTED ON only once the
             // send below has succeeded. The wait is not consumed by an attempt.
             var answersTheOwnersWait = false;
@@ -3813,7 +3979,15 @@ internal sealed class BridgeEngineModel(
                 // The subject is still passed because Should_Push's signature carries it for the
                 // callers that predate this change.
                 if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting, entry.Subject))
+                {
+                    // COUNTED, THOUGH NOTHING WAS SENT. The held-append memo is POSITIONAL — the
+                    // resume skips the first `alreadyDelivered` entries of the re-emitted append —
+                    // so it has to count entries CONSUMED, not entries sent. Counting only the sent
+                    // ones left the prefix short by one for every suppressed entry ahead of a sent
+                    // one, and the resume then re-sent an entry the owner already had.
+                    deliveredHere++;
                     continue;
+                }
 
                 lock (_ownerStateLock)
                 {
@@ -3889,6 +4063,14 @@ internal sealed class BridgeEngineModel(
             // PRESENTATION choice — the opening in the clear, the rest behind one tap — while 4096 is
             // a hard refusal. See OwnerMessage_Folder, which degrades to the chunker's own output for
             // every entry it cannot improve on.
+            // An entry whose whole body WAS the picture line has nothing left to say, and a bare
+            // "🟠 " is not a message. Its subject is the caption the owner should read under the
+            // photo — the same fallback Pick_Content already makes for an empty body. Re-ported
+            // from master's da8f66c, dropped by merge 91d3402: this is a straight port, not an
+            // addition, matched to master's condition exactly.
+            if (text.Trim().Length == 0)
+                text = entry.Subject;
+
             // COMPOSED BACK HERE, and nowhere earlier: everything above reads the agent's own words.
             text = speaker + text;
 
@@ -3947,7 +4129,15 @@ internal sealed class BridgeEngineModel(
                 // phone, so what follows is narration again. Anything that threw above skipped this
                 // line with the flag still raised, which is what makes the retry deliver the answer
                 // instead of re-classifying it.
-                if (answersTheOwnersWait)
+                //
+                // …AND NOT BY A STATUS LINE. Sessions write their turn-end declaration ("WAITING ON
+                // the re-review — fix landed") in the seconds BEFORE the actual answer, and the
+                // credit is one-shot: on 2026-09-10 the declaration took it three times in one topic
+                // and the answer that followed was filed as narration. Such an entry is delivered
+                // like any other — it simply leaves the credit open for the entry that is really the
+                // answer. Judged on the SUBJECT alone: bodies end with a "WAITING ON …" line by
+                // habit, answers included, so the body says nothing about what the entry IS.
+                if (answersTheOwnersWait && !OwnerPush_Policy.Is_TurnEndDeclaration(entry.Subject))
                 {
                     lock (_ownerStateLock)
                     {
@@ -3972,16 +4162,24 @@ internal sealed class BridgeEngineModel(
             {
                 _log.Log_Error(append.Channel.OrchId, $"Telegram mirror send failed for entry #{entry.Index}", ex);
 
-                // FALSE, not "consumed": the caller leaves this append unconfirmed and the tailer
+                // FAILED, not "consumed": the caller leaves this append unconfirmed and the tailer
                 // re-emits it, so the entry is retried instead of vanishing. Stopping at the first
                 // failure keeps the channel in ORDER, at the price of re-sending any entry of this
                 // same append that already landed. A duplicate on the phone is a nuisance; a
                 // supervisor's message that never arrives is what the owner reported today.
-                return false;
+                //
+                // The held-prefix memo is dropped by the caller (any non-Held outcome): a FAILURE
+                // retries the whole append, exactly as it always has. Carrying a prefix into the
+                // failure path would change retry semantics that have nothing to do with questions.
+                return MirrorOutcomes.Failed;
             }
+
+            deliveredHere++;
         }
 
-        return true;
+        // The whole append is out, so nothing is owed; the caller drops the memo, which must not
+        // survive into the next batch — a stale prefix would silently skip its first entries.
+        return MirrorOutcomes.Delivered;
     }
 
     /// <summary>
@@ -4046,7 +4244,7 @@ internal sealed class BridgeEngineModel(
     /// <para>
     /// BEST EFFORT, LIKE THE ENTRY PHOTO, and for a stronger reason: the messages are already on the
     /// phone by the time this runs. A failed upload must therefore cost the attachment and nothing
-    /// else — letting it throw would return false from Mirror_Append_Async, leave the append
+    /// else — letting it throw would make Mirror_Append_Async answer FAILED, leave the append
     /// unconfirmed, and re-send every chunk of a message the owner has already read.
     /// </para>
     /// </summary>
@@ -4089,18 +4287,114 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// A topic's OWN mode wins over the app-wide setting — "silence just this one while I work in
     /// its terminal" must survive someone flipping the global DND, and vice versa. Only when the
-    /// topic is Normal does the app-wide setting apply.
+    /// topic is Normal does the app-wide setting apply. A PAUSED orchestration outranks all of it:
+    /// every outbound gate in this file asks this one question, so pause reaches them by answering
+    /// it here rather than by fifteen new checks.
     /// </summary>
     TelegramDeliveryModes Resolve_EffectiveMode(string orchId)
     {
         // GATHERS, decides nothing — the ORDER of these opinions is the decision, and it is not one
         // a reader or a test could see while it lived here (rev-4, 2026-08-13).
+        var session = _store.Get_Session_OrNull(orchId);
+
         return EffectiveMode_Resolver.Resolve(
             Resolve_Presence(orchId),
             isGeneral: orchId == ChannelDiscovery.GENERAL_ORCH_ID,
-            topicMode: _store.Get_Session_OrNull(orchId)?.TelegramMode ?? TelegramDeliveryModes.Normal,
+            paused: session?.Paused ?? false,
+            topicMode: session?.TelegramMode ?? TelegramDeliveryModes.Normal,
             appWideDeferred: _telegramMuted,
             appWideSilenced: _silenceAllTopics);
+    }
+
+    /// <summary>
+    /// PAUSED means the owner walked away from this orchestration without closing it, so the app
+    /// holds its outbound traffic — that half rides Resolve_EffectiveMode above and reaches every
+    /// send gate at once. This is the OTHER half: what the app WRITES INTO THE CHANNELS — nudges,
+    /// ledger complaints, idle flags, the periodic pass — which no delivery mode has ever governed,
+    /// so each waker asks this question for itself.
+    /// </summary>
+    bool Is_Paused(string orchId)
+    {
+        return _store.Get_Session_OrNull(orchId)?.Paused ?? false;
+    }
+
+    /// <summary>
+    /// Is this orchestration waiting on the owner to answer a question it already texted them?
+    ///
+    /// The flag is raised inside Send_QuestionWithButtons_Async (Remote owner only), cleared by any
+    /// inbound word from them, and expired by Expire_StaleAwaitingAnswerFlags after
+    /// QUESTION_HOLD_CAP_MINUTES — so nothing can be held for ever, including by a question they
+    /// never intend to answer.
+    ///
+    /// Until 2026-09-09 the app WROTE this flag and never read it: the only reader was a bash hook
+    /// that covered supervisors alone, which is how a solo session put nine unanswered questions on
+    /// the owner's phone in five minutes.
+    /// </summary>
+    bool Is_AwaitingAnswer(string orchId)
+    {
+        return Status.AwaitingAnswerFlag_Marker.Is_Raised(_paths, orchId);
+    }
+
+    /// <summary>
+    /// THE OWNER'S ANSWER CREDIT IS RAISED HERE AND NOWHERE ELSE. The owner has just been heard by
+    /// the session — a message delivered to its channel, or a command that asks it to act — so
+    /// whatever it says next is the answer, and it MUST reach them.
+    ///
+    /// <para>
+    /// RAISED AT DELIVERY, NEVER AT BUFFERING. Raised early, the credit went to whatever the session
+    /// happened to write during the aggregation window — on 2026-09-10 a status line written one
+    /// second before the owner's entry even landed in the channel, so the session could not possibly
+    /// have been answering it — and the real answer that followed was filed as narration.
+    /// </para>
+    /// <para>
+    /// NOT THE <c>.awaiting-answer</c> FILE, which is a different fact with a similar name: that one
+    /// says the APP asked the owner a question and is holding the mirror until they reply
+    /// (<see cref="Is_AwaitingAnswer"/>). This set says the OWNER asked and is owed a reply.
+    /// </para>
+    /// <para>
+    /// Plan 03 adds the suppressed-entry clear here, when the narration filter — and the list of
+    /// entries it holds back — comes back with `phone.push = filtered`.
+    /// </para>
+    /// </summary>
+    void Raise_OwnerWait(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            _ownerAwaitingAnswer.Add(orchId);
+        }
+
+        // R1 SURVIVES A RESTART TOO. The flag is what makes the answer to the owner's own question
+        // push instead of being re-read as narration, and losing it while an answer was still in
+        // flight dropped that answer silently — the exact failure R1 names, reached by closing the
+        // app instead of by a failed send.
+        Persist_EngineState();
+    }
+
+    /// <summary>
+    /// Tracks the reply until the session answers AND its turn ends — the one construction site for
+    /// <see cref="PendingOwnerReply"/>, shared by a delivered owner message and by <c>/merge</c>,
+    /// which is an owner request in every way that matters and was the only one the app forgot to
+    /// watch (owner, 2026-09-10: *"The solo/sup does merge, clean, etc, but doesn't tell me anything
+    /// at completion"*).
+    /// </summary>
+    void Track_OwnerReply(string orchId, long? threadId, long? receiptMessageId, bool receiptWasReaction, int ownerAnswerCountAtDelivery)
+    {
+        lock (_ownerStateLock)
+        {
+            _pendingOwnerReplies[orchId] = new PendingOwnerReply
+            {
+                ThreadId = threadId,
+                ReceiptMessageId = receiptMessageId,
+
+                // Publish returns null for BOTH "the reaction landed" and "there was nothing to
+                // edit", so the fact is taken from the receipt path itself rather than inferred
+                // from a null.
+                ReceiptWasReaction = receiptWasReaction,
+                OwnerAnswerCountAtDelivery = ownerAnswerCountAtDelivery,
+                DeliveredUtc = DateTime.UtcNow,
+                Nudged = false,
+            };
+        }
     }
 
     /// <summary>Silence is TOTAL for a topic: its mirrored entries AND its alerts.</summary>
@@ -4150,6 +4444,16 @@ internal sealed class BridgeEngineModel(
         var client = _telegramClient
             ?? throw new Exception("Send_QuestionWithButtons_Async called without a Telegram client");
 
+        // THE SECOND-OPEN-QUESTION COACHING IS GONE, and the hold is why (owner ruling, 2026-09-11:
+        // one question at a time is the ONLY way — when three or four arrive at once their answers
+        // conflict). Its text told the asker that "both are live and both are tappable, but a TYPED
+        // reply now binds to neither", and under the hold that is FALSE for the ordinary Remote case:
+        // the second question never reaches the phone while the first is unanswered, so there is no
+        // second live question to warn about. AnswerBinding_Decider's two-open branch is still
+        // reachable — terminal presence raises no flag, the ten-minute cap expires one with the
+        // question still open, and /pc lifts a standing block — but those are the app's own routes,
+        // not something to coach an asker about at the moment it asks.
+
         // THE SAME QUESTION IS NOT ASKED TWICE. A session that re-asks what is still open on the
         // phone — word for word, buttons live, perhaps already tapped and waiting for its code —
         // would put a second copy under the first, and the owner reads that as being asked twice
@@ -4191,43 +4495,9 @@ internal sealed class BridgeEngineModel(
             }
         }
 
-        // A SECOND OPEN QUESTION IS COACHED, NOT REFUSED — and the refusal was tried first.
-        //
-        // `kit/commands/supervisor.md:323` carries "A QUESTION ENDS YOUR TURN — one open question at
-        // a time" as a HARD RULE, and 721 lines later the same file says "build that and ask in
-        // passing". Nothing here ever counted, so the owner ended up with a merge question, 004, 267
-        // and 277 live at once and reported that they could not answer a moving target.
-        //
-        // ENFORCING IT AS A HARD CAP BROKE SOMETHING REAL, which is how this ended up advisory:
-        // DecisionStateSurvivesARestartTests opens two questions in one orchestration on purpose,
-        // /pending filters a topic's questions in the plural, and every question already carries its
-        // own nonce, deadline and default. The app deliberately supports several open decisions and
-        // made each one individually resolvable. The hole was never the count — it was that a TYPED
-        // reply could not be attributed, and AnswerBinding_Decider now closes exactly that: with two
-        // open, a typed reply binds nothing and the owner taps the one they meant.
-        //
-        // So the count is a smell to tell the session about, not a thing to prevent. The audience is
-        // Agent, so this coaching never reaches the phone.
-        // DECIDED BEFORE THE SEND, so the coaching below is not written about questions this send is
-        // about to close — and swept AFTER it, so a send that fails leaves the older ones open.
+        // DECIDED BEFORE THE SEND, so what is swept is not a question this send is about to close —
+        // and swept AFTER it, so a send that fails leaves the older ones open.
         var toSupersede = Find_QuestionsToSupersede(channel.OrchId);
-
-        if (toSupersede.Count == 0 && Would_BeASecondOpenQuestion(channel.OrchId))
-        {
-            _log.Log_Info(
-                channel.OrchId,
-                "a second question went out while one was still open — the owner must tap, since a typed reply cannot be bound");
-
-            ChannelAppender.Append_AppEntry(
-                channel.FilePath,
-                AppEntryAudiences.Agent,
-                "a second question while one is still open",
-                "A question of yours was already open with the owner when this one went out. Both are "
-                + "live and both are tappable, but a TYPED reply now binds to neither — the app cannot "
-                + "tell which one they meant, so it will leave both open rather than guess. Prefer "
-                + "waiting for the first answer.",
-                DateTime.Now);
-        }
 
         var prompt = questionPrompt;
 
@@ -4872,29 +5142,13 @@ internal sealed class BridgeEngineModel(
                         continue;
                     }
 
-                    _store.Set_SupervisorModelOverride(request.OrchId, request.Model);
-                    SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_SupervisorPidFile(request.OrchId));
-                    _launcher.Respawn_Supervisor(request.OrchId);
+                    // The same apply path the phone's /model uses, so the two cannot drift.
+                    Apply_Dial(request.OrchId, Telegram.ModelEffortKinds.Model, Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE, request.Model, request.Reason);
                 }
                 else
                 {
-                    _store.Set_ImplementerModelOverride(request.OrchId, request.Model);
-                    var session = _store.Get_Session(request.OrchId);
-
-                    foreach (var member in session.Members)
-                    {
-                        if (member.ClosedUtc != null)
-                            continue;
-
-                        SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(request.OrchId, member.MemberId));
-                        _launcher.Respawn_Implementer(request.OrchId, member.MemberId);
-                    }
+                    Apply_Dial(request.OrchId, Telegram.ModelEffortKinds.Model, Telegram.ModelEffortButton_Data.IMPLEMENTER_ROLE, request.Model, request.Reason);
                 }
-
-                Append_OrchestrationAppEntry(
-                    request.OrchId, AppEntryAudiences.Owner,
-                    $"model set: {request.Role} → {request.Model} — {request.Reason}",
-                    "Affected sessions respawned on the new model; they resume from their channels.");
             }
             catch (Exception ex)
             {
@@ -5114,12 +5368,11 @@ internal sealed class BridgeEngineModel(
                     // answers something asked, or reports being blocked). The orchestration would come
                     // up, get a topic, do the work and tell the owner nothing — asked from the phone,
                     // answered into a room the phone never rang for.
-                    lock (_ownerStateLock)
-                        _ownerAwaitingAnswer.Add(session.OrchId);
-
-                    // Persisted for the reason R1 gives about its own flag: an answer in flight across
-                    // a restart must not be silently downgraded to narration on the way back up.
-                    Persist_EngineState();
+                    //
+                    // THE TASK IS ALREADY IN THE CHANNEL at this point (taskFiled), so this IS the
+                    // delivery moment for it — the same instant Flush_OwnerDeliveries_Async raises it
+                    // for a typed message.
+                    Raise_OwnerWait(session.OrchId);
                 }
 
                 var crew = isBasic
@@ -7022,6 +7275,17 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_CostReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command != null && Telegram.ModelEffortCommand_Parser.Is_Command(command, MODEL_COMMAND))
+                    {
+                        // Takes an argument, so it is matched on its leading word — the lexer hands back
+                        // the whole remainder ("model fable 5.1"), and equality would only ever see the
+                        // bare form.
+                        await Handle_DialCommand_Async(client, message.MessageThreadId, command, Telegram.ModelEffortKinds.Model, cancellationToken);
+                    }
+                    else if (command != null && Telegram.ModelEffortCommand_Parser.Is_Command(command, EFFORT_COMMAND))
+                    {
+                        await Handle_DialCommand_Async(client, message.MessageThreadId, command, Telegram.ModelEffortKinds.Effort, cancellationToken);
+                    }
                     else if (command == "limits")
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
@@ -7065,6 +7329,10 @@ internal sealed class BridgeEngineModel(
                     else if (command == "done")
                     {
                         await Toggle_Done_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "pause")
+                    {
+                        await Toggle_Paused_Async(client, message.MessageThreadId, cancellationToken);
                     }
                     else if (command == "refresh")
                     {
@@ -7907,6 +8175,380 @@ internal sealed class BridgeEngineModel(
         await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
     }
 
+    const string MODEL_COMMAND = "model";
+    const string EFFORT_COMMAND = "effort";
+
+    /// <summary>
+    /// /model and /effort from the phone (owner request, 2026-09-09). Bare → buttons. A typed value
+    /// resolves through the catalogue and is applied; one that does not resolve is answered with the
+    /// buttons rather than a guess — "even better if I just write the command and then I get
+    /// prompted with the possible options so I don't have to worry about spelling mistakes." In a
+    /// crew a typed value with no role asks which role with two buttons, because applying it to
+    /// both would respawn an implementer the owner may not have meant.
+    /// </summary>
+    async Task Handle_DialCommand_Async(
+        ITelegramApiClient client, long? messageThreadId, string command, Telegram.ModelEffortKinds kind, CancellationToken cancellationToken)
+    {
+        var verb = Dial_Verb(kind);
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                $"/{verb} works inside an orchestration's own topic — there is no session here to set it on.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var (role, argument) = Telegram.ModelEffortCommand_Parser.Parse_Argument(command, verb);
+            var hasSupervisor = !Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc);
+
+            // The same guard the set-model request has: spawning a supervisor into a basic
+            // orchestration flips its shape for good.
+            if (role == Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE && !hasSupervisor)
+            {
+                await Send_DirectReply_BestEffort_Async(
+                    client, messageThreadId,
+                    $"This is a basic orchestration — there is no supervisor to set. Its one session sits on the implementer slot: /{verb} imp <value>, or just /{verb} for the buttons.",
+                    cancellationToken);
+
+                return;
+            }
+
+            if (argument.Length == 0)
+            {
+                await Send_DialPrompt_Async(client, messageThreadId, session, Build_DialPrompt(kind, session.OrchId, hasSupervisor, role), cancellationToken);
+                return;
+            }
+
+            var value = Resolve_DialValue_OrNull(kind, argument);
+
+            if (value == null)
+            {
+                var prompt = Build_DialPrompt(kind, session.OrchId, hasSupervisor, role);
+
+                await Send_DialPrompt_Async(
+                    client, messageThreadId, session, ($"I don't know a {verb} called '{argument}'. {prompt.Text}", prompt.Rows), cancellationToken);
+
+                return;
+            }
+
+            if (role == null && hasSupervisor)
+            {
+                await Send_DialPrompt_Async(
+                    client, messageThreadId, session, Telegram.ModelEffortPrompt_Builder.Build_RolePickPrompt(kind, session.OrchId, value), cancellationToken);
+
+                return;
+            }
+
+            Apply_Dial(session.OrchId, kind, role ?? Telegram.ModelEffortButton_Data.IMPLEMENTER_ROLE, value, $"/{verb} from the phone");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, $"/{verb} failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"/{verb} failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// A /model or /effort button. The payload is stateless (orchestration, role, value), so the
+    /// tap is applied here directly and never reaches an agent as a synthetic owner message.
+    /// </summary>
+    async Task<bool> Try_HandleModelEffortTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
+    {
+        var parsed = Telegram.ModelEffortButton_Data.Parse_OrNull(tap.Data);
+
+        if (parsed == null)
+            return false;
+
+        var (kind, orchId, role, value) = parsed.Value;
+        var verb = Dial_Verb(kind);
+
+        // Answered before the work: a respawn takes seconds, and an unanswered callback leaves the
+        // button spinning on the owner's phone for the whole of it.
+        await Answer_CallbackTap_BestEffort_Async(client, tap.CallbackQueryId, "✓", cancellationToken);
+
+        if (Note_OwnerSpoke_AndWasAway())
+            await Exit_AwayMode_Async(cancellationToken);
+
+        try
+        {
+            var session = _store.Get_Session(orchId);
+
+            if (session.ClosedUtc != null)
+            {
+                await Send_DirectReply_BestEffort_Async(client, tap.MessageThreadId, $"{orchId} is closed — nothing to set the {verb} on.", cancellationToken);
+                return true;
+            }
+
+            if (role == Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE && Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc))
+            {
+                await Send_DirectReply_BestEffort_Async(
+                    client, tap.MessageThreadId, $"{orchId} is a basic orchestration — there is no supervisor to set. Tap an imp button instead.", cancellationToken);
+
+                return true;
+            }
+
+            Apply_Dial(orchId, kind, role, value, "tapped on the phone");
+            await Record_DialTap_BestEffort_Async(client, tap.MessageId, $"✓ {verb} → {Describe_DialValue(kind, value)} for {role}", cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(orchId, $"{verb} tap failed", ex);
+            await Send_DirectReply_BestEffort_Async(client, tap.MessageThreadId, $"{verb} change failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+
+        return true;
+    }
+
+    /// <summary>Rewrites the prompt into a record of what was tapped; a failure here costs nothing but the record.</summary>
+    async Task Record_DialTap_BestEffort_Async(ITelegramApiClient client, long? messageId, string text, CancellationToken cancellationToken)
+    {
+        if (messageId == null)
+            return;
+
+        try
+        {
+            await client.Edit_MessageText_Async(messageId.Value, text, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"could not rewrite the tapped prompt: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Stores the override and respawns the sessions it applies to; they pick up from their
+    /// channels. ONE implementation for the phone (/model, /effort, their buttons) and for the
+    /// agents' set-model request, so the two can never disagree about what "apply" means.
+    ///
+    /// <para>
+    /// A BRIDGE-DRIVEN SESSION IS STORED-AND-LEFT, and that is the only difference. It has no pid
+    /// file to kill and no `claude` command line to re-flag — the dispatcher runs its turns — so
+    /// respawning it would open a terminal window beside a session the app is already driving, and
+    /// killing a pid file that was never written would be luck rather than design. (The turn command
+    /// does not carry the effort flag yet; plan 02 adds it to PrintTurnCommand_Builder, and until
+    /// then a stored effort reaches a bridge-driven session at its next SPAWN, not its next turn.)
+    /// </para>
+    /// </summary>
+    void Apply_Dial(string orchId, Telegram.ModelEffortKinds kind, string role, string value, string reason)
+    {
+        var verb = Dial_Verb(kind);
+        var restarted = 0;
+
+        if (role == Telegram.ModelEffortButton_Data.SUPERVISOR_ROLE)
+        {
+            Store_SupervisorDial(orchId, kind, value);
+
+            if (Restart_ForDial_IfItHasAShell(
+                    orchId, Running.SessionRoles.Supervisor, Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
+                    verb, _paths.Get_SupervisorPidFile(orchId), () => _launcher.Respawn_Supervisor(orchId)))
+                restarted++;
+        }
+        else if (role == Telegram.ModelEffortButton_Data.IMPLEMENTER_ROLE)
+        {
+            Store_ImplementerDial(orchId, kind, value);
+            var session = _store.Get_Session(orchId);
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc != null)
+                    continue;
+
+                var memberId = member.MemberId;
+                var memberRole = Running.SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId));
+
+                if (Restart_ForDial_IfItHasAShell(
+                        orchId, memberRole, memberId, verb, _paths.Get_ImplementerPidFile(orchId, memberId), () => _launcher.Respawn_Implementer(orchId, memberId)))
+                {
+                    restarted++;
+                }
+            }
+        }
+        else
+        {
+            throw new Exception($"Unhandled dial role '{role}' for {verb} → {value} on {orchId}");
+        }
+
+        _log.Log_Info(orchId, $"{verb} set: {role} → {value} — {reason}");
+
+        // THE BODY SAYS WHAT ACTUALLY HAPPENED. Master's sentence — "affected sessions respawned" —
+        // was true of every session in a world where the dial always killed and respawned. It is not
+        // true of a bridge-driven one, and an owner-facing line that describes a restart nobody
+        // performed is the class of thing the log exists to prevent.
+        Append_OrchestrationAppEntry(
+            orchId, AppEntryAudiences.Owner,
+            $"{verb} set: {role} → {Describe_DialValue(kind, value)} — {reason}",
+            restarted == 0
+                ? $"Nothing was restarted — this role's sessions are driven by the app, not by a window. The new {verb} applies at their next spawn."
+                : $"{restarted} session(s) respawned on the new {verb}; they resume from their channels.");
+    }
+
+    /// <summary>
+    /// The kill-and-respawn half of a dial, SKIPPED for a session the bridge drives.
+    ///
+    /// <para>
+    /// THE QUESTION IS THIS FILE'S OWN <see cref="Is_BridgeDriven(Running.SessionRoles, string, string)"/>,
+    /// registration included, and NOT the config runner alone. The two disagree for as long as a
+    /// runner flip takes to land: the owner sets the supervisor to <c>print</c> while its terminal
+    /// session is still alive in its window, and until that session dies the config says
+    /// bridge-driven and the world says otherwise. Deciding from the config there would store the
+    /// override, restart nothing, and tell the owner "nothing was restarted — this role's sessions
+    /// are driven by the app", about a session sitting in a window on their screen whose model never
+    /// changes. A fourth copy of this predicate is also how the three that exist would drift.
+    /// </para>
+    /// </summary>
+    bool Restart_ForDial_IfItHasAShell(string orchId, Running.SessionRoles role, string memberId, string verb, string pidFile, Action respawn)
+    {
+        if (Is_BridgeDriven(role, orchId, memberId))
+        {
+            _log.Log_Info(orchId, $"{verb} override stored for {Running.SessionRole_Names.Get_ConfigKey(role)} — a bridge-driven session has no window to restart, so it picks the flag up at its next spawn (the turn command does not carry it yet)");
+            return false;
+        }
+
+        SessionTerminator.Kill_SessionTree_ByPidFile(pidFile);
+        respawn();
+        return true;
+    }
+
+    void Store_SupervisorDial(string orchId, Telegram.ModelEffortKinds kind, string value)
+    {
+        switch (kind)
+        {
+            case Telegram.ModelEffortKinds.Model:
+                _store.Set_SupervisorModelOverride(orchId, value);
+                break;
+            case Telegram.ModelEffortKinds.Effort:
+                _store.Set_SupervisorEffortOverride(orchId, value);
+                break;
+            default:
+                throw new Exception($"Unhandled ModelEffortKinds: {kind}");
+        }
+    }
+
+    void Store_ImplementerDial(string orchId, Telegram.ModelEffortKinds kind, string value)
+    {
+        switch (kind)
+        {
+            case Telegram.ModelEffortKinds.Model:
+                _store.Set_ImplementerModelOverride(orchId, value);
+                break;
+            case Telegram.ModelEffortKinds.Effort:
+                _store.Set_ImplementerEffortOverride(orchId, value);
+                break;
+            default:
+                throw new Exception($"Unhandled ModelEffortKinds: {kind}");
+        }
+    }
+
+    /// <summary>
+    /// The buttons, headed by what each live session currently reports — the same probe the pulse
+    /// reads, never the override, because a session respawned before an override landed still runs
+    /// the old one.
+    ///
+    /// <para>
+    /// SENT STRAIGHT THROUGH THE CLIENT, silent, like the other two button-ROW senders in this file:
+    /// the prose sender has no button-rows overload, because there is no HTML-with-rows call on
+    /// <see cref="ITelegramApiClient"/> to fall back from — and the text here is the app's own, not
+    /// an agent's Markdown.
+    /// </para>
+    /// </summary>
+    async Task Send_DialPrompt_Async(
+        ITelegramApiClient client, long? messageThreadId, IOrchestrationSession session,
+        (string Text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Rows) prompt, CancellationToken cancellationToken)
+    {
+        var now = Describe_CurrentDials_OrNull(session);
+        var text = now == null ? prompt.Text : $"now: {now}\n{prompt.Text}";
+
+        var messageId = await client.Send_MessageWithButtonRows_Async(messageThreadId, text, prompt.Rows, TelegramSendSounds.Silent, cancellationToken);
+        Remember_TopicMessage(messageThreadId, messageId);
+    }
+
+    /// <summary>"sup Fable 5.1 xhigh · imp-1 Sonnet 5 high" — what each live session reports, or null when nothing has reported yet.</summary>
+    string? Describe_CurrentDials_OrNull(IOrchestrationSession session)
+    {
+        List<string> parts = [];
+
+        var supervisorReading = UsageTotals_Reader.Read_ModelReading_OrNull(
+            Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE));
+
+        if (supervisorReading != null)
+            parts.Add($"sup {ModelReading_Formatter.Describe(supervisorReading)}");
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null)
+                continue;
+
+            var reading = UsageTotals_Reader.Read_ModelReading_OrNull(
+                Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE));
+
+            if (reading != null)
+                parts.Add($"{member.MemberId} {ModelReading_Formatter.Describe(reading)}");
+        }
+
+        return parts.Count == 0 ? null : string.Join(" · ", parts);
+    }
+
+    static string Dial_Verb(Telegram.ModelEffortKinds kind)
+    {
+        return kind switch
+        {
+            Telegram.ModelEffortKinds.Model => MODEL_COMMAND,
+            Telegram.ModelEffortKinds.Effort => EFFORT_COMMAND,
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
+    }
+
+    static string? Resolve_DialValue_OrNull(Telegram.ModelEffortKinds kind, string argument)
+    {
+        return kind switch
+        {
+            Telegram.ModelEffortKinds.Model => Telegram.ModelChoices.Resolve_OrNull(argument),
+            Telegram.ModelEffortKinds.Effort => Telegram.EffortLevels.Resolve_OrNull(argument),
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
+    }
+
+    static string Describe_DialValue(Telegram.ModelEffortKinds kind, string value)
+    {
+        return kind switch
+        {
+            Telegram.ModelEffortKinds.Model => Telegram.ModelChoices.Describe(value),
+            Telegram.ModelEffortKinds.Effort => value,
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
+    }
+
+    static (string Text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Rows) Build_DialPrompt(
+        Telegram.ModelEffortKinds kind, string orchId, bool hasSupervisor, string? role)
+    {
+        return (kind, role) switch
+        {
+            (Telegram.ModelEffortKinds.Model, null) => Telegram.ModelEffortPrompt_Builder.Build_ModelPrompt(orchId, hasSupervisor),
+            (Telegram.ModelEffortKinds.Model, { } wantedRole) => Telegram.ModelEffortPrompt_Builder.Build_ModelPrompt_ForRole(orchId, wantedRole),
+            (Telegram.ModelEffortKinds.Effort, null) => Telegram.ModelEffortPrompt_Builder.Build_EffortPrompt(orchId, hasSupervisor),
+            (Telegram.ModelEffortKinds.Effort, { } wantedRole) => Telegram.ModelEffortPrompt_Builder.Build_EffortPrompt_ForRole(orchId, wantedRole),
+            _ => throw new Exception($"Unhandled ModelEffortKinds: {kind}"),
+        };
+    }
+
     /// <summary>
     /// /limits — the 5-hour and weekly usage windows, per model where the status line reports
     /// them. Data comes from the status-line probe files; every session writes what its Claude
@@ -8226,6 +8868,10 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // Counted BEFORE the ritual lands, exactly as Flush_OwnerDeliveries_Async counts before an
+        // owner entry: a later rise can only mean the session wrote back about THIS request.
+        var ownerAnswerCountBefore = Count_OwnerAnswerEntries(_paths.Get_OwnerChannelFile(session.OrchId));
+
         if (!Append_OrchestrationAppEntry(session.OrchId, AppEntryAudiences.Agent, MergeRitual_Wording.SUBJECT, MergeRitual_Wording.Build()))
         {
             // Told rather than swallowed: the session's own report is the only other feedback this
@@ -8240,10 +8886,22 @@ internal sealed class BridgeEngineModel(
 
         Raise_OrchestrationActivity(session.OrchId);
 
-        await Send_DirectReply_BestEffort_Async(
+        var receiptMessageId = await Send_DirectReply_BestEffort_Async(
             client, messageThreadId,
             "Asked. It merges, runs the full suite on the merged tree, and pushes only if that is green — then cleans up and reports.",
             cancellationToken);
+
+        // /merge IS AN OWNER REQUEST, and it was the one the app never watched. The ritual lands as
+        // an agent-tagged app entry, so nothing raised the owner's wait and nothing tracked the
+        // reply: the session's report — "merged as 3f2a1c9, 214 tests green" — was never credited as
+        // the answer, and its turn end was never announced (owner, 2026-09-10: *"I never quite know
+        // if the merge has actually been done or not"*). Now the report is the credited answer, the
+        // "Asked." line above is the receipt the busy narration edits, and the turn-ended
+        // announcement closes it.
+        //
+        // The receipt is a real message, never a reaction: there is no owner message to react to.
+        Raise_OwnerWait(session.OrchId);
+        Track_OwnerReply(session.OrchId, messageThreadId, receiptMessageId, receiptWasReaction: false, ownerAnswerCountBefore);
     }
 
     async Task Toggle_AwaitingTest_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
@@ -8640,6 +9298,149 @@ internal sealed class BridgeEngineModel(
         _store.Set_TelegramMode(session.OrchId, TelegramDeliveryModes.Normal);
 
         _log.Log_Info(session.OrchId, "the owner wrote to a finished topic — ✅ cleared and unmuted so their reply can reach them");
+    }
+
+    /// <summary>
+    /// A PAUSED TOPIC WAKES UP THE MOMENT THE OWNER WRITES IN IT, for the rule this file already
+    /// learned the hard way: *"a mode they must remember to turn off is one they get trapped by"*.
+    ///
+    /// It matters more here than for /done, because pause stops the SESSION as well as the texting.
+    /// Without it the owner would write into a paused topic, get the ✓ tick (acks are ungated), and
+    /// then wait on an orchestration the app has been told not to poke. Writing in a topic is the
+    /// plainest possible statement that they are not done with it after all.
+    ///
+    /// ONLY REAL MESSAGES REACH HERE: recognised commands are dispatched before routing, so reading
+    /// a paused topic with /progress leaves it asleep.
+    /// </summary>
+    void Wake_PausedTopic_IfNeeded(IOrchestrationSession session)
+    {
+        if (!session.Paused)
+            return;
+
+        _store.Set_Paused(session.OrchId, false);
+        Sync_PausedFlag(session.OrchId, paused: false);
+        _pausedAtUtc.Remove(session.OrchId);
+
+        _log.Log_Info(session.OrchId, "the owner wrote to a paused topic — 💤 cleared, the orchestration is awake again");
+    }
+
+    /// <summary>
+    /// /pause — "I am done with this one for now, but I don't want to close it yet" (owner,
+    /// 2026-09-09). Traffic held, nothing pushed, session dormant. ClosedUtc kills the terminals and
+    /// deletes the topic; this does neither, and every part of it is reversible.
+    ///
+    /// <para>
+    /// IT IS A TOGGLE, which is what the owner asked for, WITH THE GUARD /done had to learn. A
+    /// rename takes a moment to surface in Telegram's topic list, so when nothing appears the owner
+    /// sends the command again — and every historical use of the /done toggle was undone that way
+    /// within 17-23 seconds. So a second /pause inside PAUSE_REASSERT_SECONDS RE-ASSERTS the pause
+    /// rather than lifting it; after that it toggles, as a toggle should. Lifting it early is never
+    /// blocked: writing anything in the topic does it (Wake_PausedTopic_IfNeeded).
+    /// </para>
+    /// <para>
+    /// The delivery mode is deliberately NOT touched, unlike /done which mutes underneath. Pause
+    /// outranks the mode in EffectiveMode_Resolver, so whatever the topic was set to comes back by
+    /// itself when the pause lifts — no state to restore, and nothing to restore it wrongly.
+    /// </para>
+    /// </summary>
+    async Task Toggle_Paused_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/pause works inside an orchestration's own topic — there is nothing here to pause.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            var reasserting = session.Paused
+                && _pausedAtUtc.TryGetValue(session.OrchId, out var pausedAtUtc)
+                && (DateTime.UtcNow - pausedAtUtc).TotalSeconds < PAUSE_REASSERT_SECONDS;
+
+            var wantPaused = reasserting || !session.Paused;
+
+            _store.Set_Paused(session.OrchId, wantPaused);
+            Sync_PausedFlag(session.OrchId, wantPaused);
+
+            if (wantPaused)
+                _pausedAtUtc[session.OrchId] = DateTime.UtcNow;
+            else
+                _pausedAtUtc.Remove(session.OrchId);
+
+            _log.Log_Info(session.OrchId, wantPaused
+                ? (reasserting
+                    ? "/pause — already paused, re-asserted: a second tap inside the rename lag is not an un-pause"
+                    : "/pause — paused: traffic held, nothing pushed, session dormant")
+                : "/pause — lifted: held traffic delivers now and the session is expected to work again");
+
+            Raise_OrchestrationActivity(session.OrchId);
+
+            // The name is pushed BEFORE the reply, so the reply can quote what the topic actually
+            // reads — the /done lesson: a confirmation that disagrees with the topic list leaves the
+            // owner with no way to tell which of the two is right.
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+
+            var updated = _store.Get_Session_OrNull(session.OrchId) ?? session;
+            var wantedName = Build_WantedTopicName(updated);
+            var renamed = _appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName;
+
+            string reply;
+
+            if (wantPaused)
+            {
+                reply = renamed
+                    ? $"💤 paused — “{wantedName}”. Nothing more reaches you from here and the session sleeps; whatever it writes is kept and arrives when you lift it. Write anything in this topic, or tap /pause again later, to wake it."
+                    : $"💤 paused — traffic held and the session dormant, but Telegram has not accepted the name “{wantedName}” yet. It retries on its own; the pause itself is saved.";
+            }
+            else
+            {
+                reply = $"▶ resumed — “{wantedName}”. Anything written while it slept is on its way now.";
+            }
+
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, reply, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "/pause failed", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/pause failed — nothing was changed: {ex.Message}", cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Makes the .paused marker match the session, and says so when it cannot. The file is what a
+    /// BASH hook can test, and it is the half of pause the SESSION obeys — a paused session with no
+    /// flag is refused its turn end and keeps working, which is the one thing pause promised.
+    /// </summary>
+    void Sync_PausedFlag(string orchId, bool paused)
+    {
+        if (Status.PausedFlag_Marker.Sync(_paths, orchId, paused, out var failure))
+            _log.Log_Info(orchId, paused
+                ? "paused flag raised — the turn-end hook will now let this session stop"
+                : "paused flag cleared");
+
+        if (failure != null)
+            _log.Log_Warning(orchId, failure);
+    }
+
+    /// <summary>
+    /// Reconciles every orchestration's .paused marker with its session, on the tick — the
+    /// DERIVED-NEVER-AUTHORED rule the meeting flag states: a file that lifts a guard must not be
+    /// able to outlive the state it stands for, so an app that died with one on disk clears it on
+    /// the way back in. A closed orchestration never keeps one either.
+    /// </summary>
+    void Sync_PausedFlags()
+    {
+        foreach (var session in Sessions_ThisTick())
+            Sync_PausedFlag(session.OrchId, session.ClosedUtc == null && session.Paused);
     }
 
     async Task Request_Close_FromCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
@@ -9229,6 +10030,7 @@ internal sealed class BridgeEngineModel(
             baseName,
             new TelegramDeliveryMode_Glyphs.TopicNameFlags(
                 OwnerReply: Last_OwnerReplyState(session.OrchId),
+                IsPausedByOwner: session.Paused,
                 IsPausedForUsageLimit: Is_SupervisorPausedForUsageLimit(session),
                 IsClosed: session.ClosedUtc != null,
                 IsAwaitingTest: session.AwaitingTest,
@@ -9442,7 +10244,11 @@ internal sealed class BridgeEngineModel(
 
         foreach (var session in _store.Load_All())
         {
-            if (session.ClosedUtc != null)
+            // PAUSED sessions are not woken and are not counted as not-woken either: /resume means
+            // "the limit reset, carry on", and a paused orchestration has nothing to carry on with
+            // until the owner lifts it. Waking it here would undo the pause from a command aimed at
+            // something else entirely.
+            if (session.ClosedUtc != null || session.Paused)
                 continue;
 
             wokenOrchestrations++;
@@ -10097,7 +10903,9 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var session in Sessions_ThisTick())
         {
-            if (session.ClosedUtc != null)
+            // PAUSED: every member of a paused orchestration is idle BY INSTRUCTION, so flagging
+            // them as idle would be the app complaining about the state the owner just asked for.
+            if (session.ClosedUtc != null || session.Paused)
                 continue;
 
             // Above the SIGNATURE, not at the append: storing it while suppressed marks this exact
@@ -10574,6 +11382,13 @@ internal sealed class BridgeEngineModel(
         // generic path below, which does not recognise the data and would answer the owner "expired"
         // for a button that is meant to work every time they press it.
         if (await Try_HandleTopicCommandTap_Async(client, tap, cancellationToken))
+            return;
+
+        // A /model or /effort choice is the app's own decision as well, and it lands here for the
+        // same reason the bar does: the payload names the orchestration, the role and the value, so
+        // the tap is applied directly. Through the generic path below it would become a synthetic
+        // owner message and land in an agent's channel.
+        if (await Try_HandleModelEffortTap_Async(client, tap, cancellationToken))
             return;
 
         PendingButtonRecord? registered;
@@ -11394,7 +12209,13 @@ internal sealed class BridgeEngineModel(
     /// owner's ruling covers all of them — *"status, receipts and app bookkeeping do not ring"*. The
     /// few that must ring say so at the call site, which is the only reason it is a parameter at all.
     /// </summary>
-    async Task Send_DirectReply_BestEffort_Async(
+    /// <returns>
+    /// The id of the message it sent, or null if there was none (a refused send, a sender that
+    /// produced no message). Nearly every caller ignores it; <c>/merge</c> does not — that reply is
+    /// the RECEIPT its pending-reply tracker edits, exactly as the ✓ is for a typed owner message, so
+    /// the id has to come back out of here rather than be sent a second time.
+    /// </returns>
+    async Task<long?> Send_DirectReply_BestEffort_Async(
         ITelegramApiClient client,
         long? messageThreadId,
         string text,
@@ -11409,9 +12230,11 @@ internal sealed class BridgeEngineModel(
             // its markers showing — while the client's own doc comment claimed every owner-facing
             // send was HTML. The sender falls back to plain text on a parse refusal, so the worst
             // case is exactly today's behaviour.
-            Remember_TopicMessage(
-                messageThreadId,
-                await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, messageThreadId, text, sound, cancellationToken));
+            var messageId = await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, messageThreadId, text, sound, cancellationToken);
+
+            Remember_TopicMessage(messageThreadId, messageId);
+
+            return messageId;
         }
         // FILTERED — THE TOKEN DECIDES, which is this file's canonical account (see
         // Refresh_TopicStatusLines_Async) applied to the one best-effort sender that still had the
@@ -11430,6 +12253,8 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Direct reply send failed: {ex.Message}");
+
+            return null;
         }
     }
 
@@ -11608,6 +12433,13 @@ internal sealed class BridgeEngineModel(
     bool Append_SupervisorAttention_UnlessMeeting(string orchId, string subject, string body, OwnerPresenceModes presence, Channels.AppEntryAudiences audience = Channels.AppEntryAudiences.Agent)
     {
         if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
+            return false;
+
+        // PAUSED, for the same reason and at the same place: this is the one site every piece of
+        // attention traffic passes through, and the owner asked for a state in which nothing pokes
+        // the session at all. Unlike a meeting, nothing here is deferred-and-resent — the pause
+        // ends when they lift it, and whatever was worth saying will still be true then.
+        if (Is_Paused(orchId))
             return false;
 
         // The return value means "an entry is on disk", so a failed append must answer FALSE. It
@@ -12147,12 +12979,6 @@ internal sealed class BridgeEngineModel(
 
         if (channel.IsOwnerChannel && OwnerPresence_Policy.Should_RaiseAwaitingAnswer(Resolve_Presence(channel.OrchId)))
             Raise_AwaitingAnswerFlag(channel.OrchId);
-    }
-
-    bool Would_BeASecondOpenQuestion(string orchId)
-    {
-        lock (_ownerStateLock)
-            return _openQuestions.Values.Any(question => question.OrchId == orchId);
     }
 
     /// <summary>
@@ -12896,6 +13722,7 @@ internal sealed class BridgeEngineModel(
             channelFile = _paths.Get_OwnerChannelFile(orchId);
 
             Wake_DoneTopic_IfNeeded(session);
+            Wake_PausedTopic_IfNeeded(session);
         }
 
         string segmentText;
@@ -12988,21 +13815,12 @@ internal sealed class BridgeEngineModel(
             _stallAlertedQuestionKeyByOrchId.Remove(orchId);
         }
 
-        // The owner is engaged, so nothing is deadlocked — a suppressed entry from before must not
-        // surface later, out of context, as if it were still waiting for them.
-        lock (_ownerStateLock)
-        {
-
-            // Whatever the supervisor says next is the answer to this, and it MUST reach them.
-            _ownerAwaitingAnswer.Add(orchId);
-        }
-
-        // R1 SURVIVES A RESTART TOO, which it did not before. The flag is what makes the answer to
-        // the owner's own question push instead of being re-read as narration, and losing it while
-        // an answer was still in flight dropped that answer silently — the exact failure R1 names,
-        // reached by closing the app instead of by a failed send.
-        Persist_EngineState();
-
+        // THE ANSWER CREDIT IS NOT RAISED HERE. This is the BUFFERING moment: the owner's words are
+        // in the aggregation window and are not in the channel yet, so a session writing right now
+        // cannot be answering them — and on 2026-09-10 exactly that happened, a status line written
+        // one second before the entry landed took the one-shot credit and the real answer that
+        // followed was filed as narration. Raise_OwnerWait runs at DELIVERY, from
+        // Flush_OwnerDeliveries_Async.
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
 
@@ -13138,6 +13956,11 @@ internal sealed class BridgeEngineModel(
         }
 
         _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
+
+        // DELIVERED — so from this instant whatever the session says next is the answer, and it must
+        // reach them. Raised here rather than at buffering: see Raise_OwnerWait.
+        Raise_OwnerWait(target.OrchId);
+
         Raise_OrchestrationActivity(target.OrchId);
 
         long? ownerMessageId;
@@ -13201,23 +14024,9 @@ internal sealed class BridgeEngineModel(
             await Show_Typing_BestEffort_Async(_telegramClient, target.ThreadId, cancellationToken);
 
             // Tracked until the supervisor actually answers — the owner must never be left
-            // with a bubble that never resolves into anything.
-            lock (_ownerStateLock)
-            {
-                _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
-                {
-                    ThreadId = target.ThreadId,
-                    ReceiptMessageId = receiptMessageId,
-
-                    // Publish returns null for BOTH "the reaction landed" and "there was nothing to
-                    // edit", so the fact is taken from the receipt path itself rather than inferred
-                    // from a null.
-                    ReceiptWasReaction = receiptWasReaction,
-                    OwnerAnswerCountAtDelivery = ownerAnswerCountBefore,
-                    DeliveredUtc = DateTime.UtcNow,
-                    Nudged = false,
-                };
-            }
+            // with a bubble that never resolves into anything. ONE construction site, shared with
+            // /merge, which is an owner request in every way that matters.
+            Track_OwnerReply(target.OrchId, target.ThreadId, receiptMessageId, receiptWasReaction, ownerAnswerCountBefore);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -13539,6 +14348,12 @@ internal sealed class BridgeEngineModel(
         foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
+                continue;
+
+            // PAUSED: skipped before the stamp for the same reason as a meeting — stamping here
+            // would restart the clock on every tick of a pause that may last days, so the first
+            // digest after they lift it would be a whole period late.
+            if (session.Paused)
                 continue;
 
             // MEETING: skipped BEFORE the stamp, deliberately. Stamping here would restart the
@@ -15094,7 +15909,13 @@ internal sealed class BridgeEngineModel(
                 // NOT WHILE QUEUED. "You have been mid-turn since it arrived" is false of a session
                 // that has not started, and the entry would only be read when the queued turn — which
                 // already carries the owner's message — finally runs. Written once it is running.
-                if (!supervisorQueued
+                // NOT TO A SESSION THAT HAS ALREADY ANSWERED. The notice says the owner's message is
+                // "still unanswered", and it ignored Answered: on 2026-09-10 it told a solo that had
+                // replied a minute earlier exactly that, the solo wrote another status line pointing
+                // at its own reply, and THAT extra line is what spent the credit the real answer
+                // needed. The owner quoted the solo's complaint about it the same morning.
+                if (!pending.Answered
+                    && !supervisorQueued
                     && !pending.BusyNoticeWritten
                     && (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds >= OWNER_REPLY_GRACE_SECONDS)
                 {

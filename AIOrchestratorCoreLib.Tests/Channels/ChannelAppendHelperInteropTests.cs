@@ -368,9 +368,43 @@ public class ChannelAppendHelperInteropTests : IDisposable
         Assert.Empty(ChannelEntry_Parser.Parse_All(File.ReadAllText(_channelFile)));
     }
 
+    /// <summary>
+    /// The interop fixture drives the real bash tool. On 2026-09-11 the suite ran inside a solo
+    /// session whose shell carried AIORCH_ROLE=solo / AIORCH_MEMBER=solo-1, <see cref="Run_Helper"/>'s
+    /// child process inherited them (a <see cref="ProcessStartInfo"/> with no explicit environment
+    /// copies the parent's), and eleven tests in this class were REFUSED with "--author 'implementer'
+    /// is not this session's identity" because <c>channel-append.sh</c> derives its identity from
+    /// AIORCH_MEMBER/AIORCH_ROLE and compares it against <c>--author</c> (see decision comment in
+    /// kit/bin/channel-append.sh's derive_author). A fixture that lets the parent's identity leak
+    /// tests the parent's shell, not the tool.
+    /// </summary>
+    [Fact]
+    public void TheTool_DoesNotInheritTheParentsOrchestrationIdentity()
+    {
+        Environment.SetEnvironmentVariable("AIORCH_ROLE", "solo");
+        Environment.SetEnvironmentVariable("AIORCH_MEMBER", "solo-1");
+        try
+        {
+            var bodyFile = Path.Combine(_tempFolder, "body.txt");
+            File.WriteAllText(bodyFile, "body\n");
+
+            var run = Run_Helper(
+                $"--channel \"{To_BashPath(_channelFile)}\" --author implementer --subject \"hello\" --body-file \"{To_BashPath(bodyFile)}\"",
+                environment: new Dictionary<string, string> { ["AIORCH_ROLE"] = "implementer", ["AIORCH_MEMBER"] = "implementer" });
+
+            Assert.Equal(0, run.ExitCode);
+            Assert.Contains("## [1] FROM implementer", File.ReadAllText(_channelFile));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AIORCH_ROLE", null);
+            Environment.SetEnvironmentVariable("AIORCH_MEMBER", null);
+        }
+    }
+
     readonly record struct HelperRun(int ExitCode, string StandardOutput, string StandardError);
 
-    static HelperRun Run_Helper(string arguments)
+    static HelperRun Run_Helper(string arguments, IReadOnlyDictionary<string, string>? environment = null)
     {
         var bashPath = Find_Bash_OrFail();
         var scriptPath = Find_Script_OrFail();
@@ -383,6 +417,15 @@ public class ChannelAppendHelperInteropTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
+
+        // The tool derives the author from AIORCH_ROLE / AIORCH_MEMBER. A test host started from inside
+        // an orchestrated shell inherits that shell's identity, so every AIORCH_* is removed first and only
+        // what the CALLER states is exported — measured 2026-09-11, eleven refusals from one leaked pair.
+        foreach (var key in startInfo.Environment.Keys.Where(k => k.StartsWith("AIORCH_", StringComparison.Ordinal)).ToList())
+            startInfo.Environment.Remove(key);
+        if (environment is not null)
+            foreach (var (key, value) in environment)
+                startInfo.Environment[key] = value;
 
         using var process = Process.Start(startInfo)
             ?? throw new Exception($"could not start bash at '{bashPath}'");

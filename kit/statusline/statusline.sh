@@ -36,9 +36,11 @@ if [ -n "$raw" ] && printf '%s' "$raw" | jq -e . >/dev/null 2>&1; then
 fi
 
 model=""
+effort=""
 cwd=""
 if [ "$json_valid" = 1 ]; then
     model=$(json_get '.model.display_name')
+    effort=$(json_get '.effort.level')
     # Split-Path -Leaf: the last segment after either separator, trailing separators ignored —
     # the payload can carry a Windows path even when this script runs elsewhere.
     cwd_full=$(json_get '.workspace.current_dir')
@@ -150,6 +152,14 @@ if [ "$json_valid" = 1 ]; then
     fi
 fi
 
+# The effort level rides NEXT TO THE MODEL — "Fable 5.1 · xhigh" — because the owner asked to see it
+# there (2026-09-09). Claude Code reports it as `effort.level` (low/medium/high/xhigh/max) and omits
+# the block when the model has no such dial, so an absent value leaves the line exactly as it was.
+effort_suffix=""
+if [ -n "$effort" ]; then
+    effort_suffix=" ${esc}[90m·${esc}[0m ${effort}"
+fi
+
 to_upper() {
     printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
 }
@@ -157,30 +167,30 @@ to_upper() {
 # --- Render ---
 case "$role" in
     supervisor)
-        printf '%s\n' "${esc}[1;91m SUPERVISOR ${esc}[0m${esc}[31m $(get_orch_label "$supervision_root" "$orch_id") ${esc}[0m ${model}${context_suffix}$(get_progress_suffix "$supervision_root" "$orch_id")"
+        printf '%s\n' "${esc}[1;91m SUPERVISOR ${esc}[0m${esc}[31m $(get_orch_label "$supervision_root" "$orch_id") ${esc}[0m ${model}${effort_suffix}${context_suffix}$(get_progress_suffix "$supervision_root" "$orch_id")"
         ;;
     solo)
         # THE SOLO CARRIES THE PROGRESS TOO (it owns PLAN.md in a basic orchestration), in ORANGE —
         # 256-colour 208, the 🟠 this session speaks with in the Telegram mirror — never member blue.
         member_upper=$(to_upper "$member")
         [ -n "$member_upper" ] || member_upper="SOLO"
-        printf '%s\n' "${esc}[1;38;5;208m ${member_upper} ${esc}[0m${esc}[38;5;208m $(get_orch_label "$supervision_root" "$orch_id") ${esc}[0m ${model}${context_suffix}$(get_progress_suffix "$supervision_root" "$orch_id")"
+        printf '%s\n' "${esc}[1;38;5;208m ${member_upper} ${esc}[0m${esc}[38;5;208m $(get_orch_label "$supervision_root" "$orch_id") ${esc}[0m ${model}${effort_suffix}${context_suffix}$(get_progress_suffix "$supervision_root" "$orch_id")"
         ;;
     implementer|reviewer)
         # NOT the members: an implementer's terminal showing the orchestration's overall percentage
         # would invite it to reason about work that is not its own.
         member_upper=$(to_upper "$member")
         [ -n "$member_upper" ] || member_upper="IMPLEMENTER"
-        printf '%s\n' "${esc}[1;94m ${member_upper} ${esc}[0m${esc}[34m $(get_orch_label "$supervision_root" "$orch_id") ${esc}[0m ${model}${context_suffix}"
+        printf '%s\n' "${esc}[1;94m ${member_upper} ${esc}[0m${esc}[34m $(get_orch_label "$supervision_root" "$orch_id") ${esc}[0m ${model}${effort_suffix}${context_suffix}"
         ;;
     communicator)
-        printf '%s\n' "${esc}[1;92m COMMUNICATOR ${esc}[0m${esc}[32m $(get_orch_label "$supervision_root" "$orch_id") ${esc}[0m ${model}${context_suffix}"
+        printf '%s\n' "${esc}[1;92m COMMUNICATOR ${esc}[0m${esc}[32m $(get_orch_label "$supervision_root" "$orch_id") ${esc}[0m ${model}${effort_suffix}${context_suffix}"
         ;;
     general)
-        printf '%s\n' "${esc}[1;93m GENERAL SUPERVISOR ${esc}[0m ${model}${context_suffix}"
+        printf '%s\n' "${esc}[1;93m GENERAL SUPERVISOR ${esc}[0m ${model}${effort_suffix}${context_suffix}"
         ;;
     *)
         # A session the app did not spawn still has a context window, and the owner reads these too.
-        printf '%s\n' "${model} · ${cwd}${context_suffix}"
+        printf '%s\n' "${model}${effort_suffix} · ${cwd}${context_suffix}"
         ;;
 esac

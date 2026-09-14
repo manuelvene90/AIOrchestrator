@@ -1,12 +1,17 @@
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
+using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
 
 namespace AIOrchestratorCoreLib.Configuration;
 
@@ -16,30 +21,66 @@ namespace AIOrchestratorCoreLib.Configuration;
 /// </summary>
 public static class OrchestratorConfig_Loader
 {
+    /// <summary>Orch id used for the one app-global entry this loader can produce (a mistyped preset). See <see cref="Resolve_Preset_OrClassic"/>.</summary>
+    const string GLOBAL_ORCH_ID = "";
+
     public static IOrchestratorConfig Load_OrEmpty(ISupervisionPaths paths)
+    {
+        return Load_OrEmpty(paths, log: null);
+    }
+
+    /// <summary>
+    /// Reads config.json and secrets.json, or the shipped defaults when either is missing. Passing
+    /// <paramref name="log"/> lets a mistyped <c>preset</c> word or path be reported instead of merely
+    /// swallowed — see <see cref="Resolve_Preset_OrClassic"/>.
+    ///
+    /// <para>
+    /// AN ABSENT config.json AND AN EMPTY ONE RESOLVE IDENTICALLY (ruling 2026-09-12, task-6 fix
+    /// round 2). This method used to return <see cref="OrchestratorConfig_Factory.Create_Empty"/>
+    /// early when both files were missing, bypassing the preset rung below entirely — so a machine
+    /// with no config.json at all got no preset, while one containing <c>{}</c> got classic. Nothing
+    /// in either shipped preset states a model today, so the difference was invisible; but <c>classic</c>
+    /// carries the owner's effort preference (<c>effort.supervisor</c>/<c>effort.solo</c>), and a
+    /// later task wires effort through this same rung. "Absent" and "empty" are the same statement —
+    /// the owner has said nothing — and must resolve the same way, so the early return is gone: every
+    /// downstream reader below (<see cref="Parse_Repos"/>, <see cref="RunnerConfigs_Json.Parse"/>,
+    /// <see cref="Parse_Guardrails"/>, <see cref="DefaultsSettings_Json.Parse"/>,
+    /// <see cref="TelegramProseSettings_Json.Parse"/>, every <c>Get_*_OrNull</c> helper here) already
+    /// tolerates a null <c>configRoot</c> and answers with the exact same shipped default
+    /// <c>Create_Empty</c> supplied, so this is a pure simplification, not a behaviour change, for
+    /// every setting except the preset-stated ones.
+    /// </para>
+    /// </summary>
+    public static IOrchestratorConfig Load_OrEmpty(ISupervisionPaths paths, IOrchestrationLog? log)
     {
         var configRoot = Read_JsonObject_OrNull(paths.ConfigFile);
         var secretsRoot = Read_JsonObject_OrNull(paths.SecretsFile);
 
-        if (configRoot == null && secretsRoot == null)
-            return OrchestratorConfig_Factory.Create_Empty();
-
         var repos = Parse_Repos(configRoot);
+
+        // THE PRESET RUNG, between the shipped default and this file (spec §6.2). It is applied HERE and
+        // only to the six model keys, because the factory's ladder (reviewer/solo → implementer → shipped)
+        // must see "the owner said nothing" as null — a preset value read one layer lower would arrive as
+        // a stated value and shorten the ladder. Nothing is written back: Save() merges, so a preset value
+        // stays a preset value and the renderers can still show its origin (spec §6.2, the reviewerModel
+        // rule generalised). Resolved through the safety net below rather than
+        // Presets_Loader.Resolve_ForConfig directly — this path cannot fail.
+        var preset = Resolve_Preset_OrClassic(configRoot, log);
 
         return OrchestratorConfig_Factory.Create(
             repos,
-            Get_String_OrNull(configRoot, "supervisorModel"),
-            Get_String_OrNull(configRoot, "implementerModel"),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Supervisor),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Implementer),
 
             // ABSENT MEANS "WHAT THE ROLE GOT UNTIL NOW", and the factory is where that ladder lives
             // (reviewer/solo → implementer → the shipped default). Passed as the raw key, null and
             // all, precisely so the factory can tell "the owner never said" from "the owner said
             // this" — reading them here with a fallback would hide the first case from the only
             // place that can act on it.
-            Get_String_OrNull(configRoot, REVIEWER_MODEL_KEY),
-            Get_String_OrNull(configRoot, SOLO_MODEL_KEY),
-            Get_String_OrNull(configRoot, "generalSupervisorModel"),
-            Get_String_OrNull(configRoot, "communicatorModel"),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Reviewer),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Solo),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.General),
+            Read_Model_OrNull(configRoot, preset, SessionRoles.Communicator),
             Get_Long_OrNull(configRoot, "telegramSupergroupChatId"),
             Get_Long_OrNull(configRoot, "telegramOwnerUserId"),
             Get_String_OrNull(secretsRoot, "telegramBotToken"),
@@ -54,7 +95,90 @@ public static class OrchestratorConfig_Loader
 
             // `telegramInbound`: "poll" (default) or "off". Hand-edited, never written back by Save
             // below — the same contract as the four blocks above it.
-            Telegram.TelegramInbound_Modes.Parse_OrPoll(Get_String_OrNull(configRoot, "telegramInbound")));
+            Telegram.TelegramInbound_Modes.Parse_OrPoll(Get_String_OrNull(configRoot, "telegramInbound")),
+
+            // THE `effort` BLOCK RIDES THE SAME PRESET RUNG THE MODELS DO (2026-09-12, plan 02 task 7),
+            // and it is passed the same `preset` tree for the same reason: `classic` is where the
+            // owner's xhigh for supervisor and solo lives now, so a machine that states nothing must
+            // still resolve through it. Unlike the models it needs no "absence" dance — there is no
+            // compat ladder between effort roles, so the resolved answer IS the answer, null included.
+            EffortSettings_Json.Parse(configRoot, preset));
+    }
+
+    /// <summary>
+    /// <c>Presets_Loader.Resolve_ForConfig</c> throws for an unknown preset word and for a preset
+    /// file that cannot be read or does not parse — correct for a caller that asked for a named
+    /// preset explicitly (ruled 2026-09-12, task-6 fix round 2 — the class doc's own reasoning still
+    /// applies there). It is wrong for THIS path: config LOADING cannot fail, because
+    /// <see cref="Load_OrEmpty(ISupervisionPaths)"/> runs on the app's startup path and
+    /// <c>IOrchestratorConfigProvider.Get_Current()</c> calls it again on every tick with no
+    /// try/catch above it. A single transposed letter in a hand-edited <c>"preset": "quite"</c>
+    /// would otherwise take the whole app's config loading down — the same failure class
+    /// <c>AMistypedModelValue_DoesNotTakeDownTheProviderOnTheStartupPath</c> exists to forbid for a
+    /// mistyped model, reached through a different key. So a typo here costs exactly what an ABSENT
+    /// <c>preset</c> key already costs — classic — never the load itself. Never silent, and never
+    /// the owner's phone: one warning line names the bad word or path (the exception message already
+    /// does), the way <see cref="AIOrchestratorCoreLib.Bridge.BridgeState_Store.Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/>
+    /// reports a predicate this codebase could not honour — never Telegram, an alert the owner cannot
+    /// act on does not belong there (CLAUDE.md decision 15).
+    /// </summary>
+    static JsonObject Resolve_Preset_OrClassic(JsonObject? configRoot, IOrchestrationLog? log)
+    {
+        try
+        {
+            return Presets_Loader.Resolve_ForConfig(configRoot).Tree;
+        }
+        catch (Exception ex)
+        {
+            log?.Log_Warning(GLOBAL_ORCH_ID, $"config.json's '{Presets_Loader.PRESET_KEY}' could not be resolved ({ex.Message}) — the classic preset was used instead.");
+            return Presets_Loader.Load_Embedded(Presets_Loader.CLASSIC);
+        }
+    }
+
+    /// <summary>
+    /// The model this file or the preset states for a role, or null when neither does — which is what
+    /// the factory's ladder needs to hear. Blank is null for the reason
+    /// <see cref="OrchestratorConfig_Factory"/> gives: a cleared field is the owner saying nothing, and
+    /// an empty string reaching a spawn emits no --model flag at all (proven 2026-09-10).
+    ///
+    /// <para>
+    /// REVIEWER AND SOLO NEVER ACCEPT A PRESET ANSWER FOR THEMSELVES. The compat ladder in
+    /// <see cref="OrchestratorConfig_Factory"/> says an absent reviewer or solo model falls to the
+    /// IMPLEMENTER's, before any default. No shipped preset states <c>models.reviewer</c> or
+    /// <c>models.solo</c> as of the 2026-09-12 ruling (task-6 fix round 1) that removed all four model
+    /// rows from <c>classic</c> — but this rule is KEPT rather than deleted (re-confirmed fix round 2),
+    /// because it now defends a HAND-EDITED preset file specifically (<c>Presets_Loader.Load_FromDisk</c>),
+    /// which is legal input an owner can still write and could name either key. If one did, it would
+    /// otherwise pre-empt the ladder for a config.json that only ever set <c>implementerModel</c>
+    /// (proven by <c>AFileWrittenBeforeTheseKeysExisted_KeepsGivingTheReviewerAndSoloTheImplementerModel</c>
+    /// and three siblings, back when <c>classic</c> still carried these two rows itself and exercised
+    /// the same code path). So a Preset-origin answer for these two roles reads as absence here too,
+    /// exactly like the shipped default — the factory's ladder, fed the implementer's own
+    /// stated-or-preset answer as its second rung, is what actually answers for them.
+    /// </para>
+    /// <para>
+    /// A SECOND REFINEMENT USED TO LIVE HERE TOO (withholding the preset tree entirely whenever the
+    /// config key was present, valid or not) and is GONE as of fix round 2: it existed only because
+    /// <c>classic</c> used to restate a model for every judging role, so a present-but-invalid config
+    /// value would otherwise have picked up the preset's answer instead of the catalogue's. With no
+    /// shipped preset stating any model any more, that condition cannot occur — verified by removing
+    /// the refinement and confirming no test in <c>PerRoleModelDefaultsTests</c> turned red. It also
+    /// duplicated a presence check <see cref="Settings_Resolver"/> already makes internally; deleting
+    /// it removes that second copy rather than re-homing it, since nothing calls it any more.
+    /// </para>
+    /// </summary>
+    static string? Read_Model_OrNull(JsonObject? configRoot, JsonObject? presetTree, SessionRoles role)
+    {
+        var definition = Catalog.Find_OrNull(Catalog.Get_ModelPath(role))!;
+        var (value, origin) = Settings_Resolver.Resolve(definition, presetTree, configRoot, session: null);
+
+        if (origin == SettingOrigins.ShippedDefault)
+            return null;
+
+        if (origin == SettingOrigins.Preset && (role == SessionRoles.Reviewer || role == SessionRoles.Solo))
+            return null;
+
+        return value?.GetValue<string>();
     }
 
     /// <summary>
@@ -145,15 +269,19 @@ public static class OrchestratorConfig_Loader
         // first button press, on every box that had never heard of the keys. A hand-edited value is
         // safe either way: Save() merges, so keys it does not write survive untouched.
         //
-        // planBackend, THE GUARDRAIL KEYS, defaults AND telegram ARE DELIBERATELY ABSENT from the writes above,
+        // planBackend, THE GUARDRAIL KEYS, defaults, telegram AND effort ARE DELIBERATELY ABSENT from the writes above,
         // for the same reason from two directions. planBackend is hand-edited, no window builds one,
         // and IOrchestratorConfig.PlanBackend is null in every config the app constructs itself —
         // writing it would erase the owner's own key on the next save. The guardrail keys and the
         // defaults block have no UI and no command that changes them, so the only thing a save could
         // do is materialise this build's defaults into the file as if the owner had chosen them,
         // freezing a default that is meant to move when the app is updated. The telegram block —
-        // foldLongEntriesAbove, attachEntriesAbove — is the newest member of that same set. All four
-        // are read; none is owned.
+        // foldLongEntriesAbove, attachEntriesAbove — belongs to that same set, and so does the
+        // `effort` block (EffortSettings_Json.EFFORT_KEY), the newest member: its shipped answer comes
+        // from the catalogue and its working answer from a PRESET, so writing this build's resolution
+        // back would pin the owner to whichever preset was in force the day they last pressed a
+        // button. EffortSettings_Json has no Write method at all, so that cannot happen by accident.
+        // All five are read; none is owned.
 
         var secretsRoot = Read_JsonObject_ForEditing(paths.SecretsFile);
 

@@ -38,7 +38,10 @@ public static class OrchestrationSession_Factory
         bool done = false,
         DateTime? telegramTopicDeletePendingUtc = null,
         DateTime? telegramTopicDeletedUtc = null,
-        bool telegramTopicDeleteFailureReported = false)
+        bool telegramTopicDeleteFailureReported = false,
+        string? supervisorEffortOverride = null,
+        string? implementerEffortOverride = null,
+        bool paused = false)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -47,7 +50,8 @@ public static class OrchestrationSession_Factory
             orchId, repoName, repoPath, createdUtc, telegramTopicId, supervisorPid, supervisorSpawnedUtc,
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
             telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done,
-            telegramTopicDeletePendingUtc, telegramTopicDeletedUtc, telegramTopicDeleteFailureReported);
+            telegramTopicDeletePendingUtc, telegramTopicDeletedUtc, telegramTopicDeleteFailureReported,
+            supervisorEffortOverride, implementerEffortOverride, paused);
     }
 
     /// <summary>
@@ -129,6 +133,23 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, implementerModelOverride: model, implementerModelWasSet: true);
     }
 
+    /// <summary>
+    /// Null RESETS the override — the next spawn then falls back to the ROLE DEFAULT
+    /// (<c>effort.&lt;role&gt;</c> in the catalogue: xhigh for the supervisor and the solo under
+    /// `classic`, null — and so no flag at all — under `quiet`). Corrected 2026-09-12: it used to say
+    /// a reset carried no flag, which was the truth only until plan 02 task 7 gave effort a config
+    /// default the way the model already had one.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithSupervisorEffortOverride(IOrchestrationSession existing, string? effort)
+    {
+        return CreateFrom_Existing(existing, supervisorEffortOverride: effort, supervisorEffortWasSet: true);
+    }
+
+    public static IOrchestrationSession CreateFrom_Existing_WithImplementerEffortOverride(IOrchestrationSession existing, string? effort)
+    {
+        return CreateFrom_Existing(existing, implementerEffortOverride: effort, implementerEffortWasSet: true);
+    }
+
     public static IOrchestrationSession CreateFrom_Existing_WithMembers(
         IOrchestrationSession existing,
         IReadOnlyList<IOrchestrationMember> members)
@@ -159,6 +180,17 @@ public static class OrchestrationSession_Factory
     public static IOrchestrationSession CreateFrom_Existing_WithDone(IOrchestrationSession existing, bool done)
     {
         return CreateFrom_Existing(existing, done: done, doneWasSet: true);
+    }
+
+    /// <summary>
+    /// ASLEEP FOR NOW, and reversibly so — see IOrchestrationSession.Paused. A flag beside the
+    /// delivery mode rather than a mode of its own, exactly like /test and /done: it says the owner
+    /// has stepped away from this endeavour, not how its messages travel, so lifting the pause
+    /// gives them back the audibility they had chosen rather than a guess at it.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithPaused(IOrchestrationSession existing, bool paused)
+    {
+        return CreateFrom_Existing(existing, paused: paused, pausedWasSet: true);
     }
 
     /// <summary>Where the owner IS — orthogonal to the delivery mode, which stays as they set it.</summary>
@@ -216,6 +248,15 @@ public static class OrchestrationSession_Factory
         bool supervisorModelWasSet = false,
         string? implementerModelOverride = null,
         bool implementerModelWasSet = false,
+
+        // Same wasSet dance as the two model overrides: null must be able to mean "cleared — spawn on
+        // the role default again" and not only "unchanged". (Corrected 2026-09-12 with the four doc
+        // comments beside it: a cleared override means no flag only where the role default is itself
+        // null, which under `classic` the supervisor's and the solo's are not.)
+        string? supervisorEffortOverride = null,
+        bool supervisorEffortWasSet = false,
+        string? implementerEffortOverride = null,
+        bool implementerEffortWasSet = false,
         IReadOnlyList<IOrchestrationMember>? members = null,
         TelegramDeliveryModes? telegramMode = null,
         OwnerPresenceModes? ownerPresence = null,
@@ -232,6 +273,11 @@ public static class OrchestrationSession_Factory
         // Same wasSet dance as awaitingTest, and for the same reason: a bare bool cannot say
         // "leave this alone", so without it every unrelated copy would quietly un-finish the topic.
         bool doneWasSet = false,
+        bool paused = false,
+
+        // Same wasSet dance as `done` beside it: a bare bool cannot say "leave this alone", so
+        // without it every unrelated copy would quietly wake an orchestration the owner put to sleep.
+        bool pausedWasSet = false,
         DateTime? telegramTopicDeletePendingUtc = null,
         DateTime? telegramTopicDeletedUtc = null,
         bool telegramTopicDeleteFailureReported = false,
@@ -262,6 +308,9 @@ public static class OrchestrationSession_Factory
             doneWasSet ? done : existing.Done,
             telegramTopicDeletePendingUtc ?? existing.TelegramTopicDeletePendingUtc,
             telegramTopicDeletedUtc ?? existing.TelegramTopicDeletedUtc,
-            telegramTopicDeleteFailureReportedWasSet ? telegramTopicDeleteFailureReported : existing.TelegramTopicDeleteFailureReported);
+            telegramTopicDeleteFailureReportedWasSet ? telegramTopicDeleteFailureReported : existing.TelegramTopicDeleteFailureReported,
+            supervisorEffortWasSet ? supervisorEffortOverride : existing.SupervisorEffortOverride,
+            implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride,
+            pausedWasSet ? paused : existing.Paused);
     }
 }

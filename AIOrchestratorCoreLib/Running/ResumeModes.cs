@@ -1,12 +1,21 @@
 namespace AIOrchestratorCoreLib.Running;
 
 /// <summary>
-/// What a print-run session remembers between turns. <see cref="Transcript"/>: every turn after
-/// the first is <c>--resume</c> of the same transcript, so the session keeps its context (an
-/// implementer mid-task). <see cref="Fresh"/>: every turn is a brand-new session whose only memory
-/// is what it re-reads from disk — CLAUDE.md decision 8 made configuration: the general supervisor
+/// What a session remembers across its own restarts, whichever runner drives it.
+/// <see cref="Transcript"/>: a bridge-driven session <c>--resume</c>s its print session, so every
+/// turn after the first keeps its context (an implementer mid-task); a terminal supervisor or solo
+/// <c>--resume</c>s its own conversation when the probe names a transcript that still exists
+/// (owner request 2026-09-10 — never <c>--continue</c>, which guesses the most recent conversation
+/// in a repo directory several sessions share). <see cref="Fresh"/>: start empty, with only what
+/// the session re-reads from disk — CLAUDE.md decision 8 made configuration: the general supervisor
 /// is stateless across launches by owner directive, and a resumed conversation once re-ran a
 /// failed request on boot.
+///
+/// <para>
+/// IMPLEMENTERS AND REVIEWERS IN A TERMINAL ALWAYS START FRESH regardless of this setting: the
+/// channel is their durable state by design (CLAUDE.md decision 8), so the launcher never hands
+/// them a resume id and this mode only reaches them through a bridge-driven runner.
+/// </para>
 /// </summary>
 public enum ResumeModes
 {

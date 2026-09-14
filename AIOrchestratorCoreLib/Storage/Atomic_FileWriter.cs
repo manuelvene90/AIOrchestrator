@@ -41,12 +41,40 @@ public static class Atomic_FileWriter
             File.WriteAllText(tempFilePath, contents);
 
             // Same folder, therefore same volume: the rename is a directory operation, not a copy.
-            File.Move(tempFilePath, filePath, overwrite: true);
+            Move_TolerantOfAReader(tempFilePath, filePath);
         }
         catch
         {
             Delete_BestEffort(tempFilePath);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// THE OTHER HALF OF THE WINDOWS SHARING RACE — <see cref="Tolerant_FileReader"/> is the read one.
+    /// A replacing rename needs DELETE on the target, and on Windows a reader that holds it is enough
+    /// to refuse that: measured 2026-09-11, <c>File.Move(overwrite: true)</c> throws
+    /// <c>UnauthorizedAccessException: Access to the path is denied</c> against an open reader — even
+    /// one that granted <c>FileShare.Delete</c>. Linux renames over an open file without noticing.
+    /// <para>
+    /// So the rename gets the same bounded backoff the reader has, and for the same reason: the loser
+    /// is waiting on someone else's READ, which is microseconds, not a computation. It still throws
+    /// when it gives up — a write that did not happen must never be reported as one.
+    /// </para>
+    /// </summary>
+    static void Move_TolerantOfAReader(string tempFilePath, string filePath)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(tempFilePath, filePath, overwrite: true);
+                return;
+            }
+            catch (Exception e) when ((e is IOException or UnauthorizedAccessException) && attempt < Tolerant_FileReader.ATTEMPTS - 1)
+            {
+                Thread.Sleep(Tolerant_FileReader.BACKOFF_STEP_MILLISECONDS * (attempt + 1));
+            }
         }
     }
 

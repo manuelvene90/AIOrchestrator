@@ -102,13 +102,24 @@ GRAMMAR_FILE="${AIORCH_CHANNEL_GRAMMAR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../
 grammar() {
   # A missing key is fatal, never empty: an empty marker writes an entry the app cannot recognise,
   # which is the silent half of the drift E3 exists to end.
+  # The CR strip below is a NO-OP ON THIS MACHINE TODAY and is here on purpose: Windows jq emits
+  # "\r\n", and what saves this reader is that command substitution strips the CR with the newline —
+  # measured, but an incidental property of the shell rather than anything this tool asked for. Every
+  # marker the tool WRITES comes through here, so if that ever stopped holding, every entry would
+  # carry a stray CR into the channel and the app would not recognise one of them. (The reader that
+  # did NOT have it is what refused every typed question on Windows — see MARKER_PREFIXES below.)
+  #
+  # DONE WITH PARAMETER EXPANSION, NEVER `| tr -d '\r'`: a pipe here would make `||` test tr's exit
+  # status instead of jq's, and the `jq -e` failure this refusal is built on would stop being seen at
+  # all — a missing grammar key would sail through as an empty marker, which is the exact silent drift
+  # the refusal exists to end.
   local value
   value="$(jq -er "$1" "$GRAMMAR_FILE" 2>/dev/null)" || {
     echo "channel-append.sh: the channel grammar has no '$1' (looked in '$GRAMMAR_FILE'). Every marker" >&2
     echo "                   this tool writes comes from there, so there is nothing to fall back to." >&2
     exit 4
   }
-  printf '%s' "$value"
+  printf '%s' "${value//$'\r'/}"
 }
 
 TYPED_CALL=0
@@ -373,7 +384,21 @@ if [ "$TYPED_CALL" = "1" ]; then
   # button or a field. Raised with the owner; the tool cannot wait for the answer, because refusing
   # every question is not a usable default. The CHARACTER ceiling still counts everything: a wall of
   # text is a wall whatever the marker at its left edge.
-  MARKER_PREFIXES="$(jq -r '.markers | to_entries[] | select(.key != "_comment") | .value' "$GRAMMAR_FILE")"
+  # CR STRIPPED, AND IT IS NOT COSMETIC — without it this tool REFUSES EVERY TYPED QUESTION ON
+  # WINDOWS (measured 2026-09-12). Windows jq writes text-mode output, so every record it emits ends
+  # "\r\n". The tool reads the grammar two ways and only one of them notices: grammar() uses
+  # value="$(jq -er …)", and command substitution eats the trailing CR along with the newline; THIS
+  # one feeds a multi-record read through a here-string, where the CRs are in the MIDDLE of the string
+  # and survive. So every marker became "QUESTION:\r", the prefix match below never fired, every
+  # marker line was counted as prose, and a well-formed question is six marker lines by construction
+  # against a five-line PROSE ceiling — exit 2, nothing written, a supervisor's question to the
+  # owner's phone refused outright. Only the LAST marker escaped (no CR after the final record), which
+  # is why short typed entries still passed and the class read 12 green, 1 red.
+  #
+  # Fixed at the source of the string rather than inside the loop: the prefix match means a CR on the
+  # BODY line is harmless, so the marker is the only thing that needs to be clean, and one strip at
+  # one place cannot drift from a second one.
+  MARKER_PREFIXES="$(jq -r '.markers | to_entries[] | select(.key != "_comment") | .value' "$GRAMMAR_FILE" | tr -d '\r')"
 
   BODY_PROSE_LINES=0
   while IFS= read -r line; do

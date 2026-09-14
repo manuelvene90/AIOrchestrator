@@ -222,6 +222,46 @@ public class ChannelChangeWakerTests : IDisposable
     }
 
     /// <summary>
+    /// THE ERROR EVENT, RAISED DIRECTLY, because the two OSes disagree about when it comes and the
+    /// difference was a red: Windows raises Error when the watched root is deleted, inotify does not,
+    /// so on Windows the deletion produced the error line AND the re-arm line and the "one fact, one
+    /// line" assertion above saw two. The rule is the root, not the OS — an error raised over a root
+    /// that is STILL THERE is a real failure of the watch and keeps its line; one raised over a root
+    /// that is gone is the deletion, which the validity check already reports.
+    /// <para>
+    /// The handler is private and the real event is not raisable from outside <c>FileSystemWatcher</c>,
+    /// so it is invoked by name. That is the point: nothing else can reach this branch, and without a
+    /// test here the suppression could silence every watcher error on both platforms unnoticed.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AWatcherErrorOverALiveRoot_IsReported_AndOneOverADeletedRootIsNot()
+    {
+        Assert.Equal(["reported an error"], Error_Lines_AfterRaisingTheError(deleteTheRootFirst: false));
+        Assert.Empty(Error_Lines_AfterRaisingTheError(deleteTheRootFirst: true));
+    }
+
+    List<string> Error_Lines_AfterRaisingTheError(bool deleteTheRootFirst)
+    {
+        List<string> lines = [];
+
+        using var waker = ChannelChangeWaker_Factory.Create(_root, line => { lock (lines) lines.Add(line); });
+
+        if (deleteTheRootFirst)
+            Directory.Delete(_root, recursive: true);
+
+        var handler = waker.GetType().GetMethod("On_WatcherError", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("On_WatcherError is gone — this test pins a branch that no longer exists, so it must not pass");
+
+        handler.Invoke(waker, [waker, new ErrorEventArgs(new InvalidOperationException("the watch buffer overflowed"))]);
+
+        // Reduced to the phrase the assertion is about, so a reworded line is not a failure and a
+        // MISSING line still is.
+        lock (lines)
+            return [.. lines.Where(line => line.Contains("reported an error")).Select(_ => "reported an error")];
+    }
+
+    /// <summary>
     /// Runs the waker's wait in short ticks for <paramref name="forHowLong"/>, which is the only way the
     /// validity check is reached: it runs between full waits and nowhere else, so a test that merely
     /// slept would exercise nothing.

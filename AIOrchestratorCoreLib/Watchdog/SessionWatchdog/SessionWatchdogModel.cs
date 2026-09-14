@@ -67,6 +67,14 @@ internal sealed class SessionWatchdogModel(
             if (session.ClosedUtc != null)
                 continue;
 
+            // PAUSED: the owner put this orchestration to sleep without closing it, so a dead
+            // terminal here is not a fault to repair. Respawning would boot a session that reads its
+            // role command, arms a watcher and starts working — the pause silently over, with
+            // nothing on screen saying so. It comes back the moment they lift it, because that is
+            // when this loop starts looking at it again.
+            if (session.Paused)
+                continue;
+
             // A BASIC orchestration never had a supervisor — checking for one would respawn a
             // supervisor into it forever, on top of the solo session that IS the orchestration.
             //
@@ -173,7 +181,7 @@ internal sealed class SessionWatchdogModel(
             return;
 
         Register_Respawn($"sup:{session.OrchId}", session.OrchId, "supervisor");
-        _log.Log_Warning(session.OrchId, "Supervisor session not running — respawning (it resumes from the channels)");
+        _log.Log_Warning(session.OrchId, "Supervisor session not running — respawning (it resumes its own conversation if the transcript survives, else from the channels)");
 
         Clear_AwaitingAnswer_ForDeadSession(session.OrchId);
 
@@ -248,7 +256,7 @@ internal sealed class SessionWatchdogModel(
             return;
 
         Register_Respawn($"imp:{orchId}/{memberId}", orchId, memberId);
-        _log.Log_Warning(orchId, $"Implementer '{memberId}' session not running — respawning (it resumes from its channel)");
+        _log.Log_Warning(orchId, $"Implementer '{memberId}' session not running — respawning (a solo resumes its own conversation if the transcript survives; every member re-reads its channel)");
         _launcher.Respawn_Implementer(orchId, memberId);
     }
 

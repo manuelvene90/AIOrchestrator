@@ -38,11 +38,14 @@ public static class SessionJson_Serializer
             ["displayName"] = session.DisplayName,
             ["supervisorModelOverride"] = session.SupervisorModelOverride,
             ["implementerModelOverride"] = session.ImplementerModelOverride,
+            ["supervisorEffortOverride"] = session.SupervisorEffortOverride,
+            ["implementerEffortOverride"] = session.ImplementerEffortOverride,
             ["members"] = membersArray,
             ["telegramMode"] = session.TelegramMode.ToString(),
             ["ownerPresence"] = session.OwnerPresence.ToString(),
             ["awaitingTest"] = session.AwaitingTest,
             ["done"] = session.Done,
+            ["paused"] = session.Paused,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicDeletePendingUtc"] = session.TelegramTopicDeletePendingUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicDeletedUtc"] = session.TelegramTopicDeletedUtc?.ToString("O", CultureInfo.InvariantCulture),
@@ -115,7 +118,24 @@ public static class SessionJson_Serializer
             // Bridge.TopicDeletion.TopicDeleteSweep_Planner.
             Get_DateTime_OrNull(root, "telegramTopicDeletePendingUtc"),
             Get_DateTime_OrNull(root, "telegramTopicDeletedUtc"),
-            root["telegramTopicDeleteFailureReported"]?.GetValue<bool>() ?? false);
+            root["telegramTopicDeleteFailureReported"]?.GetValue<bool>() ?? false,
+
+            // Absent in every session written before the effort override existed, and null is the
+            // right reading: no override means the ROLE DEFAULT decides (effort.<role> in the
+            // catalogue), which is exactly what a session that never had the key always got.
+            // Corrected 2026-09-12: this said "no override means no --effort flag", true only while
+            // the default was SpawnCommand_Builder's compiled constant; plan 02 task 7 made it data,
+            // and the default is null only where the catalogue and the preset leave it null.
+            // NOTE the blank case: Get_String_OrNull returns "" verbatim from a hand-edited file, and
+            // it is the LAUNCHER that reads blank as absent (SessionScoped_Reader.Stated_OrNull) —
+            // this reader stays literal so nothing here silently rewrites what the owner typed.
+            Get_String_OrNull(root, "supervisorEffortOverride"),
+            Get_String_OrNull(root, "implementerEffortOverride"),
+
+            // Absent in every session written before today, and false is the only safe reading of
+            // absence: an orchestration nobody paused is not paused. Reading a missing key as true
+            // would put every pre-existing orchestration to sleep on the first load.
+            root["paused"]?.GetValue<bool>() ?? false);
     }
 
     /// <summary>

@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Channels;
+﻿using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
 using AIOrchestratorCoreLib.Running.SessionLaunch;
@@ -25,6 +25,7 @@ namespace AIOrchestratorCoreLib.Tests.Running;
 /// turn already admitted to appear on its background task.
 /// </para>
 /// </summary>
+[Collection(REAL_TIME_COLLECTION.NAME)]
 public class WakeUpDigestReviewFixTests
 {
     const double DIGEST_MINUTES = 5;

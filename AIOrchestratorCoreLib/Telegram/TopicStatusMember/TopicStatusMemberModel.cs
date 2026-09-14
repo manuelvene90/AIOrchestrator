@@ -1,28 +1,23 @@
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
+using AIOrchestratorCoreLib.Status.SessionModelReading;
 
 namespace AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 
-sealed class TopicStatusMemberModel : ITopicStatusMember
+internal sealed class TopicStatusMemberModel(
+    string memberId,
+    IReadOnlyList<IChannelEntry> entries,
+    bool isClosed,
+    ISessionContextUsage? contextUsage,
+    ISessionModelReading? model) : ITopicStatusMember
 {
-    readonly string _memberId;
-    readonly IReadOnlyList<IChannelEntry> _entries;
-    readonly bool _isClosed;
-    readonly ISessionContextUsage? _contextUsage;
+    public string MemberId { get; } = memberId;
 
-    internal TopicStatusMemberModel(string memberId, IReadOnlyList<IChannelEntry> entries, bool isClosed, ISessionContextUsage? contextUsage = null)
-    {
-        _memberId = memberId;
-        _entries = entries;
-        _isClosed = isClosed;
-        _contextUsage = contextUsage;
-    }
+    public IReadOnlyList<IChannelEntry> Entries { get; } = entries;
 
-    public string MemberId => _memberId;
+    public bool IsClosed { get; } = isClosed;
 
-    public IReadOnlyList<IChannelEntry> Entries => _entries;
+    public ISessionContextUsage? ContextUsage { get; } = contextUsage;
 
-    public bool IsClosed => _isClosed;
-
-    public ISessionContextUsage? ContextUsage => _contextUsage;
+    public ISessionModelReading? Model { get; } = model;
 }

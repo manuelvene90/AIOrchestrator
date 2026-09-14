@@ -88,6 +88,13 @@ public static class BotCommandMenu
         ("progress", "This topic's task ledger, every row — in General, one line per orchestration"),
         ("tail", "What a headless session is doing right now (/tail 1, /tail sup)"),
         ("limits", "5-hour and weekly usage limits"),
+
+        // THE TWO DIALS SIT TOGETHER, and next to /limits because that is the reading that sends the
+        // owner to them: the account is filling up, so turn something down. Both take an optional
+        // value and answer a bare command with buttons — nobody should have to remember that the
+        // level is spelled xhigh (owner, 2026-09-09).
+        ("model", "Pick the model for this topic's sessions — buttons, or /model fable"),
+        ("effort", "Pick the effort level for this topic's sessions — buttons, or /effort xhigh"),
         ("cost", "What this topic has cost, per session — in General, per orchestration"),
         ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
         ("close", "End THIS orchestration — you confirm with a tap"),
@@ -117,6 +124,7 @@ public static class BotCommandMenu
         ("log", "The whole of a headless session's last turn (/log 1, /log sup)"),
         ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
         ("done", "Toggle ✅ — finished, muted, and kept open in case you come back"),
+        ("pause", "Toggle 💤 — done with it for now: traffic held, session dormant, nothing closed"),
         ("refresh", "Re-sync this topic's NAME — use when a ❓ or a glyph is stuck on it"),
         ("switch", "Turn this into a full crew, or back into one session — send twice"),
         ("clear", "Wipe THIS topic's messages (the sessions keep running)"),

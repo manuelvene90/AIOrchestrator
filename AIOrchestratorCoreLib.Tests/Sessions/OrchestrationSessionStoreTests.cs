@@ -304,7 +304,8 @@ eposrb");
     [Fact]
     public void Set_Done_SurvivesAReload_AndDoesNotDisturbItsNeighbours()
     {
-        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:eposrb");
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
         _store.Set_DisplayName("arb-fix", "drift guard");
         _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Silenced);
         _store.Set_AwaitingTest("arb-fix", true);
@@ -339,7 +340,8 @@ eposrb");
     [Fact]
     public void ASessionWrittenBeforeTheDoneFlagExistedIsNotDone()
     {
-        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:eposrb");
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:
+eposrb");
 
         var path = Path.Combine(_tempRoot, "arb-fix", "session.json");
         var json = File.ReadAllText(path);
@@ -394,5 +396,78 @@ eposrb");
 eposrb");
 
         Assert.False(_store.Get_Session("arb-fix").AwaitingTest);
+    }
+
+    /// <summary>
+    /// A PAUSE IS DORMANCY, so it has to reach session.json: an orchestration the owner deliberately
+    /// put to sleep must still be asleep after an app restart, or the restart wakes it up pushing at
+    /// them again — the one thing pausing exists to stop. Asserted through Reload() for that reason;
+    /// the in-memory copy would pass while proving nothing about what was written.
+    /// </summary>
+    [Fact]
+    public void Set_Paused_SurvivesAReload_AndDoesNotDisturbItsNeighbours()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+        _store.Add_Implementer("arb-fix");
+        _store.Set_DisplayName("arb-fix", "drift guard");
+        _store.Set_TelegramMode("arb-fix", TelegramDeliveryModes.Silenced);
+        _store.Set_OwnerPresence("arb-fix", OwnerPresenceModes.Terminal);
+        _store.Set_AwaitingTest("arb-fix", true);
+        _store.Set_Done("arb-fix", true);
+
+        Assert.False(Reload().Get_Session("arb-fix").Paused);
+
+        _store.Set_Paused("arb-fix", true);
+
+        var paused = Reload().Get_Session("arb-fix");
+
+        Assert.True(paused.Paused);
+
+        // The copy-with-overrides path must not drop its neighbours — the defect the wasSet flag
+        // exists to prevent, and the one a plain bool reintroduces silently.
+        Assert.Equal("drift guard", paused.DisplayName);
+        Assert.Equal(TelegramDeliveryModes.Silenced, paused.TelegramMode);
+        Assert.Equal(OwnerPresenceModes.Terminal, paused.OwnerPresence);
+        Assert.True(paused.AwaitingTest);
+        Assert.True(paused.Done);
+        Assert.Equal("imp-1", Assert.Single(paused.Members).MemberId);
+
+        _store.Set_Paused("arb-fix", false);
+
+        var resumed = Reload().Get_Session("arb-fix");
+
+        Assert.False(resumed.Paused);
+
+        // Waking a topic hands the owner back exactly the state they had chosen — it must not also
+        // un-finish it, move them out of its terminal, or change how loudly it speaks.
+        Assert.Equal(TelegramDeliveryModes.Silenced, resumed.TelegramMode);
+        Assert.Equal(OwnerPresenceModes.Terminal, resumed.OwnerPresence);
+        Assert.True(resumed.AwaitingTest);
+        Assert.True(resumed.Done);
+        Assert.Equal("imp-1", Assert.Single(resumed.Members).MemberId);
+    }
+
+    /// <summary>
+    /// Absent means AWAKE. Every session.json written before this field lacks the key, and reading
+    /// absence as "paused" would put every orchestration the owner has ever run to sleep on the
+    /// first load after the upgrade.
+    /// </summary>
+    [Fact]
+    public void ASessionWrittenBeforeThePausedFlagExistedIsNotPaused()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+
+        var path = Path.Combine(_tempRoot, "arb-fix", "session.json");
+        var json = File.ReadAllText(path);
+
+        Assert.Contains("\"paused\"", json);
+
+        File.WriteAllText(path, json.Replace("\"paused\": true", "\"REMOVED\": true").Replace("\"paused\": false", "\"REMOVED\": false"));
+
+        // The removal itself is asserted, so this can never silently become a test of a key that
+        // is still there — the shape that lets a guard stay green with its check gone.
+        Assert.DoesNotContain("\"paused\"", File.ReadAllText(path));
+
+        Assert.False(Reload().Get_Session("arb-fix").Paused);
     }
 }

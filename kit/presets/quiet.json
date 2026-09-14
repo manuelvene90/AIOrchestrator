@@ -1,0 +1,16 @@
+{
+  "_comment": "Nathan's way. Keys are flat dotted catalogue paths (SettingsJson_Path), deliberately not nested, so 'does this preset name only catalogue paths' is a one-line test. Only keys whose value differs from the shipped default appear here — a preset that restates a default is a default that can never move.",
+  "phone.push": "everything",
+  "phone.status.periodic": false,
+  "phone.appMessagesRing": false,
+  "phone.receipts": "reactions",
+  "topic.onClose": "delete",
+  "runners.supervisor.runner": "stream",
+  "runners.implementer.runner": "print",
+  "runners.reviewer.runner": "print",
+  "runners.solo.runner": "print",
+  "runners.general.runner": "print",
+  "runners.implementer.resume": "fresh",
+  "runners.reviewer.resume": "fresh",
+  "runners.solo.resume": "fresh"
+}

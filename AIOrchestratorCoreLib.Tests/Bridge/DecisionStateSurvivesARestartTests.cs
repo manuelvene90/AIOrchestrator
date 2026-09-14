@@ -48,6 +48,14 @@ public class DecisionStateSurvivesARestartTests : IDisposable
     const long OWNER_USER_ID = 555000111;
     const long TOPIC_ID = 4242;
 
+    /// <summary>
+    /// The engine's own cap on how long an unanswered question may hold the conversation, restated
+    /// here because the engine's copy is private. Only the ORDER matters to this fixture — backdate
+    /// the flag past it and the engine expires it — so a drift in the engine's number cannot make
+    /// this test wrong, only make it back-date further than it needs to.
+    /// </summary>
+    const int QUESTION_HOLD_CAP_MINUTES = 10;
+
     const string QUESTION_TEXT = "Which way do you want the cache invalidated?";
     const string FIRST_OPTION = "Invalidate on write";
     const string SECOND_OPTION = "Invalidate on a timer";
@@ -128,12 +136,14 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         var firstTelegram = new CapturingTelegram_Fake();
         var firstEngine = Build_Engine(firstTelegram);
 
-        // The owner speaks, which is what raises the "they are waiting for an answer" flag.
+        // The owner speaks, which is what raises the "they are waiting for an answer" flag — and it
+        // is raised when the message LANDS in the channel, not when it is buffered. A session writing
+        // during the aggregation window cannot be answering a message it has not been given yet.
         firstTelegram.Queue_Updates(Build_OwnerMessageJson("what is the state of the cache work"));
 
         Assert.True(
-            await Run_Until_Async(firstEngine, () => _log.Has_Info_Containing("Owner message buffered"), 15_000),
-            "the owner's message never reached the router, so the waiting flag was never raised."
+            await Run_Until_Async(firstEngine, () => _log.Has_Info_Containing("Owner message delivered"), 40_000),
+            "the owner's message was never delivered to the channel, so the waiting flag was never raised."
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
 
         // THE OWNER'S OUTSTANDING WAIT IS PERSISTED, asserted here rather than at the end because
@@ -147,14 +157,75 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         // baselines a channel it has never seen at its CURRENT length, so anything written before
         // the engine's first pass is absorbed as history and never mirrored at all.
         Append_SupervisorQuestion(session.OrchId, 3, QUESTION_TEXT, FIRST_OPTION, SECOND_OPTION);
-        Append_SupervisorQuestion(session.OrchId, 4, SECOND_QUESTION_TEXT, THIRD_OPTION, FOURTH_OPTION);
+
+        // AND ONE ENTRY BEHIND IT, for the fixed-clock reason spelled out at the SECOND question
+        // below: a file's last entry is released by the next HEADER and by nothing else here. This
+        // used to be the owner's own message, which landed behind the question because the credit was
+        // raised while the message was still BUFFERING and this assertion ran before it was written.
+        // The credit is raised at DELIVERY now (decision 25), so the owner's entry is already in the
+        // file by this line and the question would be the trailing one for ever.
+        Append_SupervisorNote(session.OrchId, 4, "so the question above is no longer the file's last entry");
 
         Assert.True(
             await Run_Until_Async(
                 firstEngine,
-                () => firstTelegram.Find_ButtonFor(FIRST_OPTION) != null && firstTelegram.Find_ButtonFor(THIRD_OPTION) != null,
+                () => firstTelegram.Find_ButtonFor(FIRST_OPTION) != null,
                 25_000),
             "the question never reached the phone, so this test never reached the code it is about."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        // THE SECOND QUESTION NEEDS A ROUTE THE HOLD DOES NOT COVER, and this is why it is no longer
+        // written beside the first (owner ruling 2026-09-11: one question at a time is the ONLY way).
+        // QuestionHold_Policy now holds the owner channel for as long as the awaiting-answer flag is
+        // raised, so a second question appended while the first is unanswered is HELD at the mirror
+        // and never becomes a keyboard — this test would then be asserting on one question, not two.
+        //
+        // TWO OPEN QUESTIONS ARE STILL REACHABLE, and this fixture takes the route it can drive
+        // honestly: the TEN-MINUTE CAP. The flag is backdated past QUESTION_HOLD_CAP_MINUTES and the
+        // engine's own Expire_StaleAwaitingAnswerFlags deletes it — the owner never answered, the
+        // supervisor is let go anyway, and the next question goes out with the first still open.
+        //
+        // TERMINAL PRESENCE IS NOT A SECOND ROUTE, and this comment used to claim it was. It raises
+        // no awaiting-answer flag, true — but it also resolves the topic to SILENCED
+        // (OwnerPresence_Policy.Resolve_ModeOverride_OrNull), so Mirror_Append_Async returns before
+        // any send and no question is EVER registered open. It cannot produce two open questions; it
+        // produces none. The other real route is an owner message, which clears the flag — but it
+        // also records a reply in words, so the next question SUPERSEDES the first and the pair this
+        // test needs is destroyed.
+        //
+        // The assertion is untouched: five decisions, two open questions, six buttons.
+        var flagFile = AIOrchestratorCoreLib.Status.AwaitingAnswerFlag_Marker.Build_FilePath(_paths, session.OrchId);
+
+        Assert.True(File.Exists(flagFile), "the first question raised no awaiting-answer flag, so the cap below expires nothing.");
+
+        File.SetLastWriteTimeUtc(flagFile, DateTime.UtcNow.AddMinutes(-(QUESTION_HOLD_CAP_MINUTES + 1)));
+
+        Assert.True(
+            await Run_Until_Async(firstEngine, () => !File.Exists(flagFile), 25_000),
+            "the awaiting-answer flag never expired, so the second question would be held and this "
+            + $"test could not reach two open decisions.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        // INDEX 9, NOT 4: the owner's own message above is written into this channel as an entry of
+        // its own, so by now [4] is taken — and the router's entry landed between the two questions
+        // only because the cap expiry made this one wait. A repeated index is a channel-shape fault,
+        // not a second question.
+        Append_SupervisorQuestion(session.OrchId, 9, SECOND_QUESTION_TEXT, THIRD_OPTION, FOURTH_OPTION);
+
+        // AND ONE ENTRY BEHIND IT, because this fixture runs on a FIXED clock. The tailer releases a
+        // file's LAST entry only once the file has been quiet for the trailing-entry window, and that
+        // window is measured against the injected clock — which never moves here. So a trailing entry
+        // is released by the next HEADER and by nothing else: the first question flushed because the
+        // owner's own message landed behind it, and the second needs the same. It is deliberately not
+        // a question (a second owner message would count as a reply in words and supersede the first
+        // question, which is exactly the pair this test needs to keep open).
+        Append_SupervisorNote(session.OrchId, 10, "so the question above is no longer the file's last entry");
+
+        Assert.True(
+            await Run_Until_Async(
+                firstEngine,
+                () => firstTelegram.Find_ButtonFor(THIRD_OPTION) != null,
+                25_000),
+            "the second question never reached the phone, so this test never reached two open decisions."
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
 
         var capturedButton = firstTelegram.Find_ButtonFor(FIRST_OPTION)
@@ -283,6 +354,18 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         return "{\"ok\":true,\"result\":[{\"update_id\":2001,\"message\":{\"message_id\":77,"
             + $"\"message_thread_id\":{TOPIC_ID},\"from\":{{\"id\":{OWNER_USER_ID}}},"
             + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\"}}}}]}}";
+    }
+
+    /// <summary>
+    /// A plain supervisor entry with nothing decisional in it — written only so the entry ABOVE it
+    /// stops being the file's last, which is what releases it from the tailer under a fixed clock.
+    /// </summary>
+    void Append_SupervisorNote(string orchId, int index, string subject)
+    {
+        var channelFile = _paths.Get_OwnerChannelFile(orchId);
+        var stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+
+        File.AppendAllText(channelFile, $"\n## [{index}] FROM supervisor — {stamp} — {subject}\nNoted.\n");
     }
 
     static string Build_CallbackTapJson(string callbackData, long questionMessageId)

@@ -1,30 +1,67 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
+using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
+using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
 public static class OrchestratorConfig_Factory
 {
-    /// <summary>Owner's model ladder: routing = cheap, supervision and implementation = opus.</summary>
-    public const string DEFAULT_GENERAL_SUPERVISOR_MODEL = "sonnet";
-    public const string DEFAULT_SUPERVISOR_MODEL = "opus";
-    public const string DEFAULT_IMPLEMENTER_MODEL = "opus";
-    public const string DEFAULT_COMMUNICATOR_MODEL = "sonnet";
+    /// <summary>
+    /// THE SHIPPED DEFAULT IS NOW A CATALOGUE ENTRY, not a literal here (spec §6.4, owner §11.4:
+    /// "Opus for every role except general and communicator"). Moved 2026-09-12: the same number had to
+    /// be stateable by a preset, editable by three renderers and readable by the resolver, and a `const`
+    /// in this file is none of those.
+    ///
+    /// <para>
+    /// RULED 2026-09-12 (task-6 fix round 1): <c>classic</c> used to name all four judging roles
+    /// (<c>models.supervisor/implementer/reviewer/solo</c>) at the older Fable id, which meant the
+    /// owner's own request here — Opus as the SHIPPED default — was satisfied on paper only, since
+    /// every machine that names no preset (the common case) got the preset's Fable instead. Those four
+    /// rows are gone from <c>kit/presets/classic.json</c> now, so a config.json that states nothing at
+    /// all really does spawn the catalogue's Opus; only <c>effort.supervisor</c>/<c>effort.solo</c>
+    /// (the owner's working preferences, not a model) remain preset-stated.
+    /// </para>
+    /// <para>
+    /// STILL NAMED HERE because six call sites and four tests read these by name, and because this file
+    /// is where the LADDER lives: an absent reviewerModel or soloModel falls to implementerModel before
+    /// any default applies, and that is unchanged.
+    /// </para>
+    /// </summary>
+    public static readonly string DEFAULT_SUPERVISOR_MODEL = Read_ShippedModel(SessionRoles.Supervisor);
+    public static readonly string DEFAULT_IMPLEMENTER_MODEL = Read_ShippedModel(SessionRoles.Implementer);
+    public static readonly string DEFAULT_REVIEWER_MODEL = Read_ShippedModel(SessionRoles.Reviewer);
+    public static readonly string DEFAULT_SOLO_MODEL = Read_ShippedModel(SessionRoles.Solo);
+    public static readonly string DEFAULT_GENERAL_SUPERVISOR_MODEL = Read_ShippedModel(SessionRoles.General);
+    public static readonly string DEFAULT_COMMUNICATOR_MODEL = Read_ShippedModel(SessionRoles.Communicator);
 
     /// <summary>
-    /// Reviewing stays opus even after the implementer moves to sonnet (owner, 2026-09-09): a bad
-    /// implementation gets found and fixed, a bad APPROVAL does not announce itself.
+    /// READS THE CATALOGUE'S OWN LITERAL, NEVER ONE OF THIS CLASS'S SIX CONSTANTS ABOVE — and every
+    /// one of <c>SettingsCatalog.Build_Models</c>'s six model rows MUST likewise pass a plain string
+    /// literal as its own <c>shippedDefault</c>, never <c>OrchestratorConfig_Factory.DEFAULT_*_MODEL</c>.
+    /// The six fields above are `static readonly`, assigned by running THIS method at this class's own
+    /// static-constructor time, and this method's first call reaches into <c>SettingsCatalog</c>. If
+    /// any catalogue row read one of this class's six constants back, that would be a TYPE-INITIALIZER
+    /// CYCLE: this class's static constructor would trigger <c>SettingsCatalog</c>'s, which would call
+    /// back into this class's constants before they finish being assigned — C#'s reentrant
+    /// type-initialization rule does not deadlock or throw for that, it silently hands back the
+    /// constant's default value (<c>null</c> for a string) at that point in the recursion, so the
+    /// catalogue row would build with a null shipped default instead of erroring at compile time.
+    /// Found and fixed 2026-09-12 while wiring this method in for the first time: the catalogue was
+    /// still pointing four of its six model rows at these very constants.
     /// </summary>
-    public const string DEFAULT_REVIEWER_MODEL = "opus";
+    static string Read_ShippedModel(SessionRoles role)
+    {
+        var definition = Catalog.Find_OrNull(Catalog.Get_ModelPath(role))
+            ?? throw new Exception($"No catalogue entry for {Catalog.Get_ModelPath(role)} — a role without a registered model default cannot spawn");
 
-    /// <summary>
-    /// A solo is supervisor, implementer and reviewer in one session with nobody above it, so it
-    /// takes the supervision price rather than the implementation one.
-    /// </summary>
-    public const string DEFAULT_SOLO_MODEL = "opus";
+        return definition.Default_OrNull!.GetValue<string>();
+    }
+
     /// <summary>Opt-in: a screenshot raises a real window, so an absent key must read as OFF.</summary>
     public const bool DEFAULT_TELEGRAM_STATUS_SCREENSHOTS = false;
 
@@ -48,11 +85,13 @@ public static class OrchestratorConfig_Factory
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
 
-        // OPTIONAL, AND ONLY THESE FOUR. Every other parameter is required because every caller
-        // knows its value; these keys are hand-edited in config.json and no window has a field for
-        // any of them, so the Settings window builds a config without them — and the loader, which is
-        // the only reader that can have them, passes them explicitly. Save() never serialises any of
-        // the four, so a config built without them cannot erase them from disk.
+        // OPTIONAL, AND ONLY THE SIX BELOW (four here, plus telegramInbound and effort — the count was
+        // stale from the day the fifth was added and is corrected 2026-09-12). Every other parameter
+        // is required because every caller knows its value; these keys are hand-edited in config.json
+        // and no window has a field for any of them, so the Settings window builds a config without
+        // them — and the loader, which is the only reader that can have them, passes them explicitly.
+        // Save() never serialises any of the six, so a config built without them cannot erase them
+        // from disk.
         PlanBackendSettings? planBackend = null,
         IGuardrailSettings? guardrails = null,
         IDefaultsSettings? defaults = null,
@@ -61,13 +100,17 @@ public static class OrchestratorConfig_Factory
         // A FIFTH OF THE SAME KIND, and it obeys the same three rules: hand-edited in config.json,
         // no window field, never serialised by Save — so a config rebuilt without it cannot erase
         // it from disk. Null reads as `poll`, which is what every host did before the key existed.
-        Telegram.TelegramInboundModes? telegramInbound = null)
+        Telegram.TelegramInboundModes? telegramInbound = null,
+
+        // AND A SIXTH, the `effort` block (added 2026-09-12, plan 02 task 7). Same three rules again:
+        // hand-edited, no window field, never serialised — EffortSettings_Json has no Write at all.
+        IEffortSettings? effort = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, reviewerModel, soloModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
-            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound);
+            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound, effort);
     }
 
     /// <summary>
@@ -99,7 +142,8 @@ public static class OrchestratorConfig_Factory
         IGuardrailSettings? guardrails = null,
         IDefaultsSettings? defaults = null,
         ITelegramProseSettings? telegramProse = null,
-        Telegram.TelegramInboundModes? telegramInbound = null)
+        Telegram.TelegramInboundModes? telegramInbound = null,
+        IEffortSettings? effort = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -147,7 +191,15 @@ public static class OrchestratorConfig_Factory
             // POLLING IS THE DEFAULT, and the direction is chosen rather than inherited: a host that
             // silently stops polling is a phone that silently stops working, and it cannot report
             // the reason — it is not polling, so it never sees the 409 that would explain it.
-            telegramInbound ?? Telegram.TelegramInboundModes.Poll);
+            telegramInbound ?? Telegram.TelegramInboundModes.Poll,
+
+            // DEFAULTED, NEVER NULL — the guardrails/defaults/telegramProse rule again, and it earns
+            // it: every caller that predates this parameter keeps compiling and keeps getting the
+            // shipped behaviour, which for effort is "no --effort flag for any role" (the catalogue's
+            // own answer, read by Create_Default). The PRESET rung — classic's xhigh for supervisor
+            // and solo — is applied by OrchestratorConfig_Loader, which is the only reader that has a
+            // `preset` key to consult, exactly as for the six model keys.
+            effort ?? EffortSettings_Factory.Create_Default());
     }
 
     /// <summary>
@@ -223,6 +275,11 @@ public static class OrchestratorConfig_Factory
             source.Guardrails,
             source.Defaults,
             source.TelegramProse,
-            source.TelegramInbound);
+            source.TelegramInbound,
+
+            // CARRIED THROUGH, like every other block above: this method exists to move ONE bool, and
+            // a block it forgot would be silently reset to the shipped default on the next
+            // /screenshots tap — which is precisely the bug shape `runners` had here before.
+            source.Effort);
     }
 }

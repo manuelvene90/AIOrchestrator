@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
+using AIOrchestratorCoreLib.Status.SessionModelReading;
 
 namespace AIOrchestratorCoreLib.Usage;
 
@@ -224,6 +225,16 @@ public static partial class UsageTotals_Reader
         return SessionContextUsage_Factory.Create_OrNull(usageFilePath);
     }
 
+    /// <summary>
+    /// What model and effort the session behind this probe file is running, or null when it has not
+    /// said. Delegates, like the context reading above, so this class stays the one front door for
+    /// probe figures without becoming a second parser of any of them.
+    /// </summary>
+    public static ISessionModelReading? Read_ModelReading_OrNull(string usageFilePath)
+    {
+        return SessionModelReading_Factory.Create_OrNull(usageFilePath);
+    }
+
     static void Sum_TokenFields(JsonNode node, ref long total)
     {
         if (node is JsonObject jsonObject)
@@ -285,9 +296,11 @@ public static partial class UsageTotals_Reader
             // tick makes by design (a member that has no archive, a session with no PLAN.md).
             Diagnostics.TickIo_Counters.Count_TextFileRead();
 
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-            return reader.ReadToEnd();
+            // THROUGH THE TOLERANT READER, with the swallow below kept as the LAST resort. A .usage.json
+            // is rewritten by a live session on every status-line render, so on Windows this read can
+            // lose to the writer that owns it — and an empty string here does not read as "could not
+            // open", it reads as "this session has spent nothing", which is a wrong number on a card.
+            return Storage.Tolerant_FileReader.Read_AllText(filePath);
         }
         catch
         {

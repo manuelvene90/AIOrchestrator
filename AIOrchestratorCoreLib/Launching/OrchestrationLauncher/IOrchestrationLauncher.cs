@@ -36,4 +36,5 @@ public interface IOrchestrationLauncher
 
     /// <summary>Spawns (or re-spawns) the general supervisor; resumes its previous conversation when one exists.</summary>
     void Spawn_GeneralSupervisor();
+
 }

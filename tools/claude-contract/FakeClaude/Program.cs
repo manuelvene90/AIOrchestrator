@@ -1,3 +1,4 @@
+﻿using System.Text;
 using FakeClaude;
 
 // The fake `claude`. Only PRINT mode is simulated — the interactive TUI, --bg and the daemon are
@@ -5,6 +6,26 @@ using FakeClaude;
 // against the real binary). Exit codes and error texts mirror the real CLI where they were
 // measured; where they were not, the fake is STRICTER (it refuses combinations whose real
 // behaviour is unknown), so a bridge that passes the fake never relies on an unmeasured shape.
+
+// UTF-8 ON ALL THREE STREAMS, EXPLICITLY, BEFORE ANYTHING IS READ OR WRITTEN.
+//
+// The bridge hands this process UTF-8 (PrintTurnRunnerModel and StreamSessionProcess both set
+// StandardInputEncoding), and the real `claude` reads UTF-8. Console.In does not: on Windows it
+// decodes with the console's code page, so "REPORT — two" arrived here as "REPORT ÔÇö two" and the
+// fake answered a prompt nobody sent. Measured 2026-09-11, the first Windows run of this suite —
+// it is the same fact as the statusline's output encoding, on the input side.
+//
+// The stream path hid it: System.Text.Json escapes non-ASCII to \uXXXX, so those prompts are pure
+// ASCII on the wire and decode identically under any code page. Only the print path, which sends
+// the prompt as plain text, showed the damage — which is why exactly one test carried it.
+//
+// THE INSTRUMENT, NOT THE SUBJECT: nothing in the app was wrong here. A fake CLI that mangles what
+// it is given reports a failure the product does not have, and would just as happily report a pass.
+// Streams are replaced rather than Console.InputEncoding set, because the setter needs a console and
+// this process is always spawned with all three handles redirected.
+Console.SetIn(new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false)));
+Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
+Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true });
 
 var rawArgs = args.ToList();
 var parsed = FakeClaudeArguments.Parse(rawArgs);

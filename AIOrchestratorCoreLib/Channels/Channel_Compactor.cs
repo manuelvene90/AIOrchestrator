@@ -60,6 +60,20 @@ public static class Channel_Compactor
 
     public static long? Compact_IfNeeded(string channelFilePath)
     {
+        return Compact_IfNeeded(channelFilePath, () => true);
+    }
+
+    /// <summary>
+    /// <paramref name="mayRewrite"/> is asked INSIDE the gate, immediately before the read, and a
+    /// false answer leaves the file untouched (null). That placement is the whole point: a guard
+    /// evaluated before the gate answers for a file that can still change while this call WAITS for
+    /// the gate. On 2026-09-10 a session's append held the gate, the compactor queued behind it with
+    /// a guard that had already said "nothing unread", then read the file WITH the new entry, kept it,
+    /// and re-anchored the tailer past it: the entry survived in the file and never reached the
+    /// phone. Nothing slow belongs in the callback; a cursor comparison is what it is for.
+    /// </summary>
+    public static long? Compact_IfNeeded(string channelFilePath, Func<bool> mayRewrite)
+    {
         try
         {
             var file = new FileInfo(channelFilePath);
@@ -85,7 +99,11 @@ public static class Channel_Compactor
             var acquired = ChannelWrite_Lock.Try_Run_Serialised(
                 channelFilePath,
                 COMPACTION_LOCK_BUDGET,
-                () => newLength = Compact_Gated(channelFilePath),
+                () =>
+                {
+                    if (mayRewrite())
+                        newLength = Compact_Gated(channelFilePath);
+                },
                 out _);
 
             // Not acquiring is a non-event: compaction is housekeeping with no deadline, and null

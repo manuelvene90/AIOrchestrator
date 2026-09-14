@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Running;
@@ -25,6 +25,7 @@ namespace AIOrchestratorCoreLib.Tests.Running;
 /// names an hour a fixed distance from now, and the distance is the thing under test.
 /// </para>
 /// </summary>
+[Collection(REAL_TIME_COLLECTION.NAME)]
 public class PrintTurnLimitResetTests
 {
     /// <summary>
@@ -480,6 +481,15 @@ public class PrintTurnLimitResetTests
         Assert.True(PrintRunnerTestHarness.Drive_Until(
             dispatcher,
             () => harness.Read_State(SessionRoles.Implementer, orchId, deferredMember).RetryNotBeforeUtc != null
+                // AND ITS TURN IS OFF THE IN-FLIGHT LIST. The refused turn writes RetryNotBeforeUtc and
+                // only THEN drops its in-flight entry, and Clear_LimitDeferrals deliberately skips a
+                // session whose turn is still running (F6: a snapshot taken before that turn's own
+                // writes is not something to act on). So the state file alone is not "the deferral has
+                // settled", and a test that started clearing there caught the product mid-ordering
+                // about one run in eight, alone, and returned 0 cleared. The product is right; this is
+                // the condition it actually offers, and Is_TurnInFlight is on IPrintTurnDispatcher for
+                // exactly this.
+                && !dispatcher.Is_TurnInFlight(orchId, deferredMember)
                 && harness.Read_State(SessionRoles.Implementer, orchId, normalMember).ExecutedTurns.Count == 1,
             PrintRunnerTestHarness.GENEROUS),
             Describe_Wait(harness, orchId, deferredMember, normalMember));

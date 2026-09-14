@@ -33,6 +33,7 @@
     <Content Include="..\kit\.claude-plugin\*.json" Link="kit\.claude-plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\skills\**\*.md" Link="kit\skills\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\bin\*.sh" Link="kit\bin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\presets\*.json" Link="kit\presets\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\statusline\statusline.sh" Link="kit\statusline\statusline.sh" CopyToOutputDirectory="PreserveNewest" />
