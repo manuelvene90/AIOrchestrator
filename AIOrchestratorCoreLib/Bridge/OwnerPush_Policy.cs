@@ -16,6 +16,9 @@ namespace AIOrchestratorCoreLib.Bridge;
 ///   - the ANSWER to something they asked (they are waiting for it),
 ///   - a BLOCKED flag (work has stopped and only they can restart it).
 /// Progress narration is not one of them. It is not lost; it is simply not a notification.
+///
+/// That is the <c>phone.push = filtered</c> arm (master's, and classic's). The fork's owner ruled the
+/// other way on 2026-09-09 and both are now a per-machine choice — see <see cref="Decide"/>.
 /// </summary>
 public static class OwnerPush_Policy
 {
@@ -95,13 +98,13 @@ public static class OwnerPush_Policy
     /// (kit/hooks/run-to-the-end-check.sh) is the other reader of this marker; the two must agree.
     ///
     /// <para>
-    /// ITS READER IS THE ENGINE, not <see cref="Should_Push"/>. This build pushes everything the
-    /// supervisor writes, so a turn-end declaration reaches the phone like any other entry — what it
-    /// must NOT do is CONSUME the owner's answer credit. That credit is one-shot, and on 2026-09-10
-    /// a "WAITING ON the re-review — fix landed" written seconds before the real answer spent it
-    /// three times in one topic; the answer that followed was narration by shape and never arrived.
-    /// The owner re-typed their question each time. The engine asks this before removing the
-    /// orchestration from its awaiting-answer set.
+    /// IT HAS TWO READERS. The ENGINE asks it before removing the orchestration from its awaiting-answer
+    /// set: a turn-end declaration must NOT CONSUME the owner's answer credit. That credit is one-shot,
+    /// and on 2026-09-10 a "WAITING ON the re-review — fix landed" written seconds before the real answer
+    /// spent it three times in one topic; the answer that followed was narration by shape and never
+    /// arrived. The owner re-typed their question each time. And <see cref="Decide"/> asks it under
+    /// <c>phone.push = filtered</c>, so the open credit does not SEND such a line as if it were the
+    /// answer; under <c>everything</c> it reaches the phone like any other entry.
     /// </para>
     /// </summary>
     public static bool Is_TurnEndDeclaration(string? subject)
@@ -128,50 +131,104 @@ public static class OwnerPush_Policy
     }
 
     /// <summary>
-    /// WHETHER A SUPERVISOR ENTRY REACHES THE PHONE — and since 2026-09-09 the answer is YES, for
-    /// every entry the supervisor writes on the owner channel.
+    /// WHAT HAPPENS TO ONE SUPERVISOR ENTRY ON AN OWNER CHANNEL, under the owner's <c>phone.push</c>
+    /// (plan 03 Task 2). Two ways this machine has shipped, and both are now a choice rather than a build.
     ///
     /// <para>
-    /// WHAT THIS USED TO DO, AND WHY IT IS GONE. It let through a question, an answer the owner was
-    /// waiting for, a <c>BLOCKED ON OWNER</c>, a file, and the boot greeting — and suppressed
-    /// everything else as "progress narration", on the owner's earlier words about a waterfall of
-    /// messages. It worked exactly as designed and produced the opposite of what they wanted: their
-    /// own quoted example of a message they NEEDED — *"La regola ora è completa…"* — was suppressed
-    /// here and reached them five minutes late, through the silent-deadlock net, in raw Markdown.
-    /// Meanwhile the noise they were actually drowning in came from the APP: a fifteen-line STATUS
-    /// every half hour, a receipt sentence under every message, false stall alerts.
+    /// <see cref="PhonePushModes.Everything"/> — THE FORK'S RULING OF 2026-09-09: *"If the supervisor
+    /// writes to me, I must know it — that rings. Status, receipts and app bookkeeping do not ring."*
+    /// The filter below had let through a question, an awaited answer, a <c>BLOCKED ON OWNER</c>, a
+    /// file and the boot greeting, and it worked exactly as designed while producing the opposite of
+    /// what that owner wanted: their own quoted example of a message they NEEDED — *"La regola ora è
+    /// completa…"* — was suppressed and reached them five minutes late, through the silent-deadlock net,
+    /// in raw Markdown. Under this mode the brake on chatter is the SKILL plus the brevity nudge, and
+    /// every entry is sent — byte-for-byte what <see cref="Should_Push"/> answered while it was the only
+    /// build, so quiet's phone cannot move.
     /// </para>
     /// <para>
-    /// THE OWNER'S RULING, 2026-09-09: *"If the supervisor writes to me, I must know it — that
-    /// rings. Status, receipts and app bookkeeping do not ring."* So the brake on chatter is no
-    /// longer a filter that guesses which of the supervisor's words matter; it is the SKILL (write
-    /// to the owner only what they must know) plus the brevity nudge that already measures every
-    /// entry. A filter cannot tell a thought from a status line, and the one it suppressed by
-    /// mistake was the one that mattered.
+    /// <see cref="PhonePushModes.Filtered"/> — MASTER'S, rebuilt from the predicates this class kept
+    /// through the fork: *"I answer the sup a question, and then the sup doesn't disturb me anymore
+    /// unless it has another question."* A question (marked or in prose), a <c>BLOCKED ON OWNER</c>, a
+    /// file for the owner, the boot greeting and THE answer are sent now; everything else is HELD for
+    /// the turn-end digest — not rung, and not lost.
     /// </para>
     /// <para>
-    /// ONE EXCEPTION SURVIVES, and it is not narration filtering: the owner's own words quoted back
-    /// at them (<see cref="Is_OwnerRestatement"/>). That says nothing they did not just type, and it
-    /// spent their wait — the real answer that followed then read as narration.
+    /// TWO REFUSALS HOLD IN BOTH MODES, and neither is ever held. An EMPTY body is nothing to read, and
+    /// a held one was once released five minutes later, RINGING, as a blank message about nothing. The
+    /// owner's own words quoted back (<see cref="Is_OwnerRestatement"/>) say nothing they did not just
+    /// type — holding them would put them in the digest.
+    /// </para>
+    /// <para>
+    /// THE ANSWER IS NOT A STATUS LINE. Under <c>filtered</c> the owner's open credit sends an entry only
+    /// when its subject is not a turn-end declaration (<see cref="Is_TurnEndDeclaration"/>): the engine
+    /// already refuses to CONSUME the credit on one (decision 25), and without this half a "WAITING ON …"
+    /// written seconds before the real answer would be SENT as if it were the thing they wait for.
     /// </para>
     /// </summary>
-    /// <param name="ownerIsWaitingForAReply">
-    /// CURRENTLY UNREAD — kept so the call sites do not have to be rebuilt when the filter returns.
-    /// It was the filter's "the owner is waiting for this one" arm, and on this build the credit it
-    /// carries is inert AT THE PUSH: the credit machinery is live in the engine (raised at delivery,
-    /// one-shot, never spent by a `WAITING ON` subject), but nothing here consults it. The filter and
-    /// the turn-end digest belong to plan 03 (`phone.push = filtered`); this parameter is what makes
-    /// the surrounding prose read as though they were already here.
-    /// </param>
-    /// <param name="subject">Also unread on this build, and for the same reason.</param>
+    public static OwnerPushDecisions Decide(PhonePushModes mode, string rawEntryText, bool ownerIsWaitingForAReply, string? subject)
+    {
+        // An entry with no body is nothing to read — and Telegram refuses an empty message anyway.
+        if (string.IsNullOrWhiteSpace(rawEntryText))
+            return OwnerPushDecisions.Drop;
+
+        if (Is_OwnerRestatement(rawEntryText))
+            return OwnerPushDecisions.Drop;
+
+        return mode switch
+        {
+            PhonePushModes.Everything => OwnerPushDecisions.SendNow,
+            PhonePushModes.Filtered => Is_OwedTheRingNow(rawEntryText, ownerIsWaitingForAReply, subject)
+                ? OwnerPushDecisions.SendNow
+                : OwnerPushDecisions.HoldForDigest,
+            _ => throw new Exception($"Unhandled PhonePushModes: {mode}"),
+        };
+    }
+
+    /// <summary>The filtered arm's "send now" — one union, each member a predicate this class already had.</summary>
+    static bool Is_OwedTheRingNow(string rawEntryText, bool ownerIsWaitingForAReply, string? subject)
+    {
+        return Carries_Question(rawEntryText)
+            || Asks_InProse(rawEntryText)
+            || rawEntryText.Contains(BLOCKED_MARKER, StringComparison.OrdinalIgnoreCase)
+            || Carries_FileForTheOwner(rawEntryText)
+            || Is_OnlineGreeting(subject)
+            || (ownerIsWaitingForAReply && !Is_TurnEndDeclaration(subject));
+    }
+
+    /// <summary>
+    /// THE MODE A CHANNEL IS UNDER — the configured <c>phone.push</c>, except on General, which is always
+    /// <see cref="PhonePushModes.Everything"/>.
+    ///
+    /// <para>
+    /// D8 (coordinator, 2026-09-14): <c>phone.push</c> governs ORCHESTRATION owner channels only. The
+    /// general supervisor's channel is an owner channel too, so the push block reaches it — and filtering
+    /// it would stop the concierge's narration reaching the phone, which is most of what General is for.
+    /// One place, so the mirror and the turn-end digest cannot disagree about which channels are exempt.
+    /// </para>
+    /// </summary>
+    public static PhonePushModes Resolve_ModeForChannel(PhonePushModes configured, string orchId)
+    {
+        return orchId == ChannelDiscovery.GENERAL_ORCH_ID
+            ? PhonePushModes.Everything
+            : configured;
+    }
+
+    /// <summary>
+    /// WHETHER AN ENTRY IS SENT UNDER <see cref="PhonePushModes.Everything"/> — ONE ARM OF TWO since
+    /// plan 03, and nothing more: a thin call into <see cref="Decide"/>.
+    ///
+    /// <para>
+    /// It was the whole policy while the fork's build pushed every supervisor entry (2026-09-09 to plan
+    /// 03), when <paramref name="ownerIsWaitingForAReply"/> and <paramref name="subject"/> were carried
+    /// unread for the day the filter came back. The engine no longer calls it — it switches on
+    /// <see cref="Decide"/> under the resolved mode, and on 2026-09-14 no production code in this tree
+    /// did — but the policy tests pin it as the everything arm, and deleting it is a wider change than
+    /// restoring the filter.
+    /// </para>
+    /// </summary>
     public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply, string? subject = null)
     {
-        // An entry with no body is nothing to read. Not a filter — a guard against sending an empty
-        // message, which Telegram refuses anyway.
-        if (string.IsNullOrWhiteSpace(rawEntryText))
-            return false;
-
-        return !Is_OwnerRestatement(rawEntryText);
+        return Decide(PhonePushModes.Everything, rawEntryText, ownerIsWaitingForAReply, subject) == OwnerPushDecisions.SendNow;
     }
 
     /// <summary>
