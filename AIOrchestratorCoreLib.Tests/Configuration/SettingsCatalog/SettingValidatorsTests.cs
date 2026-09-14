@@ -1,0 +1,103 @@
+using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
+using AIOrchestratorCoreLib.Telegram;
+using Xunit;
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
+
+namespace AIOrchestratorCoreLib.Tests.Configuration.SettingsCatalog;
+
+/// <summary>
+/// THE TWO LIST VALIDATORS, and the one that is still a name only. A refusal here is what turns a
+/// hand-edited typo into "that one key falls to the layer below" at the resolver — without it the
+/// typo was accepted as written and reached a builder.
+/// </summary>
+public class SettingValidatorsTests
+{
+    [Fact]
+    public void PulseFields_RefusesAWordThatIsNotAField()
+    {
+        var refusal = SettingValidators.Validate_OrNull(SettingValidators.PULSE_FIELDS, List("supervisor", "suprvisor"));
+
+        Assert.NotNull(refusal);
+        Assert.Contains("suprvisor", refusal, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PulseFields_RefusesARepeat()
+    {
+        var refusal = SettingValidators.Validate_OrNull(SettingValidators.PULSE_FIELDS, List("updated", "updated"));
+
+        Assert.NotNull(refusal);
+        Assert.Contains("updated", refusal, StringComparison.Ordinal);
+    }
+
+    /// <summary>And the empty list — a pulse with no fields is legal, the owner's to choose.</summary>
+    [Fact]
+    public void PulseFields_AcceptsTheShippedDefault()
+    {
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.PULSE_FIELDS, Catalog.Find_OrNull("pulse.fields")!.Default_OrNull));
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.PULSE_FIELDS, List([.. PulseField_Names.ALL])));
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.PULSE_FIELDS, List()));
+    }
+
+    /// <summary>
+    /// "tail sup" is a verb WITH ITS TARGET — a tap carries no text, so the target rides inside the
+    /// verb — and <c>BotCommandMenu.ALL</c> holds only the bare "tail". Exact membership would refuse
+    /// the catalogue's own default; only the first token is a verb.
+    /// </summary>
+    [Fact]
+    public void BotCommands_ChecksOnlyTheFirstToken()
+    {
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.BOT_COMMANDS, List("tail sup")));
+
+        var refusal = SettingValidators.Validate_OrNull(SettingValidators.BOT_COMMANDS, List("tale sup"));
+
+        Assert.NotNull(refusal);
+        Assert.Contains("tale", refusal, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BotCommands_AcceptsBothShippedDefaults()
+    {
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.BOT_COMMANDS, List([.. TopicCommandButtons.Commands])));
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.BOT_COMMANDS, List([.. TopicCommandButtons.GeneralCommands])));
+    }
+
+    /// <summary>Classic's <c>general.buttons</c> — General with no bar at all.</summary>
+    [Fact]
+    public void BotCommands_AcceptsTheEmptyList()
+    {
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.BOT_COMMANDS, List()));
+    }
+
+    /// <summary>The repeat is of the VERB: two targets of one verb are still one verb twice on a bar.</summary>
+    [Fact]
+    public void BotCommands_RefusesARepeatedVerb()
+    {
+        var refusal = SettingValidators.Validate_OrNull(SettingValidators.BOT_COMMANDS, List("tail sup", "tail 1"));
+
+        Assert.NotNull(refusal);
+        Assert.Contains("tail", refusal, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PINS THE REMAINING GAP AS DELIBERATE. <c>web.listen</c> has no consumer until plan 04's listener,
+    /// so its check is not written yet and any value is accepted. When plan 04 implements it, this test
+    /// is the one that must change — which is the point of writing it down as a test.
+    /// </summary>
+    [Fact]
+    public void ListenAddress_IsStillARegisteredNameOnly()
+    {
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.LISTEN_ADDRESS, JsonValue.Create("not an address at all")));
+    }
+
+    static JsonArray List(params string[] words)
+    {
+        var array = new JsonArray();
+
+        foreach (var word in words)
+            array.Add(JsonValue.Create(word));
+
+        return array;
+    }
+}

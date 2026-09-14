@@ -80,7 +80,10 @@ public class PresetProbeTests
     [InlineData("phone.status.periodic", "true")]
     [InlineData("phone.appMessagesRing", "true")]
     [InlineData("phone.receipts", "\"ticks\"")]
-    [InlineData("phone.replyKeyboard", "\"on\"")]
+
+    // OFF, NOT MASTER'S "on": the owner's answer to D5 (2026-09-14) is "off for both presets", so
+    // classic stopped stating the key and reads the catalogue's shipped default like quiet does.
+    [InlineData("phone.replyKeyboard", "\"off\"")]
     [InlineData("pulse.holdToggle", "false")]
     [InlineData("pulse.fields", """["supervisor","members","modelEffort","merged","updated"]""")]
     [InlineData("general.buttons", "[]")]

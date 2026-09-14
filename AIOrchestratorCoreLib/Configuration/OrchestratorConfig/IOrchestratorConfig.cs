@@ -1,6 +1,8 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
+using AIOrchestratorCoreLib.Configuration.PhoneSettings;
+using AIOrchestratorCoreLib.Configuration.PulseSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
 using AIOrchestratorCoreLib.Running;
@@ -127,6 +129,20 @@ public interface IOrchestratorConfig
     /// have — though every LEVEL inside it may legitimately be null, which means "emit no flag".
     /// </summary>
     IEffortSettings Effort { get; }
+
+    /// <summary>
+    /// The <c>phone.*</c> and <c>topic.*</c> rows: what reaches the owner's phone and how a topic looks,
+    /// resolved catalogue → preset → this file. Never null — an absent block means the preset's and the
+    /// catalogue's answers, the rule every block above follows. A seam reads it at the point of effect
+    /// and never keeps a copy: the provider re-reads config.json on its write stamp.
+    /// </summary>
+    IPhoneSettings Phone { get; }
+
+    /// <summary>
+    /// The <c>pulse.*</c> rows and <c>general.buttons</c>: the status line's fields and step, the two
+    /// button bars, and where the hold toggle sits. Never null, same rule as <see cref="Phone"/>.
+    /// </summary>
+    IPulseSettings Pulse { get; }
 
     /// <summary>
     /// THE ONE READER OF THE PER-ROLE DEFAULT — the same rule <see cref="IRunnerConfigs.Get_ForRole"/>

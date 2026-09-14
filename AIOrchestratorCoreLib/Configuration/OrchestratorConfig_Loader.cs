@@ -3,6 +3,8 @@ using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Configuration.PhoneSettings;
+using AIOrchestratorCoreLib.Configuration.PulseSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
@@ -91,7 +93,12 @@ public static class OrchestratorConfig_Loader
             Parse_PlanBackend_OrNull(configRoot),
             Parse_Guardrails(configRoot),
             DefaultsSettings_Json.Parse(configRoot),
-            TelegramProseSettings_Json.Parse(configRoot),
+
+            // ON THE PRESET RUNG SINCE 2026-09-14 (plan 03 task 1): the block now resolves its two keys
+            // through the catalogue, which is what makes the re-homed `phone.*` spelling work beside
+            // the old `telegram.*` one. Neither shipped preset states either key today; the tree is
+            // passed so a preset that does is honoured rather than silently skipped.
+            TelegramProseSettings_Json.Parse(configRoot, preset),
 
             // `telegramInbound`: "poll" (default) or "off". Hand-edited, never written back by Save
             // below — the same contract as the four blocks above it.
@@ -102,7 +109,14 @@ public static class OrchestratorConfig_Loader
             // owner's xhigh for supervisor and solo lives now, so a machine that states nothing must
             // still resolve through it. Unlike the models it needs no "absence" dance — there is no
             // compat ladder between effort roles, so the resolved answer IS the answer, null included.
-            EffortSettings_Json.Parse(configRoot, preset));
+            EffortSettings_Json.Parse(configRoot, preset),
+
+            // THE `phone`/`topic` AND `pulse` BLOCKS, on the SAME `preset` tree (2026-09-14, plan 03
+            // task 1). These rows are exactly where the two presets disagree — Manu's phone and
+            // Nathan's — so a block parsed without the tree would give every machine the catalogue's
+            // answer and neither owner's. No absence dance here either: the resolved value IS the value.
+            PhoneSettings_Json.Parse(configRoot, preset),
+            PulseSettings_Json.Parse(configRoot, preset));
     }
 
     /// <summary>
@@ -269,7 +283,7 @@ public static class OrchestratorConfig_Loader
         // first button press, on every box that had never heard of the keys. A hand-edited value is
         // safe either way: Save() merges, so keys it does not write survive untouched.
         //
-        // planBackend, THE GUARDRAIL KEYS, defaults, telegram AND effort ARE DELIBERATELY ABSENT from the writes above,
+        // planBackend, THE GUARDRAIL KEYS, defaults, telegram, effort, phone/topic AND pulse ARE DELIBERATELY ABSENT from the writes above,
         // for the same reason from two directions. planBackend is hand-edited, no window builds one,
         // and IOrchestratorConfig.PlanBackend is null in every config the app constructs itself —
         // writing it would erase the owner's own key on the next save. The guardrail keys and the
@@ -277,11 +291,14 @@ public static class OrchestratorConfig_Loader
         // do is materialise this build's defaults into the file as if the owner had chosen them,
         // freezing a default that is meant to move when the app is updated. The telegram block —
         // foldLongEntriesAbove, attachEntriesAbove — belongs to that same set, and so does the
-        // `effort` block (EffortSettings_Json.EFFORT_KEY), the newest member: its shipped answer comes
+        // `effort` block (EffortSettings_Json.EFFORT_KEY): its shipped answer comes
         // from the catalogue and its working answer from a PRESET, so writing this build's resolution
         // back would pin the owner to whichever preset was in force the day they last pressed a
         // button. EffortSettings_Json has no Write method at all, so that cannot happen by accident.
-        // All five are read; none is owned.
+        // The `phone`/`topic` and `pulse` blocks (2026-09-14) are the newest members, for the same
+        // preset reason and more sharply — they are the rows the two presets disagree about — and
+        // PhoneSettings_Json and PulseSettings_Json have no Write either.
+        // All seven are read; none is owned.
 
         var secretsRoot = Read_JsonObject_ForEditing(paths.SecretsFile);
 

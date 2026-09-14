@@ -291,7 +291,7 @@ public class PerRoleModelDefaultsTests : IDisposable
     /// THE SECOND HALF PROVES THE PRESET LAYER IS STILL GENUINELY CONSULTED, not merely that deleting
     /// it would look the same: a test that only asserted the shipped model would pass identically with
     /// <c>Presets_Loader</c> ripped out entirely. <c>classic</c> still carries non-model rows
-    /// (<c>effort.supervisor</c>, <c>phone.replyKeyboard</c>, …) that the catalogue's own shipped
+    /// (<c>effort.supervisor</c>, <c>topic.modeGlyphs</c>, …) that the catalogue's own shipped
     /// default does not, and a config.json naming no preset resolves one of those through
     /// <see cref="Settings_Resolver"/> with <see cref="SettingOrigins.Preset"/> as its origin.
     /// </para>

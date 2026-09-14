@@ -106,8 +106,14 @@ internal sealed class SettingDefinitionModel(
     /// restriction: <c>TryGetValue&lt;long&gt;</c> alone would already accept
     /// <c>-1001234567890</c> there. Trying <see langword="long"/> first and falling back to
     /// <see langword="int"/> covers both shapes without accepting anything a whole number is not.
+    ///
+    /// <para>
+    /// INTERNAL BECAUSE <c>Settings_Resolver.Resolve_Long</c> READS THROUGH IT TOO (2026-09-14): that
+    /// accessor called <c>GetValue&lt;long&gt;()</c> directly and threw on every int-backed shipped
+    /// default — the exact shape this method exists for. One reading of "a whole number", not two.
+    /// </para>
     /// </summary>
-    static bool Try_GetLong(JsonValue jsonValue, out long number)
+    internal static bool Try_GetLong(JsonValue jsonValue, out long number)
     {
         if (jsonValue.TryGetValue(out number))
             return true;

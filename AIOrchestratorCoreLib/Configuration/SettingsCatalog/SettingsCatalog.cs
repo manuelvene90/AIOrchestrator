@@ -682,28 +682,36 @@ public static class SettingsCatalog
             SettingDefinition_Factory.Create_Int(
                 path: "phone.foldLongEntriesAbove",
                 shippedDefault: OwnerMessage_Folder.DEFAULT_FOLD_THRESHOLD,
-                minimum: 1,
+
+                // 0, NOT 1: 0 is the owner's OFF SWITCH (OwnerMessage_Folder — the delivery that predates
+                // the fold), pinned by TelegramProseSettingsJsonTests and LongEntriesFoldOnThePhoneTests.
+                // A floor of 1 was harmless while nothing resolved this row; the day
+                // TelegramProseSettings_Json began resolving it (2026-09-14) it would have turned a
+                // hand-edited 0 into 900.
+                minimum: 0,
                 maximum: 10000,
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Fold long entries above (characters)",
                 description:
-                    "Characters above which an entry is folded on the phone rather than sent whole. Re-homed from " +
-                    $"'telegram.foldLongEntriesAbove', which still resolves as an alias. {INERT_NOTE}",
+                    "Characters above which an entry is folded on the phone rather than sent whole; 0 turns folding off. " +
+                    "Re-homed from 'telegram.foldLongEntriesAbove', which still resolves as an alias.",
                 restart: RestartKinds.None,
                 legacyPath: $"{TelegramProseSettings.TelegramProseSettings_Json.TELEGRAM_KEY}.{TelegramProseSettings.TelegramProseSettings_Json.FOLD_LONG_ENTRIES_ABOVE_KEY}"),
 
             SettingDefinition_Factory.Create_Int(
                 path: "phone.attachEntriesAbove",
                 shippedDefault: OwnerDocument_Builder.DEFAULT_ATTACH_ABOVE_CHUNKS,
-                minimum: 1,
+
+                // 0, NOT 1, for the reason phone.foldLongEntriesAbove gives: 0 is the attachment's off switch.
+                minimum: 0,
                 maximum: 100,
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Attach entries above (chunks)",
                 description:
-                    "How many message-sized chunks an entry may span before it is sent as an attached document instead. " +
-                    $"Re-homed from 'telegram.attachEntriesAbove', which still resolves as an alias. {INERT_NOTE}",
+                    "How many message-sized chunks an entry may span before it is sent as an attached document instead; " +
+                    "0 turns the attachment off. Re-homed from 'telegram.attachEntriesAbove', which still resolves as an alias.",
                 restart: RestartKinds.None,
                 legacyPath: $"{TelegramProseSettings.TelegramProseSettings_Json.TELEGRAM_KEY}.{TelegramProseSettings.TelegramProseSettings_Json.ATTACH_ENTRIES_ABOVE_KEY}"),
 
