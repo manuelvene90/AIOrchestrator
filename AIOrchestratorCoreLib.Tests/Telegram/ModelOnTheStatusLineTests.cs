@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
 using AIOrchestratorCoreLib.Status.SessionModelReading;
@@ -16,24 +17,50 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 ///
 /// Every reading that has one shows it, unlike the context figure, which members earn only near
 /// full: a context percentage is an ALARM and is worth a glance only past a threshold, whereas the
-/// model is a FACT about the row that is either known or not. The supervisor's rides on the LEAD
-/// LINE for the reason ContextOnTheStatusLineTests gives — this line lists members and a crew's
-/// supervisor is not one — and the fixtures here are that file's, so the two surfaces are pinned
-/// against the same rows.
+/// model is a FACT about the row that is either known or not. The fixtures here are
+/// ContextOnTheStatusLineTests', so the two surfaces are pinned against the same rows.
+///
+/// <para>
+/// PORTED 2026-09-14 FROM MASTER'S ONE-LINE PULSE, under plan 03 ruling R10. Master wrote this file
+/// (7f658e0) against a builder whose lead line carried the ledger figures and the supervisor's
+/// readings — `PULSE · 72/113 · 63% · sup Fable 5.1 xhigh` — and whose member rows had no state word.
+/// This tree's PULSE is the fork's six-field layout, which TopicStatusLineBuilderTests and
+/// ContextOnTheStatusLineTests pin: a bare header, a `sup · …` row, member rows carrying their state
+/// word, a `merged` row and the `updated` heartbeat. The builder was not bent back to master's text;
+/// every case keeps its intent and its expected string is re-rendered in this layout.
+/// </para>
+/// <para>
+/// THE SUPERVISOR'S READING RIDES ITS `sup` ROW, not the lead word, for the reason master put it on
+/// the lead line: that was the supervisor's only line, because this message lists members and a
+/// crew's supervisor is not one. Field 2 gave it a line of its own, and the context figure moved there
+/// first (ContextOnTheStatusLineTests.TheSupervisorsOwnWindowRidesOnItsOwnSupRow).
+/// </para>
+/// <para>
+/// EVERY CALL PASSES CLASSIC'S FIELD LIST: `modelEffort` is legal but not in the catalogue's shipped
+/// list, and classic — master's phone — is the preset that asks for it. PulseSettingsJsonTests pins that
+/// classic resolves to these five words.
+/// </para>
 /// </summary>
 public class ModelOnTheStatusLineTests
 {
     static readonly DateTime NOW = new(2026, 8, 21, 20, 30, 0);
     static readonly DateTime PROBED = new(2026, 8, 21, 20, 29, 0, DateTimeKind.Utc);
 
+    /// <summary>kit/presets/classic.json's `pulse.fields`, spelled out for the reason PresetProbeTests gives.</summary>
+    static readonly IReadOnlyList<string> CLASSIC =
+    [
+        PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.MERGED, PulseField_Names.UPDATED,
+    ];
+
+    /// <summary>The reading rides after the duration — the row's state word, which this layout adds, sits before it.</summary>
     [Fact]
     public void AMembersModelAndEffortRideAfterItsDuration()
     {
         var line = TopicStatusLine_Builder.Build(
             Progress(1, 5), [Member("imp-1", Briefed(), model: Fable("xhigh"))], null, NOW,
-            aMessageIsAlreadyPosted: false);
+            aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• imp-1 · wiring the context field · 30 min · Fable 5.1 xhigh", line.Split('\n')[1]);
+        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh", line.Split('\n')[1]);
     }
 
     /// <summary>A quiet member is still running SOMETHING, and the row says what.</summary>
@@ -41,24 +68,24 @@ public class ModelOnTheStatusLineTests
     public void AMemberStandingByStillNamesItsModel()
     {
         var line = TopicStatusLine_Builder.Build(
-            Progress(1, 5), [Member("imp-1", [], model: Fable("xhigh"))], null, NOW, aMessageIsAlreadyPosted: false);
+            Progress(1, 5), [Member("imp-1", [], model: Fable("xhigh"))], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
         Assert.Equal("• imp-1 · standing by · Fable 5.1 xhigh", line.Split('\n')[1]);
     }
 
     /// <summary>
-    /// The field ORDER on a member row, with everything present: who, what, how long, on what, how
-    /// full. The model sits between the duration and the context figure — the facts about the row
-    /// first, the alarm last, where a glance lands.
+    /// The field ORDER on a member row, with everything present: who, what, which state, how long, on
+    /// what, how full. The model sits between the duration and the context figure — the facts about the
+    /// row first, the alarm last, where a glance lands.
     /// </summary>
     [Fact]
     public void TheModelSitsBetweenTheDurationAndTheContextField()
     {
         var line = TopicStatusLine_Builder.Build(
             Progress(1, 5), [Member("solo-1", Briefed(), Reading(52), Fable("xhigh"))], null, NOW,
-            aMessageIsAlreadyPosted: false);
+            aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• solo-1 · wiring the context field · 30 min · Fable 5.1 xhigh · ctx 52%", line.Split('\n')[1]);
+        Assert.Equal("• solo-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh · ctx 52%", line.Split('\n')[1]);
     }
 
     /// <summary>An older Claude Code reports no dial. Just the model, nothing trailing.</summary>
@@ -67,49 +94,55 @@ public class ModelOnTheStatusLineTests
     {
         var line = TopicStatusLine_Builder.Build(
             Progress(1, 5), [Member("imp-1", Briefed(), model: SessionModelReading_Factory.Create("Opus 5", null))], null, NOW,
-            aMessageIsAlreadyPosted: false);
+            aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• imp-1 · wiring the context field · 30 min · Opus 5", line.Split('\n')[1]);
+        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Opus 5", line.Split('\n')[1]);
     }
 
     /// <summary>
     /// A member that has not reported renders EXACTLY as it did before this field existed — asserted
     /// as the whole row, because a Contains check cannot see a trailing separator or placeholder.
-    /// TopicStatusLineBuilderTests.TheApprovedShape pins the same promise across a whole message.
+    /// TopicStatusLineBuilderTests.TheApprovedShape pins the same row shape across a whole message.
     /// </summary>
     [Fact]
     public void AMemberWithNoReadingRendersExactlyAsBefore()
     {
         var line = TopicStatusLine_Builder.Build(
-            Progress(1, 5), [Member("imp-1", Briefed())], null, NOW, aMessageIsAlreadyPosted: false);
+            Progress(1, 5), [Member("imp-1", Briefed())], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• imp-1 · wiring the context field · 30 min", line.Split('\n')[1]);
-    }
-
-    [Fact]
-    public void TheSupervisorsModelRidesOnTheLeadLine()
-    {
-        var line = TopicStatusLine_Builder.Build(
-            Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false,
-            supervisorModel: Fable("xhigh"));
-
-        Assert.Equal("PULSE · 72/113 · 63% · sup Fable 5.1 xhigh", line);
+        Assert.Equal("• imp-1 · wiring the context field · working · 30 min", line.Split('\n')[1]);
     }
 
     /// <summary>
-    /// The field ORDER on the lead line with all three optional fields present: the ledger reading
-    /// stays together (count, percent, how long unchanged), then the supervisor's model, then its
-    /// context — the same facts-then-alarm order as a member row, and `sup ctx` keeps its place at
-    /// the very end so ContextOnTheStatusLineTests' expectations still hold.
+    /// WAS TheSupervisorsModelRidesOnTheLeadLine. The supervisor's reading rides the supervisor's own
+    /// line — the `sup` row in this layout, as the class docstring records — and the ledger figures keep
+    /// theirs.
     /// </summary>
     [Fact]
-    public void TheLeadLineFieldOrderWithEverythingPresent()
+    public void TheSupervisorsModelRidesOnItsSupRow()
     {
         var line = TopicStatusLine_Builder.Build(
-            Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+            Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC,
+            supervisorModel: Fable("xhigh"));
+
+        Assert.Equal("PULSE\nsup · Fable 5.1 xhigh\n72/113 merged · 63 %\nupdated 20:30", line);
+    }
+
+    /// <summary>
+    /// WAS TheLeadLineFieldOrderWithEverythingPresent. The field ORDER with all three optional fields
+    /// present: the ledger reading stays together (count, percent, how long unchanged) on its row, and
+    /// the supervisor's row carries its model then its context — the same facts-then-alarm order as a
+    /// member row, with `ctx` keeping its place at the very end so ContextOnTheStatusLineTests'
+    /// expectations still hold.
+    /// </summary>
+    [Fact]
+    public void TheSupAndMergedRowFieldOrderWithEverythingPresent()
+    {
+        var line = TopicStatusLine_Builder.Build(
+            Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC,
             figuresUnchangedFor: TimeSpan.FromMinutes(25), supervisorContext: Reading(41), supervisorModel: Fable("xhigh"));
 
-        Assert.Equal("PULSE · 3/4 · 75% · unchanged 25 min · sup Fable 5.1 xhigh · sup ctx 41%", line);
+        Assert.Equal("PULSE\nsup · Fable 5.1 xhigh · ctx 41%\n3/4 merged · 75 % · unchanged 25 min\nupdated 20:30", line);
     }
 
     /// <summary>
@@ -123,24 +156,31 @@ public class ModelOnTheStatusLineTests
         Assert.Equal(
             "",
             TopicStatusLine_Builder.Build(
-                null, [], null, NOW, aMessageIsAlreadyPosted: false, supervisorModel: Fable("xhigh")));
+                null, [], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC, supervisorModel: Fable("xhigh")));
     }
 
     /// <summary>
-    /// With no ledger the lead word comes back BARE and the supervisor's model goes with it, as the
-    /// context figure always has: that return is the "nothing to say" shape, and hanging a field
-    /// off it would be the say-nothing message the builder refuses. The member rows still carry
-    /// theirs.
+    /// With no ledger the lead word stays BARE: nothing hangs off the header in this layout, ledger or
+    /// not, and no merged row is drawn. The member rows still carry their readings.
+    ///
+    /// <para>
+    /// HALF OF MASTER'S CASE DOES NOT PORT, and the assertion says so rather than hiding it. Master
+    /// dropped the supervisor's model along with its lead-line figures, because a field hung off the bare
+    /// lead word was its "nothing to say" shape. Here the supervisor's reading is not on the lead word at
+    /// all: the `sup` row is drawn whenever the message has substance, exactly as `sup · ctx` already
+    /// was — so it is present, and pinned as present.
+    /// </para>
     /// </summary>
     [Fact]
     public void TheBareLeadWordStaysBareWithoutALedger()
     {
-        var lines = TopicStatusLine_Builder.Build(
-            null, [Member("imp-1", Briefed(), model: Fable("xhigh"))], null, NOW, aMessageIsAlreadyPosted: false,
-            supervisorModel: Fable("xhigh")).Split('\n');
+        var line = TopicStatusLine_Builder.Build(
+            null, [Member("imp-1", Briefed(), model: Fable("xhigh"))], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC,
+            supervisorModel: Fable("xhigh"));
 
-        Assert.Equal("PULSE", lines[0]);
-        Assert.Equal("• imp-1 · wiring the context field · 30 min · Fable 5.1 xhigh", lines[1]);
+        Assert.Equal(
+            "PULSE\nsup · Fable 5.1 xhigh\n• imp-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh\nupdated 20:30",
+            line);
     }
 
     /// <summary>The owner's first complaint about this line was "wide spaces"; a new field must not bring them back.</summary>
@@ -153,8 +193,8 @@ public class ModelOnTheStatusLineTests
                 Member("solo-1", Briefed(), Reading(52), Fable("xhigh")),
                 Member("imp-1", [], model: SessionModelReading_Factory.Create("Opus 5", null)),
             ],
-            "gate cleared on 34e5515",
-            NOW, aMessageIsAlreadyPosted: false,
+            new TopicLastEvent("gate cleared on 34e5515", null),
+            NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC,
             figuresUnchangedFor: TimeSpan.FromMinutes(25), supervisorContext: Reading(41), supervisorModel: Fable("xhigh"));
 
         Assert.DoesNotContain("  ", line);
@@ -180,13 +220,15 @@ public class ModelOnTheStatusLineTests
             repostIsImpossible: false,
             figuresUnchangedFor: null,
             supervisorContext: null,
-            supervisorModel: Fable("xhigh"));
+            supervisorModel: Fable("xhigh"),
+            pulseFields: CLASSIC);
 
         var lines = plan.Text.Split('\n');
 
         Assert.Equal(TopicStatusActions.Post, plan.Action);
-        Assert.Equal("PULSE · 72/113 · 63% · sup Fable 5.1 xhigh", lines[0]);
-        Assert.Equal("• imp-1 · wiring the context field · 30 min · Fable 5.1 xhigh", lines[1]);
+        Assert.Equal("PULSE", lines[0]);
+        Assert.Equal("sup · Fable 5.1 xhigh", lines[1]);
+        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh", lines[2]);
     }
 
     /// <summary>
