@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
+using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Sessions;
@@ -74,7 +75,7 @@ public class AStatusLineDoesNotSpendTheOwnersWaitTests : IDisposable
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeEngineTiming_Factory.Create_Production());
     }
 
     public void Dispose()
