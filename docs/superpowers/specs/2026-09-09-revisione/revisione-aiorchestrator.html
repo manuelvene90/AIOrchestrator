@@ -1,0 +1,394 @@
+<title>Revisione AIOrchestrator</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F4F6F9; --card:#FFFFFF; --ink:#17212B; --muted:#5B6875; --line:#D6DDE5; --soft:#E9EEF3;
+  --accent:#C2601A; --accent-ink:#8A4210;
+  --keep:#1F7A64; --keep-bg:#E3F3EE;
+  --change:#B1471D; --change-bg:#F9E9E0;
+  --redo:#9E2A38; --redo-bg:#F8E4E7;
+  --code-bg:#EDF1F5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10161C; --card:#171F27; --ink:#E6EBF0; --muted:#98A6B3; --line:#2A3540; --soft:#1E2830;
+    --accent:#E58A3A; --accent-ink:#F0A868;
+    --keep:#4FB596; --keep-bg:#15302A;
+    --change:#E2825A; --change-bg:#3A2418;
+    --redo:#E06A78; --redo-bg:#3A1C22;
+    --code-bg:#1E2830;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10161C; --card:#171F27; --ink:#E6EBF0; --muted:#98A6B3; --line:#2A3540; --soft:#1E2830;
+  --accent:#E58A3A; --accent-ink:#F0A868;
+  --keep:#4FB596; --keep-bg:#15302A;
+  --change:#E2825A; --change-bg:#3A2418;
+  --redo:#E06A78; --redo-bg:#3A1C22;
+  --code-bg:#1E2830;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,sans-serif;font-size:16px;line-height:1.6;margin:0}
+.page{max-width:78ch;margin:0 auto;padding:48px 24px 96px}
+h1,h2,h3{font-family:"Fraunces","Iowan Old Style",Georgia,serif;text-wrap:balance;line-height:1.15;margin:0}
+h1{font-size:2.6rem;font-weight:600;letter-spacing:-0.01em}
+h2{font-size:1.7rem;font-weight:600;margin-top:64px;padding-top:24px;border-top:1px solid var(--line)}
+h3{font-size:1.2rem;font-weight:600;margin-top:36px}
+p{margin:14px 0}
+.eyebrow{font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-ink);font-weight:600;margin-bottom:10px}
+.lede{font-size:1.15rem;color:var(--ink);margin-top:18px}
+.meta{color:var(--muted);font-size:.9rem;margin-top:14px;display:flex;flex-wrap:wrap;gap:8px 20px}
+code,pre{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em}
+code{background:var(--code-bg);padding:1px 5px;border-radius:4px}
+pre{background:var(--code-bg);padding:14px 16px;border-radius:6px;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0}
+a{color:var(--accent-ink)}
+.verdict{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);padding:20px 24px;margin:28px 0;border-radius:4px}
+.verdict p:first-child{margin-top:0}
+.verdict p:last-child{margin-bottom:0}
+.tag{display:inline-block;font-size:.72rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:2px 8px;border-radius:999px;vertical-align:middle;white-space:nowrap}
+.keep{color:var(--keep);background:var(--keep-bg)}
+.change{color:var(--change);background:var(--change-bg)}
+.redo{color:var(--redo);background:var(--redo-bg)}
+.src{color:var(--muted);font-size:.8rem}
+table{border-collapse:collapse;width:100%;font-size:.92rem;margin:16px 0}
+.tablewrap{overflow-x:auto;margin:16px 0}
+th,td{text-align:left;vertical-align:top;padding:9px 10px;border-bottom:1px solid var(--line)}
+th{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}
+.fig{background:var(--card);border:1px solid var(--line);padding:14px 16px;border-radius:4px}
+.fig .n{font-family:"Fraunces",Georgia,serif;font-size:1.9rem;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+.fig .l{color:var(--muted);font-size:.82rem;margin-top:4px}
+.area{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:20px 22px;margin:20px 0}
+.area h3{margin-top:0;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.area .row{display:grid;grid-template-columns:9ch 1fr;gap:6px 14px;margin-top:12px;font-size:.95rem}
+.area .row b{color:var(--muted);font-weight:600;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;padding-top:3px}
+.area .row div p{margin:0 0 8px}
+.area .row div p:last-child{margin-bottom:0}
+ul,ol{padding-left:22px}
+li{margin:6px 0}
+.note{color:var(--muted);font-size:.9rem}
+.toc{background:var(--soft);border-radius:4px;padding:16px 20px;margin:28px 0;font-size:.95rem}
+.toc ol{margin:0;columns:2;column-gap:28px}
+@media (max-width:640px){.toc ol{columns:1}.area .row{grid-template-columns:1fr}}
+.mermaid{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:12px;overflow-x:auto}
+kbd{font-family:"IBM Plex Mono",monospace;font-size:.85em}
+.roadmap li{margin:10px 0}
+.roadmap .why{color:var(--muted);font-size:.9rem;display:block}
+hr{border:0;border-top:1px solid var(--line);margin:32px 0}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="page">
+<div class="eyebrow">Revisione critica · architettura, protocollo, mercato</div>
+<h1>AIOrchestrator: cosa regge, cosa va rifatto</h1>
+<p class="lede">Un mese di lavoro (723 commit in 34 giorni) ha prodotto un sistema che funziona e che ha imparato a proprie spese. Le fondamenta — file come verità, Telegram come specchio, un supervisore e N implementer — sono giuste e il mercato le conferma. Tre scelte invece stanno costando caro e vanno rifatte: la <strong>memoria come trascrizione infinita</strong> (token), il <strong>protocollo scritto in prosa</strong> e letto con espressioni regolari (fragilità), e un <strong>unico file da 13.421 righe</strong> che fa tutto (manutenibilità).</p>
+<div class="meta">
+  <span>9 settembre 2026</span>
+  <span>Copia letta: sorgente del branch <code>ours/integration</code>, checkout Mac — scritto a HEAD <code>926cc6b</code>, ogni affermazione ricontrollata a HEAD <code>5737664</code> (dopo i merge <code>stage/4b</code> e <code>7a–7m</code> del 9 settembre) e di nuovo a <code>27cf6c0</code> (dopo <code>4e</code>, <code>4f</code> e l'handoff del lavoro token)</span>
+  <span>Nessuna modifica fatta</span>
+</div>
+
+<div class="toc">
+<strong>Indice</strong>
+<ol>
+  <li><a href="#verdetto">Il verdetto in breve</a></li>
+  <li><a href="#cosa">Cosa è, in numeri</a></li>
+  <li><a href="#metodo">Come ho lavorato</a></li>
+  <li><a href="#pagella">La pagella, area per area</a></li>
+  <li><a href="#mercato">Cosa fanno gli altri</a></li>
+  <li><a href="#giusto">Cosa è giusto e non va toccato</a></li>
+  <li><a href="#ideale">Come lo farei oggi</a></li>
+  <li><a href="#difetti">Difetti concreti nel codice</a></li>
+  <li><a href="#roadmap">Ordine di lavoro, per valore</a></li>
+  <li><a href="#limiti">Cosa non ho verificato</a></li>
+</ol>
+</div>
+
+<h2 id="verdetto">1. Il verdetto in breve</h2>
+<div class="verdict">
+<p><strong>Tieni le fondamenta, rifai tre cose, poi cura il resto.</strong></p>
+<p><span class="tag keep">Tieni</span> Il protocollo su file come sistema di verità (funziona anche con l'app spenta, si legge con <code>cat</code>), Telegram come specchio e console dell'owner con un topic per orchestrazione, la topologia supervisore + implementer separati come processi, la ripartenza "rientra nel ruolo, non <code>--continue</code>", l'enforcement nell'app e non nel prompt. Anthropic stessa, con Agent Teams (caselle JSON per agente) e con i Channels Telegram ufficiali, è arrivata alle stesse forme.</p>
+<p><span class="tag redo">Rifai</span> <strong>(1) La memoria.</strong> Ogni turno di un implementer rilegge una trascrizione da 249 k token mediani; il 83 % dei token è contesto "trascinato". La direzione già presa (sessione fresca + digest composto dal bridge) è quella giusta ed è la pratica che Anthropic raccomanda; il 9 settembre è atterrata la parte grossa (<code>pack.md</code> scritto dal bridge, turno di chiusura dopo un kill) — restano la rete di sicurezza, i risvegli digeriti del supervisore e la misura. <strong>(2) Il protocollo.</strong> Intestazioni, numeri, timestamp, marcatori (<code>QUESTION:</code>, <code>WORKTREE:</code>, <code>STANDING BY</code>), il ledger PLAN.md: tutto scritto da un modello in prosa e riletto con regex. Va tipizzato — un log di eventi JSON scritto solo dall'app, il markdown come proiezione. <strong>(3) Il motore.</strong> <code>BridgeEngineModel.cs</code>: 13.421 righe, 23 responsabilità (erano 24: il 9 settembre è stato tolto il traduttore), 45 % di tutti i commit del repo. Va spezzato in una pipeline di stadi dichiarati, senza cambiare comportamento.</p>
+<p><span class="tag change">Cambia</span> Skill del supervisore da 87 KB (metà è cronaca di incidenti), telemetria dei costi raschiata dalla statusline invece che letta dal risultato del turno, hook bash da 870 righe per fare ciò che un sandbox e un elenco di tool negati fanno meglio, un'interfaccia WPF Windows-only in un prodotto che gira su un VPS Linux.</p>
+</div>
+
+<h2 id="cosa">2. Cosa è, in numeri</h2>
+<p>AIOrchestrator fa lavorare più sessioni di Claude Code come una squadra: un <strong>supervisore</strong> (modello caro, giudica e assegna), N <strong>implementer</strong> (scrivono codice, uno per worktree git), un <strong>reviewer</strong> (sola lettura, avversariale). Parlano tra loro con file markdown "canale" in append; un demone C# legge i file, li rispecchia su Telegram (un supergruppo, un topic per orchestrazione), riporta le risposte dell'owner al supervisore, fa girare i turni delle sessioni in modo headless (<code>claude -p</code>), e tiene un registro dei task (<code>PLAN.md</code>). L'owner comanda tutto dal telefono.</p>
+
+<div class="figures">
+  <div class="fig"><div class="n">116 921</div><div class="l">righe C# [misurato a <code>5737664</code>]</div></div>
+  <div class="fig"><div class="n">13 421</div><div class="l">righe in un solo file, <code>BridgeEngineModel.cs</code></div></div>
+  <div class="fig"><div class="n">723</div><div class="l">commit in 34 giorni · 323 toccano quel file</div></div>
+  <div class="fig"><div class="n">2 751</div><div class="l">test verdi, 9 skip, 0 rossi [documentato, report del 9 set]</div></div>
+  <div class="fig"><div class="n">272 KB</div><div class="l">di skill di ruolo + reference · supervisore 87,6 KB ≈ 29 k token</div></div>
+  <div class="fig"><div class="n">2,04 G</div><div class="l">token in 3 giorni sul VPS · 97,8 % letture cache [documentato]</div></div>
+</div>
+
+<div class="tablewrap"><table>
+<tr><th>Progetto</th><th class="num">Righe</th><th>Ruolo</th></tr>
+<tr><td><code>AIOrchestratorCoreLib</code></td><td class="num">≈51 400</td><td>tutto il motore: bridge, canali, Telegram, runner, ledger, limiti (misura a <code>926cc6b</code>; +stage/4b e 7a–7m dopo)</td></tr>
+<tr><td><code>AIOrchestratorCoreLib.Tests</code></td><td class="num">≈52 500</td><td>suite xunit — più codice di test che di prodotto</td></tr>
+<tr><td><code>AIOrchestrator</code> (WPF)</td><td class="num">1 982</td><td>finestra Windows: card, log, bottoni</td></tr>
+<tr><td><code>AIOrchestrator.Daemon</code></td><td class="num">301</td><td>host headless per systemd / launchd / servizio Windows — quello che gira sul VPS</td></tr>
+<tr><td><code>kit/</code></td><td class="num">≈626 KB</td><td>plugin Claude Code: 6 skill di ruolo, 7 hook bash, statusline, writer del canale</td></tr>
+</table></div>
+<p class="note">Comandi: <code>find … -name '*.cs' | xargs wc -l</code>, <code>git rev-list --count HEAD</code>, <code>git log --oneline -- &lt;file&gt; | wc -l</code>, <code>wc -c kit/skills/*/SKILL.md</code>. I dati di consumo token sono quelli misurati sul VPS il 8 settembre (documenti <code>2026-09-08-token-efficiency-design.md</code> e <code>…-revisione-memoria-fra-turni.md</code>), non rimisurati da me.</p>
+
+<h2 id="metodo">3. Come ho lavorato</h2>
+<p><strong>Aggiornamento del 9 settembre.</strong> Mentre scrivevo, un'altra sessione ha mergiato in <code>ours/integration</code> <code>stage/4b</code> (il pacchetto di stato <code>pack.md</code>) e <code>stage/7a–7m</code> (velocità, rimozione del traduttore, turno di chiusura, appuntamento sui limiti d'uso; report in <code>2026-09-09-report-lavoro-e-runbook.md</code>). Ho ricontrollato ogni affermazione di questo documento contro il nuovo HEAD <code>5737664</code>: dove qualcosa è cambiato lo dico nel punto stesso. I difetti di §8 sono tutti ancora presenti tranne dove indicato.</p>
+<p>Cinque letture indipendenti, poi una sintesi. Due audit sul codice e sul kit (un architetto sul C#, un esperto di protocolli agentici sulle skill e sui runner), tre ricerche online con lenti diverse (orchestratori concorrenti; console telefono e trasporti tra agenti; primitive native di Claude Code e ingegneria del contesto). I report degli agenti li ho trattati come affermazioni, non come prove: i numeri portanti li ho rimisurati a mano (dimensioni, commit, contraddizioni nel codice, flag della CLI installata 2.1.263, i due passaggi dei documenti Anthropic su Agent Teams e Channels). Dove non ho verificato, lo dico in §10.</p>
+<p>Il lavoro si appoggia ai due documenti di ieri sui token (<code>2026-09-08-*</code>): non li rifaccio, li uso. Dove li contraddico, lo segnalo (§4, area "Skill").</p>
+
+<h2 id="pagella">4. La pagella, area per area</h2>
+<p>Per ogni area: cosa c'è oggi, cosa fanno gli altri, il giudizio, cosa farei. <span class="tag keep">Tieni</span> = giusto così, al massimo rinforzi. <span class="tag change">Cambia</span> = idea giusta, esecuzione da correggere. <span class="tag redo">Rifai</span> = scelta da sostituire.</p>
+
+<div class="area">
+<h3>Il file markdown come bus e come stato <span class="tag change">Cambia</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>Tutto passa per <code>channel.md</code> in append: è il trasporto, lo stato, il cursore (offset in byte), l'archivio e il testo che finisce sul telefono. Le intestazioni <code>## [n] FROM ruolo — data — oggetto</code> le scrive l'agente stesso; il numero e la data sono "indovinati" (decisione 12 del CLAUDE.md). La compattazione sposta le voci vecchie in un <code>.archive.md</code> e i conteggi non sono più monotoni (decisione 13). Il parser (<code>ChannelEntry_Parser.Parse_All</code>) non conosce i blocchi <code>```</code>: se un supervisore cita l'entry di un implementer, quella citazione diventa un'entry fantasma con indice duplicato — molto probabilmente la vera causa dei "due [80]" di <code>option-lab-2</code>, attribuiti alla sciatteria dell'agente.</p></div>
+<b>Gli altri</b><div><p>Agent Teams di Anthropic usa lo stesso principio — una casella JSON per agente su disco, niente broker — ma <em>valida ogni voce alla lettura e scarta quelle malformate</em> (verificato nei docs). OpenHands modella tutto come <em>event stream</em> tipizzato e append-only. Gas Town (Yegge) tiene i task in Git + SQLite: versionati e interrogabili insieme.</p></div>
+<b>Giudizio</b><div><p>Il mezzo è giusto: leggibile, funziona con l'app spenta, si audita con <code>grep</code>. Ciò che manca è uno schema. Un artefatto che fa quattro mestieri produce ogni bug difficile visto in questo audit: offset su un file che viene riscritto, conteggi non monotoni, un parser che indovina dove finisce un'entry, una convenzione sul newline finale che regge il sistema.</p></div>
+<b>Farei</b><div><p>Un <code>events.jsonl</code> per orchestrazione, <strong>scritto solo dall'app</strong>, con un <code>seq</code> monotono assegnato dall'app; <code>channel.md</code> diventa una <em>proiezione</em> rigenerata a ogni append (stesso percorso, stesso formato: gli agenti e l'owner continuano a leggerlo). I cursori diventano "ultimo seq", non byte. Il runner headless già fa metà del lavoro: l'app scrive l'intestazione al posto della sessione (<code>ChannelAppender.Append_SessionEntry</code>, il cui commento dice che "rende moot la decisione 12"). Va reso l'unico modo.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>La memoria delle sessioni: trascrizione ripresa a ogni turno <span class="tag redo">Rifai</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>Un turno riprende la trascrizione precedente con <code>--resume</code>: il contesto della prima chiamata di un implementer è 249 k token mediani (p90: 719 k), un turno costa 690 k token mediani, e in totale l'83 % dei token è contesto trascinato dai turni prima [documentato]. Il supervisore si sveglia ~400 volte al giorno a ~1 M token per risveglio. Dal 8 settembre sera implementer e reviewer girano in modalità "fresh" (round 1). <strong>Dal 9 settembre</strong> (<code>stage/4b</code>) il digest è un file <code>pack.md</code> che il bridge scrive prima del turno — brief cercato anche nell'archivio, ultimo rapporto proprio, stato del codice, righe del ledger, entry pendenti — e la skill dice "cerca prima il tuo PACK"; un turno ucciso alla scadenza fa un turno di chiusura e scrive dove è arrivato (<code>7f</code>/<code>7j</code>); ogni turno registra la sessione in cui ha girato (C7).</p></div>
+<b>Gli altri</b><div><p>Anthropic ("Effective context engineering", 2025): compattazione, <em>appunti strutturati fuori dal contesto</em>, sotto-agenti che tornano con riassunti da 1–2 k token. La ricerca "context rot" (Chroma): la qualità degrada ben prima di riempire la finestra — quindi 249 k non è solo un costo, è un rischio di qualità. Symphony (OpenAI) e Jules (Google): un agente <em>nuovo</em> per task, stato durevole nel tracker. Nessun prodotto della rassegna riderivava il contesto da una trascrizione di 250 k a ogni turno.</p></div>
+<b>Giudizio</b><div><p>La scelta iniziale era comprensibile (continuità del ragionamento), ma è la voce di costo dominante e la più facile da abbattere. La direzione presa ieri è corretta e allineata alla pratica del settore. Cosa resta aperto a HEAD <code>5737664</code>: (a) la contraddizione "non rileggere il canale" / "leggi il canale da cima a fondo" è <em>mitigata</em>, non tolta: il paragrafo "cerca prima il PACK" precede il passo 1 della skill e lo scavalca, ma il passo 1 dice ancora "leggi il canale da cima a fondo" (<code>implementer/SKILL.md</code> riga 50, <code>reviewer</code> riga 59) — meglio un testo di boot per regime scelto dall'app; (b) <code>--autocompact</code> non viene mai passato alla CLI (zero usi, una menzione in un commento); (c) <code>--max-budget-usd</code> <strong>non è una rete</strong>: misurato il 9 settembre dall'altra sessione, con tetto 0,0001 $ ha comunque speso 0,11 $ — il controllo avviene <em>dopo</em> il passo, non prima. La rete va fatta con un contatore di chiamate (hook) o con <code>--autocompact</code>. Attenzione anche alla contabilità: le letture da cache costano 0,1× — un ledger che conta token grezzi sovrastima la spesa in dollari; sul <em>limite settimanale</em> il peso della cache non è noto.</p></div>
+<b>Farei</b><div><p>Completare quanto già progettato, nell'ordine della revisione di ieri: testo di boot scelto <em>per regime</em> dall'app (non due testi che si contraddicono), digest deterministico (brief cercato anche nell'archivio, ultima entry propria, <code>git status/log -3</code>, righe PLAN del membro, pendenti), C4 (meno risvegli del supervisore) prima che il supervisore vada fresh, <code>--autocompact</code> ~300 k come rete sui ruoli ancora a trascrizione, contabilità per session id della tappa. Nessuna soglia di continuità finché il rilavoro non è misurato.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Il protocollo in prosa: marcatori, domande, ledger PLAN.md <span class="tag redo">Rifai</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>Il contratto tra agenti e app è un vocabolario di marcatori estratti dal testo: <code>QUESTION:</code> + due <code>OPTION:</code> + <code>RECOMMEND:</code> + <code>RISK:</code> + <code>ROW:</code> (cinque righe obbligatorie o la domanda non parte), <code>TO: imp-1</code>, <code>WORKTREE:</code>, <code>WRITING WINDOW OPEN/CLOSED</code>, <code>STANDING BY</code>, <code>WAITING ON</code>, <code>IMAGE:</code>/<code>ATTACH:</code>. Ognuno ha il suo incidente documentato (marcatori a metà frase che fissano uno stato per quattro ore; "MUTATION WINDOW CLOSED" che contiene "WINDOW CLOSED"; una riga di narrazione che diventa oggetto sul telefono). Il ledger <code>PLAN.md</code> è l'unico stato dei task, scritto in prosa dal supervisore, letto con una regex; la spunta <code>[x]</code> dovrebbe significare "costruito, revisionato da altri, senza finding bloccanti" ma il parser vede un carattere. Le richieste agente→app sono file JSON senza id: niente idempotenza (un crash tra "eseguito" e "cancellato" crea due orchestrazioni — l'incidente della decisione 8 per un'altra strada), lettura non atomica (un file troncato viene cancellato), niente dead-letter.</p></div>
+<b>Gli altri</b><div><p>Agent Teams: una task list condivisa con stati tipizzati (pending / in progress / completed) e dipendenze, claim con file lock. Symphony: Linear <em>è</em> il piano di controllo, il riavvio riscansiona la board; OpenAI attribuisce a questo un +500 % di PR [dato del vendor]. Gas Town: "beads" in SQLite versionato. Paperclip: budget e checkout dei task atomici in Postgres. Il pattern che converge: <strong>lo stato dei task vive in una struttura interrogabile, non in prosa da rileggere</strong>.</p></div>
+<b>Giudizio</b><div><p>Ogni proprietà che un bus dovrebbe avere come meccanismo — schema, macchina a stati dei task, ack di lavoro (non solo di consegna), chiavi di idempotenza, dead-letter, thread causale — oggi esiste come <em>regola che l'agente deve ricordare</em>. Ed è esattamente la classe di cose che gli stessi header degli hook dicono non funzionare: "la differenza è l'enforcement, non la diligenza". Le mitigazioni (digest dell'entry per contenuto, lock come directory, indice allocato dentro il lock) sono eccellenti, ma curano i sintomi del formato.</p></div>
+<b>Farei</b><div><p>Brief, report, verdetto, domanda all'owner e richiesta all'app diventano <strong>oggetti tipizzati</strong> con campi obbligatori, esposti come tool di un piccolo server MCP locale (<code>channel.append</code>, <code>plan.set_line</code>, <code>question.ask</code>, <code>request.submit</code>, <code>state.put</code>). Una macchina a stati dei task posseduta dall'app (<code>proposed → briefed → in_progress → reported → in_review → accepted|rework → merged</code>), con la <code>[x]</code> raggiungibile <em>solo</em> da un verdetto registrato da chi non ha scritto il codice; PLAN.md generato da lì. Per le richieste, subito: <code>requestId</code> + insieme degli id processati + regola <code>.tmp</code>→<code>mv</code> — cinquanta righe, nessun contro. Il markdown resta la proiezione che tutti leggono.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Le skill di ruolo: 87 KB per il supervisore <span class="tag change">Cambia</span></h3>
+<div class="row">
+<b>Oggi</b><div><p><code>supervisor/SKILL.md</code> 87 271 byte ≈ 29 k token (a 3 byte/token, calibrazione della revisione di ieri), 112 imperativi, e il 49 % dei paragrafi è cronaca di incidenti (date, "measured", "what really happened"). <code>solo</code> è per il 35 % quasi-duplicato del supervisore; cinque <code>print-runner.md</code> su sei sono byte-identici (verificato con md5). Tutte e sei le skill chiudono con "arma il Monitor watcher o la tua partecipazione finisce", mentre nel regime headless in vigore sul VPS il watcher non serve e viene smentito da un altro file. La skill del COMMUNICATOR è dichiarata ritirata in una skill e spedita comunque. La contraddizione fresh/"leggi il canale" è live.</p></div>
+<b>Gli altri</b><div><p>Anthropic: system prompt minimo ad alto segnale, contesto <em>just-in-time</em>, sotto-agenti con riassunti brevi. Il costo di boot misurato: implementer 34–47 k (skill ≈ 8 k), <strong>supervisore 55,9–56,9 k, di cui skill+stream-runner ≈ 29–34 k = 52–60 %</strong>.</p></div>
+<b>Giudizio</b><div><p>Il documento di ieri ha <em>parcheggiato</em> la dieta delle skill (C5) con il criterio "riaprire se la skill supera il 40 % del boot del supervisore". <strong>Il criterio è già soddisfatto dall'aritmetica sui suoi stessi numeri.</strong> Per i membri il parcheggio è giusto (8 k su 34–47 k, il resto è Claude Code); per il supervisore no, ed è il ruolo che si sveglia 400 volte al giorno. Le cronache hanno valore — sono il motivo per cui una regola sopravvive a una sessione che "sa meglio" — ma non devono essere fatturate a ogni boot.</p></div>
+<b>Farei</b><div><p>Separare <em>regola</em> (≤2 righe, resta in <code>SKILL.md</code>) e <em>perché</em> (va in <code>reference/why-&lt;tema&gt;.md</code>, letto solo quando la sessione sta per discutere o rilassare una regola). Un file di boot per regime, <em>selezionato</em> dall'app, invece di due che si smentiscono. Una sola copia di ciò che è condiviso (fan-out, print-runner, tabella dei codici piattaforma). Obiettivo: supervisore da ~29 k a 4–5 k token residenti senza cancellare una regola. Fuori dal kit portabile ciò che è locale a questa macchina (nomi propri, modelli vietati, chiavi di config).</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Il motore: <code>BridgeEngineModel.cs</code> <span class="tag redo">Rifai la struttura, non il comportamento</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>13 421 righe, una classe, ~280 membri, ~97 campi mutabili, 8 lock, 36 costanti di taratura, 190 <code>catch</code>. Ventitré responsabilità distinte (erano 24 fino al 9 settembre, quando il traduttore italiano è stato rimosso — la cartella <code>Translation/</code> non esiste più). Il "tick" ogni 2 secondi esegue ~35 passi in un unico metodo il cui <em>ordine è la specifica</em>, difeso solo da commenti ("spostare questa chiamata sette righe più giù compila, passa tutti i test e reintroduce esattamente il bug"). 14 passi sono stati sollevati sopra il <code>return</code> del DND, ognuno con un paragrafo di giustificazione. Il router dei 29 comandi bot è una catena <code>if/else if</code> dentro il loop di rete. 323 commit su 723 toccano questo file. Migliorato il 9 settembre: il tick legge solo i file cambiati e scrive lo stato solo se è cambiato (<code>7g</code>), e un append sveglia il ciclo senza aspettare i 2 s (<code>7e</code>, <code>FileSystemWatcher</code>) — il costo del polling è sceso; la struttura no.</p></div>
+<b>Gli altri</b><div><p>Symphony ha scelto Elixir/OTP proprio per far girare decine di agenti come processi leggeri supervisionati e isolati. Non serve cambiare linguaggio: serve la stessa idea — stadi piccoli, ordinati, isolati negli errori.</p></div>
+<b>Giudizio</b><div><p>Fuori da questo file il codice è <em>buono</em>: 344 classi, mediana sotto le 150 righe, politiche pure e testate (<code>PlanLedger_Parser</code>, <code>TokenBucket_Gate</code>, <code>Nudge_Decider</code>, <code>ChannelFile_Lock</code>…). Il problema non è "questa squadra scrive god class"; è che <em>una</em> classe non è mai stata spezzata e ora assorbe tutto. I conflitti di merge tra rami <code>stage/*</code> sono garantiti dalla struttura.</p></div>
+<b>Farei</b><div><p>Una pipeline dichiarata: <code>ITickStage { Name; RunsWhileMuted; Run_Async }</code> e una lista ordinata <code>TickPipeline_Order.STAGES</code> che un test asserisce. L'ordine diventa dato; il mute diventa una proprietà per stadio invece di 14 eccezioni espresse come posizione delle righe; ogni stadio ha tempi, errori e log propri. I 29 comandi bot diventano una tabella <code>IOwnerCommand</code>. È meccanico, incrementale (uno stadio per commit), e non richiede il log di eventi. È il refactor col miglior rapporto valore/rischio dell'intero audit.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Telegram come console dell'owner <span class="tag keep">Tieni</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>Un supergruppo forum, un topic per orchestrazione, mirror in uscita, messaggi dell'owner instradati al supervisore, bottoni inline per le decisioni, i ripetuti che <em>modificano</em> un messaggio invece di accodarsi, DND con burst di recupero, gli avvisi su cui l'owner non può agire non arrivano al telefono.</p></div>
+<b>Gli altri</b><div><p>Anthropic ha spedito i <strong>Claude Code Channels</strong> (marzo 2026, research preview): Telegram, Discord, iMessage come chat bridge verso <em>una</em> sessione, tramite un server MCP che spinge eventi. I permessi si possono approvare da chat solo se il plugin dichiara la capability di relay. Remote Control (febbraio 2026) collega telefono e sessione locale, una a una. OpenClaw e almeno cinque progetti open source indipendenti hanno reinventato "Claude Code dietro un bot Telegram", alcuni con topic per progetto. Convergenza forte.</p></div>
+<b>Giudizio</b><div><p>La scelta è validata dal mercato e dal vendor. Ciò che AIOrchestrator ha e i Channels ufficiali non hanno: <em>molte</em> orchestrazioni in un'unica console, domande strutturate con bottoni, DND, riepiloghi. Il rischio non è il mezzo, è che il vendor lo assorba: da monitorare, non da anticipare. Tre difetti tecnici: il messaggio dell'owner può <strong>perdersi</strong> se l'host muore nella finestra di aggregazione (l'offset di Telegram viene salvato prima che le parole siano su disco; il buffer non è nello snapshot persistito — verificato anche a <code>5737664</code>; il <code>7e</code> ha ridotto la finestra da 6 a 3 s e la salta per un messaggio "finito", quindi il rischio è più piccolo ma c'è ancora); l'invariante "un solo poller" è per cartella e non per token del bot; dopo 30 minuti di invii falliti le entry vengono abbandonate senza un comando di replay.</p></div>
+<b>Farei</b><div><p>Rendere il messaggio durevole <em>prima</em> di avanzare l'offset. Un messaggio di stato pinnato per orchestrazione, modificato in place. Una <strong>Mini App Telegram</strong> come cruscotto di sola lettura (stato, costo, worktree, ultima attività di tutte le orchestrazioni) lanciata dal menu del bot — niente PWA separata da mantenere. Trattare un 409 di <code>getUpdates</code> come fatale e nominato. Non spostarsi su Discord o Slack: tecnicamente comparabili, ma una seconda piattaforma da mantenere per un solo owner.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Telemetria dei costi: la statusline come sonda <span class="tag redo">Rifai</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>Lo script della statusline scarica il JSON che Claude Code gli passa in un <code>.usage.json</code> per sessione; <code>UsageTotals_Reader</code> somma campi con una regex sui nomi delle chiavi; da lì vengono card, <code>/tokens</code>, <code>/cost</code>, gli allarmi 90–100 % e — cosa più grave — la <em>pausa dello spawn</em>. Il codice stesso nota in tre punti che una sessione headless <code>-p</code> non rende la statusline; la spec porta ancora "⚠ NEEDS LIVE VERIFICATION". Il registro dei turni vede ~60 % del consumo reale (niente sidechain, reset alle notifiche di background).</p></div>
+<b>Gli altri</b><div><p>Claude Code emette metriche/log/trace OpenTelemetry (<code>CLAUDE_CODE_ENABLE_TELEMETRY=1</code>): costo, token, sessioni, decisioni sui tool, taggabili per orchestrazione. Il risultato <code>--output-format json</code> porta già <code>total_cost_usd</code> e usage per turno. <code>ccusage</code> legge le trascrizioni locali con la pesatura corretta della cache. Nel repo: zero menzioni di OpenTelemetry (grep a parola intera).</p></div>
+<b>Giudizio</b><div><p>Struttura giusta (un solo lettore, decisione 10) attorno all'input più fragile del sistema. La statusline resta utile per una sola cosa che OTEL non porta: <code>rate_limits</code> (presente solo con login Pro/Max, assente sulla prima render).</p></div>
+<b>Farei</b><div><p>Costo e usage dal <em>risultato del turno</em> che il runner già parsa (<code>ITurnResult</code>), contabilità dalle trascrizioni deduplicate per <code>message.id</code> con le sidechain (C7), export OTEL come sorgente primaria, statusline solo per il limite settimanale con parser tollerante. Pesare le letture da cache a 0,1× quando si parla di dollari.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Hook bash ed enforcement <span class="tag change">Cambia</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>Dottrina giusta e ben argomentata (decisione 21: gli hook consigliano, l'app impone al punto di effetto; un hook che non può valutare il predicato lo dice e lascia passare). Consegna meno buona: nella finestra misurata 52 esecuzioni di hook sono uscite con 127 (comando non trovato) e <code>run-to-the-end</code> ha bloccato 3 volte su 435; 4 hook su 7 dipendono da <code>python3</code>, che la decisione 19 dichiara inaffidabile su quella macchina. <code>reviewer-readonly-check.sh</code> è un lexer di shell in bash+python da 870 righe / 40 881 byte, il cui header registra quattro generazioni di matcher falliti — per sorvegliare un tool <code>Bash</code> che il reviewer potrebbe semplicemente non avere (la garanzia vera viene già da <code>--disallowedTools Write Edit NotebookEdit</code>). L'hook "awaiting-answer" da 11,6 KB serve al regime a terminale: nel regime headless una domanda chiude il turno da sola.</p></div>
+<b>Gli altri</b><div><p>Claude Code ha 21 eventi hook (inclusi <code>TaskCreated</code>, <code>TaskCompleted</code>, <code>TeammateIdle</code>, <code>WorktreeCreate</code>) con exit 2 = blocca e spiega; un sandbox nativo (bubblewrap su Linux, Seatbelt su macOS) per l'enforcement a livello di kernel; <code>permissions.deny</code> in settings.</p></div>
+<b>Giudizio</b><div><p>Hook di sicurezza generica → sandbox e deny nativi. Hook di politica di prodotto (forma del ledger, disciplina di staging) → restano custom, ma leggeri e senza python3. Il lexer da 870 righe è l'artefatto più costoso del kit per unità di garanzia.</p></div>
+<b>Farei</b><div><p>Reviewer con soli tool di lettura (o senza Bash) + mount read-only; cancellare il lexer. Sandbox bubblewrap sul VPS. Un contatore di chiamate via hook come rete al posto del <code>--max-turns</code> che <strong>non esiste</strong> nella CLI 2.1.263 (verificato). Spostare ciò che gli hook Stop oggi tentano (turno che finisce con lavoro aperto, ledger arretrato) dentro la macchina a stati dell'app, che sa cosa è aperto senza chiederlo a un modello.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Runner delle sessioni: terminale, print, stream, SDK, Agent Teams <span class="tag change">Cambia</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>Tre modi di far girare una sessione: terminale Windows (<code>wt new-tab</code>, pid file, titolo finestra come identità, 871 righe di <code>WindowFocus/</code> con 30 <code>DllImport</code>), print (<code>claude -p --output-format json</code>, un processo per turno), stream (processo residente <code>stream-json</code>). Sul VPS Linux funzionano solo print e stream; i comandi <code>/screens</code>, <code>/show</code>, <code>/organize</code> non possono funzionare lì e non hanno un gate di capability.</p></div>
+<b>Gli altri</b><div><p><strong>Agent Teams non è un'alternativa</strong>: i docs dicono verbatim che in modalità <code>-p</code>, incluse le sessioni Agent SDK, Claude non spawna teammate — è pensato per un terminale interattivo con pannello. Il cross-session messaging (v2.1.224) passa solo testo via socket locale tra sessioni: da provare in headless, non da assumere. <strong>Non esiste un Agent SDK per .NET</strong>: il pacchetto NuGet ufficiale è l'API Messages grezza; l'unico wrapper .NET è non ufficiale e chiama la CLI. Quindi lo shell-out alla CLI non è un ripiego: è l'unica via first-party per un host C#. Novità da valutare: <code>claude --bg</code> / <code>claude agents</code> / <code>respawn</code> / <code>logs</code>, un gestore nativo di sessioni in background che somiglia a ciò che il watchdog fa a mano.</p></div>
+<b>Giudizio</b><div><p>La scelta di processi OS separati per ruolo è <em>giusta e obbligata</em>: durabilità oltre il riavvio, modello per ruolo, mirror sul telefono, costo attribuibile. Il runner a terminale è residuo Windows che regge un'infrastruttura (pid, titoli, screenshot) che il target di deploy non può usare.</p></div>
+<b>Farei</b><div><p>Un solo runner headless (stream come default, print come ripiego), terminale solo come scappatoia di debug non supportata fuori Windows; cancellare <code>WindowFocus/</code> e i tre comandi. Non passare all'SDK né a un sidecar Node: la CLI è ciò che l'owner usa a mano e <code>tools/claude-contract</code> le dà già un test di contratto — investimento giusto. Uno spike su <code>claude --bg</code> prima di scriverne altro a mano. Un DTO C# stretto sugli eventi stream-json.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Il supervisore come unica linea con l'owner <span class="tag change">Cambia</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>"Ogni minuto che lavori è un minuto in cui l'owner parla a un muro" — la skill lo diagnostica bene. Cinque compensazioni sono nate attorno a questo fatto: il ruolo COMMUNICATOR (costruito e ritirato), la narrazione a metà turno letta dall'app sulla trascrizione, la regola della ricevuta, "rispondi di nuovo se richiedono", l'AWAY MODE, lo stato ogni 30 minuti. ~12 KB di prosa in tre skill.</p></div>
+<b>Gli altri</b><div><p>Devin (Command Center), Factory (Mission Control), Cursor (Agents Window) mettono un pannello di <em>stato</em> tra l'umano e N agenti; nessuno paga un LLM costoso sempre acceso come centralino. Symphony e Jules vanno all'estremo opposto: il tracker/PR è l'interfaccia, niente chat mediata.</p></div>
+<b>Giudizio</b><div><p>La mediazione di un supervisore che ragiona è il valore del prodotto (è ciò che Symphony sacrifica). Ma il ruolo che parla con l'owner è il ruolo che blocca: è un difetto di topologia pagato in prosa. Il COMMUNICATOR è stato tolto per il motivo giusto (due voci che rispondono) e con la portata sbagliata (poteva narrare, non rispondere <em>dallo stato</em>).</p></div>
+<b>Farei</b><div><p>C4 (i risvegli da membri arrivano digeriti) attacca il volume. Poi un router owner-facing economico e sempre libero che risponde <em>solo da stato</em> (progresso, chi sta facendo cosa, domande aperte) e instrada al supervisore ciò che richiede giudizio. Il supervisore viene svegliato per decidere, non per prendere nota.</p></div>
+</div>
+</div>
+
+<div class="area">
+<h3>Stack e interfaccia: C#, WPF + demone, residui Windows <span class="tag change">Cambia</span></h3>
+<div class="row">
+<b>Oggi</b><div><p>Due host che costruiscono lo stesso grafo: WPF (<code>net10.0-windows</code>, 1 982 righe) e demone (301 righe, systemd/launchd/SCM in un binario, <code>Type=notify</code> con watchdog — ben fatto). 16 file del CoreLib toccano <code>user32</code>/<code>kernel32</code>/<code>powershell</code>/<code>wt.exe</code>. Il CLAUDE.md dice ancora che la root è <code>C:\Users\Gianpiero\…</code>; nel repo ci sono <code>bash.exe.stackdump</code> e <code>grep.exe.stackdump</code>. 154 costanti <code>const</code> di taratura (nudge a 8 minuti, stall a 25, tick a 2 s…) non configurabili senza rebuild — alcune commentate come "THIS NUMBER IS A GUESS".</p></div>
+<b>Gli altri</b><div><p>Tutti gli orchestratori della rassegna sono web app, CLI o servizi (Node, Go, Rust, Elixir, Python). Il .NET è "solo diverso", non peggiore — e senza SDK .NET la CLI è la via. Il cliente reale è un VPS Linux e un telefono.</p></div>
+<b>Giudizio</b><div><p>Tenere C# e il demone. L'unica capacità esclusiva della WPF (focus delle finestre Win32) non funziona sul target. Un solo host cross-platform con una pagina web servita dal demone (card, coda del log, bottoni, mute — ciò che fa <code>MainWindow.xaml.cs</code>, con refresh a 5 s) elimina la divergenza WPF/demone e funziona anche dal browser del telefono.</p></div>
+<b>Farei</b><div><p>Un host, una pagina web; le 154 costanti promosse a una sezione <code>tuning</code> in <code>config.json</code> con default nel codice; un istogramma della durata del tick e tempi per stadio (oggi nessuno sa se i 2 s vengono rispettati); pulizia del repo e del CLAUDE.md (le decisioni 17 e 23 descrivono <code>kit/commands/</code> e un installer che a HEAD non esistono più).</p></div>
+</div>
+</div>
+
+<h2 id="mercato">5. Cosa fanno gli altri, e cosa ci dice</h2>
+<p>Rassegna di ~25 prodotti (2025–2026), con fonti nei report di ricerca. Le convergenze che pesano su AIOrchestrator:</p>
+<div class="tablewrap"><table>
+<tr><th>Convergenza del settore</th><th>AIOrchestrator oggi</th><th>Lettura</th></tr>
+<tr><td>Un worktree git (o sandbox cloud) per unità di lavoro — universale</td><td>Sì, per implementer</td><td><span class="tag keep">Tieni</span>; passare a "per task" quando la macchina a stati esiste</td></tr>
+<tr><td>Lo stato dei task in un tracker o in una task list tipizzata (Symphony/Linear, Agent Teams, Vibe Kanban, Factory)</td><td>PLAN.md in prosa + regex</td><td><span class="tag redo">Rifai</span>: proiezione da uno stato posseduto dall'app</td></tr>
+<tr><td>La PR/diff come unità di revisione</td><td>Review sulla trascrizione + report nel canale</td><td><span class="tag change">Cambia</span>: verdetto legato al commit, non al testo</td></tr>
+<tr><td>"Sopravvive alla chiusura del laptop" come requisito (Ona acquisita da OpenAI, Routines, Jules, Cursor cloud)</td><td>Sì, via VPS + demone</td><td><span class="tag keep">Tieni</span> — già risolto</td></tr>
+<tr><td>Caselle/eventi strutturati e validati, non prosa condivisa (Agent Teams, OpenHands)</td><td>Markdown + regex</td><td><span class="tag redo">Rifai</span></td></tr>
+<tr><td>Console mobile first-party (Remote Control, Channels, Codex mobile) e community (Omnara, Happy, OpenClaw)</td><td>Telegram + topic + bottoni</td><td><span class="tag keep">Tieni</span>; sorvegliare i Channels ufficiali</td></tr>
+<tr><td>Autonomia senza gate umano (Symphony, Jules) è una scelta seria, non marginale</td><td>Supervisore gate su tutto</td><td>Scelta legittima; sapere che è un punto su uno spettro, non l'unico sano</td></tr>
+<tr><td>Mortalità degli strati di orchestrazione VC-funded (Terragon chiuso feb 2026, Bloop/Vibe Kanban apr 2026)</td><td>Self-hosted</td><td><span class="tag keep">Tieni</span>: nessun rischio di piattaforma</td></tr>
+</table></div>
+<p>Il singolo fatto più utile: <strong>Anthropic ha costruito, in Agent Teams, la stessa forma di AIOrchestrator</strong> (caselle JSON per agente su disco, task list condivisa, lead + teammate) — e l'ha resa disponibile <em>solo in sessione interattiva</em>. Il che conferma due cose insieme: la forma è giusta, e per un demone headless su VPS la si deve continuare a costruire da sé.</p>
+
+<h2 id="giusto">6. Cosa è giusto e non va toccato</h2>
+<ul>
+<li><strong>Il protocollo su file come sistema di verità.</strong> Qualsiasi rifacimento che renda un demone indispensabile alla coordinazione tra agenti è peggiore.</li>
+<li><strong>Telegram specchio, mai trasporto.</strong> I tre vincoli della Bot API sono corretti e la conclusione segue.</li>
+<li><strong>Hub-and-spoke</strong>, un canale duplex per membro; gli implementer non si vedono (isolamento e costo di contesto).</li>
+<li><strong>Ripartenza = rientro nel ruolo</strong>, canale letto come log e mai come to-do (decisione 8).</li>
+<li><strong>Enforcement nell'app, non nel prompt</strong> (decisione 21): <code>PlanLedger_Parser</code> che salta PARKED, il reader delle richieste che rifiuta <code>fable</code> e richiede <code>reason</code>/<code>requester</code>.</li>
+<li><strong>I ripetuti modificano, non si accodano; gli avvisi inutili non arrivano al telefono</strong> (decisioni 14, 15).</li>
+<li><strong>Identità dell'entry dal contenuto</strong> (<code>ChannelEntry_Digest</code>): la migliore singola decisione del repo — immune ai numeri duplicati e alla compattazione.</li>
+<li><strong>Le regole di fan-out</strong> (decisione 16): la parte di protocollo meglio ragionata del kit, incluso "il report di un sub-agente non è evidenza".</li>
+<li><strong>Drenaggio dei turni prima dello stop</strong> (112 M token salvati per finestra), loop supervisionati che rilanciano e avvisano, exit code 1 sul demone in fault. Fino al 9 settembre sera la grazia era una promessa non mantenuta: l'host .NET tagliava a 30 s (<code>HostOptions.ShutdownTimeout</code> mai impostato — 15,2 M token persi in tre stop misurati). Corretto in <code>stage/4e</code>: <code>ShutdownGrace_Rule</code> è l'unica fonte per "drenaggio &lt; grazia del motore &lt; timeout dell'host", unità systemd a 2400 s (verificato a <code>27cf6c0</code>).</li>
+<li><strong>La disciplina dei commenti</strong>: data, misura, incidente, raggio d'esplosione — e che degradano da "misurato" a "speculativo" da soli. Più raro e più prezioso di gran parte del codice.</li>
+</ul>
+
+<h2 id="ideale">7. Come lo farei oggi</h2>
+<p>Stesse proprietà (file, telefono, un supervisore, N implementer, funziona con l'app spenta), contratto spostato dalla prosa ai tipi.</p>
+
+<pre class="mermaid">
+flowchart LR
+  O[Owner · Telegram topic / Mini App] -- messaggi, tap --> B
+  subgraph B[Demone · un solo host cross-platform]
+    P[Pipeline di stadi dichiarati]
+    E[(events.jsonl · seq monotono · scritto solo dall'app)]
+    T[Macchina a stati dei task]
+    D[Digest per turno · stable-first]
+  end
+  B -- proiezioni --> M[channel.md · PLAN.md · messaggio pinnato]
+  B -- claude -p / stream-json, sessione fresca per tappa --> S[Supervisore]
+  B -- idem, modello per task --> I[imp-1 … imp-n · worktree per task]
+  B -- idem, tool sola lettura, sandbox --> R[Reviewer]
+  S & I & R -- tool MCP tipizzati: report, brief, verdict, question, request --> E
+  S & I & R -- STATE: ≤2 KB, staccato dall'entry --> D
+</pre>
+
+<div class="tablewrap"><table>
+<tr><th>Elemento</th><th>Oggi</th><th>Domani</th><th>Cosa si perde e come lo si tiene</th></tr>
+<tr><td>Verità</td><td><code>channel.md</code> scritto da agenti e app</td><td><code>events.jsonl</code> scritto solo dall'app; markdown = proiezione</td><td>Una modifica a mano del markdown non è più un messaggio → una CLI <code>aiorch append</code> che scrive un evento valido anche con il demone spento</td></tr>
+<tr><td>Identità</td><td><code>[n]</code> e data scritti dal modello</td><td><code>seq</code> e timestamp dell'app</td><td>Niente; le decisioni 12 e 13 diventano non-problemi</td></tr>
+<tr><td>Task</td><td>PLAN.md in prosa</td><td>Macchina a stati dell'app; <code>[x]</code> solo da verdetto di un non-autore</td><td>Flessibilità del testo → ogni evento ha un campo <code>note</code> libero; lo schema vincola le <em>transizioni</em>, non la parola</td></tr>
+<tr><td>Contratto agente</td><td>Marcatori in prosa + <code>channel-append.sh</code></td><td>Tool MCP locali tipizzati</td><td>Il messaggio finale resta l'entry per chi non usa i tool; i tool sono la via preferita</td></tr>
+<tr><td>Memoria</td><td>Trascrizione ripresa</td><td>Tappa fresca + <code>pack.md</code> (fatto) + <code>STATE:</code> opzionale; <code>--autocompact</code> come rete; contatore di chiamate via hook (non <code>--max-budget-usd</code>, che non ferma la spesa)</td><td>Continuità del ragionamento → dead-ends nello STATE, un resume di chiusura dopo un kill</td></tr>
+<tr><td>Motore</td><td>Un metodo da 35 passi</td><td>Pipeline di stadi con ordine asserito da test, <code>RunsWhileMuted</code> per stadio</td><td>Niente</td></tr>
+<tr><td>Costi</td><td>Statusline raschiata</td><td>Risultato del turno + trascrizioni dedupe + OTEL; cache pesata 0,1×</td><td><code>rate_limits</code> resta dalla statusline, con parser tollerante</td></tr>
+<tr><td>Runner</td><td>Terminale / print / stream</td><td>Stream (print come ripiego); niente <code>WindowFocus</code></td><td>Il "mostra la finestra" sparisce: sul VPS non esisteva comunque</td></tr>
+<tr><td>Console</td><td>Topic + bottoni</td><td>+ messaggio di stato pinnato e modificato; + Mini App per il cruscotto; permission relay</td><td>—</td></tr>
+<tr><td>UI desktop</td><td>WPF Windows</td><td>Pagina web servita dal demone</td><td>Finestra nativa → tab del browser, anche dal telefono</td></tr>
+<tr><td>Sicurezza</td><td>Lexer bash da 870 righe</td><td>Tool negati + sandbox bubblewrap + mount read-only</td><td>—</td></tr>
+</table></div>
+
+<h3>Cosa <em>non</em> farei</h3>
+<ul>
+<li>Niente broker (NATS, Redis, Kafka) né Temporal: latenze irrilevanti a cadenza conversazionale, e un servizio in più che deve stare su — l'opposto di "funziona con l'app spenta".</li>
+<li>Niente A2A o MCP come bus tra agenti: A2A è per agenti opachi tra organizzazioni; MCP è agente↔tool (e i Channels ufficiali lo usano solo come iniettore di eventi in una sessione).</li>
+<li>Niente Agent SDK via sidecar Node: aggiunge un confine di processo e di linguaggio per feature che la CLI espone già; la CLI è ciò che si usa a mano e ha un test di contratto.</li>
+<li>Niente Agent Teams: non funziona in <code>-p</code>, una squadra per sessione, niente resume dei teammate.</li>
+<li>Niente <code>--fork-session</code> per risparmiare: stessa trascrizione, zero risparmio (giusto lo scarto della revisione di ieri).</li>
+<li>Niente Discord/Slack: comparabili, nessun guadagno per un solo owner.</li>
+</ul>
+
+<h2 id="difetti">8. Difetti concreti nel codice</h2>
+<p>Letti nel sorgente a <code>926cc6b</code>; i primi cinque li ho ricontrollati io con <code>grep</code>. Sono difetti, non opinioni: vanno corretti indipendentemente dal progetto di §7.</p>
+<div class="tablewrap"><table>
+<tr><th>#</th><th>Gravità</th><th>Difetto</th><th>Dove</th></tr>
+<tr><td>1</td><td><span class="tag redo">Alta</span></td><td><strong>Il messaggio Telegram dell'owner si perde</strong> se l'host muore nella finestra di aggregazione (3 s dal <code>7e</code>, saltata per un messaggio che finisce con <code>. ? !</code> o inizia con <code>/</code>): l'offset di <code>getUpdates</code> viene salvato (<code>_lastUpdateId = batch.MaxUpdateId.Value; Persist_BridgeState();</code>, righe 5963–5964 a <code>5737664</code>) mentre il testo è solo nel buffer in memoria (<code>Add_Segment</code>, riga 10972); <code>EngineStateSnapshot</code> non lo persiste (0 riferimenti). Telegram non lo rimanda.</td><td><code>BridgeEngineModel:Run_InboundLoop_Async</code>, <code>:Route_OwnerMessage_Async</code>, <code>EngineStateSnapshot</code></td></tr>
+<tr><td>2</td><td><span class="tag redo">Alta</span></td><td>La maggior parte degli append dell'app <strong>ignora il risultato "ho scritto?"</strong>: sotto contesa del lock (budget 1,5 s, ~35 call site) le entry — avvisi, nudge, conferme di richieste — cadono in silenzio. Auto-dichiarato nel docstring.</td><td><code>Channels/ChannelAppender</code> (docstring), <code>BridgeEngineModel:Append_AppEntry_Safe</code></td></tr>
+<tr><td>3</td><td><span class="tag redo">Alta</span></td><td><strong>Parser cieco ai blocchi <code>```</code></strong>: citare un'entry ne crea una fantasma con indice duplicato; corrompe mirror, screening degli indici, stato del membro, indice successivo. Probabile vera causa dell'incidente della decisione 12.</td><td><code>Channels/ChannelEntry_Parser:Parse_All</code> (0 occorrenze di fence), <code>Status/MemberState_Resolver</code></td></tr>
+<tr><td>4</td><td><span class="tag redo">Alta</span></td><td>L'ordine dei 35 passi del tick è la specifica e <strong>nessun test lo protegge</strong> (ammesso nei commenti).</td><td><code>BridgeEngineModel:Execute_MirrorTick_Async</code></td></tr>
+<tr><td>5</td><td><span class="tag redo">Alta</span></td><td>Limiti e costi — che <strong>mettono in pausa lo spawn</strong> — vengono da un file della statusline con schema non verificato; in headless può non esistere; "nessun dato" = "idle".</td><td><code>Usage/UsageTotals_Reader</code>, <code>Limits/LimitData_Parser</code>, <code>:Update_DispatchPause_Async</code></td></tr>
+<tr><td>6</td><td><span class="tag change">Media</span></td><td><code>int.Parse</code> su <code>(\d+)</code> senza limite: un indice enorme in un header lancia <em>dopo</em> l'avanzamento dell'offset e <em>prima</em> dello svuotamento di <code>Pending</code> → lo stesso errore ogni 2 s per sempre, canale che non specchia né accetta append.</td><td><code>ChannelEntry_Parser:Build_Entry</code> (righe 145, 153 a <code>5737664</code>), <code>ChannelTailerModel:Extract_CompleteEntries</code></td></tr>
+<tr><td>7</td><td><span class="tag change">Media</span></td><td>Richieste senza id: un crash tra esecuzione e cancellazione crea <strong>due orchestrazioni</strong>.</td><td><code>BridgeEngineModel:Process_StartRequests</code>, <code>OrchestrationRequests_Reader</code></td></tr>
+<tr><td>8</td><td><span class="tag change">Media</span></td><td>Richieste lette non atomicamente su poll a 2 s; un file troncato a metà scrittura viene <strong>cancellato</strong>. Alle skill non è detto di scrivere <code>.tmp</code> e poi <code>mv</code>.</td><td><code>OrchestrationRequests_Reader:Try_ParseInto_OrReason</code>, <code>supervisor/SKILL.md</code> §richieste</td></tr>
+<tr><td>9</td><td><span class="tag change">Media</span></td><td><code>_lastUpdateId</code> scritto sul loop inbound senza lock, letto sul loop mirror sotto <code>_stateLock</code>: il lock sembra proteggere e non protegge; un offset stantio persistito duplica messaggi dell'owner dopo un riavvio.</td><td><code>BridgeEngineModel:792</code>, <code>:5963</code>, <code>:Persist_BridgeState</code></td></tr>
+<tr><td>10</td><td><span class="tag change">Media</span></td><td>Comandi Windows-only (<code>/screens</code>, <code>/show</code>, <code>/organize</code>) attivi sul target Linux senza gate di capability.</td><td><code>WindowFocus/*</code>, <code>BridgeEngineModel:Show_SessionWindow_Async</code></td></tr>
+</table></div>
+<p>Difetti di documentazione che ingannano attivamente: le decisioni 17 e 23 del CLAUDE.md descrivono <code>kit/commands/</code> e un installer che copia in <code>~/.claude/commands</code>; a HEAD non esistono (è <code>kit/skills/*/SKILL.md</code> + plugin, e il csproj dice che l'app non copia più nulla). La spec di progetto non ha demone, runner headless, ruoli solo/reviewer/communicator, e 4 azioni di richiesta dove il codice ne ha 9. Il CLAUDE.md è di Manu: questi punti vanno nel report per lui, non toccati da noi.</p>
+
+<h2 id="roadmap">9. Ordine di lavoro, per valore</h2>
+<p>Ordinato per valore, non per sforzo. Ogni voce è un pacchetto <code>stage/*</code> a sé, mergiabile da solo, con il criterio di "fatto" scritto prima. I primi due pacchetti si possono fare subito e non dipendono dal progetto di §7.</p>
+<ol class="roadmap">
+<li><strong>Fermare le perdite.</strong> Messaggio dell'owner durevole prima dell'ack a Telegram; <code>requestId</code> + insieme processati + <code>.tmp</code>→<code>mv</code>; parser consapevole dei fence (canale e PLAN.md); indice con limite; risultato dell'append controllato ovunque. <span class="why">Fatto quando: un kill dell'host durante l'aggregazione non perde il messaggio (test); un file di richiesta troncato non viene cancellato; un'entry citata non produce entry fantasma.</span></li>
+<li><strong>Finire il lavoro sui token già iniziato.</strong> Già fatto il 9 set (<code>stage/4b</code>, <code>7f/7j</code>): pacchetto di stato completo per i membri, turno di chiusura dopo un kill, session id per turno. Resta: boot per regime (via la contraddizione fresh/"leggi il canale" — oggi solo scavalcata); il pacchetto del supervisore con la coda dell'owner; C4 digest dei risvegli; <code>--autocompact</code> ~300 k come rete sui ruoli a trascrizione (l'unica rete vera: <code>--max-budget-usd</code> è stato misurato non fermare la spesa); contabilità con le sidechain; bookkeeping dell'app fuori dal canale; e la misura del gate, che nessuno ha ancora rifatto sul VPS dopo il deploy. <span class="why">Fatto quando: ctx mediano prima chiamata &lt; 70 k; ≤ 2 chiamate per turno "ack"; token per consegna ≥ 3× giù con rilavoro entro +10 % e 10 verdetti letti alla cieca dall'owner (criteri già scritti ieri).</span></li>
+<li><strong>Dieta della skill del supervisore.</strong> Regola/perché, una copia per ciò che è condiviso, fuori dal kit ciò che è locale. <span class="why">Fatto quando: <code>supervisor/SKILL.md</code> ≤ 15 KB, zero regole cancellate (diff delle righe imperative), boot del supervisore misurato con una <code>-p</code> vuota prima e dopo.</span></li>
+<li><strong>Spezzare il motore.</strong> Pipeline <code>ITickStage</code> con ordine asserito da test e <code>RunsWhileMuted</code>; tabella <code>IOwnerCommand</code>; metriche per stadio. <span class="why">Fatto quando: nessun file &gt; 1 000 righe nel CoreLib; il test dell'ordine esiste e fallisce se si sposta uno stadio.</span></li>
+<li><strong>Costi dalla fonte giusta.</strong> Turn result + trascrizioni dedupe + OTEL; statusline solo per <code>rate_limits</code>; pesatura cache. <span class="why">Fatto quando: registro ↔ trascrizioni entro 5 %; la pausa dello spawn non dipende più da <code>.usage.json</code>.</span></li>
+<li><strong>Il log di eventi.</strong> <code>seq</code> monotono, <code>events.jsonl</code> scritto solo dall'app, header sempre dell'app, <code>channel.md</code> come proiezione, cursori a seq. <span class="why">Fatto quando: <code>ChannelIndexSequence_Screen</code>, <code>ChannelHistory_Counter</code> e <code>Warn_IfEntriesWereArchivedUndelivered</code> possono essere cancellati.</span></li>
+<li><strong>Task tipizzati.</strong> Macchina a stati, tool MCP locali (report/brief/verdict/question/request), PLAN.md generato, worktree per task, <code>[x]</code> solo da verdetto. <span class="why">Fatto quando: gli hook Stop del ledger non servono più; "quale commit ha chiuso questa riga" è una query.</span></li>
+<li><strong>Un host, una pagina.</strong> Web UI servita dal demone, via WPF e <code>WindowFocus/</code>, un solo runner headless, sandbox sul VPS, reviewer senza Bash, spike su <code>claude --bg</code>, costanti in <code>tuning</code>. <span class="why">Fatto quando: la soluzione ha un solo TFM e un solo eseguibile; i comandi owner disponibili sono gli stessi su ogni OS.</span></li>
+<li><strong>Console.</strong> Messaggio pinnato modificato in place, Mini App cruscotto, permission relay, 409 fatale, comando di replay del mirror. <span class="why">Fatto quando: l'owner risponde "questa è finita?" senza scorrere.</span></li>
+</ol>
+<p>Cosa lasciare fuori dal denominatore (decisione 22): tutto ciò che qui non è legato a una tua richiesta va in PARKED, scritto e non fatto.</p>
+
+<h3>Chi fa cosa — per non costruire due volte</h3>
+<p>La sessione "token" ha pubblicato il suo handoff (<code>2026-09-09-token-work-handoff.md</code>): un pezzo è già stato costruito due volte oggi (<code>stage/4c</code> e <code>stage/7f</code>, lo stesso turno di chiusura). Questa mappa dice quali voci di §9 sono <em>sue</em> — rivendicate, con date — e quali restano libere. Chi tocca una voce libera lo dichiara prima nel canale dell'owner.</p>
+<div class="tablewrap"><table>
+<tr><th>Voce</th><th>Di chi</th><th>Stato</th><th>File che tocca</th></tr>
+<tr><td>Pacchetto di stato per i membri, turno di chiusura, session id per turno, drenaggio dell'host, modello del general riletto</td><td>sessione token</td><td><strong>fatto</strong> (<code>4b</code>, <code>7f</code>, <code>4e</code>, <code>4f</code>)</td><td>—</td></tr>
+<tr><td>C9 confine morbido dentro il turno (hook <code>PreToolUse</code> di avviso verso la chiamata ~40)</td><td>sessione token</td><td>10 set mattina</td><td><code>kit/hooks/</code>, <code>kit/skills/implementer|reviewer</code>, forse <code>Running/</code></td></tr>
+<tr><td>C4 risvegli digeriti del supervisore</td><td>sessione token</td><td>10 set dopo il gate 3</td><td><code>Running/PrintTurnDispatcher/*</code>, <code>PendingTraffic/*</code>, <code>TurnSource/*</code></td></tr>
+<tr><td>C6 <code>MODEL:</code> letto dal brief; chiave del reviewer separata</td><td>sessione token</td><td>11 set mattina</td><td><code>Configuration/*</code>, <code>Launching/*</code>, dispatcher</td></tr>
+<tr><td>Supervisore fresh con il pacchetto</td><td>sessione token</td><td>11 set pomeriggio (config, non codice)</td><td>VPS <code>config.json</code></td></tr>
+<tr><td>C3 bookkeeping fuori dal canale · C7 contatore token nell'app · <code>STATE:</code> se il gate mostra rilavoro</td><td>sessione token</td><td>dopo</td><td><code>Channels/*</code>, <code>Usage/*</code>, <code>Running/StatePack/*</code></td></tr>
+<tr><td><strong>Fermare le perdite</strong> (§9.1): messaggio dell'owner durevole, <code>requestId</code> + <code>.tmp→mv</code>, parser con fence, indice con limite, esito dell'append controllato</td><td><em>libera</em></td><td>—</td><td><code>Bridge/BridgeEngine/*</code>, <code>Channels/*</code>, <code>GeneralSupervision/*</code>, una frase in <code>kit/skills</code></td></tr>
+<tr><td><strong>Dieta della skill del supervisore</strong> (§9.3)</td><td><em>libera, ma in conflitto</em></td><td>C5 parcheggiata dall'owner l'8 set; la sessione token tocca <code>kit/skills</code> (una frase) e l'hook C9 — da concordare prima</td><td><code>kit/skills/supervisor/*</code></td></tr>
+<tr><td><strong>Spezzare il motore</strong> (§9.4)</td><td><em>libera</em></td><td>—</td><td><code>Bridge/BridgeEngine/BridgeEngineModel.cs</code> — non tocca il dispatcher</td></tr>
+<tr><td><strong>Costi dalla fonte giusta</strong> (§9.5)</td><td><em>libera, sovrapposta a C7</em></td><td>C7 (contatore nell'app dalle trascrizioni) è loro; il resto — costo dal turn result, OTEL, via statusline dallo spawn gate — va concordato per non fare due lettori</td><td><code>Usage/*</code>, <code>Limits/*</code></td></tr>
+<tr><td><strong>Registro di eventi, task tipizzati, tool MCP</strong> (§9.6–9.7)</td><td><em>libera</em></td><td>strutturale; dopo il gate del lavoro token, così misura su un sistema stabile</td><td><code>Channels/*</code>, <code>Planning/*</code>, nuovo server MCP, <code>kit/</code></td></tr>
+<tr><td><strong>Un host, sandbox, console</strong> (§9.8–9.9)</td><td><em>libera</em></td><td>—</td><td><code>AIOrchestrator/</code>, <code>WindowFocus/</code>, <code>Daemon/</code>, <code>Telegram/*</code></td></tr>
+</table></div>
+<p class="note">Strade condivise dove si collide: <code>PrintTurnDispatcherModel.cs</code> (oggi vi sono atterrati 4c/7f, 7b, 7e, 4f — rebase su <code>origin/ours/integration</code> prima di scrivere, trial merge prima del commit); <code>kit/skills/*/SKILL.md</code> (riorganizzare, mai riscrivere una regola: un test conta le frasi normative); <code>kit/hooks/</code> (C9 aggiunge un hook, §9.8 ne toglie uno). Deploy: solo la ricetta <code>~/aiorch-vps/03-aiorch.sh</code>, che reinstalla il plugin — il <code>git pull</code> + <code>cp -a</code> a mano no.</p>
+
+<h2 id="limiti">10. Cosa non ho verificato</h2>
+<ul>
+<li>Nulla di ciò che gira sul VPS: né il binario in <code>/opt/aiorchestrator</code>, né il plugin installato, né il <code>config.json</code> vivo. Ogni affermazione è sul sorgente del branch; i dati di consumo sono quelli dei documenti del 8 settembre.</li>
+<li>La suite non è stata eseguita in questa sessione. "2 751 verdi, 9 skip, 0 rossi" è dal report dell'altra sessione del 9 settembre (2 756 su <code>f5d6b76</code> secondo l'handoff token).</li>
+<li>Che cosa il <code>7e</code> cambi esattamente nel percorso "messaggio dell'owner → disco": ho verificato che l'ordine offset-prima-del-testo è ancora quello, non ho misurato la finestra residua.</li>
+<li>Se il cross-session messaging funzioni in headless <code>-p</code>; se <code>claude --bg</code> copra i bisogni del watchdog (env per ruolo, root); l'interazione di <code>--autocompact</code> con <code>--resume</code> tra processi.</li>
+<li>Se il limite settimanale pesi le letture da cache come input fresco.</li>
+<li>Il +500 % di Symphony, il numero di stelle di Paperclip/Ruflo e simili sono dichiarazioni dei vendor.</li>
+<li>La ripartizione del boot tra system prompt, tool, MCP e skill è dedotta per differenze (2,8–3,2 byte/token), non misurata con una <code>-p</code> vuota — è il primo passo del pacchetto 3.</li>
+<li>Il contenuto dei turni: ho letto quanto pesano, mai cosa hanno detto.</li>
+</ul>
+<p class="note">Report di lavoro (in inglese, con tutte le fonti): <code>audit-architecture.md</code>, <code>audit-protocol.md</code>, <code>research-landscape.md</code>, <code>research-console-transport.md</code>, <code>research-native-primitives.md</code> nella scratchpad della sessione. Nulla qui è certificato dal suo autore: ciò che lo prova sono i criteri di "fatto" di §9, misurati prima e dopo.</p>
+</div>
