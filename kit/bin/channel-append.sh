@@ -54,7 +54,7 @@ usage() {
   echo "    --to owner|member     which channel kind this is for (checked against --channel)" >&2
   echo "" >&2
   echo "  The index and the timestamp are computed HERE, never by the caller (CLAUDE.md decision 12)." >&2
-  echo "  The author is derived from AIORCH_ROLE/AIORCH_MEMBER; a mismatching --author is refused." >&2
+  echo "  The author is the session role word from AIORCH_ROLE; a mismatching --author is refused." >&2
   exit 2
 }
 
@@ -163,21 +163,27 @@ fi
 # OUTSIDE A SESSION IT STILL WORKS. The app itself appends through the same lock from .NET, and a
 # human debugging by hand has no AIORCH_ROLE — so with nothing exported, `--author` is taken as given.
 # What is refused is the case that actually lied: a session that HAS a role claiming another one.
+#
+# THE ROLE WORD, NEVER THE MEMBER ID. The header's author is read by ChannelEntry_Parser.Parse_Author,
+# which knows role words only (supervisor, implementer, reviewer, solo, …): `FROM solo-1` or `FROM imp-2`
+# parses as Unknown, so the app mis-attributes the entry and every member-authored rule (window markers,
+# "has the supervisor answered") stops seeing it. Preferring AIORCH_MEMBER did exactly that from the
+# day the plugin was installed (2026-09-14: "[owner] entry #67 FROM Unknown: solo online"). Every one
+# of the ~11,000 headers written before carries a role word. The general supervisor's protocol signs
+# as `supervisor`, so its role word `general` is mapped to that.
 derive_author() {
-  if [ -n "${AIORCH_MEMBER:-}" ]; then
-    printf '%s' "$AIORCH_MEMBER"
-  elif [ -n "${AIORCH_ROLE:-}" ]; then
-    printf '%s' "$AIORCH_ROLE"
-  else
-    printf ''
-  fi
+  case "${AIORCH_ROLE:-}" in
+    '')      printf '' ;;
+    general) printf 'supervisor' ;;
+    *)       printf '%s' "$AIORCH_ROLE" ;;
+  esac
 }
 
 SESSION_AUTHOR="$(derive_author)"
 
 if [ -n "$SESSION_AUTHOR" ]; then
   if [ -n "$AUTHOR" ] && [ "$AUTHOR" != "$SESSION_AUTHOR" ]; then
-    echo "channel-append.sh: REFUSED — --author '$AUTHOR' is not this session's identity ('$SESSION_AUTHOR', from AIORCH_MEMBER/AIORCH_ROLE)." >&2
+    echo "channel-append.sh: REFUSED — --author '$AUTHOR' is not this session's identity ('$SESSION_AUTHOR', member '${AIORCH_MEMBER:-?}', from AIORCH_ROLE)." >&2
     echo "                   Nothing was written. An entry signed with another role's name is believed because of the name on it;" >&2
     echo "                   that is how a member's brief was once attributed to the supervisor. Drop --author, or fix it." >&2
     exit 2

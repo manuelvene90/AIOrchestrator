@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Bridge;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
@@ -7,6 +8,7 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using Xunit;
@@ -190,6 +192,123 @@ public class ANudgedMemberIsNeverRespawnedOnSilenceTests : IDisposable
             Wait_Until(() => Was_Nudged(channelFile)),
             $"a member dormant for 20 minutes was never nudged.\n{Read(channelFile)}");
     }
+
+    /// <summary>
+    /// THE CONTROL FOR THE TWO BELOW, and the first engine-level test of the report at all. A member
+    /// the app CAN read, whose last act predates its nudge and which has nothing in flight, is
+    /// reported. Without this, "no report was written" below would pass just as well for a loop that
+    /// never reached the escalation.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AReadableMemberThatTookNoTurnAfterItsNudge_IsReported()
+    {
+        var (orchId, memberId, channelFile) = Start_WithADormantMember();
+        Write_MemberTranscript(orchId, memberId, [Activity(DateTime.UtcNow.AddMinutes(-30))]);
+
+        await Cross_TheConfirmationWindow_Async(channelFile);
+
+        Assert.True(
+            Wait_Until(() => Was_ReportedDeaf(orchId, memberId)),
+            "a readable member that took no turn after its nudge was never reported, so the two tests that "
+            + $"assert the absence of a report prove nothing.\n{Read_Log()}");
+    }
+
+    /// <summary>
+    /// A MEMBER BLOCKED ON A USAGE LIMIT IS NOT REPORTED DEAF. Five of the nine ORPHANED kills examined
+    /// on 2026-09-14 were this shape, and the report that replaced the kill fired on it too — telling
+    /// the supervisor to close and replace a member whose replacement would land on the same limit.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AMemberBlockedOnAUsageLimit_IsNotReportedDeaf()
+    {
+        var (orchId, memberId, channelFile) = Start_WithADormantMember();
+        Write_MemberTranscript(
+            orchId, memberId,
+            [Activity(DateTime.UtcNow.AddMinutes(-31)), LimitRefusal(DateTime.UtcNow.AddMinutes(-30))]);
+
+        await Cross_TheConfirmationWindow_Async(channelFile);
+
+        Assert.True(
+            Wait_Until(() => Log_Contains("blocked on a usage limit")),
+            $"the escalation never weighed the limit-blocked member, so the assertion below proves nothing.\n{Read_Log()}");
+        Assert.False(Was_ReportedDeaf(orchId, memberId), $"a member blocked on a usage limit was reported deaf.\n{Read_Log()}");
+    }
+
+    /// <summary>
+    /// A MEMBER WAITING ON ITS OWN SUB-AGENT IS NOT REPORTED DEAF. da-vinci-fintech-suite-31,
+    /// 2026-09-14 08:44: the solo was killed while its background agent had written 46 seconds
+    /// earlier. The sub-agent's transcript is written AFTER the nudge here, as it was there.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AMemberWhoseSubAgentIsStillWorking_IsNotReportedDeaf()
+    {
+        var (orchId, memberId, channelFile) = Start_WithADormantMember();
+        var transcriptPath = Write_MemberTranscript(orchId, memberId, [Activity(DateTime.UtcNow.AddMinutes(-30))]);
+
+        await Tick_Once_Async();
+        Assert.True(Wait_Until(() => Was_Nudged(channelFile)), $"the member was never nudged.\n{Read(channelFile)}");
+
+        var subAgentFile = Path.Combine(
+            Path.GetDirectoryName(transcriptPath)!, Path.GetFileNameWithoutExtension(transcriptPath), "subagents", "agent-a1.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(subAgentFile)!);
+        File.WriteAllText(subAgentFile, Activity(DateTime.UtcNow));
+
+        _clock.Advance(TimeSpan.FromMinutes(10));
+        await Tick_Once_Async();
+        await Tick_Once_Async();
+
+        Assert.False(Was_ReportedDeaf(orchId, memberId), $"a member whose sub-agent was still working was reported deaf.\n{Read_Log()}");
+    }
+
+    async Task Cross_TheConfirmationWindow_Async(string channelFile)
+    {
+        await Tick_Once_Async();
+
+        Assert.True(Wait_Until(() => Was_Nudged(channelFile)), $"the member was never nudged.\n{Read(channelFile)}");
+
+        _clock.Advance(TimeSpan.FromMinutes(10));
+
+        await Tick_Once_Async();
+        await Tick_Once_Async();
+    }
+
+    /// <summary>Writes the member's transcript and the .usage.json pointing at it, as the status line does.</summary>
+    string Write_MemberTranscript(string orchId, string memberId, string[] lines)
+    {
+        var memberFolder = _paths.Get_ImplementerFolder(orchId, memberId);
+        Directory.CreateDirectory(memberFolder);
+
+        var transcriptPath = Path.Combine(_tempRoot, "transcripts", $"{memberId}-session.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(transcriptPath)!);
+        File.WriteAllText(transcriptPath, string.Join("\n", lines));
+
+        File.WriteAllText(
+            Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE),
+            "{\"transcript_path\":\"" + transcriptPath.Replace("\\", "\\\\") + "\"}");
+
+        return transcriptPath;
+    }
+
+    bool Was_ReportedDeaf(string orchId, string memberId)
+    {
+        var subject = OrphanEscalation_Decider.Describe_Report(memberId, 6).Subject;
+
+        return ChannelEntry_Parser
+            .Parse_All(Read(_paths.Get_OwnerChannelFile(orchId)))
+            .Any(entry => entry.Subject.Contains(subject, StringComparison.Ordinal));
+    }
+
+    static string Stamp(DateTime utc) => utc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+
+    static string Activity(DateTime utc) => "{\"type\":\"assistant\",\"timestamp\":\"" + Stamp(utc) + "\",\"uuid\":\"u\"}";
+
+    static string LimitRefusal(DateTime utc)
+        => "{\"type\":\"assistant\",\"timestamp\":\"" + Stamp(utc)
+         + "\",\"uuid\":\"u\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"You've hit your weekly limit\"}]},"
+         + "\"error\":\"rate_limit\",\"isApiErrorMessage\":true,\"apiErrorStatus\":429}";
 
     (string OrchId, string MemberId, string ChannelFile) Start_WithADormantMember()
     {

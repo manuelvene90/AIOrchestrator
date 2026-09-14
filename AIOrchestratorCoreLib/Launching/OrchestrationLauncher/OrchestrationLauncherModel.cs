@@ -309,7 +309,7 @@ internal sealed class OrchestrationLauncherModel(
         return Add_Member(orchId, MemberKinds.Solo);
     }
 
-    public void Respawn_Supervisor(string orchId)
+    public bool Respawn_Supervisor(string orchId)
     {
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_SupervisorPidFile(orchId);
@@ -358,7 +358,7 @@ internal sealed class OrchestrationLauncherModel(
         var started = Start_Session(launch, runner);
 
         if (started == null)
-            return;
+            return false;
 
         if (started.Kind == SessionRunners.Terminal)
             Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
@@ -366,6 +366,7 @@ internal sealed class OrchestrationLauncherModel(
         var what = $"Supervisor session {Describe_Started(started)}";
 
         _log.Log_Info(orchId, resumes ? Describe_Spawn(what, resumeSessionId) : what);
+        return true;
     }
 
     public void Respawn_Communicator(string orchId)
@@ -406,7 +407,7 @@ internal sealed class OrchestrationLauncherModel(
     /// Respawns a member AS ITS KIND — the id carries it, so a respawned reviewer comes back
     /// read-only instead of being quietly resurrected as a writable implementer.
     /// </summary>
-    public void Respawn_Implementer(string orchId, string memberId)
+    public bool Respawn_Implementer(string orchId, string memberId)
     {
         var session = _store.Get_Session(orchId);
 
@@ -424,7 +425,7 @@ internal sealed class OrchestrationLauncherModel(
         if (member?.ClosedUtc != null)
         {
             _log.Log_Info(orchId, $"Respawn of '{memberId}' skipped — it was closed while the tick was in flight");
-            return;
+            return false;
         }
 
         var pidFile = _paths.Get_ImplementerPidFile(orchId, memberId);
@@ -482,7 +483,7 @@ internal sealed class OrchestrationLauncherModel(
         var started = Start_Session(launch, runner);
 
         if (started == null)
-            return;
+            return false;
 
         if (started.Kind == SessionRunners.Terminal)
             Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
@@ -490,9 +491,10 @@ internal sealed class OrchestrationLauncherModel(
         var what = $"{kind} '{memberId}' session {Describe_Started(started)}";
 
         _log.Log_Info(orchId, resumes ? Describe_Spawn(what, resumeSessionId) : what);
+        return true;
     }
 
-    public void Spawn_GeneralSupervisor()
+    public bool Spawn_GeneralSupervisor()
     {
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
@@ -514,8 +516,11 @@ internal sealed class OrchestrationLauncherModel(
 
         var runner = Start_Session(launch);
 
-        if (runner != null)
-            _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"General supervisor session {Describe_Started(runner)}");
+        if (runner == null)
+            return false;
+
+        _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"General supervisor session {Describe_Started(runner)}");
+        return true;
     }
 
     /// <summary>

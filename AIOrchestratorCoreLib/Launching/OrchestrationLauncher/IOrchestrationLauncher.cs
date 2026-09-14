@@ -30,11 +30,20 @@ public interface IOrchestrationLauncher
     /// override (set-model) still wins over it; the config default is the floor beneath both.
     /// </summary>
     IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model);
-    void Respawn_Supervisor(string orchId);
-    void Respawn_Communicator(string orchId);
-    void Respawn_Implementer(string orchId, string memberId);
 
-    /// <summary>Spawns (or re-spawns) the general supervisor; resumes its previous conversation when one exists.</summary>
-    void Spawn_GeneralSupervisor();
+    /// <summary>
+    /// True when a session was actually started. False when none was — the kit gate refused, or the
+    /// member was closed while the caller's snapshot was in flight — and the launcher has already
+    /// logged why. The watchdog counts only true towards a crash loop: a refusal starts no process,
+    /// so there is nothing that failed to come alive (2026-09-14, three false CRASH-LOOPING alerts).
+    /// </summary>
+    bool Respawn_Supervisor(string orchId);
+    void Respawn_Communicator(string orchId);
+
+    /// <summary>Same contract as <see cref="Respawn_Supervisor"/>: true only when a session was started.</summary>
+    bool Respawn_Implementer(string orchId, string memberId);
+
+    /// <summary>Spawns (or re-spawns) the general supervisor; true only when a session was started.</summary>
+    bool Spawn_GeneralSupervisor();
 
 }

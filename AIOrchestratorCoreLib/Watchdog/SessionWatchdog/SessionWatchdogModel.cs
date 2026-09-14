@@ -43,6 +43,15 @@ internal sealed class SessionWatchdogModel(
     readonly Dictionary<string, int> _consecutiveRespawns = [];
     readonly List<(string OrchId, string AlertText)> _pendingCrashLoopAlerts = [];
 
+    /// <summary>
+    /// True until the first pass of this host run has finished. Every session is down at that point
+    /// BECAUSE THE APP KILLED IT ON EXIT, so restoring it is the design and not a fault: that pass
+    /// logs no "not running" warning of its own, and the launcher's "… session spawned — …" line is
+    /// the record. On 2026-09-14 every app start printed an orange warning per session beside that
+    /// line, which made a clean restart read as a crash storm.
+    /// </summary>
+    bool _isAppStartPass = true;
+
     public IReadOnlyDictionary<string, int> Get_ConsecutiveRespawns()
     {
         return new Dictionary<string, int>(_consecutiveRespawns);
@@ -59,6 +68,18 @@ internal sealed class SessionWatchdogModel(
     }
 
     public void Check_AndRestart_DeadSessions()
+    {
+        try
+        {
+            Check_AllSessions();
+        }
+        finally
+        {
+            _isAppStartPass = false;
+        }
+    }
+
+    void Check_AllSessions()
     {
         Check_GeneralSupervisor();
 
@@ -153,9 +174,7 @@ internal sealed class SessionWatchdogModel(
         if (!Try_ClaimRespawnSlot("general"))
             return;
 
-        Register_Respawn("general", ChannelDiscovery.GENERAL_ORCH_ID, "general supervisor");
-        _log.Log_Warning(ChannelDiscovery.GENERAL_ORCH_ID, "General supervisor not running — spawning it");
-        _launcher.Spawn_GeneralSupervisor();
+        Respawn("general", ChannelDiscovery.GENERAL_ORCH_ID, "general supervisor", "General supervisor not running — spawning it", _launcher.Spawn_GeneralSupervisor);
     }
 
     void Check_OrchestrationSupervisor(Sessions.OrchestrationSession.IOrchestrationSession session)
@@ -168,24 +187,24 @@ internal sealed class SessionWatchdogModel(
         if (Is_PrintRun(SessionRoles.Supervisor, session.OrchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID))
             return;
 
-        if (Is_WithinSpawnGrace(session.SupervisorSpawnedUtc))
-            return;
-
+        // ALIVE IS ASKED BEFORE THE GRACE: seeing a session alive is the only thing that clears its
+        // crash-loop counter, and the grace used to return first — so an app restart inside the 90 s
+        // after a respawn carried a healthy slot's count forward into a false CRASH-LOOPING alert.
         if (Is_SessionAlive(_paths.Get_SupervisorPidFile(session.OrchId)))
         {
             _consecutiveRespawns.Remove($"sup:{session.OrchId}");
             return;
         }
 
+        if (Is_WithinSpawnGrace(session.SupervisorSpawnedUtc))
+            return;
+
         if (!Try_ClaimRespawnSlot($"sup:{session.OrchId}"))
             return;
 
-        Register_Respawn($"sup:{session.OrchId}", session.OrchId, "supervisor");
-        _log.Log_Warning(session.OrchId, "Supervisor session not running — respawning (it resumes its own conversation if the transcript survives, else from the channels)");
-
         Clear_AwaitingAnswer_ForDeadSession(session.OrchId);
 
-        _launcher.Respawn_Supervisor(session.OrchId);
+        Respawn($"sup:{session.OrchId}", session.OrchId, "supervisor", "Supervisor session not running — respawning", () => _launcher.Respawn_Supervisor(session.OrchId));
     }
 
     /// <summary>
@@ -236,28 +255,49 @@ internal sealed class SessionWatchdogModel(
 
     void Check_Implementer(string orchId, string memberId, DateTime? spawnedUtc)
     {
-        if (Is_WithinSpawnGrace(spawnedUtc))
-            return;
+        var kind = MemberKind_Ids.Resolve_Kind(memberId);
 
         // Print-run: no pid file by design (see Check_GeneralSupervisor).
-        if (Is_PrintRun(SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId)), orchId, memberId))
+        if (Is_PrintRun(SessionRole_Names.From_MemberKind(kind), orchId, memberId))
         {
             _consecutiveRespawns.Remove($"imp:{orchId}/{memberId}");
             return;
         }
 
+        // Alive before grace, for the reason given in Check_OrchestrationSupervisor.
         if (Is_SessionAlive(_paths.Get_ImplementerPidFile(orchId, memberId)))
         {
             _consecutiveRespawns.Remove($"imp:{orchId}/{memberId}");
             return;
         }
 
+        if (Is_WithinSpawnGrace(spawnedUtc))
+            return;
+
         if (!Try_ClaimRespawnSlot($"imp:{orchId}/{memberId}"))
             return;
 
-        Register_Respawn($"imp:{orchId}/{memberId}", orchId, memberId);
-        _log.Log_Warning(orchId, $"Implementer '{memberId}' session not running — respawning (a solo resumes its own conversation if the transcript survives; every member re-reads its channel)");
-        _launcher.Respawn_Implementer(orchId, memberId);
+        // NAMED BY ITS KIND — a solo or a reviewer is not an implementer, and the launcher's own
+        // spawn line already says which (`Solo 'solo-1' session spawned — …`). Whether it resumes its
+        // conversation is on that line too, so this one carries no design notes.
+        Respawn($"imp:{orchId}/{memberId}", orchId, memberId, $"{kind} '{memberId}' session not running — respawning", () => _launcher.Respawn_Implementer(orchId, memberId));
+    }
+
+    /// <summary>
+    /// The one respawn path of the three checks above. The warning is for a session that died while
+    /// the app was running; the app-start pass restores what the app itself stopped, and says nothing.
+    /// ONLY A STARTED SESSION COUNTS towards a crash loop — a spawn the kit gate refused started no
+    /// process, so there is nothing that failed to come alive, and the refusal has its own error
+    /// line. On 2026-09-14 two refusals plus one clean start made "3 respawns without coming alive"
+    /// for three sessions that were running.
+    /// </summary>
+    void Respawn(string slotKey, string orchId, string sessionLabel, string warning, Func<bool> spawn)
+    {
+        if (!_isAppStartPass)
+            _log.Log_Warning(orchId, warning);
+
+        if (spawn())
+            Register_Respawn(slotKey, orchId, sessionLabel);
     }
 
     /// <summary>Counts respawns since the slot was last seen ALIVE; at the threshold, queues one escalation.</summary>

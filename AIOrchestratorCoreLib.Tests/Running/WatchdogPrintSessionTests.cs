@@ -20,10 +20,10 @@ public class WatchdogPrintSessionTests
         public IOrchestrationSession Demote_ToBasic(string orchId) => throw new NotSupportedException();
         public IOrchestrationSession Add_Member(string orchId, MemberKinds kind) => throw new NotSupportedException();
         public IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model) => throw new NotSupportedException();
-        public void Respawn_Supervisor(string orchId) => Calls.Add($"sup:{orchId}");
+        public bool Respawn_Supervisor(string orchId) { Calls.Add($"sup:{orchId}"); return true; }
         public void Respawn_Communicator(string orchId) => Calls.Add($"com:{orchId}");
-        public void Respawn_Implementer(string orchId, string memberId) => Calls.Add($"imp:{orchId}/{memberId}");
-        public void Spawn_GeneralSupervisor() => Calls.Add("general");
+        public bool Respawn_Implementer(string orchId, string memberId) { Calls.Add($"imp:{orchId}/{memberId}"); return true; }
+        public bool Spawn_GeneralSupervisor() { Calls.Add("general"); return true; }
     }
 
     [Fact]

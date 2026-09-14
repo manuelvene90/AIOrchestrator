@@ -200,8 +200,16 @@ internal sealed class BridgeEngineModel(
     /// Production evidence for the register this is logged at: build 481efc9, the hour to 22:38 on
     /// 2026-09-10, 388 HTTP 429s, of which 376 were topic status lines re-attempted at the TICK's own
     /// rate against a retry_after of 20–34 s — the downstream shape a parked tick produces.
+    ///
+    /// SIXTY SECONDS SINCE 2026-09-14, because five now fires on the design. The per-message brake no
+    /// longer waits — Hold_UnlessThisMessageMayBeEdited throws TelegramHeldException instead — so what
+    /// still lengthens a tick is the SEND budget (TokenBucket_Gate: 10 tokens refilled per 60 s, about
+    /// one send per 6 s once a burst drains it), which the tick awaits on purpose. The owner's panel
+    /// showed 31.6 s at startup catch-up and 5.7 s / 8.4 s while two orchestrations were closed: all
+    /// pacing, none actionable, all orange. A tick past a full refill window is more than the budget
+    /// can explain, so that is still a finding.
     /// </summary>
-    const int SLOW_TICK_THRESHOLD_MILLISECONDS = 5000;
+    const int SLOW_TICK_THRESHOLD_MILLISECONDS = 60000;
 
     /// <summary>Below this age /cost prints no burn rate — dividing by minutes invents a number.</summary>
     const double MINIMUM_BURN_RATE_HOURS = 0.25;
@@ -1546,12 +1554,7 @@ internal sealed class BridgeEngineModel(
             {
                 _tickWasSlowLastTime = true;
                 _log.Log_Warning(GLOBAL_ORCH_ID,
-                    $"Mirror tick took {elapsed.TotalSeconds:F1} s (threshold "
-                        + $"{SLOW_TICK_THRESHOLD_MILLISECONDS / 1000.0:F0} s) — the tick's own period "
-                        + "is 2 s, so something inside it (stage/15's 30 s per-message edit brake is "
-                        + "the known cause) parked the mirror, the owner's deliveries and the deadline "
-                        + "sweep behind it. Logged once per spell: silent again until a tick lands "
-                        + "back under the threshold.");
+                    $"Mirror tick took {elapsed.TotalSeconds:F1} s (normally 2 s) — Telegram mirroring was delayed");
             }
         }
         else
@@ -2613,6 +2616,7 @@ internal sealed class BridgeEngineModel(
                     // both means neither host is judged on evidence it cannot produce.
                     MemberWorking_Decider.Is_Busy(Resolve_MemberWorking(Running.SessionRoles.Implementer, session.OrchId, member.MemberId))
                         || SessionActivity_Probe.Is_MidTurn(memberUsageFile),
+                    SessionActivity_Probe.Is_BlockedOnUsageLimit(memberUsageFile),
                     SessionActivity_Probe.Get_LastActivityUtc_OrNull(memberUsageFile),
                     nudgedUtc);
 
@@ -2629,16 +2633,11 @@ internal sealed class BridgeEngineModel(
                 if (!OrphanEscalation_Decider.Reports(escalation))
                     continue;
 
-                // A REPORT, NOT A RESPAWN. The supervisor can look at the member, ask it something, or
-                // close and re-add it — all of which it can already do, and all of which are decisions
-                // this loop has no business taking on evidence this thin.
-                Append_SupervisorAttention_UnlessMeeting(
-                    session.OrchId,
-                    $"{member.MemberId} may be deaf to wakes",
-                    $"{member.MemberId} was nudged {ORPHAN_CONFIRM_MINUTES} minutes ago, took no turn since, and has no "
-                    + "tool call in flight. It may be fine — check its channel before doing anything. If it really is "
-                    + "deaf, close it and add a replacement; the app will not restart it for you.",
-                    Resolve_Presence(session.OrchId));
+                // A REPORT, NOT A RESPAWN — and not an invitation to close either. The wording lives in
+                // OrphanEscalation_Decider.Describe_Report, which says why it must never advise one.
+                var report = OrphanEscalation_Decider.Describe_Report(member.MemberId, ORPHAN_CONFIRM_MINUTES);
+
+                Append_SupervisorAttention_UnlessMeeting(session.OrchId, report.Subject, report.Body, Resolve_Presence(session.OrchId));
             }
 
             Publish_AwaitingVerdict(session.OrchId, awaitingVerdict);
@@ -3674,6 +3673,12 @@ internal sealed class BridgeEngineModel(
             }
 
             _generalDashboardFailedAtUtc = DateTime.UtcNow;
+
+            // A HELD call was never made — the window is still shut — so it backs off like a failure
+            // and says nothing; see the status line's catch for why that is not a warning.
+            if (ex is TelegramHeldException)
+                return;
+
             _log.Log_Warning(GLOBAL_ORCH_ID, $"General dashboard not updated ({ex.Message}) — retrying after the backoff");
         }
     }
@@ -10744,6 +10749,18 @@ internal sealed class BridgeEngineModel(
                 _repostImpossibleOrchIds.Remove(session.OrchId);
 
                 _log.Log_Warning(session.OrchId, $"Topic status message is gone — posting a new one next tick ({exception.Message})");
+            }
+            catch (TelegramHeldException)
+            {
+                // NOT NOW, NOT A FAILURE: the call was never made, because this message's rate-limit
+                // window is still shut. Same backoff and same forget-a-deleted-id rule as a failure
+                // below, and NO WARNING — the next tick after the window redraws the line. Logging it
+                // put one orange line per open orchestration on the owner's panel every ~40 s
+                // (2026-09-14), which is the log storm TelegramHeldException exists to prevent.
+                if (oldStatusMessageDeleted)
+                    Forget_StatusLineMessage(session.OrchId);
+
+                _statusLineFailedAtByOrchId[session.OrchId] = DateTime.Now;
             }
             catch (Exception exception)
             {

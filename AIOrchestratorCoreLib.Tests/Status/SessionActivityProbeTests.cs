@@ -208,6 +208,111 @@ public class SessionActivityProbeTests : IDisposable
         Assert.False(SessionActivity_Probe.Is_MidTurn(usageFile));
     }
 
+    /// <summary>
+    /// A SESSION WAITING ON ITS OWN SUB-AGENT IS WORKING. Measured 2026-09-14 on
+    /// da-vinci-fintech-suite-31: the solo ended its turn with four background agents pending, one of
+    /// them was still writing its transcript 46 seconds before the app declared the solo ORPHANED and
+    /// killed it — agent and all. The parent's own transcript was ten minutes quiet, because a parent
+    /// waiting on a background agent writes nothing. The sub-agent's transcript sits beside it, in a
+    /// folder named after the session: `&lt;session&gt;.jsonl` and `&lt;session&gt;/subagents/agent-*.jsonl`.
+    /// </summary>
+    [Fact]
+    public void A_sub_agent_still_writing_makes_its_session_read_as_working()
+    {
+        var now = DateTime.UtcNow;
+
+        var usageFile = Write_Session("waiting-on-its-agent", Activity(now.AddMinutes(-10)));
+        Write_SubAgent("waiting-on-its-agent", "agent-a1", Activity(now.AddSeconds(-5)));
+
+        Assert.True(
+            SessionActivity_Probe.Is_MidTurn(usageFile),
+            "a session whose sub-agent wrote five seconds ago was read as not working — that is what got one killed");
+        Assert.Equal(Stamp(now.AddSeconds(-5)), Stamp(SessionActivity_Probe.Get_LastActivityUtc_OrNull(usageFile)!.Value));
+    }
+
+    /// <summary>
+    /// And a sub-agent that finished long ago proves nothing about now. Its file was written a moment
+    /// ago in this fixture, so this also pins that the reading comes from what the transcript SAYS,
+    /// never from when it was touched — the mtime lesson of 2026-08-13, not relearned one folder down.
+    /// </summary>
+    [Fact]
+    public void A_sub_agent_that_finished_long_ago_does_not_make_its_session_look_busy()
+    {
+        var now = DateTime.UtcNow;
+
+        var usageFile = Write_Session("agent-long-done", Activity(now.AddMinutes(-10)));
+        Write_SubAgent("agent-long-done", "agent-b2", Activity(now.AddHours(-2)));
+
+        Assert.False(SessionActivity_Probe.Is_MidTurn(usageFile));
+        Assert.Equal(Stamp(now.AddMinutes(-10)), Stamp(SessionActivity_Probe.Get_LastActivityUtc_OrNull(usageFile)!.Value));
+    }
+
+    /// <summary>
+    /// The newest sub-agent decides, among several. A long session accumulates dozens of finished
+    /// agents; the one still running is what says the session is working.
+    /// </summary>
+    [Fact]
+    public void Among_several_sub_agents_the_one_still_writing_decides()
+    {
+        var now = DateTime.UtcNow;
+
+        var usageFile = Write_Session("many-agents", Activity(now.AddMinutes(-30)));
+        Write_SubAgent("many-agents", "agent-old", Activity(now.AddHours(-1)));
+        Write_SubAgent("many-agents", "agent-live", Activity(now.AddSeconds(-20)));
+        File.SetLastWriteTimeUtc(SubAgentPath("many-agents", "agent-live"), now.AddSeconds(-20));
+        File.SetLastWriteTimeUtc(SubAgentPath("many-agents", "agent-old"), now.AddHours(-1));
+
+        Assert.True(SessionActivity_Probe.Is_MidTurn(usageFile));
+    }
+
+    /// <summary>
+    /// SUB-AGENT EVIDENCE ONLY ADDS LIFE. A parent the probe cannot read is "no opinion", and an old
+    /// sub-agent date must not replace that with a stamp the escalation would find older than its
+    /// nudge — which would turn a session it leaves alone into one it reports deaf.
+    /// </summary>
+    [Fact]
+    public void A_sub_agent_never_turns_an_unreadable_session_into_a_verdict()
+    {
+        var now = DateTime.UtcNow;
+
+        var usageFile = Write_Session("parent-unreadable", QueueOp(now.AddMinutes(-20), "enqueue"));
+        Write_SubAgent("parent-unreadable", "agent-c3", Activity(now.AddMinutes(-30)));
+
+        Assert.Null(SessionActivity_Probe.Get_LastActivityUtc_OrNull(usageFile));
+    }
+
+    [Fact]
+    public void A_session_whose_last_reply_was_a_limit_refusal_reads_as_blocked_on_the_limit()
+    {
+        var now = DateTime.UtcNow;
+
+        var usageFile = Write_Session(
+            "limit-blocked",
+            Activity(now.AddMinutes(-31)),
+            "{\"type\":\"assistant\",\"timestamp\":\"" + Stamp(now.AddMinutes(-30))
+            + "\",\"uuid\":\"u\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"You've hit your weekly limit\"}]},"
+            + "\"error\":\"rate_limit\",\"isApiErrorMessage\":true,\"apiErrorStatus\":429}");
+
+        Assert.True(SessionActivity_Probe.Is_BlockedOnUsageLimit(usageFile));
+    }
+
+    [Fact]
+    public void A_missing_usage_file_is_not_blocked_on_a_limit()
+    {
+        Assert.False(SessionActivity_Probe.Is_BlockedOnUsageLimit(Path.Combine(_tempRoot, "never-ran", ".usage.json")));
+    }
+
+    string SubAgentPath(string sessionName, string agentId)
+        => Path.Combine(_tempRoot, sessionName, "transcript", "subagents", agentId + ".jsonl");
+
+    /// <summary>Writes a sub-agent transcript where Claude Code puts it: beside the session's own, in a folder named after it.</summary>
+    void Write_SubAgent(string sessionName, string agentId, params string[] lines)
+    {
+        var path = SubAgentPath(sessionName, agentId);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, string.Join("\n", lines));
+    }
+
     static string ToolUse(DateTime utc)
         => "{\"type\":\"assistant\",\"timestamp\":\"" + Stamp(utc)
          + "\",\"uuid\":\"u\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\"}]}}";
