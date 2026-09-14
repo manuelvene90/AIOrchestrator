@@ -93,6 +93,11 @@ These close questions that would otherwise be open, and they shape sections B an
 2. **Where the two owners' preferences differ, the shipped default is master's behaviour**
    and the fork's preference lives in the `quiet` preset. This follows the catalogue's own
    convention: a preset names only keys that differ from the shipped default.
+3. **Every taste key was chosen, not inherited.** The fork owner walked the whole catalogue
+   on 2026-09-14 rather than letting defaults apply by omission. §7.3 records the result,
+   including the keys he reviewed and chose to leave alone — which the preset file cannot
+   hold, because a preset names only differences. One default is reversed knowingly
+   (`topic.modeGlyphs`), and the reversal is argued there rather than buried in a diff.
 
 ---
 
@@ -370,39 +375,99 @@ fragility in a comment.
 
 ---
 
-## 7. Section C — taste, expressed as settings
+## 7. Section C — taste, chosen rather than inherited
 
 Every proposal follows the catalogue's convention: **shipped default = master's behaviour
 today**, the fork owner's preference carried by `quiet`, and `classic` left silent.
 
-| Key | Kind | Values | Shipped default | `quiet` |
+The fork owner went through the whole catalogue on 2026-09-14 rather than accepting defaults.
+What follows is the result of that pass, and it is deliberately recorded here in full —
+including the keys he left where they were — because of a property of the preset convention
+that is easy to miss.
+
+### 7.1 · Why choices that match the default are recorded here and not in the preset
+
+A preset names only keys whose value differs from the shipped default; master's own comment
+gives the reason, and it is a good one: *"a preset that restates a default is a default that
+can never move."*
+
+The consequence is that **choosing a value identical to the shipped default does not pin
+it**. If the default later moves, the fork owner moves with it, having decided nothing. He
+reviewed each of the keys in §7.3 and chose to keep its current value; that decision has no
+home in the preset file, so it is recorded here instead. If master later changes one of these
+defaults, this section is the record that someone had looked at it and meant it.
+
+### 7.2 · New keys this port introduces
+
+| Key | Kind | Values | Shipped default (master) | `quiet` (the fork) |
 |---|---|---|---|---|
-| `phone.renderMarkdownTables` | Bool | on/off | `false` — tables reach the phone as written | `true` |
-| `pulse.taskSummaryTruncationMark` | Enum | `none`, `ellipsis` | `none` — the original rule, full text lives in the feed | `ellipsis` |
+| `phone.renderMarkdownTables` | Bool | on/off | `false` — tables arrive as written | `true` |
+| `pulse.taskSummaryTruncationMark` | Enum | `none`, `ellipsis` | `none` — full text lives in the feed | `ellipsis` |
 | `topic.createAt` | Enum | `firstMessage`, `creation` | `firstMessage` | `creation` |
 | `receipts.nudgePromise` | Enum | `always`, `onlyWhenPossible` | `always` | `onlyWhenPossible` |
 | `phone.repeatQuestionWindowMinutes` | Int, 0–480 | 0 = off | `0` | `120` |
 | `limits.memberSilenceMinutes` | Int, 0–1440 | 0 = brake off | `0` — master has no member brake | `15` |
 | `limits.memberTurnTimeoutMinutes` | Int, 1–1440 | | `120`, inert while the brake is off | `120` |
 
-Two notes the fork owner should see rather than have decided for him:
+Two of these ship "off" by the convention above, which means **the member brakes and the
+repeated-question guard arrive disabled by default**, with the fork's behaviour confined to
+its preset. That cedes the default and not merely the argument; it is the shape most likely
+to be accepted, and it was chosen with that trade understood.
 
-- The two brake keys shipping at "off" means **the member brakes arrive disabled by default**,
-  with the fork's behaviour confined to its preset. That is what the convention in §3.2
-  requires, and it is the shape most likely to be accepted, but it does cede the default and
-  not merely the argument.
-- `phone.repeatQuestionWindowMinutes` at 0 likewise ships A3's third guard **off**. The first
-  two guards in A3 are not offered as settings: each is a case where the app records a decision
-  nobody took or throws away an answer the owner gave. That is a correctness bar, not a taste.
+The first two guards in A3 are deliberately **not** offered as settings: each is a case where
+the app records a decision nobody took or discards an answer the owner gave. That is a
+correctness bar, not a taste.
 
-Settings are the wrong home for the rest of the divergence, and it is recorded here as wording
-for the two owners to agree rather than dressed up as configuration: how deep a review runs and
-whether the reviewer spawns its own finders; how many review rounds before the supervisor
-rules; whether a report caps its incidental findings at three; and whether the parked count is
-said at every check-in or only at the close. The catalogue has no vocabulary for any of it, and
-inventing one to avoid a conversation would be worse than the conversation.
+### 7.3 · The fork owner's profile, as chosen on 2026-09-14
 
----
+**Changed from what the fork owner would otherwise inherit — one line to add to `quiet.json`:**
+
+```json
+"topic.modeGlyphs": "name"
+```
+
+The mode glyphs (🌙 🔕 ✈ 🤐 💻) move from PULSE's header onto the topic **name**, so the
+delivery mode is visible from the topic list without opening anything.
+
+**This reverses the fork's own earlier reasoning, knowingly.** The glyphs were moved off the
+name because each rename is an `editForumTopic` call and every rename writes a service
+message, so an app-wide mode change wrote a line into every one of the owner's threads to
+tell them something they had just done themselves. The fork owner has weighed that and judged
+the visibility worth the noise, on the grounds that he changes mode rarely. Recorded here so
+that the reversal reads as a decision rather than as an oversight, and so that whoever meets
+the service-message noise later knows it was priced in.
+
+*A reasonable improvement for whoever touches this code: rename only when the glyph actually
+changes, not on every recalculation. That would give the visibility without the noise, and it
+would make the trade above disappear rather than be endured.*
+
+**Confirmed, already in `quiet.json` — master chose these on the fork owner's behalf and they
+are now ratified rather than merely inherited:**
+
+| Key | Value | What it means |
+|---|---|---|
+| `phone.push` | `everything` | every channel entry reaches the phone, not only what asks or blocks |
+| `phone.status.periodic` | `false` | the PULSE only; no periodic status message |
+| `phone.appMessagesRing` | `false` | the app's own messages arrive silently — an agent's question still rings |
+| `phone.receipts` | `reactions` | the app reacts to the owner's message rather than editing a receipt line |
+| `topic.onClose` | `delete` | closing an orchestration deletes its topic rather than archiving it |
+
+**Reviewed on 2026-09-14 and deliberately left at the shipped default** — no preset line, by
+the reasoning in §7.1:
+
+| Key | Value kept | Note |
+|---|---|---|
+| `pulse.fields` | the shipped seven | waitingOnYou · supervisor · members · closedCount · lastEvent · merged · updated. `modelEffort` exists and was declined; master takes it and drops three others |
+| `pulse.buttons` | the shipped six | ⏳ pending · 📋 left · 👀 tail sup · 📉 limits · 🔀 merge · 🏁 close |
+| `general.buttons` | the shipped set | 📊 summary · ⏳ pending · 📉 limits — master ships himself none |
+| `pulse.holdToggle` | `true` | the ⏸/▶ toggle stays on the PULSE bar rather than the receipt |
+| `phone.replyKeyboard` | `off` | the slash-command bar stays off; it re-shows itself whenever the phone keyboard hides |
+
+Worth stating plainly, because "inheriting the default" sounds like taking master's side and
+here it is often the opposite: several shipped defaults encode the **fork's** reasoning, and
+master overrides them in `classic`. `topic.modeGlyphs` is the clearest case — its shipped
+default exists because of the fork's service-message finding, which is exactly the default the
+fork owner has now chosen to leave.
 
 ## 8. Things a merge must not decide by itself
 
