@@ -197,6 +197,22 @@ report stating whether the owner's RUNNING app was rebuilt or is still the fourt
 
 ---
 
+## ANSWERS — recorded 2026-09-14 (owner in chat)
+
+The owner approved running this plan as written, after plan 03, with the Telegram menu first. The five
+owner decisions are ANSWERED; the ten coordinator decisions (D6–D15) take their written
+recommendation. A task that reads one of these rows follows the answer, not the recommendation text
+further down.
+
+| # | answer |
+|---|---|
+| D1 | **yes** — the model keys join every other catalogue key under `Settings_Writer`, written only when that row is edited; `Save` stops writing the four model lines |
+| D2 | **(b) for `telegramInbound`, `telegramSupergroupChatId`, `telegramOwnerUserId`** (the phone refuses them and says to change them at the desktop or in `config.json`); **(a) for the rest of Kernel** (two-tap confirm) |
+| D3 | **machine settings in GENERAL only**; `/settings` typed in an orchestration topic answers read-only with that orchestration's `session.*` rows and dials and points at `/model` and `/effort` |
+| D4 | **open read AND write on loopback** — `web.listen` stays `127.0.0.1:7391`, `PUT` does NOT require `web.token` while it is empty (a set token is still enforced). This overrides the recommendation |
+| D5 | **immediate-apply per row, Cancel removed**; the Connection tab keeps its own explicit Save |
+| D6–D15 | the written recommendation of each |
+
 ## OPEN DECISIONS — the owner or the coordinator answers these BEFORE the named task starts
 
 The spec left each of these open, or the tree contradicts it. **Do not guess.** Each row names the task

@@ -61,6 +61,27 @@ Every one of these is a different plan. A task that finds itself editing the fil
 
 ---
 
+## ANSWERS — recorded 2026-09-14 (owner in chat, and the coordinator where the decision was not the owner's)
+
+The owner approved running this plan as written, plus one new task (Task 6b, Send now). Every open
+decision below is now ANSWERED; a task that reads one of these rows follows the answer, not the
+recommendation text further down.
+
+| # | answer | by |
+|---|---|---|
+| D1 | **(a)** — re-port master's fifteen-line periodic STATUS (`git log -S Build_PeriodicStatusText master`); `phone.status.periodic` stays shipped `true`, classic `true`, quiet `false`; `phone.status.intervalMinutes` stays 30 | owner |
+| D2 | **delete** — `topic.onClose` shipped default becomes `delete`; `close` stays in the enum and costs `closeForumTopic` only if someone later asks; classic follows the default | owner |
+| D3 | **(b) with (a)** — the eleven labelled verbs keep their emoji labels, every other verb renders as bare `/verb` | coordinator |
+| D4 | **confirmed** — an empty `general.buttons` sends General's message with no `reply_markup` | coordinator |
+| D5 | **off for both** — `classic`'s `phone.replyKeyboard` becomes `off`; Task 9 is implemented and unexercised by either preset | owner |
+| D6 | moot while D5 is off; if ever turned on, the verbs come from `general.buttons` | coordinator |
+| D7 | **(b)** — `phone.appMessagesRing = false` silences agent narration that is not a question, BLOCKED, file or answer (Task 2's predicate applied to sound) | coordinator |
+| D8 | **orchestration owner channels only** — General is exempt from `phone.push`, stated in code and pinned by a test | coordinator |
+| D9 | **periodic status only** — the away digest keeps `SLOT_MINUTES`; the planner takes the slot length as a parameter | coordinator |
+| D10 | **fall back to the PULSE bar** and log one warning line naming both keys | coordinator |
+| D11 | **move verbatim, then a second commit** deletes the dead `telegramItalianLayer` key | coordinator |
+| D12 | **three consecutive local full runs green AND two consecutive green runs of both CI legs**, the set-of-names comparison recorded each time | coordinator |
+
 ## OPEN DECISIONS — the owner or the coordinator answers these BEFORE the named task starts
 
 The spec left each of these open, or the tree contradicts it. **Do not guess.** Each row names the task it blocks; a task whose decision is unanswered stops and asks rather than picking the recommendation silently. The recommendation is what the plan's author would do and why; it is not an answer.
@@ -598,6 +619,288 @@ dotnet test AIOrchestratorCoreLib.Tests --filter "FullyQualifiedName~GeneralDash
 ```bash
 export PATH="$PATH:/c/Users/Gianpiero/AppData/Local/Microsoft/WinGet/Links"
 dotnet test AIOrchestratorCoreLib.Tests --filter "FullyQualifiedName~ReceiptStyle|FullyQualifiedName~TypingBubbleReplacesTheStatusMessages"
+```
+
+---
+
+### Task 6b: Send now — `▶ Send now` beside `⏸ Wait` on the receipt (owner request 2026-09-14)
+
+**Why.** The owner's words: *"Sometimes I am absolutely sure that what I have written is correct and
+full, and waiting 6 seconds is annoying, I'd like to have a button that basically says 'don't worry,
+send it to the solo/sup right away'."* The receipt already carries `⏸ Wait`; it gains a second button.
+
+**The engine already has the action.** `HoldButtonActions.Go` → `_ownerDeliveryBuffer.Release(targetKey)`
+sets `ReleaseRequested`, which `OwnerDeliveryBufferModel.Is_Ready` answers `true` for with no window, and
+`Try_HandleHoldTap_Async` then calls `Flush_OwnerDeliveries_Async` immediately. So Send now is the SAME
+payload (`go:<thread>`) under a different label on the not-held receipt. **No new payload prefix, no new
+buffer method, no new delivery path** — a second way to deliver would be a second place for the
+delivery guarantees (put-back on failure, ordinal order, credit raised at delivery) to drift.
+
+**Files:**
+- Modify: `AIOrchestratorCoreLib/Telegram/HoldButton_Data.cs` — `SEND_NOW_LABEL`, `Build_ReceiptButtons`
+- Modify: `AIOrchestratorCoreLib/Bridge/BridgeEngine/BridgeEngineModel.cs` — `Send_ReceivedAck_Async` (~13860), `Rewrite_HoldButtonMessage_BestEffort_Async` (~13139), `Try_HandleHoldTap_Async` (~13058, the answer text only)
+- Modify: `AIOrchestratorCoreLib.Tests/Telegram/HoldButtonDataTests.cs`
+- Create: `AIOrchestratorCoreLib.Tests/Bridge/SendNowSkipsTheWindowTests.cs`
+
+**Interfaces:**
+- Consumes: `HoldButton_Data.Build(HoldButtonActions, long?)`, `HOLD_LABEL`, `GO_LABEL`; the engine's `Try_HandleHoldTap_Async`; `ScriptedInbound_Fake` (in `Tests/Bridge/TheInboundLoopSurvivesItsOwnBatchTests.cs`) — `Queue_Updates`, `Refuse_Reactions`, `Find_ButtonFor`, `ButtonEdits`, `Answered_Callbacks`, `Dump_Sent`; `BridgeEngineTiming_Factory.Create_Custom`.
+- Produces: `public const string HoldButton_Data.SEND_NOW_LABEL = "▶ Send now";` and `public static IReadOnlyList<(string Data, string Label)> HoldButton_Data.Build_ReceiptButtons(long? messageThreadId)` returning `[(Build(Hold, id), HOLD_LABEL), (Build(Go, id), SEND_NOW_LABEL)]`.
+
+**Ordering against Task 6.** Task 6 decides WHETHER a `"✓"` message is sent (`ticks`) or a reaction is
+used (`reactions`). This task only changes the buttons ON that message, so under `reactions` there is no
+receipt and no Send now — exactly as there is no `⏸ Wait` today. Run it after Task 6; it touches the same
+method, one line apart.
+
+- [ ] **Step 1: Write the failing pure test** — append to `HoldButtonDataTests`:
+
+```csharp
+    /// <summary>
+    /// THE RECEIPT OFFERS BOTH DIRECTIONS (owner request 2026-09-14): wait for more, or send what is
+    /// there right now. Send now is GO under another label — the engine already delivers a GO with no
+    /// window — so the payload must round-trip as Go for the SAME topic, or the tap releases nothing.
+    /// </summary>
+    [Fact]
+    public void TheReceipt_CarriesWaitThenSendNow_AndSendNowIsGoForTheSameTopic()
+    {
+        var buttons = HoldButton_Data.Build_ReceiptButtons(4242);
+
+        Assert.Equal(2, buttons.Count);
+        Assert.Equal(HoldButton_Data.HOLD_LABEL, buttons[0].Label);
+        Assert.Equal(HoldButton_Data.SEND_NOW_LABEL, buttons[1].Label);
+        Assert.Equal((HoldButtonActions.Hold, (long?)4242), HoldButton_Data.Parse_OrNull(buttons[0].Data));
+        Assert.Equal((HoldButtonActions.Go, (long?)4242), HoldButton_Data.Parse_OrNull(buttons[1].Data));
+    }
+
+    [Fact]
+    public void TheReceiptInGeneral_KeysBothButtonsAsTheGeneralTopic()
+    {
+        var buttons = HoldButton_Data.Build_ReceiptButtons(null);
+
+        Assert.All(buttons, button => Assert.Null(HoldButton_Data.Parse_OrNull(button.Data)!.Value.MessageThreadId));
+    }
+```
+
+- [ ] **Step 2: Run it and see it fail to compile** (`Build_ReceiptButtons` / `SEND_NOW_LABEL` do not exist).
+
+```bash
+dotnet test AIOrchestratorCoreLib.Tests --filter "FullyQualifiedName~HoldButtonDataTests"
+```
+
+- [ ] **Step 3: Implement the builder** in `HoldButton_Data`, beside `GO_LABEL`:
+
+```csharp
+    /// <summary>
+    /// Send now is GO, labelled for the moment before a hold: the owner is sure the message is whole
+    /// and wants it delivered without waiting out the aggregation window (owner request 2026-09-14).
+    /// The engine's GO already skips the window and flushes on the tap, so this is a label, not an
+    /// action — a second delivery path would be a second place for the delivery guarantees to drift.
+    /// </summary>
+    public const string SEND_NOW_LABEL = "▶ Send now";
+
+    /// <summary>The buttons of a ✓ receipt that is not holding: ⏸ Wait, then ▶ Send now.</summary>
+    public static IReadOnlyList<(string Data, string Label)> Build_ReceiptButtons(long? messageThreadId)
+    {
+        return
+        [
+            (Build(HoldButtonActions.Hold, messageThreadId), HOLD_LABEL),
+            (Build(HoldButtonActions.Go, messageThreadId), SEND_NOW_LABEL),
+        ];
+    }
+```
+
+- [ ] **Step 4: Run the pure tests green.** Same command as Step 2. Expected: all `HoldButtonDataTests` pass.
+
+- [ ] **Step 5: Write the failing engine probe** — `AIOrchestratorCoreLib.Tests/Bridge/SendNowSkipsTheWindowTests.cs`. Construct it exactly as `TheBridgeNeverLiesAboutDeliveryTests` does (same config/secrets fixture, `EngineStateStore_Factory.Create_InMemory()`, `RecordingLog_Fake`, `ScriptedInbound_Fake`, `FixedClock_Fake`, `BridgeEngine_Factory.Create_WithDecisionState`, the same `Run_WhileAsync` / `Stop_Async` / `Wait_Until_Async` / `Updates_Json` / `Message_Json` helpers copied, not referenced — they are private there) with ONE difference: the timing has a **60-second** aggregation window, so a delivery inside the test's lifetime can only have come from the tap.
+
+```csharp
+    /// <summary>Fast()'s tick, lock allowance and trailing quiet, with an aggregation window no test outlives.</summary>
+    static IBridgeEngineTiming LongWindow() =>
+        BridgeEngineTiming_Factory.Create_Custom(
+            BridgeTestTiming.TICK_MILLISECONDS,
+            ownerAggregationSeconds: 60,
+            BridgeTestTiming.RETRY_BACKOFF_SECONDS,
+            BridgeTestTiming.TICK_LOCK_ALLOWANCE_MILLISECONDS,
+            BridgeTestTiming.TRAILING_ENTRY_QUIET_MILLISECONDS);
+```
+
+`Build_Engine()` in this file passes `LongWindow()` where the sibling passes `BridgeTestTiming.Fast()`.
+
+The owner's text must NOT read as finished — `OwnerMessageComplete_Decider.Is_Complete` gives a finished
+single message the 2-second window — so use a fragment with no closing punctuation, e.g.
+`"and also check the"`.
+
+```csharp
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task SendNow_DeliversAtOnce_WhileTheWindowWouldHaveHeldIt()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        // The ✓ MESSAGE path: a reaction carries no buttons, so there would be nothing to tap.
+        _telegram.Refuse_Reactions("Bad Request: REACTION_INVALID");
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("and also check the", 9701, 701, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Find_ButtonFor("Send now") != null, 20_000),
+                $"the receipt carries no Send now button.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+            Assert.Equal(HoldButton_Data.Build(HoldButtonActions.Go, TOPIC_ID), _telegram.Find_ButtonFor("Send now"));
+
+            // THE CONTROL, because "delivered" has two routes: the tap, or a window that was not
+            // actually long. Several ticks go by and the message must still be in the buffer.
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(10));
+
+            Assert.False(
+                File.Exists(channelFile) && File.ReadAllText(channelFile).Contains("and also check the"),
+                "the message was delivered before any tap — the window in this fixture is not long, so the test below proves nothing.");
+
+            var receiptId = _telegram.LastSentMessageId_Containing("✓");
+            _telegram.Queue_Updates(Updates_Json(SendNowTap_Json(receiptId, TOPIC_ID, 9702)));
+
+            Assert.True(
+                await Wait_Until_Async(() => File.Exists(channelFile) && File.ReadAllText(channelFile).Contains("and also check the"), 10_000),
+                $"Send now was tapped and the message did not reach the channel inside 10 s of a 60 s window.{Environment.NewLine}{_log.Dump()}");
+        });
+    }
+
+    /// <summary>
+    /// After the tap the receipt goes back to offering BOTH buttons, because the next message may be
+    /// one the owner wants to hold or to send at once — never a lone ⏸ Wait.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AfterSendNow_TheReceiptOffersWaitAndSendNowAgain()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        _telegram.Refuse_Reactions("Bad Request: REACTION_INVALID");
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("and also check the", 9711, 711, TOPIC_ID)));
+
+            Assert.True(await Wait_Until_Async(() => _telegram.Find_ButtonFor("Send now") != null, 20_000), _telegram.Dump_Sent());
+
+            var receiptId = _telegram.LastSentMessageId_Containing("✓");
+            _telegram.Queue_Updates(Updates_Json(SendNowTap_Json(receiptId, TOPIC_ID, 9712)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.ButtonEdits.Any(edit => edit.MessageId == receiptId), 10_000),
+                $"the tapped receipt was never rewritten.{Environment.NewLine}{_log.Dump()}");
+
+            var rewrite = _telegram.ButtonEdits.First(edit => edit.MessageId == receiptId);
+
+            Assert.Equal(2, rewrite.ButtonCount);
+            Assert.Contains(HoldButton_Data.SEND_NOW_LABEL, rewrite.Labels);
+        });
+    }
+
+    static string SendNowTap_Json(long tappedMessageId, long threadId, long updateId)
+    {
+        var data = HoldButton_Data.Build(HoldButtonActions.Go, threadId);
+
+        return $"{{\"update_id\":{updateId},\"callback_query\":{{\"id\":\"cbq-{updateId}\","
+            + $"\"data\":\"{data}\",\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"message\":{{\"message_id\":{tappedMessageId},\"message_thread_id\":{threadId},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}}}}}}}}";
+    }
+```
+
+`ScriptedInbound_Fake` (in `TheInboundLoopSurvivesItsOwnBatchTests.cs`) has no
+`LastSentMessageId_Containing`. `Record` keeps only `_sentTexts`, so add a parallel id list and the
+accessor — every existing accessor keeps reading `_sentTexts` unchanged:
+
+```csharp
+    readonly List<(long Id, string Text)> _sentWithIds = [];
+
+    // in Record(), replacing the last two lines:
+            _sentTexts.Add(text);
+            _sentWithIds.Add((_nextMessageId, text));
+            return _nextMessageId++;
+
+    public long LastSentMessageId_Containing(string fragment)
+    {
+        lock (_lock)
+            return _sentWithIds.Last(sent => sent.Text.Contains(fragment, StringComparison.Ordinal)).Id;
+    }
+```
+
+- [ ] **Step 6: Run the probe and see it fail** — the first test fails on "no Send now button", the second on `ButtonCount` being 1.
+
+```bash
+dotnet test AIOrchestratorCoreLib.Tests --filter "FullyQualifiedName~SendNowSkipsTheWindow"
+```
+
+- [ ] **Step 7: Wire the builder into the engine.**
+
+In `Send_ReceivedAck_Async`, replace the single-button list:
+
+```csharp
+            var messageId = await client.Send_MessageWithButtons_Async(
+                messageThreadId,
+                "✓",
+                HoldButton_Data.Build_ReceiptButtons(messageThreadId),
+```
+
+In `Rewrite_HoldButtonMessage_BestEffort_Async`, the post-GO branch offers both again; the post-HOLD
+branch keeps its single `▶ GO` (while held, GO already means "send what is held, now"):
+
+```csharp
+        var text = action == HoldButtonActions.Hold ? Build_HoldReceiptText(heldCount) : "✓";
+
+        IReadOnlyList<(string Data, string Label)> buttons = action == HoldButtonActions.Hold
+            ? [(HoldButton_Data.Build(HoldButtonActions.Go, threadId), HoldButton_Data.GO_LABEL)]
+            : HoldButton_Data.Build_ReceiptButtons(threadId);
+
+        try
+        {
+            await client.Edit_MessageTextWithButtons_Async(messageId, text, buttons, cancellationToken);
+        }
+```
+
+(delete the now-unused `nextAction` / `nextLabel` locals and adjust the method's comment: after a GO the
+receipt offers both directions again.)
+
+In `Try_HandleHoldTap_Async`, a GO with nothing buffered and no hold answers `"already sent"` instead
+of `"✓"` — the message left before the tap, and a bare ✓ reads as "sent now". Compute it BEFORE the
+answer, since the answer is sent first:
+
+```csharp
+        var nothingLeftToSend = targetKey != null
+            && action == HoldButtonActions.Go
+            && _ownerDeliveryBuffer.Count_Pending(targetKey) == 0
+            && !_ownerDeliveryBuffer.Is_Holding(targetKey);
+
+        await Answer_CallbackTap_BestEffort_Async(
+            client,
+            tap.CallbackQueryId,
+            targetKey == null ? "no orchestration in this topic" : nothingLeftToSend ? "already sent" : "✓",
+            cancellationToken);
+```
+
+- [ ] **Step 8: Run green, with the neighbours that pin receipts and the hold toggle.**
+
+```bash
+export PATH="$PATH:/c/Users/Gianpiero/AppData/Local/Microsoft/WinGet/Links"
+dotnet test AIOrchestratorCoreLib.Tests --filter "FullyQualifiedName~SendNowSkipsTheWindow|FullyQualifiedName~HoldButtonData|FullyQualifiedName~TheBridgeNeverLiesAboutDelivery|FullyQualifiedName~TopicCommandButtonsHoldToggle|FullyQualifiedName~ReceiptStyle|FullyQualifiedName~OwnerDeliveryBuffer"
+```
+
+Expected: all pass. A test that asserted the receipt carries exactly ONE button is a test of the old
+receipt — update its count to two and say so in the commit body; do not weaken it to "at least one".
+
+- [ ] **Step 9: Commit.**
+
+```bash
+git add AIOrchestratorCoreLib/Telegram/HoldButton_Data.cs AIOrchestratorCoreLib/Bridge/BridgeEngine/BridgeEngineModel.cs AIOrchestratorCoreLib.Tests/Telegram/HoldButtonDataTests.cs AIOrchestratorCoreLib.Tests/Bridge/SendNowSkipsTheWindowTests.cs AIOrchestratorCoreLib.Tests/Bridge/TheInboundLoopSurvivesItsOwnBatchTests.cs
+git commit -F <tempfile>   # feat(telegram): ▶ Send now beside ⏸ Wait — the receipt's GO, before a hold
 ```
 
 ---
