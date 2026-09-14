@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Running;
 
 namespace AIOrchestratorCoreLib.Status;
 
@@ -44,6 +45,7 @@ public static class TranscriptActivity_Reader
     public const int TAIL_WINDOW_BYTES = 256 * 1024;
 
     const string QUEUE_OPERATION_TYPE = "queue-operation";
+    const string ASSISTANT_TYPE = "assistant";
     const string ENQUEUE_OPERATION = "enqueue";
 
     /// <summary>
@@ -71,14 +73,26 @@ public static class TranscriptActivity_Reader
     ///
     /// An unanswered tool_use is positive evidence of work, not an absence to be interpreted.
     /// </param>
+    /// <param name="RefusedForUsageLimit">
+    /// The session's last reply was the CLI's own usage-limit refusal, and no real reply has come
+    /// since. Such a session is BLOCKED, not deaf: its wakes queue up behind the refusal unanswered,
+    /// which is exactly the shape the orphan check reads as deafness. Five of the nine ORPHANED kills
+    /// examined on 2026-09-14 were this, and every replacement landed on the same limit.
+    ///
+    /// Read only off records the CLI marks <c>isApiErrorMessage</c>, so a model quoting the sentence
+    /// cannot set it; cleared only by a later assistant record, because the CLI writes a
+    /// <c>system</c> turn_duration record straight after the refusal and that is not the session
+    /// moving on.
+    /// </param>
     public readonly record struct TranscriptActivity(
         DateTime? LastActivityUtc,
         DateTime? OldestUnansweredWakeUtc,
         bool SawActivity,
-        bool HasOpenToolCall = false)
+        bool HasOpenToolCall = false,
+        bool RefusedForUsageLimit = false)
     {
         /// <summary>Nothing read, nothing known — the shape every failure path returns.</summary>
-        public static TranscriptActivity Unknown => new(null, null, false, false);
+        public static TranscriptActivity Unknown => new(null, null, false, false, false);
     }
 
     /// <summary>
@@ -131,6 +145,9 @@ public static class TranscriptActivity_Reader
         // Flipped by whichever came LAST — a call opens it, its result closes it.
         var hasOpenToolCall = false;
 
+        // Flipped by whichever ASSISTANT record came last — a refusal sets it, a real reply clears it.
+        var refusedForUsageLimit = false;
+
         var lines = tailText.Split('\n');
 
         for (var index = startedMidFile ? 1 : 0; index < lines.Length; index++)
@@ -140,7 +157,7 @@ public static class TranscriptActivity_Reader
             if (line.Length == 0)
                 continue;
 
-            if (!Try_ReadRecord(line, out var stampedUtc, out var isEnqueue, out var isToolUse, out var isToolResult))
+            if (!Try_ReadRecord(line, out var stampedUtc, out var isEnqueue, out var isToolUse, out var isToolResult, out var isAssistant, out var isLimitRefusal))
                 continue;
 
             if (isEnqueue)
@@ -158,13 +175,16 @@ public static class TranscriptActivity_Reader
             else if (isToolResult)
                 hasOpenToolCall = false;
 
+            if (isAssistant)
+                refusedForUsageLimit = isLimitRefusal;
+
             // Any non-enqueue record is the SESSION acting: a dequeue, a removal, a tool call, a
             // reply. It clears every wake before it — those were answered by definition.
             lastActivityUtc = stampedUtc;
             oldestWakeSinceActivityUtc = null;
         }
 
-        return new TranscriptActivity(lastActivityUtc, oldestWakeSinceActivityUtc, lastActivityUtc != null, hasOpenToolCall);
+        return new TranscriptActivity(lastActivityUtc, oldestWakeSinceActivityUtc, lastActivityUtc != null, hasOpenToolCall, refusedForUsageLimit);
     }
 
     /// <summary>
@@ -195,12 +215,21 @@ public static class TranscriptActivity_Reader
         return (nowUtc - activity.OldestUnansweredWakeUtc.Value).TotalMinutes >= thresholdMinutes;
     }
 
-    static bool Try_ReadRecord(string line, out DateTime stampedUtc, out bool isEnqueue, out bool isToolUse, out bool isToolResult)
+    static bool Try_ReadRecord(
+        string line,
+        out DateTime stampedUtc,
+        out bool isEnqueue,
+        out bool isToolUse,
+        out bool isToolResult,
+        out bool isAssistant,
+        out bool isLimitRefusal)
     {
         stampedUtc = default;
         isEnqueue = false;
         isToolUse = false;
         isToolResult = false;
+        isAssistant = false;
+        isLimitRefusal = false;
 
         try
         {
@@ -231,6 +260,10 @@ public static class TranscriptActivity_Reader
             // A tool call and its result are both ordinary stamped records; what matters is which
             // came last. Read from the message content rather than the record type, because both
             // arrive as plain assistant/user records.
+            isAssistant = string.Equals(record["type"]?.GetValue<string>(), ASSISTANT_TYPE, StringComparison.Ordinal);
+
+            var replyText = new System.Text.StringBuilder();
+
             if (record["message"] is JsonObject message && message["content"] is JsonArray blocks)
             {
                 foreach (var block in blocks)
@@ -241,8 +274,19 @@ public static class TranscriptActivity_Reader
                         isToolUse = true;
                     else if (string.Equals(kind, "tool_result", StringComparison.Ordinal))
                         isToolResult = true;
+                    else if (string.Equals(kind, "text", StringComparison.Ordinal))
+                        replyText.Append((block as JsonObject)?["text"]?.GetValue<string>()).Append(' ');
                 }
             }
+
+            // ONLY THE CLI CAN MARK A RECORD AS AN API ERROR, and the wording question is asked in the
+            // one place that already answers it for the dispatcher (LimitReset_Parser), so the two
+            // readers of "was this a limit refusal" cannot drift apart.
+            isLimitRefusal = isAssistant
+                && record["isApiErrorMessage"] is JsonValue flag
+                && flag.TryGetValue<bool>(out var isApiError)
+                && isApiError
+                && LimitReset_Parser.Looks_LikeUsageLimit(replyText.ToString(), Read_Status_OrNull(record["apiErrorStatus"]));
 
             return true;
         }
@@ -252,5 +296,10 @@ public static class TranscriptActivity_Reader
             // ending the scan.
             return false;
         }
+    }
+
+    static int? Read_Status_OrNull(JsonNode? node)
+    {
+        return node is JsonValue value && value.TryGetValue<int>(out var status) ? status : null;
     }
 }
