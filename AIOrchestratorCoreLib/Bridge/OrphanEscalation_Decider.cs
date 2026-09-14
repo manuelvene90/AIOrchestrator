@@ -18,6 +18,12 @@ public enum OrphanEscalations
     /// <summary>No evidence either way. Not-knowing is never death.</summary>
     LeaveAlone_Unknown,
 
+    /// <summary>
+    /// The session's last reply was the CLI's usage-limit refusal. It is blocked, not deaf, and a
+    /// replacement would land on the same limit.
+    /// </summary>
+    LeaveAlone_UsageLimited,
+
     /// <summary>Positive evidence that the wake went unanswered. Report it; do not act on it.</summary>
     ReportDeaf,
 }
@@ -61,6 +67,15 @@ public enum OrphanEscalations
 /// to look, and leaves the process alone.
 /// </para>
 /// <para>
+/// <b>AND THE REPORT FIRED ON THE SAME LIVE SESSIONS (2026-09-14).</b> Replayed against the owner's
+/// five latest ORPHANED events, the report that replaced the kill fired on all five, and all five
+/// sessions were alive: two were waiting on their own background agents, still writing seconds before
+/// the verdict, and the rest sat behind the CLI's usage-limit refusal. Its text ended "close it and
+/// add a replacement", and close-implementer kills at once — so the kill had moved one step away, not
+/// gone. Sub-agent activity now counts as the session's activity (SessionActivity_Probe), a limit
+/// refusal is its own outcome, and the report tells the supervisor NOT to close on it.
+/// </para>
+/// <para>
 /// <b>THE ORDER OF THE CHECKS IS THE DESIGN.</b> Bridge-driven is asked before anything is read from
 /// disk, so a host that can never produce the evidence never reaches the branch that weighs it.
 /// </para>
@@ -71,13 +86,15 @@ public static class OrphanEscalation_Decider
     /// <param name="sinceNudge">How long since the nudge was written.</param>
     /// <param name="confirmWindow">How long a nudged member may stay silent before it is weighed.</param>
     /// <param name="hasOpenToolCall">A tool call is in flight — a long build, a big read.</param>
-    /// <param name="lastActivityUtc">Newest transcript activity, or null for "cannot tell".</param>
+    /// <param name="isBlockedOnUsageLimit">The session's last reply was the CLI's usage-limit refusal.</param>
+    /// <param name="lastActivityUtc">Newest transcript activity, sub-agents included, or null for "cannot tell".</param>
     /// <param name="nudgedUtc">When the nudge was written.</param>
     public static OrphanEscalations Decide(
         bool isBridgeDriven,
         TimeSpan sinceNudge,
         TimeSpan confirmWindow,
         bool hasOpenToolCall,
+        bool isBlockedOnUsageLimit,
         DateTime? lastActivityUtc,
         DateTime nudgedUtc)
     {
@@ -95,6 +112,11 @@ public static class OrphanEscalation_Decider
         // the decision is actually taken.
         if (hasOpenToolCall)
             return OrphanEscalations.LeaveAlone_Working;
+
+        // BLOCKED IS NOT DEAF. Its last activity is the refusal, older than the nudge, which is exactly
+        // the shape the last check reads as deafness — so it is asked before that check, not after.
+        if (isBlockedOnUsageLimit)
+            return OrphanEscalations.LeaveAlone_UsageLimited;
 
         if (lastActivityUtc == null)
             return OrphanEscalations.LeaveAlone_Unknown;
@@ -136,12 +158,38 @@ public static class OrphanEscalation_Decider
             OrphanEscalations.LeaveAlone_BridgeDriven =>
                 $"{memberId} is bridge-driven — it has no monitor to be deaf with, so the orphan check does not apply",
             OrphanEscalations.LeaveAlone_Working =>
-                $"{memberId} is working — it answered the nudge, or a tool call is in flight",
+                $"{memberId} is working — it answered the nudge, a tool call is in flight, or one of its sub-agents is active",
             OrphanEscalations.LeaveAlone_Unknown =>
                 $"{memberId} cannot be read, so nothing is concluded — not knowing is not death",
+            OrphanEscalations.LeaveAlone_UsageLimited =>
+                $"{memberId} is blocked on a usage limit — not deaf, and a replacement would land on the same limit, so it is left alone",
             OrphanEscalations.ReportDeaf =>
                 $"{memberId} took no turn after its nudge and has no tool call in flight — the supervisor is being asked to look",
             _ => $"{memberId} is not due to be weighed yet",
         };
+    }
+
+    /// <summary>
+    /// The entry the supervisor receives on <see cref="OrphanEscalations.ReportDeaf"/>. It lives here,
+    /// beside the decision, rather than inline in the engine, so the words and the evidence they rest
+    /// on are read together.
+    ///
+    /// <para>
+    /// IT MUST NOT ADVISE A CLOSE. The text used to end "If it really is deaf, close it and add a
+    /// replacement", and close-implementer kills the process at once with no confirmation — which put
+    /// the kill this decider removed one supervisor turn away. The evidence behind this report is an
+    /// absence: on 2026-09-14 it fired on five sessions in a row and all five were alive. The
+    /// supervisor's own command already forbids closing an implementer because it is suspected dead;
+    /// this says the same thing where the suspicion is raised.
+    /// </para>
+    /// </summary>
+    public static (string Subject, string Body) Describe_Report(string memberId, int confirmMinutes)
+    {
+        return (
+            $"{memberId} may be deaf to wakes",
+            $"{memberId} was nudged {confirmMinutes} minutes ago and has taken no turn since, with no tool call or "
+            + "sub-agent in flight. That is not proof it is gone: it may be thinking, stuck on a slow model call, or "
+            + "its watcher may have stopped. Do not close it on this report — closing kills whatever it is in the "
+            + "middle of. Write to it in its channel and wait, and tell the owner if it stays silent.");
     }
 }

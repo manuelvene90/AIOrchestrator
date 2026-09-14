@@ -2586,6 +2586,7 @@ internal sealed class BridgeEngineModel(
                     // both means neither host is judged on evidence it cannot produce.
                     MemberWorking_Decider.Is_Busy(Resolve_MemberWorking(Running.SessionRoles.Implementer, session.OrchId, member.MemberId))
                         || SessionActivity_Probe.Is_MidTurn(memberUsageFile),
+                    SessionActivity_Probe.Is_BlockedOnUsageLimit(memberUsageFile),
                     SessionActivity_Probe.Get_LastActivityUtc_OrNull(memberUsageFile),
                     nudgedUtc);
 
@@ -2602,16 +2603,11 @@ internal sealed class BridgeEngineModel(
                 if (!OrphanEscalation_Decider.Reports(escalation))
                     continue;
 
-                // A REPORT, NOT A RESPAWN. The supervisor can look at the member, ask it something, or
-                // close and re-add it — all of which it can already do, and all of which are decisions
-                // this loop has no business taking on evidence this thin.
-                Append_SupervisorAttention_UnlessMeeting(
-                    session.OrchId,
-                    $"{member.MemberId} may be deaf to wakes",
-                    $"{member.MemberId} was nudged {ORPHAN_CONFIRM_MINUTES} minutes ago, took no turn since, and has no "
-                    + "tool call in flight. It may be fine — check its channel before doing anything. If it really is "
-                    + "deaf, close it and add a replacement; the app will not restart it for you.",
-                    Resolve_Presence(session.OrchId));
+                // A REPORT, NOT A RESPAWN — and not an invitation to close either. The wording lives in
+                // OrphanEscalation_Decider.Describe_Report, which says why it must never advise one.
+                var report = OrphanEscalation_Decider.Describe_Report(member.MemberId, ORPHAN_CONFIRM_MINUTES);
+
+                Append_SupervisorAttention_UnlessMeeting(session.OrchId, report.Subject, report.Body, Resolve_Presence(session.OrchId));
             }
 
             Publish_AwaitingVerdict(session.OrchId, awaitingVerdict);

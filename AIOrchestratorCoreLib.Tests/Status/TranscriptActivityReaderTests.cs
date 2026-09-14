@@ -364,6 +364,88 @@ public class TranscriptActivityReaderTests
     }
 
     /// <summary>
+    /// A SESSION REFUSED FOR A USAGE LIMIT IS BLOCKED, NOT DEAF. Measured 2026-09-12 on
+    /// ai-orchestrator-24: a respawned solo's only reply was the CLI's own refusal, its wakes queued up
+    /// behind it unanswered, and the app declared it ORPHANED three times in thirty minutes — each
+    /// replacement landing on the same limit. The record shape is the real one from transcript
+    /// 4a80bc9a, including the `system` turn_duration record the CLI writes straight after it, which
+    /// must not read as the session having moved on.
+    /// </summary>
+    [Fact]
+    public void A_usage_limit_refusal_as_the_last_reply_reads_as_blocked_on_the_limit()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(
+                Activity("2026-09-12T11:46:30.000Z"),
+                LimitRefusal("2026-09-12T11:46:39.339Z", "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."),
+                Activity("2026-09-12T11:46:39.353Z", type: "system"),
+                QueueOp("2026-09-12T11:51:08.000Z", "enqueue")),
+            startedMidFile: false);
+
+        Assert.True(activity.RefusedForUsageLimit, "a session whose last reply was the CLI's limit refusal was not read as blocked on the limit");
+    }
+
+    /// <summary>A retry that is refused again is still blocked — the dequeue alone is not a way out.</summary>
+    [Fact]
+    public void A_retry_refused_again_is_still_blocked()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(
+                LimitRefusal("2026-09-12T20:27:11.000Z", "You've hit your weekly limit · resets Sep 15, 9pm (Europe/Rome)"),
+                QueueOp("2026-09-12T20:30:10.000Z", "enqueue"),
+                QueueOp("2026-09-12T20:30:11.000Z", "dequeue"),
+                ToolResult("2026-09-12T20:30:11.500Z"),
+                LimitRefusal("2026-09-12T20:30:12.000Z", "You've hit your weekly limit · resets Sep 15, 9pm (Europe/Rome)")),
+            startedMidFile: false);
+
+        Assert.True(activity.RefusedForUsageLimit);
+    }
+
+    /// <summary>
+    /// And the other direction: a real reply after the refusal means the limit reset or the model was
+    /// switched. A flag that never cleared would exempt a session from the deaf check for ever.
+    /// </summary>
+    [Fact]
+    public void A_reply_after_the_refusal_means_the_limit_no_longer_blocks()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(
+                LimitRefusal("2026-09-12T11:46:39.339Z", "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."),
+                QueueOp("2026-09-12T12:10:00.000Z", "dequeue"),
+                Activity("2026-09-12T12:10:05.000Z")),
+            startedMidFile: false);
+
+        Assert.False(activity.RefusedForUsageLimit);
+    }
+
+    /// <summary>
+    /// A MODEL QUOTING THE SENTENCE IS NOT A REFUSAL. Only the CLI marks a record as an API error, so
+    /// a session discussing limits — this very fix, say — cannot exempt itself by writing the words.
+    /// </summary>
+    [Fact]
+    public void A_model_quoting_the_refusal_sentence_is_not_a_refusal()
+    {
+        var quoted = "{\"type\":\"assistant\",\"timestamp\":\"2026-09-14T11:00:00.000Z\",\"uuid\":\"u\","
+            + "\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"The log said: You've hit your weekly limit · resets 5am\"}]}}";
+
+        var activity = TranscriptActivity_Reader.Parse_Tail(quoted, startedMidFile: false);
+
+        Assert.False(activity.RefusedForUsageLimit);
+    }
+
+    [Fact]
+    public void UnknownIsNotBlockedOnALimit()
+    {
+        Assert.False(TranscriptActivity_Reader.TranscriptActivity.Unknown.RefusedForUsageLimit);
+    }
+
+    /// <summary>The CLI's refusal record as it appears in a live transcript (Claude Code 2.1.268/2.1.269).</summary>
+    static string LimitRefusal(string stamp, string text)
+        => "{\"type\":\"assistant\",\"timestamp\":\"" + stamp
+         + "\",\"uuid\":\"u\",\"message\":{\"model\":\"<synthetic>\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\""
+         + text + "\"}]},\"error\":\"rate_limit\",\"isApiErrorMessage\":true,\"apiErrorStatus\":429}";
+
+    /// <summary>
     /// Built by concatenation rather than a raw interpolated string: this JSON ends in a run of
     /// consecutive closing braces, which a `$$"""..."""` literal reads as its own delimiters.
     /// </summary>

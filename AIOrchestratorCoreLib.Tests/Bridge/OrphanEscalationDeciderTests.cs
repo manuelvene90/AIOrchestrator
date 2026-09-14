@@ -27,11 +27,12 @@ public class OrphanEscalationDeciderTests
         bool bridgeDriven = false,
         double minutesSinceNudge = 6,
         bool midTurn = false,
-        DateTime? lastActivityUtc = null)
+        DateTime? lastActivityUtc = null,
+        bool blockedOnUsageLimit = false)
     {
         return OrphanEscalation_Decider.Decide(
             bridgeDriven, TimeSpan.FromMinutes(minutesSinceNudge), CONFIRM_WINDOW,
-            midTurn, lastActivityUtc, NUDGED_AT);
+            midTurn, blockedOnUsageLimit, lastActivityUtc, NUDGED_AT);
     }
 
     [Fact]
@@ -120,6 +121,40 @@ public class OrphanEscalationDeciderTests
         Assert.True(OrphanEscalation_Decider.Reports(escalation));
     }
 
+    /// <summary>
+    /// A MEMBER REFUSED FOR A USAGE LIMIT IS BLOCKED, NOT DEAF. Five of the nine ORPHANED kills
+    /// examined on 2026-09-14 were sessions sitting on the CLI's own limit refusal — fincanva-2 twice,
+    /// fincanva-4, ai-orchestrator-24 twice — and every replacement landed on the same limit. Its last
+    /// activity is the refusal, older than the nudge, which is exactly the shape that reads as deaf.
+    /// </summary>
+    [Fact]
+    public void AMemberBlockedOnAUsageLimit_IsLeftAlone_NotReportedDeaf()
+    {
+        var escalation = Decide(lastActivityUtc: NUDGED_AT.AddMinutes(-5), blockedOnUsageLimit: true);
+
+        Assert.Equal(OrphanEscalations.LeaveAlone_UsageLimited, escalation);
+        Assert.False(OrphanEscalation_Decider.Reports(escalation));
+        Assert.True(OrphanEscalation_Decider.Clears_TheClock(escalation));
+    }
+
+    /// <summary>
+    /// THE REPORT MUST NOT TELL THE SUPERVISOR TO CLOSE A MEMBER ON THIS EVIDENCE. The old text ended
+    /// "If it really is deaf, close it and add a replacement" — and close-implementer kills at once,
+    /// with no confirmation. Replayed against the owner's five latest ORPHANED events on 2026-09-14,
+    /// this verdict fired on all five and all five sessions were alive; the supervisor's own command
+    /// already forbids closing an implementer because it is suspected dead. The report is a prompt to
+    /// look, and it now says so in as many words.
+    /// </summary>
+    [Fact]
+    public void TheDeafReport_TellsTheSupervisorNotToCloseTheMember()
+    {
+        var (subject, body) = OrphanEscalation_Decider.Describe_Report("imp-1", 6);
+
+        Assert.Contains("imp-1", subject, StringComparison.Ordinal);
+        Assert.Contains("do not close", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("close it and add a replacement", body, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>A turn in flight outranks a stale timestamp: the member is demonstrably busy now.</summary>
     [Fact]
     public void AToolCallInFlight_BeatsAStaleActivityStamp()
@@ -137,6 +172,7 @@ public class OrphanEscalationDeciderTests
     [InlineData(OrphanEscalations.LeaveAlone_BridgeDriven)]
     [InlineData(OrphanEscalations.LeaveAlone_Working)]
     [InlineData(OrphanEscalations.LeaveAlone_Unknown)]
+    [InlineData(OrphanEscalations.LeaveAlone_UsageLimited)]
     [InlineData(OrphanEscalations.ReportDeaf)]
     public void EveryDecidedOutcome_ClearsTheClock(OrphanEscalations escalation)
     {
@@ -158,6 +194,7 @@ public class OrphanEscalationDeciderTests
     [InlineData(OrphanEscalations.LeaveAlone_BridgeDriven)]
     [InlineData(OrphanEscalations.LeaveAlone_Working)]
     [InlineData(OrphanEscalations.LeaveAlone_Unknown)]
+    [InlineData(OrphanEscalations.LeaveAlone_UsageLimited)]
     public void NothingButReportDeaf_EverActs(OrphanEscalations escalation)
     {
         Assert.False(OrphanEscalation_Decider.Reports(escalation));
@@ -172,6 +209,7 @@ public class OrphanEscalationDeciderTests
     [InlineData(OrphanEscalations.LeaveAlone_BridgeDriven)]
     [InlineData(OrphanEscalations.LeaveAlone_Working)]
     [InlineData(OrphanEscalations.LeaveAlone_Unknown)]
+    [InlineData(OrphanEscalations.LeaveAlone_UsageLimited)]
     [InlineData(OrphanEscalations.ReportDeaf)]
     public void EveryOutcome_NamesTheMember_AndSaysSomething(OrphanEscalations escalation)
     {

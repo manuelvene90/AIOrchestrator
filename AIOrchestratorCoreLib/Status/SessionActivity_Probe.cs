@@ -62,6 +62,16 @@ public static class SessionActivity_Probe
     }
 
     /// <summary>
+    /// The session's last reply was the CLI's usage-limit refusal and nothing has replied since — it is
+    /// BLOCKED, not deaf. False when we cannot tell, which is the direction that leaves the ordinary
+    /// checks exactly as they were.
+    /// </summary>
+    public static bool Is_BlockedOnUsageLimit(string usageFilePath)
+    {
+        return Read_Activity(usageFilePath).RefusedForUsageLimit;
+    }
+
+    /// <summary>
     /// Working right now. Shared with the UI's chips and the Telegram status line, so "working now"
     /// means one thing everywhere — the reason the fifteen readers of this function move together
     /// rather than one at a time. Two liveness clocks disagreeing is how this subsystem got here.
@@ -110,7 +120,7 @@ public static class SessionActivity_Probe
             var transcriptPath = RateLimits_Reader.Read_TranscriptPath_OrNull(rawJson);
 
             if (transcriptPath != null && File.Exists(transcriptPath))
-                return TranscriptActivity_Reader.Read(transcriptPath);
+                return With_SubAgentActivity(TranscriptActivity_Reader.Read(transcriptPath), transcriptPath);
 
             return new TranscriptActivity_Reader.TranscriptActivity(
                 File.GetLastWriteTimeUtc(usageFilePath),
@@ -121,5 +131,65 @@ public static class SessionActivity_Probe
         {
             return TranscriptActivity_Reader.TranscriptActivity.Unknown;
         }
+    }
+
+    /// <summary>Where Claude Code keeps a session's sub-agent transcripts, inside a folder named after the session.</summary>
+    const string SUBAGENTS_FOLDER = "subagents";
+
+    /// <summary>
+    /// A SESSION WAITING ON ITS OWN SUB-AGENT IS WORKING, and its own transcript cannot say so.
+    ///
+    /// <para>
+    /// Measured 2026-09-14 on da-vinci-fintech-suite-31: the solo ended its turn with four background
+    /// agents pending, and one of them was still writing 46 seconds before the app declared the solo
+    /// ORPHANED and killed it, agent and all. ai-orchestrator-24 on 2026-09-12 was the same shape, its
+    /// agent writing one second before the kill. A parent waiting on a background agent writes nothing,
+    /// so its transcript read ten minutes quiet while its work was in full flight.
+    /// </para>
+    /// <para>
+    /// Layout, verified on this machine against Claude Code 2.1.26x: <c>&lt;session&gt;.jsonl</c> and,
+    /// beside it, <c>&lt;session&gt;/subagents/agent-*.jsonl</c>. The newest file by write time is the
+    /// only candidate, and its reading comes from what it SAYS, never from when it was touched — the
+    /// mtime lesson of 2026-08-13. The app never writes into a sub-agent transcript, and those files
+    /// carry no queue operations, so nothing the app does can make a session look busy through them.
+    /// It only ever ADDS evidence of life; the wake fields are the parent's and are left alone.
+    /// </para>
+    /// </summary>
+    static TranscriptActivity_Reader.TranscriptActivity With_SubAgentActivity(
+        TranscriptActivity_Reader.TranscriptActivity activity,
+        string transcriptPath)
+    {
+        // NO OPINION STAYS NO OPINION. When the parent's own reading is empty, a sub-agent's date would
+        // not add life, it would REPLACE "cannot tell" with a stamp the escalation can find older than
+        // its nudge, and so turn a LeaveAlone_Unknown into a deaf report.
+        if (activity.LastActivityUtc == null)
+            return activity;
+
+        var subAgentsFolder = Path.Combine(
+            Path.GetDirectoryName(transcriptPath) ?? string.Empty,
+            Path.GetFileNameWithoutExtension(transcriptPath),
+            SUBAGENTS_FOLDER);
+
+        if (!Directory.Exists(subAgentsFolder))
+            return activity;
+
+        FileInfo? newest = null;
+
+        foreach (var file in new DirectoryInfo(subAgentsFolder).EnumerateFiles("agent-*.jsonl"))
+        {
+            if (newest == null || file.LastWriteTimeUtc > newest.LastWriteTimeUtc)
+                newest = file;
+        }
+
+        // A file untouched since the parent last acted cannot hold anything newer, so it is not read.
+        if (newest == null || newest.LastWriteTimeUtc <= activity.LastActivityUtc.Value)
+            return activity;
+
+        var subAgentLastUtc = TranscriptActivity_Reader.Read(newest.FullName).LastActivityUtc;
+
+        if (subAgentLastUtc == null || subAgentLastUtc <= activity.LastActivityUtc)
+            return activity;
+
+        return activity with { LastActivityUtc = subAgentLastUtc };
     }
 }
