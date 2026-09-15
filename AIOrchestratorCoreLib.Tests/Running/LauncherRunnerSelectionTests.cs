@@ -40,8 +40,15 @@ public class LauncherRunnerSelectionTests
             var session = launcher.Start_Orchestration("Repo", harness.RepoPath);
 
             Assert.Equal(3, spawner.Commands.Count);
-            Assert.False(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Implementer, session.OrchId, "imp-1"));
-            Assert.False(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Reviewer, session.OrchId, "rev-1"));
+
+            // "AS BEFORE" IS ABOUT THE WINDOW, NOT THE FILE. Before the one-wake-model series
+            // (2026-09-15, Task 5) a terminal spawn DELETED any state file; now it WRITES one with
+            // DrivesTurns=false — the state file's existence is no longer "the dispatcher runs my
+            // turns", so a terminal member having one is not the old print-registration coming back.
+            Assert.True(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Implementer, session.OrchId, "imp-1"));
+            Assert.False(harness.Read_State(SessionRoles.Implementer, session.OrchId, "imp-1").DrivesTurns);
+            Assert.True(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Reviewer, session.OrchId, "rev-1"));
+            Assert.False(harness.Read_State(SessionRoles.Reviewer, session.OrchId, "rev-1").DrivesTurns);
         }
     }
 
@@ -129,7 +136,11 @@ public class LauncherRunnerSelectionTests
             var session = launcher.Start_Orchestration("Repo", harness.RepoPath);
 
             Assert.Equal(3, spawner.Commands.Count);
-            Assert.False(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Implementer, session.OrchId, "imp-1"));
+
+            // Falls back to a terminal exactly like the default-config case — see the note there
+            // (one-wake-model, 2026-09-15, Task 5): the state file now survives a terminal spawn.
+            Assert.True(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Implementer, session.OrchId, "imp-1"));
+            Assert.False(harness.Read_State(SessionRoles.Implementer, session.OrchId, "imp-1").DrivesTurns);
             Assert.Contains(logged, message => message.Contains("runner: bg", StringComparison.Ordinal) && message.Contains("no role in this stage", StringComparison.Ordinal));
         }
     }

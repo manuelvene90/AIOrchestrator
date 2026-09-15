@@ -12772,7 +12772,13 @@ internal sealed class BridgeEngineModel(
 
         return Running.Runner_Support.Is_BridgeDriven(runner)
             && Running.Runner_Support.Supports(runner, role)
-            && Running.PrintSessionState.PrintSessionState_Store.Exists(_paths, role, orchId, memberId);
+            // DRIVING, NOT MERELY PRESENT (one-wake-model, 2026-09-15, Task 5). A terminal spawn now
+            // WRITES this file with DrivesTurns=false instead of deleting it, so its existence no
+            // longer answers "is the dispatcher running this session's turns". Asking Exists here
+            // would make a window look bridge-driven for the whole flip window — exactly the
+            // backwards answer the paragraph above exists to prevent.
+            && Running.PrintSessionState.PrintSessionState_Store.Read_OrNull(
+                Running.PrintSessionState.PrintSessionState_Store.Get_StateFile(_paths, role, orchId, memberId))?.DrivesTurns == true;
     }
 
     /// <summary>

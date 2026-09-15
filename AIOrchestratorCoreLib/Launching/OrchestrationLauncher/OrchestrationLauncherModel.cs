@@ -546,13 +546,12 @@ internal sealed class OrchestrationLauncherModel(
     {
         var runner = resolvedRunner ?? Resolve_Runner(launch.Role, launch.OrchId);
 
-        // A ROLE THAT LEFT A BRIDGE-DRIVEN MODE LEAVES ITS REGISTRATION BEHIND, and that file is what tells
-        // the dispatcher to keep running turns and the watchdog that a missing pid file is by
-        // design. Spawning a terminal for this session is the moment we know it is no longer
-        // print-run, so it is the moment to clear it — otherwise the member would have a window AND
-        // headless turns answering the same brief, while nothing would ever respawn the window.
-        if (runner.Kind == SessionRunners.Terminal && PrintSessionState_Store.Delete_IfExists(_paths, launch.Role, launch.OrchId, launch.MemberId))
-            _log.Log_Warning(launch.OrchId, $"'{launch.MemberId}' was registered as print-run but its role is now runner: terminal — the stale registration was cleared and it is spawned in a window");
+        // A TERMINAL SESSION KEEPS THIS FILE NOW, and it means something different in it: not "the
+        // dispatcher runs my turns" (Task 4 screens on DrivesTurns for that) but "here are my cursors
+        // and my state pack". Deleting it was right while the file had one meaning; it is what left a
+        // terminal session with no cursor, and therefore with no digest, no riding notes and no pack.
+        if (runner.Kind == SessionRunners.Terminal)
+            Demote_ToTerminal(launch);
 
         // THE KIT GATE. A session started against a kit this host was not built for would follow a
         // protocol nobody here has read, and would do it silently — so it does not start.
@@ -577,6 +576,38 @@ internal sealed class OrchestrationLauncherModel(
 
         runner.Start(launch);
         return runner;
+    }
+
+    /// <summary>
+    /// Writes the session's state with <c>DrivesTurns = false</c>, PRESERVING the cursors of a session
+    /// that was bridge-driven a moment ago — losing them would re-deliver every live entry to the
+    /// window as new.
+    ///
+    /// <para>
+    /// THE COMMUNICATOR IS SKIPPED ENTIRELY. It has no channel to cursor
+    /// (<see cref="TurnSource.TurnSources_Resolver.Resolve_Own"/> refuses it by design — its input is
+    /// the supervisor's transcript, not a channel) and it is never bridge-driven
+    /// (<see cref="Runner_Support.Supports"/> is false for it on every bridge-driven runner), so
+    /// <paramref name="launch"/> can never arrive here with a registration worth preserving. This
+    /// leaves it exactly where the old delete-based code left it: no state file, same as a role that
+    /// was never registered.
+    /// </para>
+    /// </summary>
+    void Demote_ToTerminal(ISessionLaunch launch)
+    {
+        if (!Runner_Support.Supports(SessionRunners.Print, launch.Role))
+            return;
+
+        var stateFile = PrintSessionState_Store.Get_StateFile(_paths, launch.Role, launch.OrchId, launch.MemberId);
+        var existing = PrintSessionState_Store.Read_OrNull(stateFile);
+
+        if (existing is { DrivesTurns: false })
+            return;
+
+        if (existing != null)
+            _log.Log_Warning(launch.OrchId, $"'{launch.MemberId}' was registered as print-run but its role is now runner: terminal — it keeps its cursors and stops driving turns");
+
+        PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.Create_ForTerminal(existing, launch, _paths));
     }
 
     /// <summary>

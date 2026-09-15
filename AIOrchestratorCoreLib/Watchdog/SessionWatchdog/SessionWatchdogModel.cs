@@ -136,7 +136,13 @@ internal sealed class SessionWatchdogModel(
         // reason and through the same question, so a third one cannot be forgotten here.
         return Runner_Support.Is_BridgeDriven(runner)
             && Runner_Support.Supports(runner, role)
-            && PrintSessionState_Store.Exists(_paths, role, orchId, memberId);
+            // DRIVING, NOT MERELY PRESENT (one-wake-model, 2026-09-15, Task 5). A terminal spawn now
+            // WRITES this file with DrivesTurns=false instead of deleting it, so its existence no
+            // longer answers "is the dispatcher running this session's turns". Asking Exists here
+            // would make a window look bridge-driven for the whole flip window — exactly the
+            // backwards answer the paragraph above exists to prevent.
+            && PrintSessionState_Store.Read_OrNull(
+                PrintSessionState_Store.Get_StateFile(_paths, role, orchId, memberId))?.DrivesTurns == true;
     }
 
     static bool Is_WithinSpawnGrace(DateTime? spawnedUtc)

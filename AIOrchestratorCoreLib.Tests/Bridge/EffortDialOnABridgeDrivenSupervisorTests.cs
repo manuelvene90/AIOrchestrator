@@ -128,9 +128,13 @@ public class EffortDialOnABridgeDrivenSupervisorTests : IDisposable
 
         Write_Config(SessionRunners.Print, SessionRunners.Terminal);
 
+        // NOT DRIVING TURNS is the precondition, and it used to be spelled "no state file at all".
+        // Since Task 5 of the one-wake-model series a terminal spawn WRITES that file with
+        // DrivesTurns=false, so the file's absence is no longer the question — the flag is.
         Assert.False(
-            PrintSessionState_Store.Exists(_paths, SessionRoles.Supervisor, orchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID),
-            "a registration exists, so this is not the flip window");
+            PrintSessionState_Store.Read_OrNull(
+                PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.Supervisor, orchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID))?.DrivesTurns == true,
+            "this supervisor drives turns, so this is not the flip window");
 
         await Owner_Says_Async("/effort xhigh", 7001, 401, () => _telegram.Has_Sent_Containing("for which role"));
         Owner_Taps(ModelEffortButton_Data.Build(ModelEffortKinds.Effort, orchId, ModelEffortButton_Data.SUPERVISOR_ROLE, "xhigh"), 7002, 402);
