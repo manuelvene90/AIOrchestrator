@@ -51,15 +51,27 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     answered. Until they do, treat the deletion as the tree's *current* state, not as a *settled*
     decision — if the answer is "keep it," a future task re-ports the layer described above from
     master's history; it is not merely un-deleting a flag.
-12. **Channel headers are AGENT-WRITTEN — treat `[n]` and the timestamp as untrusted input.** Both
-    are guesses unless the agent re-read the file: on 2026-08-10 `option-lab-2` carried two `[80]`
-    and two `[81]` entries, and a supervisor stamped `2026-08-11 01:34` on an entry written at
-    `15:20` the day before. The date field drives "time on task", and a future stamp used to render
-    as "on task under a minute" indefinitely — through a SECOND copy of the duration wording in
-    `SessionRows_Builder` that lacked the negative guard `SessionDuration_Formatter` always had.
-    One implementation now (`Describe_SinceStamp_OrNull`, which returns null for a future stamp
-    rather than a confident wrong number), and all five role commands require a fresh read for both
-    fields. Never add a second copy of a formatter.
+12. **Channel headers WERE agent-written — the allocation is now the TOOL's, and the duplicate-index
+    danger has moved rather than gone (corrected 2026-09-15).** As originally written: `[n]` and the
+    timestamp were guesses unless the agent re-read the file — on 2026-08-10 `option-lab-2` carried
+    two `[80]` and two `[81]` entries, and a supervisor stamped `2026-08-11 01:34` on an entry
+    written at `15:20` the day before. The date field drives "time on task", and a future stamp used
+    to render as "on task under a minute" indefinitely — through a SECOND copy of the duration
+    wording in `SessionRows_Builder` that lacked the negative guard `SessionDuration_Formatter`
+    always had. One implementation now (`Describe_SinceStamp_OrNull`, which returns null for a future
+    stamp rather than a confident wrong number). **Never add a second copy of a formatter** — that
+    half is permanent and is why this entry stays.
+    **What changed:** `channel-append.sh:657-665` now computes `NEXT_INDEX` (max of the live file)
+    and `STAMP` **inside the lock**, and the grammar states it (`kit/grammar/channel-grammar.json:16`).
+    Agent-authored fields are now only **author** (validated against `AIORCH_ROLE`), **subject** and
+    **body**. So for cooperating writers going through the tool, the failure class is closed.
+    **What did NOT change, and is the live cause:** entry parsing is **fence-blind**
+    (`audit-architecture.md:459-472`) — an entry quoted inside a fenced block is split into phantom
+    entries with duplicate indices, corrupting the mirror, the index screen, member state and the
+    next-index computation. That is the likelier true cause of the `option-lab-2` duplicate `[80]`
+    than the agent's typing ever was. Distrust `[n]` for THIS reason now, not the old one. Related
+    and still open: an oversized `[n]` throws out of `int.Parse` after the offset advanced and before
+    `Pending` clears, so it recurs every 2 s for ever and nothing can even append the error report.
 13. **Never compare a stored entry COUNT against a later live-file count.** `Channel_Compactor`
     moves older entries into a sibling `.archive.md`, so a live-file count is not monotonic. This
     silently broke "has the supervisor answered the owner yet": `option-lab-2` compacted 2 minutes
@@ -266,6 +278,12 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
   `Check_LedgerHealth_Async`, `Push_PeriodicStatus_Async`, `Resume_AllSessions_Async`, the
   `SessionWatchdog` respawn, and `Break_SilentDeadlock_Async` (which must not CONSUME the suppressed
   entry even though its send is already suppressed). Miss one and dormancy is a word.
+  **`Break_SilentDeadlock_Async` DOES NOT EXIST IN THE CODE (verified 2026-09-15).** A repo-wide grep
+  finds only two prose references plus `AwaySuppressesAppAlertsScanTests.cs:54`, a test that asserts
+  its ABSENCE; `docs/superpowers/plans/2026-09-12-behavioural-seams-03.md:838` already logged this.
+  It is named here, and in the audit dossier, as if it were a live waker — it is not, so there is no
+  deadlock breaker in this system. Treat the clause above as a requirement for the day it is built,
+  not as a description of what runs. Do not cite it again as existing machinery.
   `Status/PausedFlag_Marker` writes `.paused`, DERIVED-never-authored like `.meeting` and reconciled
   every tick, because the turn-end hook is bash and cannot read session.json — without it a paused
   session with open ledger lines is refused its turn end and keeps working. It SURVIVES a respawn
