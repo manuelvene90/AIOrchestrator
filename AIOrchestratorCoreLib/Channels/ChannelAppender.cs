@@ -71,10 +71,48 @@ public static class ChannelAppender
         return Append_Entry(channelFilePath, ChannelAuthor_Words.Get_Word(author), subject, body, nowLocal);
     }
 
+    /// <summary>
+    /// A SUBJECT THAT IS BLANK IS BORROWED FROM THE BODY, never written blank.
+    ///
+    /// <para>
+    /// Observed 2026-09-15: the mirror falls back to the subject when an entry's body is nothing but
+    /// marker lines, so an entry written with an empty subject reached the owner as a message that
+    /// was ONLY the speaker prefix — a notification carrying no text, seven times in one export. This
+    /// writer always emits both em dashes, so a blank subject stays blank however the parser reads
+    /// the header; the fix has to be here, at the write.
+    /// </para>
+    /// <para>
+    /// BORROWED, NOT INVENTED. A placeholder like "(no subject)" would put the app's own bookkeeping
+    /// on the owner's phone; the entry's first line of prose is the thing the author would have
+    /// written anyway. It throws nothing: this reaches the print runner carrying model output, which
+    /// is untrusted input, and the conventions say a parser of untrusted data recovers rather than
+    /// throws.
+    /// </para>
+    /// </summary>
+    static string Resolve_Subject(string subject, string body)
+    {
+        if (!string.IsNullOrWhiteSpace(subject))
+            return subject.Trim();
+
+        foreach (var line in body.Replace("\r\n", "\n").Split('\n'))
+        {
+            var trimmed = line.Trim();
+
+            if (trimmed.Length > 0 && !ChannelGrammar.Is_MarkerLine(trimmed))
+                return trimmed.Length <= 120 ? trimmed : trimmed[..120].TrimEnd();
+        }
+
+        // Nothing to borrow: a body of pure markers. The send path refuses to text an empty message,
+        // so this is a channel-file placeholder and never something the owner reads.
+        return "(no subject)";
+    }
+
     /// <summary>The index the entry was written under, or null when the channel stayed locked for the whole budget.</summary>
     static int? Append_Entry(string channelFilePath, string authorWord, string subject, string body, DateTime nowLocal)
     {
         int? writtenIndex = null;
+
+        subject = Resolve_Subject(subject, body);
 
         // The index comes from a read, so the read and the append have to be one indivisible step:
         // split them and two appenders pick the same index.

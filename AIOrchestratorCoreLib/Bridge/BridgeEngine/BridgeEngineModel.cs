@@ -4076,11 +4076,26 @@ internal sealed class BridgeEngineModel(
             if (text.Trim().Length == 0)
                 text = entry.Subject;
 
+            // AND WHEN THE SUBJECT IS EMPTY TOO, THERE IS NO MESSAGE TO SEND.
+            //
+            // Observed 2026-09-15, seven times in one Telegram export: the owner received a bare
+            // "🔴 Sup:" with no text, each time immediately followed by the real question card. The
+            // fallback above cannot help when the subject is empty as well, and two routes produce
+            // exactly that — a hand-written header carrying one em dash (the parser used to read its
+            // whole tail as the date), and ChannelAppender writing a blank subject between two em
+            // dashes. Both are now closed at their source; this is the guard that makes the class of
+            // fault unreachable from here, because the speaker prefix is app chrome and a
+            // notification carrying nothing but chrome is strictly worse than silence.
+            //
+            // The QUESTION CARD BELOW IS NOT SKIPPED: an entry whose body is all markers has nothing
+            // to narrate and everything to ask, so what the owner wants is the buttons, unannounced.
+            var hasProse = text.Trim().Length > 0;
+
             // COMPOSED BACK HERE, and nowhere earlier: everything above reads the agent's own words.
             text = speaker + text;
 
             var prose = _configProvider.Get_Current().TelegramProse;
-            var pieces = OwnerMessage_Folder.Fold_ForOwner(text, prose.FoldLongEntriesAbove);
+            var pieces = hasProse ? OwnerMessage_Folder.Fold_ForOwner(text, prose.FoldLongEntriesAbove) : [];
 
             // THREADED ONTO THE OWNER MESSAGE IT ANSWERS, when a turn said which one that was — the
             // first piece only; the rest follow it as they always did (Running.ReplyLinks).
