@@ -1190,6 +1190,18 @@ internal sealed class BridgeEngineModel(
     string? _dispatchPauseReason = restoredState.DispatchPauseReason;
 
     /// <summary>
+    /// When the pause the owner LIFTED would have ended, or null. Guarded by <c>_ownerStateLock</c>
+    /// with the two fields above. See <see cref="Limits.DispatchPause_Gate.Is_CoveredByLift"/>.
+    /// </summary>
+    DateTime? _dispatchPauseLiftedUntilUtc = restoredState.DispatchPauseLiftedUntilUtc;
+
+    /// <summary>
+    /// False until the first pause check of this host run. That check announces a pause restored
+    /// from engine state — mirror loop only, so no lock.
+    /// </summary>
+    bool _restoredPauseChecked;
+
+    /// <summary>
     /// When the pause last read the usage probes. ITS OWN STAMP, not the alert scan's: that one is
     /// only advanced on ticks where the alert scan actually runs, and the alert scan returns early
     /// while muted — so sharing it would make the pause check fire every 2 s under DND and once a
@@ -1206,6 +1218,52 @@ internal sealed class BridgeEngineModel(
     public event Action<string>? OrchestrationActivity;
     public event Action<bool>? MutedChanged;
     public event Action<bool>? SilenceAllChanged;
+    public event Action<string?>? DispatchPauseChanged;
+
+    /// <summary>
+    /// The owner lifts the dispatch pause — /resume, or the app's button. One path for both.
+    /// Returns what they are told, or null when nothing was paused.
+    /// </summary>
+    public string? Lift_DispatchPause_ByOwner()
+    {
+        var nowUtc = _clock.UtcNow;
+        string text;
+
+        lock (_ownerStateLock)
+        {
+            if (!Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, nowUtc))
+                return null;
+
+            var pausedUntilUtc = _dispatchPausedUntilUtc!.Value;
+
+            text = Limits.DispatchPause_Gate.Describe_Lift(_dispatchPauseReason, pausedUntilUtc, nowUtc);
+
+            // Never shortened: a second lift inside a longer lifted episode keeps the longer one.
+            if (_dispatchPauseLiftedUntilUtc == null || _dispatchPauseLiftedUntilUtc.Value < pausedUntilUtc)
+                _dispatchPauseLiftedUntilUtc = pausedUntilUtc;
+
+            _dispatchPausedUntilUtc = null;
+            _dispatchPauseReason = null;
+        }
+
+        Persist_EngineState();
+        _log.Log_Info(GLOBAL_ORCH_ID, text);
+        Raise_DispatchPauseChanged();
+
+        return text;
+    }
+
+    void Raise_DispatchPauseChanged()
+    {
+        try
+        {
+            DispatchPauseChanged?.Invoke(Describe_DispatchPause_OrNull());
+        }
+        catch
+        {
+            // A faulty subscriber must not take the bridge down.
+        }
+    }
 
     /// <summary>
     /// Turns the periodic status's screenshots on or off, APP-WIDE and persisted — the owner asked
@@ -9379,7 +9437,7 @@ internal sealed class BridgeEngineModel(
     /// The dispatcher pause as one line, or null when it is running. Reads the same fields the tick
     /// writes — never a second computation of whether it is paused.
     /// </summary>
-    string? Describe_DispatchPause_OrNull()
+    public string? Describe_DispatchPause_OrNull()
     {
         DateTime? pausedUntilUtc;
         string? reason;
@@ -9395,7 +9453,7 @@ internal sealed class BridgeEngineModel(
         if (!Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, _clock.UtcNow))
             return null;
 
-        return $"⏸ DISPATCH PAUSED — {reason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {pausedUntilUtc:HH:mm} UTC.";
+        return $"⏸ DISPATCH PAUSED — {reason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {Limits.DispatchPause_Gate.Describe_ResumeAt(pausedUntilUtc!.Value, _clock.UtcNow)}. /resume lifts it now.";
     }
 
     /// <summary>
@@ -10057,6 +10115,21 @@ internal sealed class BridgeEngineModel(
             + "Pick up exactly where you left off: re-read this channel from your last entry down, and if your last "
             + "turn was cut short by a usage limit, redo that step now. If you were genuinely finished and waiting, "
             + "say so in one line and go back to waiting — do NOT invent new work to look busy.";
+
+        // THE DISPATCH PAUSE IS LIFTED FIRST (2026-09-15). The appends below wake a LIVE session, but
+        // while the dispatcher is paused a dead one is never respawned to read them — and after a
+        // restart every session is dead. Guarded for the reason the appointment override below is.
+        try
+        {
+            var liftText = Lift_DispatchPause_ByOwner();
+
+            if (liftText != null)
+                await Send_DirectReply_BestEffort_Async(client, messageThreadId, liftText, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Log_Error(GLOBAL_ORCH_ID, "/resume could not lift the dispatch pause — the wake below still ran, but dead sessions are not respawned until it lifts", ex);
+        }
 
         // THE OVERRIDE THE HELP TEXT PROMISES. Appending fresh traffic below wakes a session that was
         // idle for the ordinary reason; it does nothing for one the dispatcher is refusing to run
@@ -11929,6 +12002,7 @@ internal sealed class BridgeEngineModel(
 
         DateTime? pausedUntilUtc;
         string? previousReason;
+        DateTime? liftedUntilUtc;
 
         // GUARDED, because the mirror loop writes these and the inbound loop reads them for /limits.
         // A DateTime? is 16 bytes and its store is not atomic on any platform, so an unsynchronised
@@ -11937,6 +12011,25 @@ internal sealed class BridgeEngineModel(
         {
             pausedUntilUtc = _dispatchPausedUntilUtc;
             previousReason = _dispatchPauseReason;
+            liftedUntilUtc = _dispatchPauseLiftedUntilUtc;
+        }
+
+        // A PAUSE RESTORED FROM ENGINE STATE IS ANNOUNCED, once per host run. Every session is down
+        // after a restart and the watchdog is skipped while paused, so this pause decides whether ANY
+        // of them comes back. On 2026-09-15 a weekly pause six days out was restored in silence: two
+        // restarts, "Bridge started", and every session stayed down with no reason on screen.
+        if (!_restoredPauseChecked)
+        {
+            _restoredPauseChecked = true;
+
+            if (Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, nowUtc))
+            {
+                var restored = Limits.DispatchPause_Gate.Describe_RestoredPause(previousReason, pausedUntilUtc!.Value, nowUtc);
+
+                _log.Log_Warning(GLOBAL_ORCH_ID, restored);
+                Raise_DispatchPauseChanged();
+                await Send_GeneralNotice_BestEffort_Async(restored, cancellationToken);
+            }
         }
 
         // Still inside the window: nothing to decide. Re-reading the probes here would let a
@@ -11946,6 +12039,19 @@ internal sealed class BridgeEngineModel(
             return;
 
         var wasPaused = pausedUntilUtc != null;
+
+        // A LIFT ENDS WITH THE WINDOW IT LIFTED — past that instant the guard is whole again.
+        if (liftedUntilUtc != null && !Limits.DispatchPause_Gate.Is_Paused(liftedUntilUtc, nowUtc))
+        {
+            lock (_ownerStateLock)
+            {
+                if (_dispatchPauseLiftedUntilUtc == liftedUntilUtc)
+                    _dispatchPauseLiftedUntilUtc = null;
+            }
+
+            liftedUntilUtc = null;
+            Persist_EngineState();
+        }
 
         // THROTTLED LIKE THE ALERT SCAN IT SHARES A READER WITH — reading the probes means globbing
         // the supervision root and parsing one JSON per session, and at the 2 s tick rate that is
@@ -11972,7 +12078,11 @@ internal sealed class BridgeEngineModel(
             var candidate = Limits.DispatchPause_Gate.Decide_PauseUntil_OrNull(
                 pair.Value.Percent, pair.Value.WindowResetsAtUtc, thresholdPercent, nowUtc);
 
-            if (candidate == null || (pauseUntilUtc != null && candidate.Value <= pauseUntilUtc.Value))
+            // THE OWNER LIFTED THIS WINDOW: its reading is still over the threshold, and re-pausing on
+            // it is what made lifting the pause by hand undo itself on the next tick.
+            if (candidate == null
+                || Limits.DispatchPause_Gate.Is_CoveredByLift(candidate.Value, liftedUntilUtc)
+                || (pauseUntilUtc != null && candidate.Value <= pauseUntilUtc.Value))
                 continue;
 
             pauseUntilUtc = candidate;
@@ -11997,9 +12107,10 @@ internal sealed class BridgeEngineModel(
             // pause message every thirty minutes for ever — a stacking waterfall, which is the one
             // thing owner-facing repeats must never become. The state changes; the owner is told once
             // per episode, and /limits still answers whenever they ask.
-            var alert = Limits.DispatchPause_Gate.Describe_Pause(bindingWindow ?? "usage", bindingPercent, pauseUntilUtc.Value);
+            var alert = Limits.DispatchPause_Gate.Describe_Pause(bindingWindow ?? "usage", bindingPercent, pauseUntilUtc.Value, nowUtc);
 
             _log.Log_Warning(GLOBAL_ORCH_ID, wasPaused ? $"Dispatch pause EXTENDED — {alert}" : alert);
+            Raise_DispatchPauseChanged();
 
             if (!wasPaused)
                 await Send_GeneralNotice_BestEffort_Async(alert, cancellationToken);
@@ -12021,6 +12132,7 @@ internal sealed class BridgeEngineModel(
         var resume = Limits.DispatchPause_Gate.Describe_Resume(previousReason ?? "the window reset");
 
         _log.Log_Info(GLOBAL_ORCH_ID, resume);
+        Raise_DispatchPauseChanged();
         await Send_GeneralNotice_BestEffort_Async(resume, cancellationToken);
     }
 
@@ -16182,6 +16294,7 @@ internal sealed class BridgeEngineModel(
                     ButtonGroupSequence = _buttonGroupSequence,
                     DispatchPausedUntilUtc = _dispatchPausedUntilUtc,
                     DispatchPauseReason = _dispatchPauseReason,
+                    DispatchPauseLiftedUntilUtc = _dispatchPauseLiftedUntilUtc,
                 };
             }
         }

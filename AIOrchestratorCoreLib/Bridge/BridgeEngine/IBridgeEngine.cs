@@ -36,6 +36,17 @@ public interface IBridgeEngine
     /// </summary>
     void Close_Orchestration_ByOwner(string orchId, string reason);
 
+    /// <summary>
+    /// Lifts the usage-limit dispatch pause on the OWNER's word — the app's button, and /resume from
+    /// the phone, through the same path. The window that caused it does not re-pause before its own
+    /// reset; a window that resets later still can. Returns what the owner is told, or null when
+    /// nothing was paused.
+    /// </summary>
+    string? Lift_DispatchPause_ByOwner();
+
+    /// <summary>The dispatch pause as one line, or null while the dispatcher is running.</summary>
+    string? Describe_DispatchPause_OrNull();
+
     /// <summary>Raised (from background threads) whenever an orchestration's channels changed.</summary>
     event Action<string>? OrchestrationActivity;
 
@@ -44,4 +55,10 @@ public interface IBridgeEngine
 
     /// <summary>Raised when app-wide silence toggles, so the UI stays in sync with /mute_all.</summary>
     event Action<bool>? SilenceAllChanged;
+
+    /// <summary>
+    /// Raised (from background threads) when the dispatch pause starts, lifts, resumes, or is found
+    /// restored at startup. Carries <see cref="Describe_DispatchPause_OrNull"/>'s line, or null.
+    /// </summary>
+    event Action<string?>? DispatchPauseChanged;
 }
