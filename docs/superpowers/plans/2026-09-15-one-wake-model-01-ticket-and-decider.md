@@ -574,10 +574,18 @@ Expected: FAIL — the non-driving session is dispatched, `StartedTurns` has one
 
 - [ ] **Step 3: Screen in discovery**
 
-In `PrintTurnDispatcherModel`, the predicate at line ~719 becomes:
+**NOT in the discovery predicate — the plan was wrong here, corrected 2026-09-15 while executing.**
+That predicate screens on the ROLE's configured runner from config.json, while `DrivesTurns` is a
+per-SESSION flag on the state file. A member demoted to a terminal (Task 5) does not change
+config.json, so the role can still read `print` while that member's own file says its turns are no
+longer the dispatcher's — and the discovery screen would miss it, which is the failure this task
+exists to prevent.
+
+Put it in `Consider_Session`, immediately after the state is read and before the sources are resolved:
 
 ```csharp
-return state.DrivesTurns && Runner_Support.Is_BridgeDriven(runner) && Runner_Support.Supports(runner, role) && _executors.ContainsKey(runner);
+        if (!state.DrivesTurns)
+            return;
 ```
 
 - [ ] **Step 4: Run the test and watch it pass**

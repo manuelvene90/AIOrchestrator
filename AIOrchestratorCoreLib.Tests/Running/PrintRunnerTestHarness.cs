@@ -190,8 +190,19 @@ public sealed class PrintRunnerTestHarness : IDisposable
         return TurnExecutor_Factory.Create_All(Paths, Fake_Invocation(), Log, ConfigProvider);
     }
 
-    /// <summary>An orchestration with one member of the kind, registered bridge-driven — the launcher's path, minus the terminal.</summary>
-    public (string OrchId, string MemberId) Register_Member(MemberKinds kind, string orchId = "repo-1", SessionRunners runner = SessionRunners.Print)
+    /// <summary>
+    /// An orchestration with one member of the kind, registered bridge-driven — the launcher's path,
+    /// minus the terminal.
+    ///
+    /// <para>
+    /// <paramref name="drivesTurns"/> defaults <c>true</c> (the normal bridge-driven shape). Passing
+    /// <c>false</c> models a session that Task 5's <c>Demote_ToTerminal</c> flipped — this does NOT
+    /// spawn a real terminal (<c>TerminalRunnerModel.Start</c> opens an actual window, which a unit
+    /// test must not do); it registers exactly as usual and then flips the ALREADY-WRITTEN state file's
+    /// flag via <see cref="Set_DrivesTurns"/>, the same read-modify-write shape production uses.
+    /// </para>
+    /// </summary>
+    public (string OrchId, string MemberId) Register_Member(MemberKinds kind, string orchId = "repo-1", SessionRunners runner = SessionRunners.Print, bool drivesTurns = true)
     {
         if (Store.Get_Session_OrNull(orchId) == null)
             Store.Create_Orchestration(orchId, "Repo", RepoPath);
@@ -203,7 +214,28 @@ public sealed class PrintRunnerTestHarness : IDisposable
         Create_Runner(runner).Start(
             SessionLaunch_Factory.Create(role, orchId, memberId, RepoPath, "haiku", Paths.Get_ImplementerPidFile(orchId, memberId), null));
 
+        if (!drivesTurns)
+            Set_DrivesTurns(role, orchId, memberId, false);
+
         return (orchId, memberId);
+    }
+
+    /// <summary>
+    /// Flips an already-registered session's <see cref="IPrintSessionState.DrivesTurns"/> flag in
+    /// place, preserving every other field — cursors included, which is the whole point of Task 5's
+    /// demotion (a terminal session keeps what it already delivered).
+    /// </summary>
+    public void Set_DrivesTurns(SessionRoles role, string orchId, string memberId, bool drivesTurns)
+    {
+        var stateFile = PrintSessionState_Store.Get_StateFile(Paths, role, orchId, memberId);
+        var existing = PrintSessionState_Store.Read_OrNull(stateFile)
+            ?? throw new Exception($"state file missing for '{orchId}/{memberId}' before flipping DrivesTurns");
+
+        PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.Create(
+            existing.SessionId, existing.SessionStarted, existing.Role, existing.OrchId, existing.MemberId,
+            existing.WorkingDirectory, existing.Model, existing.ChannelFilePath, existing.Cursors,
+            existing.NextTurnNumber, existing.FailedAttempts, existing.ExecutedTurns, existing.RetryNotBeforeUtc,
+            drivesTurns: drivesTurns));
     }
 
     /// <summary>The orchestration's SUPERVISOR, registered bridge-driven — woken by the owner channel.</summary>

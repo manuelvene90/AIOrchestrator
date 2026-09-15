@@ -736,6 +736,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (state == null)
             return;
 
+        // THE ONE-WAKE-MODEL INTERLOCK (2026-09-15). DrivesTurns is a per-SESSION flag on the state
+        // file itself, independent of config.json's runner word for the role — Is_StillBridgeDriven
+        // above screens on the role's CONFIGURED runner, which a terminal-demoted session (Task 5,
+        // OrchestrationLauncherModel.Demote_ToTerminal) does not by itself change: the role can still
+        // read "print" in config while THIS member's own file says its turns are no longer the
+        // dispatcher's to run. Without this check that member would have both an open terminal window
+        // AND headless turns answering the same brief — the exact failure the launcher's old delete
+        // existed to prevent.
+        if (!state.DrivesTurns)
+            return;
+
         var sources = TurnSources_Resolver.Resolve(_paths, _store, role, orchId, memberId);
         var reads = Read_Sources(stateFile, ref state, role, sources);
 
