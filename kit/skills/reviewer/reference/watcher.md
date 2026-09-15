@@ -152,7 +152,7 @@ while true; do
   [ -z "$now" ] && continue
   [ "$now" = "$last" ] && continue
   last="$now"
-  echo "WAKE — $now. Read your channel from your last entry down, act on it, append your report."
+  echo "WAKE — $now. Read the state pack this ticket names in statePackFile FIRST (when it names one): it holds your brief, your last report, the entries that woke you and your repo state, assembled by the app. Then read your channel only for what the pack lacks, act, and append your report."
 done
 ```
 

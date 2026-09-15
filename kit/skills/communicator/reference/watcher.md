@@ -51,7 +51,7 @@ while true; do
   [ -z "$now" ] && continue
   [ "$now" = "$last" ] && continue
   last="$now"
-  echo "WAKE — $now. Read owner-channel.md from your last entry down, apply your behavior rules."
+  echo "WAKE — $now. Read the state pack this ticket names in statePackFile FIRST (when it names one): it holds your last entry and the entries that woke you, assembled by the app. Then read owner-channel.md only for what the pack lacks, and apply your behavior rules."
 done
 ```
 

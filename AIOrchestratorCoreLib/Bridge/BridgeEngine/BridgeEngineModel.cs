@@ -1914,11 +1914,22 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// The ticket, numbered one above the last one on disk, and the cursor advance that says these
-    /// entries have been handed over — in that order, because a ticket that is written and not
-    /// recorded is re-written next tick (noisy, recoverable) while a cursor advanced for a ticket that
-    /// never landed is an entry nobody is ever told about.
+    /// The pack, then the ticket, then the cursor advance that says these entries have been handed
+    /// over — and the order is the whole of the safety here. THE PACK IS WRITTEN FIRST because the
+    /// ticket NAMES it: a ticket on disk ahead of its pack is a window in which the session wakes,
+    /// reads the path it was given and finds nothing there. The cursor advance is LAST for the mirror
+    /// reason Task 8 gave: a ticket written and not recorded is re-written next tick (noisy,
+    /// recoverable), while a cursor advanced for a ticket that never landed is an entry nobody is
+    /// ever told about.
     ///
+    /// <para>
+    /// THE PACK IS THE PAYOFF OF THIS SERIES (2026-09-15 one-wake-model, spec step 2). Until here it
+    /// was written only by <c>PrintTurnExecutorModel</c>, so a terminal session — the DEFAULT runner —
+    /// had to go and rebuild its own state from channels that may since have been compacted. It is
+    /// built by <c>StatePack_Writer.Write_ForSession_OrNull</c>, the same call the print executor
+    /// makes; a null answer means the pack could not be written and the ticket says so by naming
+    /// none, which lands the session on its ordinary boot sequence rather than on a missing file.
+    /// </para>
     /// <para>
     /// THE NUMBER IS READ BACK FROM THE FILE rather than counted in memory, so it survives an app
     /// restart: the monitor compares the ticket it last carried against the one on disk, and a
@@ -1930,9 +1941,16 @@ internal sealed class BridgeEngineModel(
         var ticketFile = Running.WakeTicket.WakeTicket_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId);
         var number = (Running.WakeTicket.WakeTicket_Store.Read_OrNull(ticketFile)?.Number ?? 0) + 1;
 
+        // A NEW BRIEF RETIRES THE OLD PROGRESS NOTE, exactly as it does on the print path: without it
+        // the pack would tell a member starting a new task to resume the previous one's next steps.
+        Running.StatePack.StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, state.Role, state.OrchId, state.MemberId, [.. decision.Pending.Select(item => item.Entry)]);
+
+        var statePackFile = Running.StatePack.StatePack_Writer.Write_ForSession_OrNull(
+            _paths, state, $"{state.OrchId}/{state.MemberId}/wake-{number}", decision.Pending, sources);
+
         Running.WakeTicket.WakeTicket_Store.Write(
             ticketFile,
-            Running.WakeTicket.WakeTicket_Factory.Create(number, decision.Reason, statePackFile: null, stampedUtc: _clock.UtcNow));
+            Running.WakeTicket.WakeTicket_Factory.Create(number, decision.Reason, statePackFile, stampedUtc: _clock.UtcNow));
 
         // CreateFrom_Existing_Cursors, and the DrivesTurns it carries over is load-bearing: a
         // transition that defaulted the flag back to true would put the session under the dispatcher

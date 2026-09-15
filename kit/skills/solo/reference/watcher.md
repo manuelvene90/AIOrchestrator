@@ -135,7 +135,7 @@ while true; do
   [ -z "$now" ] && continue
   [ "$now" = "$last" ] && continue
   last="$now"
-  echo "WAKE — $now. Read owner-channel.md from your last entry down, act on it, reply."
+  echo "WAKE — $now. Read the state pack this ticket names in statePackFile FIRST (when it names one): it holds your last report, the ledger, the last owner-channel entries and your repo state, assembled by the app. Then read owner-channel.md only for what the pack lacks, act, and reply."
 done
 ```
 

@@ -136,7 +136,7 @@ while true; do
   [ -z "$now" ] && continue
   [ "$now" = "$last" ] && continue
   last="$now"
-  echo "WAKE — $now. Read the general channel from your last entry down, act, reply."
+  echo "WAKE — $now. Read the state pack this ticket names in statePackFile FIRST (when it names one): it holds your last entry and the entries that woke you, assembled by the app. Then read the general channel only for what the pack lacks, act, and reply."
 done
 ```
 

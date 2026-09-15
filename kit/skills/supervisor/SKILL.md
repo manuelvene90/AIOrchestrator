@@ -72,6 +72,8 @@ watcher. Nothing else.
 
 **Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/.supervisor.pack.md"`. If the file exists, the bridge started you FRESH and wrote it for you: read it FIRST — it carries the entries that woke you, your last entry, the whole ledger (PLAN.md), the last owner-channel entries and the code state. The channels are then a reference for facts the pack lacks, not a to-do list, and the greeting in step 2 is skipped. No pack → the steps below as written.
 
+**A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
+
 1. Read `session.json` and every channel file in your home, top to bottom. **You may be resuming**
    — the channels are the full history, read them as a LOG, never a to-do list: an entry that
    already has a later reply is CLOSED; only unanswered trailing traffic is yours to act on.

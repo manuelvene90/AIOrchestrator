@@ -101,21 +101,14 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
     }
 
     /// <summary>
-    /// Reads what the bridge holds and writes the pack. Guarded as a whole on top of the reader's own
-    /// per-section guards: a pack that cannot be written must not stop the turn — the session then
-    /// finds no pack and falls back to its boot sequence, which is today's behaviour, not a failure.
+    /// Reads what the bridge holds and writes the pack — through the shared writer, which is also what
+    /// the wake-ticket sweep calls for a TERMINAL session (2026-09-15 one-wake-model, Task 11), so the
+    /// two runners cannot drift on where the pack goes or on what happens when it cannot be written.
+    /// Its answer is ignored here: this turn is opened by the app itself and has nothing to tell.
     /// </summary>
     void Write_StatePack(IPrintSessionState state, string requestId, IReadOnlyList<PendingEntry> pending, IReadOnlyList<TurnSource.ITurnSource> sources)
     {
-        try
-        {
-            var inputs = StatePackInputs_Reader.Read(_paths, state, requestId, pending, sources);
-            StatePack_Writer.Write(StatePack_Locator.Get_File(_paths, state.Role, state.OrchId, state.MemberId), StatePack_Builder.Build(inputs));
-        }
-        catch
-        {
-            // Swallowed by design — see the summary. The session's boot sequence covers the gap.
-        }
+        StatePack_Writer.Write_ForSession_OrNull(_paths, state, requestId, pending, sources);
     }
 
     public void Release(string orchId, string memberId)

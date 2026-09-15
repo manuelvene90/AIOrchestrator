@@ -318,6 +318,14 @@ PREAMBLE
     | HOME="$home" AIORCH_ID="$aiorch_id" AIORCH_MEMBER="$aiorch_member" bash "$home/driven.sh" > "$out2" 2>"$home/err2.txt"
   check "$role: two distinct tickets wake it exactly twice, not once per poll" "2" "$(grep -c "WAKE" "$out2" 2>/dev/null || true)"
 
+  # ---- Scenario 2b: EVERY wake line sends the session to the pack the ticket names (Task 11). ----
+  # The pack is the whole payoff of the one-wake-model series: the app assembles the session's brief,
+  # its last report, the entries that woke it and the repo state, and the ticket carries the path. A
+  # wake line that does not point at it leaves a terminal session doing what it always did — going to
+  # look for its own state — with the pack sitting unread beside it. Counted against the SAME two
+  # wakes above, so a script that fired twice and named the pack once is a failure, not a pass.
+  check "$role: every wake line sends the session to its state pack" "2" "$(grep -c "state pack" "$out2" 2>/dev/null || true)"
+
   # ---- Scenario 3 (meeting-capable roles only): silence during the meeting, exactly one delivery after. ----
   if [ "$has_meeting" -eq 1 ]; then
     local out3="$home/out3.txt"
