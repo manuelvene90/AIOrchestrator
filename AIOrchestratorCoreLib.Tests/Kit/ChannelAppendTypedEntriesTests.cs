@@ -270,6 +270,57 @@ public class ChannelAppendTypedEntriesTests : IDisposable
         Assert.DoesNotContain(ChannelGrammar.TypeLine_Prefix, entry.RawText);
     }
 
+    /// <summary>
+    /// THE SEAM NOBODY WAS WATCHING: the word the TOOL signs with, read back by the parser, rendered
+    /// as the prefix the owner sees. End to end, through the real script.
+    ///
+    /// <para>
+    /// WHY IT EXISTS. Between <c>7d6949f</c> (2026-09-10) and <c>2848172</c> (2026-09-14)
+    /// <c>derive_author</c> preferred <c>AIORCH_MEMBER</c>, and the launcher exports
+    /// <c>AIORCH_MEMBER='sup'</c> for a supervisor (<c>SessionLaunch_Factory.SUPERVISOR_MEMBER_ID</c>).
+    /// The parser knows seven ROLE words and <c>sup</c> is not one, so every entry that supervisor
+    /// wrote parsed as <c>ChannelAuthors.Unknown</c> and reached the owner prefixed "?: ".
+    /// </para>
+    /// <para>
+    /// THE PREFIX WAS THE LEAST OF IT. <c>Speaks_ToOwner</c> is a positive list that excludes
+    /// Unknown, so roughly twenty consecutive supervisor messages arrived SILENT (no notification
+    /// sound), unthreaded, outside the one-question-at-a-time hold, uncounted by "has the supervisor
+    /// answered yet" — and the session's own watcher woke on its own appends.
+    /// </para>
+    /// <para>
+    /// TWO TESTS ALREADY COVERED THE TWO HALVES and neither could see it: `SessionRoleNamesTests`
+    /// pins word → parse for all seven authors, `MirrorTextFormatterTests` pins Supervisor → "🔴 Sup: ".
+    /// The defect lived in the seam — what word the live writer actually emits — and the one test
+    /// touching the shell path had been written asserting the WRONG word (`FROM imp-2`), so it moved
+    /// with the bug. This asserts the whole chain, with the environment a real supervisor is spawned
+    /// with.
+    /// </para>
+    /// </summary>
+    [RequiresChannelToolTheory]
+    [Trait("Speed", "Slow")]
+    [InlineData("supervisor", "sup", ChannelAuthors.Supervisor)]
+    [InlineData("implementer", "imp-2", ChannelAuthors.Implementer)]
+    [InlineData("reviewer", "rev-1", ChannelAuthors.Reviewer)]
+    [InlineData("solo", "solo-1", ChannelAuthors.Solo)]
+    [InlineData("general", "sup", ChannelAuthors.Supervisor)]
+    public void TheWordTheToolSignsWith_ParsesBackToThatSessionsAuthor(string role, string memberId, ChannelAuthors expected)
+    {
+        var run = Run(
+            new Dictionary<string, string> { ["AIORCH_ROLE"] = role, ["AIORCH_MEMBER"] = memberId },
+            "--subject", "identity", "--report", "hello");
+
+        Assert.Equal(0, run.ExitCode);
+
+        var entry = Assert.Single(ChannelEntry_Parser.Parse_All(File.ReadAllText(_channel)));
+
+        Assert.Equal(expected, entry.Author);
+
+        // The half that actually rang — or failed to. An Unknown author is not merely mislabelled:
+        // it is excluded from every owner-facing behaviour keyed on Speaks_ToOwner.
+        Assert.NotEqual(ChannelAuthors.Unknown, entry.Author);
+        Assert.DoesNotContain($"FROM {memberId} ", entry.RawText);
+    }
+
     // ── running the real thing ──────────────────────────────────────────────────────────────────
 
     (int ExitCode, string StdOut, string StdErr) Run(params string[] arguments)
