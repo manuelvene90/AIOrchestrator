@@ -4,11 +4,19 @@
 
 **Why this exists.** The dossier at `docs/superpowers/specs/2026-09-09-revisione/` (five documents,
 347 KB) sat untracked for six days and was one `git worktree remove` away from being lost. It was
-committed on 2026-09-15 (`5810ba4`). Between 2026-09-09 and today there are **333 commits on
-`ours/integration` and not one of the dossier's top ten is among them** — verified by grep at
-`5810ba4`: no `ITickStage`, no request idempotency, no buffer in `EngineStateSnapshot`, no fence
-tracking, no OTEL. Nothing implemented, nothing parked, nothing recorded as rejected. It was never
-triaged. This file is the triage, so that the same thing does not happen to it twice.
+committed on 2026-09-15 (`5810ba4`). It was never triaged — nothing in it is recorded as accepted,
+parked or rejected. This file is the triage, so that the same thing does not happen to it twice.
+
+**CORRECTION, same day, before anyone acts on this file.** The first version of it repeated a claim
+from the comparison pass: "333 commits since 2026-09-09 and not one of the dossier's top ten is among
+them." **That claim is false, and the way it was produced is worth more than the claim.** It was
+reached by grepping for the NAMES OF THE PROPOSED SOLUTIONS — `ITickStage`, `requestId`, OTEL — and
+not for whether the PROBLEM had been solved. At least two of the dossier's items were fixed on
+2026-09-10, the day after it was written, in one commit (`6fc5d45`, "one bad update no longer replays
+the whole batch, and a 409 is named") under names no grep for the proposal would ever find. Every row
+below was therefore re-verified against the code rather than against a commit search, and two rows
+moved to section A as a result. **When checking whether a finding is still live, read the code it
+describes — a search for the fix you imagined will report every fix someone else imagined as absent.**
 
 **What this file is not.** It decides nothing. Every row carries a proposed verdict so there is
 something to disagree with, but the verdict column is the owner's to overwrite.
@@ -29,6 +37,8 @@ stale for that reason and are marked) or `AUDIT` (2026-09-14/15, this session, r
 | A4 | The dossier itself, and `the-brake-that-cannot-be-lifted`, committed before the fork is retired | `5810ba4` |
 | A5 | The kit marketplace pointed at a deleted worktree, so the installed plugin froze on 2026-09-07 | machine config, not a commit |
 | A6 | `vibe-framework` was enabled machine-wide, making its ~21 k agent prompt the system prompt of every session in every repo | machine config, not a commit |
+| **A7** | **The owner's Telegram message can be lost** — the dossier's #1 row. **Closed 2026-09-10, one day after the dossier, in `6fc5d45`.** The offset now advances at the END of the batch, and `Was_UpdateHandled` guards the replay. The residual loss is a stated DECISION, not an oversight: *"AT MOST ONCE IS THE CHOICE … a replayed owner message is a second copy of their words in the channel and a second answer from the supervisor, while an update dropped after a failed handler is one loud Error line naming the update. The second is recoverable by asking again; the first corrupts the conversation."* The set is in RAM *deliberately* — persisting it would make the offset and the set two sources of truth. **Do not "fix" this.** | `6fc5d45` |
+| **A8** | **The 409 is unnamed** (dossier C10 — two pollers on one bot token, one stealing the other's updates undetected). **Closed in the same commit**: `TELEGRAM_CONFLICT_STATUS = 409` with a documented constant and told-once logic. | `6fc5d45` |
 
 ---
 
@@ -36,10 +46,9 @@ stale for that reason and are marked) or `AUDIT` (2026-09-14/15, this session, r
 
 | # | Item | Provenance | Severity | Cost | Proposed verdict |
 |---|---|---|---|---|---|
-| B1 | **The owner's Telegram message can be destroyed.** The `getUpdates` offset is persisted before the words are durable; the buffer lives in RAM for ≥6 s and is not in `EngineStateSnapshot`. A host death in that window loses the message silently. | DOSSIER `audit-architecture.md:1011` — ranked #1 by value | **Critical** | Small | **DO FIRST.** In a system whose stated purpose is carrying the owner's words, this is the one defect that contradicts the product. |
 | B2 | **An oversized `[n]` poisons a channel for ever.** `int.Parse` on an unbounded `(\d+)` throws after the offset advanced and before `Pending` clears, so it recurs every 2 s and nothing can even append the error report. | DOSSIER `audit-architecture.md:474-484`; **re-verified live** at `ChannelEntry_Parser.cs:26,159,167` | **High** | Small, but **three copies** | Fix by bounding the pattern to `\d{1,9}` in C#, in `channel-grammar.json`, and in the bash transcription — **together**. Bounding one scanner and not the others recreates the duplicate-index defect the tool's own comment warns about. Needs a test pinning all three. |
 | B3 | **`DispatchPause_Gate` can latch and has no release.** Account swapped, real usage 70 %, dispatch blocked on a 95 % reading from the previous account for **4 days 14 hours**; two sessions and a reviewer never started; an operator with a shell was required. | `2026-09-11-the-brake-that-cannot-be-lifted.md`, PROPOSED, nothing built | **High** | Medium | Build the release path before wiring anything else into this brake. **This retires the earlier recommendation to connect the token budget to it** — a second trigger on a brake that cannot be lifted doubles the ways to be blocked for days. |
-| B4 | **~35 channel-append call sites discard the "did I write?" boolean.** Alerts, nudges and request confirmations are silently dropped under a 1500 ms lock budget. Self-declared HIGH in `ChannelAppender`'s own docstring. | DOSSIER `audit-architecture.md:1012` | **High** | Medium | Decide a policy — retry, log, or escalate — and apply it once at the helper rather than at 35 call sites. |
+| B4 | **Some channel-append call sites discard the "did I write?" boolean**, so an alert or a nudge can be dropped silently under the 1500 ms lock budget. **Re-measured 2026-09-15: 12 of 22 call sites in `BridgeEngineModel` DO check the return** — so this is half-closed, not the ~35 the dossier counted at its HEAD. | DOSSIER `audit-architecture.md:1012`, re-measured | **Medium** | Small | Finish the ten. Better: make the helper's failure impossible to ignore rather than auditing call sites again. |
 | B5 | **Request files have no idempotency key.** Execute-then-delete means a host death re-runs `start-orchestration` and produces two orchestrations — the same failure decision 8 blames on `--continue`. | DOSSIER `audit-architecture.md:1017`; **re-verified**: zero hits for `requestId`/`idempot` in `GeneralSupervision/` | **High** | ~50 lines; the dossier records "**no downside**" | Do it. The cheapest high-severity row in the table. |
 | B6 | **Fence-blind entry parsing.** An entry quoted inside a fenced block is split into phantom entries with duplicate indices, corrupting the mirror, the index screen, member state and the next-index computation. Likelier true cause of the `option-lab-2` duplicate `[80]` than agent-typed numbers ever were. | DOSSIER `audit-architecture.md:459-472` | **High** | Medium | Track fences in the parse. Note this is now recorded in decision 12, so the documentation no longer misattributes the cause. |
 
@@ -95,10 +104,10 @@ stale for that reason and are marked) or `AUDIT` (2026-09-14/15, this session, r
 
 ## What I would do first, if it were mine
 
-1. **B1** — the owner's message. It is small and it contradicts the product.
-2. **B5** — request idempotency. ~50 lines, no downside, prevents duplicate orchestrations.
-3. **C5** — the fresh-mode contradiction. Cheap, and plausibly the biggest single lever on spend.
-4. **B3** — the brake's release path, *before* anything else is wired into it.
+1. **B5** — request idempotency. ~50 lines, the dossier records "no downside", and it stops a host death from minting two orchestrations.
+2. **C5** — the fresh-mode contradiction. Cheap, and plausibly the biggest single lever on spend.
+3. **B3** — the brake's release path, *before* anything else is wired into it.
+4. **B2 / B6** — the channel parser: an oversized index, and fence-blindness. Both live, both needing the three scanners moved together.
 
 And one process change worth more than any row above: **this file, or its successor, gets looked at.**
 The dossier's real defect was not any of its findings — it was that 333 commits went by without one
