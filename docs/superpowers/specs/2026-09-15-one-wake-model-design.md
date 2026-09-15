@@ -143,10 +143,15 @@ and the pack path. So the store's single meaning must be split into two fields:
 - `DrivesTurns` — the dispatcher runs this session's turns. True for bridge, **false for terminal**.
 - the cursor and pack state — present for **both**.
 
-`PrintSessionState_Store` is renamed `SessionState_Store` and stops being print-shaped. The
-launcher's delete becomes a `DrivesTurns = false` write. This is the one genuinely invasive change in
-the design and it is the reason step 1 is the load-bearing step: after it, the remaining six are
+The launcher's delete becomes a `DrivesTurns = false` write. This is the one genuinely invasive change
+in the design and it is the reason step 1 is the load-bearing step: after it, the remaining six are
 configuration and deletion.
+
+**`PrintSessionState_Store` is deliberately NOT renamed.** `SessionState_Store` would read better once
+the type serves both runners, but the rename touches every call site and every test that names it,
+for no change in behaviour — churn spread across exactly the files this step is already rewriting,
+which is where a mistake would be hardest to see. The name stays print-shaped and the docstring says
+why; rename it later, alone, if it ever becomes worth a commit of its own.
 
 ### 3.4 What this does not change
 
