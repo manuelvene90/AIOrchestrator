@@ -70,4 +70,19 @@ public interface IPrintSessionState
     /// </summary>
     DateTime? RetryNotBeforeUtc { get; }
     IReadOnlyList<IExecutedTurn> ExecutedTurns { get; }
+
+    /// <summary>
+    /// Whether the DISPATCHER runs this session's turns. True for every bridge-driven session — and
+    /// for every state file written before this field existed, which is why its absence reads as true
+    /// (<see cref="PrintSessionState_Store"/>).
+    ///
+    /// <para>
+    /// FALSE IS NOT "CLOSED" AND NOT "DEAD": it is a session in a terminal, which takes its own turns
+    /// and needs this file only for its cursors and its state pack. Before the 2026-09-15 one-wake-model
+    /// change the file's existence WAS the "dispatcher runs this" flag, so a terminal spawn deleted it
+    /// (<c>OrchestrationLauncherModel</c>) and a terminal session had no cursor at all — which is why
+    /// the digest, the riding app-notes and the pack never reached it.
+    /// </para>
+    /// </summary>
+    bool DrivesTurns { get; }
 }

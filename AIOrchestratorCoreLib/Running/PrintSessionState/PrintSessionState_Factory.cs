@@ -18,7 +18,8 @@ public static class PrintSessionState_Factory
         int nextTurnNumber,
         int failedAttempts,
         IReadOnlyList<IExecutedTurn> executedTurns,
-        DateTime? retryNotBeforeUtc = null)
+        DateTime? retryNotBeforeUtc = null,
+        bool drivesTurns = true)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
             throw new ArgumentException($"Session id must be non-empty ('{orchId}/{memberId}')");
@@ -40,7 +41,7 @@ public static class PrintSessionState_Factory
         if (retryNotBeforeUtc != null && retryNotBeforeUtc.Value.Kind != DateTimeKind.Utc)
             throw new ArgumentException($"The scheduled retry must be UTC, got {retryNotBeforeUtc.Value.Kind} ('{orchId}/{memberId}')");
 
-        return new PrintSessionStateModel(sessionId, sessionStarted, role, orchId, memberId, workingDirectory, model, channelFilePath, cursors, nextTurnNumber, failedAttempts, executedTurns, retryNotBeforeUtc);
+        return new PrintSessionStateModel(sessionId, sessionStarted, role, orchId, memberId, workingDirectory, model, channelFilePath, cursors, nextTurnNumber, failedAttempts, executedTurns, retryNotBeforeUtc, drivesTurns);
     }
 
     /// <summary>
