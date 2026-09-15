@@ -65,13 +65,24 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     and `STAMP` **inside the lock**, and the grammar states it (`kit/grammar/channel-grammar.json:16`).
     Agent-authored fields are now only **author** (validated against `AIORCH_ROLE`), **subject** and
     **body**. So for cooperating writers going through the tool, the failure class is closed.
-    **What did NOT change, and is the live cause:** entry parsing is **fence-blind**
-    (`audit-architecture.md:459-472`) — an entry quoted inside a fenced block is split into phantom
-    entries with duplicate indices, corrupting the mirror, the index screen, member state and the
-    next-index computation. That is the likelier true cause of the `option-lab-2` duplicate `[80]`
-    than the agent's typing ever was. Distrust `[n]` for THIS reason now, not the old one. Related
-    and still open: an oversized `[n]` throws out of `int.Parse` after the offset advanced and before
-    `Pending` clears, so it recurs every 2 s for ever and nothing can even append the error report.
+    **What was the live cause until 2026-09-15, and is now CLOSED:** entry parsing was
+    **fence-blind** (`audit-architecture.md:459-472`) — an entry quoted inside a fenced block was
+    split into phantom entries with duplicate indices, corrupting the mirror, the index screen,
+    member state and the next-index computation. That, not the agent's typing, is the likelier true
+    cause of the `option-lab-2` duplicate `[80]`. It was also reproduced from the owner's Telegram
+    export as something worse than a duplicate index: the supervisor's message arrived CUT, its tail
+    delivered separately and signed by whoever was quoted — and deleted outright when the quoted
+    author word was `owner` or `app`. `ChannelFence_Screen` now answers "is this line quoted code"
+    for the parser, the tailer and `ChannelShape_Validator` alike, and **only a CLOSED fence
+    suppresses anything**, so a stray ``` cannot swallow a channel. The two readers that used to
+    disagree are one: the tailer asks the parser where an append is cut.
+    **Also closed the same day:** an unusable `[n]` — oversized, or `[0]` — threw out of `int.Parse`
+    or the entry factory after the offset had advanced and before `Pending` cleared, so it recurred
+    every 2 s for ever and nothing could even append the error report. Such a header now opens no
+    entry and is REPORTED through `ChannelShape_Validator.Find_MalformedHeaders`, owner-channel alert
+    included. **Still distrust `[n]`** — the tool allocates it under the lock, but nothing stops a
+    session appending by hand, and a duplicate index is a fault the index screen reports rather than
+    a thing that cannot happen.
 13. **Never compare a stored entry COUNT against a later live-file count.** `Channel_Compactor`
     moves older entries into a sibling `.archive.md`, so a live-file count is not monotonic. This
     silently broke "has the supervisor answered the owner yet": `option-lab-2` compacted 2 minutes
