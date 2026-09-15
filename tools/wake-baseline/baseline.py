@@ -25,25 +25,38 @@ def collect(root):
     unmeasurable (CLAUDE.md decision 20).
     """
     by_author = collections.Counter()
-    watcher = collections.Counter({"owner": 0, "member": 0, "app": 0})
-    ticket = collections.Counter({"owner": 0, "member": 0, "app": 0})
+    watcher = collections.Counter({"owner": 0, "member": 0, "app": 0, "unrecognised": 0})
+    ticket = collections.Counter({"owner": 0, "member": 0, "app": 0, "unrecognised": 0})
 
-    for channel in sorted(root.glob("*/**/channel.md")) + sorted(root.glob("*/owner-channel.md")):
+    # LIVE **AND** ARCHIVE. Channel_Compactor moves older entries into a sibling `.archive.md`, so a
+    # live-file count is not monotonic and reading only the live files undercounts silently — CLAUDE.md
+    # decision 13, the defect that once told an owner their message was still waiting long after it had
+    # been answered. This script measures the very thing that rule is about, so it reads both.
+    for channel in sorted(root.glob("*/**/channel*.md")) + sorted(root.glob("*/owner-channel*.md")):
         for h in read_headers(channel):
             author = h["author"]
             by_author[author] += 1
 
-            kind = "owner" if author == "owner" else "member" if author in MEMBERS else "app" if author == "app" else None
+            # AN AUTHOR WORD THIS BUILD DOES NOT KNOW IS COUNTED, NOT DROPPED. Headers are
+            # agent-written (decision 12) and a hand-written one bypasses channel-append.sh: measured
+            # 2026-09-15 on the VPS, 39 entries carry the author `sup` instead of `supervisor`.
+            # Dropping them would hide both the traffic and the fact that the vocabulary is leaking.
+            kind = ("owner" if author == "owner"
+                    else "member" if author in MEMBERS
+                    else "app" if author == "app"
+                    else "supervisor" if author == "supervisor"
+                    else "unrecognised")
 
-            if kind is None:
-                continue
+            if kind in ("owner", "member", "app", "unrecognised"):
+                # The fingerprint monitor fires on ANY change it cannot prove is its own.
+                watcher[kind] += 1
 
-            # The fingerprint monitor fires on ANY change it cannot prove is its own: every author counts.
-            watcher[kind] += 1
-
-            # The app's policy: the owner and members are inbound, the app's own bookkeeping is not.
-            if kind != "app":
+            # The app's policy: the owner and members are inbound; the app's own bookkeeping is not.
+            # An unrecognised author is inbound to nobody and is reported so it can be chased.
+            if kind in ("owner", "member"):
                 ticket[kind] += 1
+
+            continue
 
     return {
         "entries_by_author": dict(by_author),
