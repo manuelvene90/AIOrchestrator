@@ -74,6 +74,30 @@ public class PauseGatesEveryWakerScanTests
     }
 
     /// <summary>
+    /// AND THE LIVENESS ALARM INSIDE THAT SWEEP IS BELOW THE PAUSE SCREEN. It is the one thing in the
+    /// sweep that writes to a channel, and it is precisely the sort of alarm a pause must not produce:
+    /// a paused orchestration's session is asleep BECAUSE THE OWNER SAID SO, and every ticket-mode
+    /// session in one would otherwise be reported as having stopped waking, one window after the
+    /// pause. The choke point below would refuse the append anyway, which is the belt; this is the
+    /// braces, and it is the stronger half — a paused session is not examined at all.
+    /// </summary>
+    [Fact]
+    public void TheWakeTicketStallAlarm_SitsBelowThePauseScreenOfItsSweep()
+    {
+        var body = Extract_Method("async Task Sweep_WakeTickets_Async");
+
+        var paused = body.IndexOf("session.Paused", StringComparison.Ordinal);
+        var alarm = body.IndexOf("Raise_WakeStall_IfTicketWentUnanswered", StringComparison.Ordinal);
+
+        Assert.True(alarm >= 0, "the sweep no longer asserts that a ticket was acted on — the one failure this series introduces is silent again");
+        Assert.True(paused >= 0, "the sweep no longer asks whether the orchestration is paused — this scan is reading a method it does not understand");
+
+        Assert.True(
+            paused < alarm,
+            "the liveness alarm is raised above the pause screen: an orchestration the owner put to sleep would be reported as having stopped waking");
+    }
+
+    /// <summary>
     /// THE CHOKE POINT, and the ordering is the claim. Every piece of supervisor-facing attention
     /// traffic passes through here, so one check covers nudges, ledger complaints, idle flags and
     /// the periodic status — but only if it sits ABOVE the append. Below it, the entry is on disk
