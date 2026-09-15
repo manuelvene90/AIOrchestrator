@@ -44,13 +44,14 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     command; the code that used to back this paragraph (`/italian` toggled the layer from the phone,
     with the app's status-bar checkbox mirroring it, PERSISTED to config.json so the provider
     reloaded on the file's write stamp rather than keeping an in-memory copy in step) does not exist
-    anymore. **Whether that stays permanent is still open**: the 2026-09-11 spec's §11.1
-    (`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md`, on branch
-    `feat/fork-merge-and-profiles-spec`, not in this worktree) asks the owner to confirm dropping it
-    in favour of the fork's rule ("with the owner, write in the owner's language"); the owner has not
-    answered. Until they do, treat the deletion as the tree's *current* state, not as a *settled*
-    decision — if the answer is "keep it," a future task re-ports the layer described above from
-    master's history; it is not merely un-deleting a flag.
+    anymore. **Whether that stays permanent is still open**, and the document that framed the question
+    is GONE — the 2026-09-11 spec's §11.1 asked the owner to confirm dropping the layer in favour of
+    the fork's rule ("with the owner, write in the owner's language"), and that spec no longer exists
+    anywhere (see **Design Spec** below for the search). **So the question is open with no written
+    statement of it left**: the owner never answered, and now nobody can re-read what was asked. Treat
+    the deletion as the tree's *current* state, not a *settled* decision — if the answer is "keep it",
+    a future task re-ports the layer described above from master's history, which is not merely
+    un-deleting a flag.
 12. **Channel headers WERE agent-written — the allocation is now the TOOL's, and the duplicate-index
     danger has moved rather than gone (corrected 2026-09-15).** As originally written: `[n]` and the
     timestamp were guesses unless the agent re-read the file — on 2026-08-10 `option-lab-2` carried
@@ -258,10 +259,8 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     features and intent (decisions 8's resume rule, 17's kit delivery rule, the Telegram/pause/
     question-hold decisions above, etc.) were **re-ported by hand across a numbered task series**,
     ledgered in `docs/superpowers/plans/2026-09-11-fork-merge-01-report.md` — that ledger is the
-    audit trail for which side's code is actually running where. Spec:
-    `docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md` (this spec file
-    lives on branch `feat/fork-merge-and-profiles-spec`, not in the merge worktree or on
-    `integration/fork-merge` — read it from that branch, not here). Two names for the same repo
+    audit trail for which side's code is actually running where — **and, the design spec being gone
+    (see **Design Spec** below), it is now the ONLY surviving account of this merge.** Two names for the same repo
     persist for now: `.claude/rules/` still describes fork/upstream boundaries that a merged repo has
     already outgrown (see the git-and-boundaries rule) — that is a known staleness, not yet resolved.
     **One concrete contradiction it will trip over:** `git-and-boundaries.md` says "Do not modify
@@ -363,10 +362,23 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
 
 **`docs/superpowers/specs/2026-08-06-ai-orchestrator-design.md` is the approved design** — read it before changing architecture. This file stays the quick context; the spec is the authority.
 
-**`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md`** covers the
-2026-09-11 fork merge (decision 26) and per-user profiles. It lives on branch
-`feat/fork-merge-and-profiles-spec`, not on `integration/fork-merge` or in this worktree — check out
-that branch (or `git show` the path from it) to read it.
+**`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md` IS GONE, and three
+places in this file used to send a reader to fetch it (corrected 2026-09-15).** It was cited as
+living on branch `feat/fork-merge-and-profiles-spec`. Searched exhaustively on 2026-09-15: **no such
+branch on `origin` or `upstream`** (`git ls-remote --heads` on both), **no such file in any reachable
+commit** (`git rev-list --all` × `git ls-tree`), nothing in the reflog or in any stash. Either it was
+never committed, or it lived only in a worktree that has since been removed.
+
+**What this means for a reader.** The fork merge's authority is now the code and the two things that
+did survive: `docs/superpowers/plans/2026-09-11-fork-merge-01-report.md` (the per-task ledger of which
+side's code is running where) and decision 26 below. The per-user-profiles half has no surviving
+design document — treat any claim about it as unsourced until someone rewrites it.
+
+**The lesson, which is the reason this paragraph replaces a pointer rather than deleting it:** a spec
+that lives only on a branch nobody merged is a spec that will be lost, and the citation outlives the
+file. The sibling incident is in the same week — the 2026-09-09 review dossier sat untracked for six
+days and was one `git worktree remove` from going the same way; it survives only because it was
+committed on 2026-09-15 (`5810ba4`). Commit the document, or do not cite it.
 
 ## Repository Structure
 
