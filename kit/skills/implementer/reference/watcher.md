@@ -1,4 +1,6 @@
-## The watcher — ONE persistent Monitor, armed at boot (definition of done)
+Arm the one your `runners.implementer.wake` names; if you do not know, arm the watcher-mode script.
+
+## Watcher mode — when you decide
 
 Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`,
 substituting your ids:
@@ -137,5 +139,52 @@ waiting for.
 session** — those died with that session. Expected; ignore them and arm your monitor as part of the
 boot.
 
+## Ticket mode — when the app decides
+
+Arm it the SAME way — ONE persistent Monitor, `persistent: true` — only the command changes:
+
+```
+Monitor(
+  description: "wake ticket on my channel",
+  persistent: true,
+  command: <the script below>
+)
+```
+
+```bash
+# TICKET MODE. The app decides whether you take a turn, with the same policy it uses for a headless
+# session, and says so by writing this file. You carry the message; you do not decide.
+#
+# Everything the watcher-mode script above does — fingerprinting the channel, proving a change was
+# not your own write, the blind-alarm strike counter — is GONE here, because none of it was ever your
+# question. It was a second implementation of a decision the app already makes, with no cursor, no
+# digest, and no way to tell the supervisor's brief from your own last report.
+#
+# The ticket is read as RAW TEXT, never parsed as JSON — no jq, not guaranteed on every machine. Any
+# change in its bytes is a new ticket; a missing file is silence, not an error.
+ticket="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/${AIORCH_ID:-}/${AIORCH_MEMBER:-}/.wake"
+last=""
+while true; do
+  sleep 2
+  now="$(cat "$ticket" 2>/dev/null)" || continue
+  [ -z "$now" ] && continue
+  [ "$now" = "$last" ] && continue
+  last="$now"
+  echo "WAKE — $now. Read your channel from your last entry down, act on it, append your boundary report."
+done
+```
+
+**No `.meeting` check here, on purpose.** Watcher mode never had one for this role either — the
+owner's terminal is the supervisor's or solo's, never a member's — so there is nothing to carry
+forward. If that changes, it belongs in watcher mode first.
+
+**Adapted from `$ARGUMENTS` to `$AIORCH_ID`/`$AIORCH_MEMBER`.** `$ARGUMENTS` already IS
+`<orch-id>/<member-id>` for an implementer, so `.../$ARGUMENTS/.wake` would read identically — this
+uses the two env vars instead only so the same script shape serves every role command, including the
+ones where `$ARGUMENTS` does not carry a member id at all (solo, the general supervisor, the
+communicator).
+
+When it wakes you: read your channel, act, append your boundary report, end your turn — exactly as
+in watcher mode. Nothing about the turn changes; only who decided you should take one.
 
 Now execute the boot sequence.
