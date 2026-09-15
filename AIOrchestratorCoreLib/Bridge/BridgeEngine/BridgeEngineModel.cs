@@ -690,7 +690,7 @@ internal sealed class BridgeEngineModel(
     /// duplicate message, which is the at-least-once contract this component already documents,
     /// while persisting it would risk skipping entries nobody ever received.
     /// </summary>
-    readonly Dictionary<string, int> _deliveredEntriesOfHeldAppend = [];
+    readonly HeldAppendMemo.IHeldAppendMemo _deliveredEntriesOfHeldAppend = HeldAppendMemo.HeldAppendMemo_Factory.Create();
 
     /// <summary>
     /// When each orchestration was paused, so a SECOND /pause inside the rename lag re-asserts the
@@ -1734,7 +1734,7 @@ internal sealed class BridgeEngineModel(
             // The prefix memo counts entries of a batch that no longer exists — compaction moved
             // them into the archive — so keeping it would skip the first entries of whatever the
             // file holds now.
-            _deliveredEntriesOfHeldAppend.Remove(truncatedFile);
+            _deliveredEntriesOfHeldAppend.Forget(truncatedFile);
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Channel file shrank (append-only protocol anomaly), offset reset: {truncatedFile}");
         }
 
@@ -3837,20 +3837,21 @@ internal sealed class BridgeEngineModel(
     /// </para>
     /// <para>
     /// WHICH MEANS AN APPEND CAN BE PARTIALLY DELIVERED, and the tailer confirms whole appends only.
-    /// <see cref="_deliveredEntriesOfHeldAppend"/> remembers how many mirrorable entries of a HELD
-    /// append already went out, so the next poll — which re-emits the same entries at the front, in
-    /// order — skips them instead of texting the owner the same question twice.
+    /// <see cref="_deliveredEntriesOfHeldAppend"/> remembers WHICH entries of a HELD append already
+    /// went out, so the next poll — which re-emits the whole append — skips exactly those instead of
+    /// texting the owner the same question twice.
     /// </para>
     /// </summary>
     async Task<MirrorOutcomes> Mirror_Append_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
     {
         var outcome = await Mirror_AppendEntries_Async(append, cancellationToken);
 
-        // THE MEMO IS A POSITIONAL SKIP — "ignore the first N mirrorable entries of this file's
-        // re-emitted append" — so it is only valid while the cursor has NOT advanced. Every outcome
-        // except HELD lets the caller settle the append, which confirms it and moves the cursor; the
-        // batch those N entries were counted against is then gone for ever, and anything left over
-        // would silently count off the front of an UNRELATED later batch, with no log line at all.
+        // THE MEMO DESCRIBES ONE APPEND, so it is only valid while the cursor has NOT advanced.
+        // Every outcome except HELD lets the caller settle the append, which confirms it and moves
+        // the cursor; the batch those entries belonged to is then gone for ever, and anything left
+        // over would silently suppress entries of an UNRELATED later batch, with no log line at all.
+        // (It was a positional COUNT until 2026-09-15, which could suppress the wrong entries even
+        // within its own batch — see HeldAppendMemoModel.)
         //
         // Cleared HERE, once, rather than at each exit: two of them (nothing mirrorable, silenced
         // topic) return Delivered above the entry loop and used to leave the memo behind. That is an
@@ -3858,7 +3859,7 @@ internal sealed class BridgeEngineModel(
         // silences the topic, the held append is confirmed and dropped — and the next thing the
         // supervisor writes to the owner loses its first N entries.
         if (outcome != MirrorOutcomes.Held)
-            _deliveredEntriesOfHeldAppend.Remove(append.Channel.FilePath);
+            _deliveredEntriesOfHeldAppend.Forget(append.Channel.FilePath);
 
         return outcome;
     }
@@ -3921,17 +3922,18 @@ internal sealed class BridgeEngineModel(
         // Entries of THIS append that already reached the phone before an earlier tick held it. They
         // are re-emitted by the tailer because the append was never confirmed; sending them again
         // would be the waterfall arriving by the door built to stop it.
-        var alreadyDelivered = _deliveredEntriesOfHeldAppend.TryGetValue(append.Channel.FilePath, out var previouslyDelivered)
-            ? previouslyDelivered
-            : 0;
-
-        var deliveredHere = 0;
+        // BY IDENTITY, NOT BY POSITION. This used to be a COUNT skipped off the front of the
+        // re-emitted list, which is only correct while the list re-composes identically — and
+        // Select_MirrorableEntries keeps only the NEWEST STATUS entry of an append, so an ordinary
+        // periodic status landing during a hold reshuffled it and the resume skipped an entry that
+        // had never been sent. See HeldAppendMemoModel for the full sequence.
+        List<Channels.ChannelEntry.IChannelEntry> deliveredHere = [];
 
         foreach (var entry in mirrorableEntries)
         {
-            if (deliveredHere < alreadyDelivered)
+            if (_deliveredEntriesOfHeldAppend.Was_Delivered(append.Channel.FilePath, entry))
             {
-                deliveredHere++;
+                deliveredHere.Add(entry);
                 continue;
             }
 
@@ -3939,11 +3941,11 @@ internal sealed class BridgeEngineModel(
             // check outside the loop cannot see a flag its own first entry is about to raise.
             if (QuestionHold_Policy.Should_Hold(append.Channel.IsOwnerChannel, Is_AwaitingAnswer(append.Channel.OrchId)))
             {
-                _deliveredEntriesOfHeldAppend[append.Channel.FilePath] = deliveredHere;
+                _deliveredEntriesOfHeldAppend.Remember_Delivered(append.Channel.FilePath, deliveredHere);
 
                 _log.Log_Info(
                     append.Channel.OrchId,
-                    $"held entry #{entry.Index} and everything after it — the owner is still answering the last question (delivered so far from this batch: {deliveredHere})");
+                    $"held entry #{entry.Index} and everything after it — the owner is still answering the last question (delivered so far from this batch: {deliveredHere.Count})");
 
                 return MirrorOutcomes.Held;
             }
@@ -3985,12 +3987,13 @@ internal sealed class BridgeEngineModel(
                 // callers that predate this change.
                 if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting, entry.Subject))
                 {
-                    // COUNTED, THOUGH NOTHING WAS SENT. The held-append memo is POSITIONAL — the
-                    // resume skips the first `alreadyDelivered` entries of the re-emitted append —
-                    // so it has to count entries CONSUMED, not entries sent. Counting only the sent
-                    // ones left the prefix short by one for every suppressed entry ahead of a sent
-                    // one, and the resume then re-sent an entry the owner already had.
-                    deliveredHere++;
+                    // RECORDED, THOUGH NOTHING WAS SENT. The memo tracks entries CONSUMED, not
+                    // entries sent: an entry the push policy refused has been dealt with, and a
+                    // resume that reconsidered it would re-evaluate a decision already made. (When
+                    // this was a positional count the same rule applied for a sharper reason —
+                    // omitting a suppressed entry left the prefix short by one and the resume
+                    // re-sent an entry the owner already had.)
+                    deliveredHere.Add(entry);
                     continue;
                 }
 
@@ -4042,6 +4045,25 @@ internal sealed class BridgeEngineModel(
             // wearing a bare protocol keyword. The value is deliberately discarded here: this call
             // exists for the REMOVAL, and the field's own reader parses the entry from the channel.
             Extract_MarkerLines(ref text, DeclaredState_Parser.MARKER.TrimEnd(':'));
+
+            // A LINE LIFTED OUT OF A MESSAGE LEAVES A RECEIPT.
+            //
+            // Extraction is anchored at column 0 and is unconditional — it runs on every entry, not
+            // only on questions — so an ordinary sentence that happens to OPEN with a marker word is
+            // removed from what the owner reads. `DEFAULT:`, `RISK:` and `ROW:` are the realistic
+            // ones: this project's own supervisors write about configuration defaults and ledger
+            // rows constantly. Until now that line vanished between the channel file and the phone
+            // with nothing recording it anywhere, which is precisely the silence CLAUDE.md decision
+            // 21 forbids — the file said one thing, the phone showed another, and no surface could
+            // be asked which.
+            //
+            // ONE LINE PER ENTRY, not one per marker: ten calls above, and a log that fired for each
+            // would be noise on every well-formed question. Info, not warning — for a real question
+            // this is the normal path and nothing is wrong.
+            var liftedMarkers = LiftedMarkers_Describer.Describe_OrNull(entry.Body, text);
+
+            if (liftedMarkers != null)
+                _log.Log_Info(append.Channel.OrchId, $"entry #{entry.Index}: {liftedMarkers}");
 
             // COMPLETE OR NOT AT ALL. The body still reaches the owner — a formatting fault must
             // never cost them a message — but an incomplete question grows no buttons, and the
@@ -4194,7 +4216,7 @@ internal sealed class BridgeEngineModel(
                 return MirrorOutcomes.Failed;
             }
 
-            deliveredHere++;
+            deliveredHere.Add(entry);
         }
 
         // The whole append is out, so nothing is owed; the caller drops the memo, which must not
