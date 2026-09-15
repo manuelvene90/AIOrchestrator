@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace AIOrchestratorCoreLib.Limits;
 
 /// <summary>
@@ -75,12 +77,51 @@ public static class DispatchPause_Gate
     }
 
     /// <summary>
-    /// What the owner is told, once. It carries the TIME, because "you are over your limit" is not
-    /// something they can act on and "back at 19:40" is.
+    /// A lift covers the window it lifted: a pause that would end NO LATER than the lifted one is
+    /// the same episode (or an earlier-resetting one) and stays lifted. A window that comes back
+    /// later is a new episode and still pauses — otherwise lifting a five-hour pause would silently
+    /// switch off the weekly guard for the rest of those five hours.
     /// </summary>
-    public static string Describe_Pause(string windowName, double percent, DateTime resumeAtUtc)
+    public static bool Is_CoveredByLift(DateTime candidatePauseUntilUtc, DateTime? liftedUntilUtc)
     {
-        return $"⏸ Dispatch PAUSED — the {windowName} window is at {percent:0.#}%. No new sessions are started or respawned; work already running finishes. Resuming automatically at {resumeAtUtc:HH:mm} UTC.";
+        return liftedUntilUtc != null && candidatePauseUntilUtc <= liftedUntilUtc.Value;
+    }
+
+    /// <summary>
+    /// The resume instant in words. THE DATE IS NAMED ONCE IT IS MORE THAN A DAY AWAY: on 2026-09-15
+    /// a weekly pause said "Resuming automatically at 08:00 UTC", which reads as tomorrow morning and
+    /// meant six days later. The one formatter for every pause line — never a second copy.
+    /// </summary>
+    public static string Describe_ResumeAt(DateTime resumeAtUtc, DateTime nowUtc)
+    {
+        var format = resumeAtUtc - nowUtc < TimeSpan.FromDays(1) ? "HH:mm" : "ddd d MMM HH:mm";
+
+        return $"{resumeAtUtc.ToString(format, CultureInfo.InvariantCulture)} UTC";
+    }
+
+    /// <summary>
+    /// What the owner is told, once. It carries the TIME, because "you are over your limit" is not
+    /// something they can act on and "back at 19:40" is — and the command that lifts it now.
+    /// </summary>
+    public static string Describe_Pause(string windowName, double percent, DateTime resumeAtUtc, DateTime nowUtc)
+    {
+        return $"⏸ Dispatch PAUSED — the {windowName} window is at {percent:0.#}%. No new sessions are started or respawned; work already running finishes. Resuming automatically at {Describe_ResumeAt(resumeAtUtc, nowUtc)}. Send /resume to lift it now.";
+    }
+
+    /// <summary>
+    /// Said at startup when the pause came back from engine state. Every session is down after a
+    /// restart, so a restored pause is what decides whether ANY of them comes back — and before this
+    /// line the only thing the log said was "Bridge started".
+    /// </summary>
+    public static string Describe_RestoredPause(string? reason, DateTime pausedUntilUtc, DateTime nowUtc)
+    {
+        return $"⏸ Dispatch is still PAUSED from before this restart — {reason ?? "a usage limit was reached"}. Sessions are not started or restored until {Describe_ResumeAt(pausedUntilUtc, nowUtc)}. Send /resume to lift it now.";
+    }
+
+    /// <summary>The owner lifted it (/resume, or the app's button).</summary>
+    public static string Describe_Lift(string? reason, DateTime liftedUntilUtc, DateTime nowUtc)
+    {
+        return $"▶ Dispatch pause lifted — sessions are started and restored again (it paused because {reason ?? "a usage limit was reached"}). That window will not pause dispatch again before {Describe_ResumeAt(liftedUntilUtc, nowUtc)}; a window that resets later still can.";
     }
 
     public static string Describe_Resume(string reason)

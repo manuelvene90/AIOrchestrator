@@ -126,11 +126,67 @@ public class DispatchPauseGateTests
     {
         var resumeAt = Now.AddHours(2).AddMinutes(15);
 
-        var text = DispatchPause_Gate.Describe_Pause("5-hour", 97.3, resumeAt);
+        var text = DispatchPause_Gate.Describe_Pause("5-hour", 97.3, resumeAt, Now);
 
         Assert.Contains("5-hour", text);
         Assert.Contains("97.3", text);
         Assert.Contains(resumeAt.ToString("HH:mm"), text);
+        Assert.Contains("/resume", text);
+    }
+
+    [Fact]
+    public void Describe_ResumeAt_WithinADay_IsTheTimeAlone()
+    {
+        var text = DispatchPause_Gate.Describe_ResumeAt(Now.AddHours(20), Now);
+
+        Assert.Equal("08:00 UTC", text);
+    }
+
+    /// <summary>
+    /// 2026-09-15: "Resuming automatically at 08:00 UTC" read as tomorrow morning and meant six days
+    /// later. Past a day, the date is part of the answer.
+    /// </summary>
+    [Fact]
+    public void Describe_ResumeAt_MoreThanADayAway_NamesTheDate()
+    {
+        var sixDaysOut = new DateTime(2026, 9, 21, 8, 0, 0, DateTimeKind.Utc);
+
+        var text = DispatchPause_Gate.Describe_ResumeAt(sixDaysOut, new DateTime(2026, 9, 15, 9, 39, 0, DateTimeKind.Utc));
+
+        Assert.Equal("Mon 21 Sep 08:00 UTC", text);
+    }
+
+    [Fact]
+    public void Describe_RestoredPause_CarriesTheReason_TheDate_AndTheWayToLiftIt()
+    {
+        var text = DispatchPause_Gate.Describe_RestoredPause("the seven_day window was at 95%", Now.AddDays(6), Now);
+
+        Assert.Contains("the seven_day window was at 95%", text);
+        Assert.Contains("Wed 7 Jan", text);
+        Assert.Contains("/resume", text);
+    }
+
+    [Fact]
+    public void NoLift_CoversNothing()
+    {
+        Assert.False(DispatchPause_Gate.Is_CoveredByLift(Now, null));
+    }
+
+    [Fact]
+    public void ALift_CoversThePauseItLifted_AndAnyThatWouldEndSooner()
+    {
+        var liftedUntil = Now.AddDays(6);
+
+        Assert.True(DispatchPause_Gate.Is_CoveredByLift(liftedUntil, liftedUntil));
+        Assert.True(DispatchPause_Gate.Is_CoveredByLift(Now.AddMinutes(30), liftedUntil));
+    }
+
+    [Fact]
+    public void ALift_DoesNotCoverAWindowThatComesBackLater()
+    {
+        var liftedUntil = Now.AddMinutes(40);
+
+        Assert.False(DispatchPause_Gate.Is_CoveredByLift(Now.AddDays(3), liftedUntil));
     }
 
     [Fact]

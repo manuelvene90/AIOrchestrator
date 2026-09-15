@@ -110,7 +110,7 @@ public static class BotCommandMenu
         // /progress fix rejected as sufficient: the menu is what they read BEFORE tapping.
         ("mute", "Toggle 🔕 this topic — drop its messages (in General: everywhere)"),
         ("summary", "What is going on across all orchestrations"),
-        ("resume", "Wake EVERY session — use when the usage limit resets"),
+        ("resume", "Wake EVERY session and lift a usage-limit pause — use when the limit resets"),
         ("status", "What every session of this orchestration is doing"),
         ("tasks", "The FULL ledger of this orchestration, done lines included"),
         ("tokens", "Token and usage totals"),

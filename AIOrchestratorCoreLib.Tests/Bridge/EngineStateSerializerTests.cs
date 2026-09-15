@@ -117,6 +117,7 @@ public class EngineStateSerializerTests
             ButtonGroupSequence = 1002,
             DispatchPausedUntilUtc = T0.AddMinutes(15),
             DispatchPauseReason = "usage limit hit at 97%",
+            DispatchPauseLiftedUntilUtc = T0.AddDays(6),
         };
     }
 
@@ -132,6 +133,7 @@ public class EngineStateSerializerTests
         Assert.Equal(expected.ButtonGroupSequence, actual.ButtonGroupSequence);
         Assert.Equal(expected.DispatchPausedUntilUtc, actual.DispatchPausedUntilUtc);
         Assert.Equal(expected.DispatchPauseReason, actual.DispatchPauseReason);
+        Assert.Equal(expected.DispatchPauseLiftedUntilUtc, actual.DispatchPauseLiftedUntilUtc);
     }
 
     /// <summary>
@@ -234,6 +236,7 @@ public class EngineStateSerializerTests
         Assert.Empty(snapshot.ConsecutiveRespawns);
         Assert.Equal(0, snapshot.ButtonGroupSequence);
         Assert.Null(snapshot.DispatchPausedUntilUtc);
+        Assert.Null(snapshot.DispatchPauseLiftedUntilUtc);
     }
 
     /// <summary>
