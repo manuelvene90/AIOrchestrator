@@ -421,13 +421,40 @@ if [ "$TYPED_CALL" = "1" ]; then
     [ "$is_marker" = "1" ] || BODY_PROSE_LINES=$((BODY_PROSE_LINES + 1))
   done < "$BODY_FILE"
 
-  BODY_CHARACTERS="$(wc -c < "$BODY_FILE" | tr -d ' ')"
+  # CHARACTERS, NOT BYTES — and the trailing newline is not one of them.
+  #
+  # This used to be a bare `wc -c`, which counts BYTES, so the ceiling was tighter for anyone writing
+  # in a language with accents: an em dash costs 3 bytes, a curly apostrophe 3, an emoji 4. A message
+  # the app measured at exactly 600 was reported here as 629 and refused. The newline the composer
+  # appends counted too, which put the real ASCII ceiling at 599 while every other surface said 600.
+  # `wc -m` needs a UTF-8 locale to count characters rather than bytes; where none is available it
+  # degrades to the byte count, which is the old behaviour and now only affects a warning.
+  BODY_CHARACTERS="$(LC_ALL="${AIORCH_UTF8_LOCALE:-en_US.UTF-8}" wc -m < "$BODY_FILE" 2>/dev/null | tr -d ' ')"
+  [ -n "$BODY_CHARACTERS" ] || BODY_CHARACTERS="$(wc -c < "$BODY_FILE" | tr -d ' ')"
+  [ "$BODY_CHARACTERS" -gt 0 ] && BODY_CHARACTERS=$((BODY_CHARACTERS - 1))
 
+  # IT ADVISES; IT DOES NOT REFUSE. Owner's ruling, 2026-09-15.
+  #
+  # From 7d6949f (2026-09-10) to this change, going over the ceiling meant `exit 2` and NOTHING
+  # WRITTEN. Three things made that the wrong trade, and the owner called it after seeing all three:
+  #   * NOBODY EVER KNEW. A refusal is not logged, not mirrored, not written anywhere — a refused
+  #     entry is indistinguishable from an entry never attempted. A session that read `exit 2` as
+  #     "handled" and ended its turn left the owner with no answer and the app with no flag: no
+  #     `.awaiting-answer`, no ❓ on the topic, nothing to notice the silence.
+  #   * IT AIMED THE CUT AT THE WRONG END. The role protocol tells a session to lead with the
+  #     decision and drop context, so the cheapest thing to lose on a retry is the opening — which is
+  #     exactly why the owner's messages began mid-thought.
+  #   * THE RULE WAS ALREADY MEASURED SOMEWHERE BETTER. `Brevity_Policy` counts what actually reached
+  #     the phone and coaches with the real numbers, and its own header says what this line now
+  #     honours: "It never truncates ... Feedback only." Two enforcement points also meant two
+  #     counting units — bytes here, UTF-16 units there — a pair that could not both be obeyed.
+  # So the ceiling stays the rule and this stays its earliest reading of it: said once, on stderr,
+  # with the entry already written.
   if [ "$BODY_PROSE_LINES" -gt "$MAX_LINES" ] || [ "$BODY_CHARACTERS" -gt "$MAX_CHARACTERS" ]; then
-    echo "channel-append.sh: REFUSED — NOTHING WAS WRITTEN. The composed entry is $BODY_PROSE_LINES lines of prose and $BODY_CHARACTERS characters;" >&2
-    echo "                   the ceiling is $MAX_LINES lines and $MAX_CHARACTERS characters. Say less, or move the detail to a spoke." >&2
+    echo "channel-append.sh: NOTE — this entry is $BODY_PROSE_LINES lines of prose and $BODY_CHARACTERS characters; the ceiling is $MAX_LINES lines and $MAX_CHARACTERS characters." >&2
+    echo "                   IT WAS WRITTEN — nothing is refused and nothing is dropped. Next time, cut the EVIDENCE, never the ANSWER:" >&2
+    echo "                   lead with the decision or the question, drop the reasoning unless they asked, and let the detail live in the spokes and the app." >&2
     echo "                   (Marker lines — the question, its options, the recommendation — are not counted as prose.)" >&2
-    exit 2
   fi
 fi
 

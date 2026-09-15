@@ -137,6 +137,43 @@ public class ChannelAppendTypedEntriesTests : IDisposable
     }
 
     /// <summary>
+    /// THE BREVITY CEILING ADVISES; IT DOES NOT REFUSE (owner's ruling, 2026-09-15).
+    ///
+    /// <para>
+    /// From <c>7d6949f</c> (2026-09-10) an over-ceiling entry earned <c>exit 2</c> and NOTHING
+    /// WRITTEN. That was never anybody's intention — it arrived as a side effect of the typed-entry
+    /// feature — and it was the one refusal in this tool that could cost the OWNER something: the
+    /// refusal is logged nowhere, so a session that read it as "handled" ended its turn leaving the
+    /// owner with no answer, the channel with no entry, and the app with no flag to notice that one
+    /// was owed. Every other refusal here protects the protocol; this one attacked it.
+    /// </para>
+    /// <para>
+    /// It is also the only rule in this file that this suite never covered, which is how a refusal
+    /// nobody chose survived five days. The ceiling itself stands — <c>Brevity_Policy</c> measures
+    /// what actually reached the phone and coaches with the real numbers, which is what its own
+    /// header always said it was for.
+    /// </para>
+    /// </summary>
+    [RequiresChannelToolFact]
+    [Trait("Speed", "Slow")]
+    public void AnOverlongEntryIsWrittenAnyway_AndOnlyAdvised()
+    {
+        var wall = string.Join(' ', Enumerable.Repeat("parola", 200));
+
+        var run = Run("--to", "owner", "--subject", "il muro", "--report", wall);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.DoesNotContain("NOTHING WAS WRITTEN", run.StdErr);
+
+        // Advised, with the numbers and with what to cut — the guidance the refusal never carried.
+        Assert.Contains("NOTE", run.StdErr);
+        Assert.Contains("IT WAS WRITTEN", run.StdErr);
+        Assert.Contains("never the ANSWER", run.StdErr);
+
+        Assert.Contains("parola", File.ReadAllText(_channel));
+    }
+
+    /// <summary>
     /// EVERY FAULT AT ONCE, not the first one. A caller told "missing --option" fixes that and is
     /// then told "too long", which is two round trips for one entry — and a session's round trip is
     /// a model turn.

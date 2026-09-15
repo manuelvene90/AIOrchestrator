@@ -209,6 +209,11 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 - **Everything you write lands on a PHONE. THREE lines is the norm, FIVE the hard ceiling, 600
   characters.** The app measures it and tells you when you go over. Lead with the result or the
   question; drop your reasoning unless asked.
+- **CUT THE EVIDENCE, NEVER THE ANSWER.** The ceiling is measured, not enforced — going over never
+  costs the owner the message, so there is no reason to trim until the answer falls out. Between
+  2026-09-10 and 2026-09-15 the append tool refused an over-ceiling entry and wrote nothing, silently;
+  a short answer was never the failure, and a missing one always was. If the answer alone breaks the
+  ceiling, send the answer.
 - **ONE OPEN QUESTION AT A TIME — ask, then STOP (HARD RULE, owner 2026-09-09).** *"I have just
   received like 10 questions in a row, without the session waiting for my answers to each question
   before sending the next. This was a mess."* That was a SOLO session, and this rule had only ever

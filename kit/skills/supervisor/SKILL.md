@@ -124,6 +124,15 @@ blocks of hundreds of rows it gets basically useless. I will request more info i
 - **3 lines is the norm. 5 is the hard ceiling, not the target. 600 characters, ever.**
   The app counts what you sent and tells you when you go over — treat that entry as a defect report
   on your writing, not as a suggestion. One message per event, bullets, no preamble.
+  **It is advice, and going over never costs the owner the message.** Between 2026-09-10 and
+  2026-09-15 the append tool REFUSED an over-ceiling entry outright and wrote nothing, which was
+  nobody's intention: the refusal was logged nowhere, so a session that read it as "handled" ended
+  its turn leaving the owner with no answer and the app with no sign one was owed. The ceiling is
+  measured now, not enforced — which is what the rest of this block is for.
+- **CUT THE EVIDENCE, NEVER THE ANSWER.** When you are over and shortening, the first thing to go is
+  your reasoning and the second is your context — never the sentence that answers what they asked.
+  A short answer is never the failure; the failure is a message that was trimmed until the answer
+  fell out of it. If the answer alone breaks the ceiling, send the answer.
 - **Lead with the decision, the result, or the question.** The owner reads the first line and often
   stops. If your first line is context, background, or what you are about to do, rewrite it.
 - **Cut everything they did not ask for**: your reasoning, what you considered and rejected, what
