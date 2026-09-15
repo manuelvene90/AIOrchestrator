@@ -30,6 +30,14 @@ public static partial class ChannelEntry_Parser
 
     const string EM_DASH = "—";
 
+    /// <summary>
+    /// The stamp the tool writes (<c>kit/grammar/channel-grammar.json</c>: <c>yyyy-MM-dd HH:mm</c>),
+    /// recognised by SHAPE so a one-field header can be told from a dated one. Deliberately lenient
+    /// about the time half — older entries carry the date alone.
+    /// </summary>
+    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$", RegexOptions.Compiled)]
+    private static partial Regex Stamp_Regex();
+
     public static IReadOnlyList<IChannelEntry> Parse_All(string channelText)
     {
         List<IChannelEntry> entries = [];
@@ -38,18 +46,18 @@ public static partial class ChannelEntry_Parser
             return entries;
 
         var lines = channelText.Split('\n');
+        var quoted = ChannelFence_Screen.Map_QuotedLines(lines);
         List<string> currentLines = [];
         Match? currentHeader = null;
 
-        foreach (var rawLine in lines)
+        for (var i = 0; i < lines.Length; i++)
         {
-            var line = rawLine.TrimEnd('\r');
-            var headerMatch = Header_Regex().Match(line);
+            var line = lines[i].TrimEnd('\r');
+            var headerMatch = quoted[i] ? Match.Empty : Header_Regex().Match(line);
 
             if (headerMatch.Success)
             {
-                if (currentHeader != null)
-                    entries.Add(Build_Entry(currentHeader, currentLines));
+                Add_Entry_IfUsable(entries, currentHeader, currentLines);
 
                 currentHeader = headerMatch;
                 currentLines = [line];
@@ -60,10 +68,50 @@ public static partial class ChannelEntry_Parser
             }
         }
 
-        if (currentHeader != null)
-            entries.Add(Build_Entry(currentHeader, currentLines));
+        Add_Entry_IfUsable(entries, currentHeader, currentLines);
 
         return entries;
+    }
+
+    /// <summary>
+    /// Adds the entry unless its header carries an index this system cannot use — see
+    /// <see cref="Read_Index_OrNull"/>. The entry's lines are DROPPED rather than folded into the
+    /// previous entry: an unusable header is not a continuation of the message above it, and merging
+    /// would quietly put one agent's text inside another's.
+    /// </summary>
+    static void Add_Entry_IfUsable(List<IChannelEntry> entries, Match? header, IReadOnlyList<string> entryLines)
+    {
+        if (header == null || Read_Index_OrNull(header) == null)
+            return;
+
+        entries.Add(Build_Entry(header, entryLines));
+    }
+
+    /// <summary>
+    /// THE INDEX, OR NULL WHEN IT CANNOT BE USED — never a throw.
+    ///
+    /// <para>
+    /// WHY. The pattern captures an unbounded <c>(\d+)</c>, so <c>## [99999999999999999999]</c> threw
+    /// <c>OverflowException</c> out of <c>int.Parse</c>, and <c>## [0]</c> threw
+    /// <c>ArgumentException</c> out of <see cref="ChannelEntry_Factory"/>. Either throw landed inside
+    /// the tailer AFTER the read offset had advanced and BEFORE <c>Pending</c> was cleared, so the
+    /// same throw recurred every two seconds for ever: that channel never mirrored again, its pending
+    /// buffer grew without bound, and <c>ChannelAppender.Get_NextIndex</c> hit the same throw inside
+    /// the write lock — so nothing could append to it either, not even the app's own error report
+    /// about it. One bad character killed a channel permanently.
+    /// </para>
+    /// <para>
+    /// A channel header is agent-written, untrusted input (CLAUDE.md decision 12), so this is the
+    /// swallow case the conventions name: skip the entry, keep the channel. The loss is VISIBLE —
+    /// such a line opens no entry, so <see cref="Opens_AnEntry"/> reports it as malformed and it
+    /// travels the alert path <see cref="ChannelShape_Validator.Find_MalformedHeaders"/> already
+    /// owns, right down to the owner-channel alert. A dropped entry is a reported fault, never
+    /// silence.
+    /// </para>
+    /// </summary>
+    static int? Read_Index_OrNull(Match header)
+    {
+        return int.TryParse(header.Groups[1].Value, out var index) && index >= 1 ? index : null;
     }
 
     /// <summary>
@@ -84,29 +132,47 @@ public static partial class ChannelEntry_Parser
     /// them.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// IT SPLITS THE TEXT NOW, where it used to walk it as a span. Fence awareness needs to know
+    /// whether a delimiter further down ever closes (see <see cref="ChannelFence_Screen"/>), which a
+    /// single forward pass cannot answer — and the alternative, a second counting rule that reads
+    /// fences differently from <see cref="Parse_All"/>, is the drift this file's own header warns
+    /// about. The point of this method was never the span: it was not BUILDING the entries, and it
+    /// still does not.
+    /// </remarks>
     public static int Count_Entries(string channelText)
     {
         if (string.IsNullOrEmpty(channelText))
             return 0;
 
-        var count = 0;
-        var remaining = channelText.AsSpan();
+        return Read_HeaderLineIndexes(channelText.Split('\n')).Count;
+    }
 
-        while (!remaining.IsEmpty)
+    /// <summary>
+    /// WHERE THE HEADER LINES ARE, fence-aware, for the callers that cut text at them rather than
+    /// parse it.
+    ///
+    /// <para>
+    /// It exists so <see cref="Tailing.ChannelTailer.ChannelTailerModel"/> does not keep its own
+    /// scan: the tailer decides where an APPEND is cut, so a tailer that disagreed with the parser
+    /// about what opens an entry would split one message where the parser sees none — the same class
+    /// of two-copies drift that <see cref="Read_HeaderLines"/> was extracted to end.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<int> Read_HeaderLineIndexes(IReadOnlyList<string> lines)
+    {
+        List<int> indexes = [];
+
+        var array = lines as string[] ?? [.. lines];
+        var quoted = ChannelFence_Screen.Map_QuotedLines(array);
+
+        for (var i = 0; i < array.Length; i++)
         {
-            var lineBreak = remaining.IndexOf('\n');
-            var line = lineBreak < 0 ? remaining : remaining[..lineBreak];
-
-            if (Header_Regex().IsMatch(line.TrimEnd('\r')))
-                count++;
-
-            if (lineBreak < 0)
-                break;
-
-            remaining = remaining[(lineBreak + 1)..];
+            if (!quoted[i] && Header_Regex().IsMatch(array[i].TrimEnd('\r')))
+                indexes.Add(i);
         }
 
-        return count;
+        return indexes;
     }
 
     public static int Get_NextIndex(string channelText)
@@ -126,6 +192,27 @@ public static partial class ChannelEntry_Parser
     public static bool Is_HeaderLine(string line)
     {
         return Header_Regex().IsMatch(line.TrimEnd('\r'));
+    }
+
+    /// <summary>
+    /// Whether this line actually OPENS AN ENTRY — it is header-shaped AND carries an index this
+    /// system can use.
+    ///
+    /// <para>
+    /// Distinct from <see cref="Is_HeaderLine"/>, which answers about the SHAPE alone and is what the
+    /// print-runner's neutraliser wants: that one must spot a header-shaped line wherever it appears,
+    /// precisely so it can defuse it. This one answers the question every shape check is really
+    /// asking — "will the parser make an entry out of this?" — and the two differ exactly on
+    /// <c>## [0]</c> and on an index too large for <c>int</c>, which parse as headers and become
+    /// nothing. Before <see cref="Read_Index_OrNull"/> they became an exception instead, every two
+    /// seconds, for ever.
+    /// </para>
+    /// </summary>
+    public static bool Opens_AnEntry(string line)
+    {
+        var match = Header_Regex().Match(line.TrimEnd('\r'));
+
+        return match.Success && Read_Index_OrNull(match) != null;
     }
 
     /// <summary>
@@ -150,13 +237,15 @@ public static partial class ChannelEntry_Parser
 
         var lines = channelText.Split('\n');
 
-        for (var i = 0; i < lines.Length; i++)
+        foreach (var i in Read_HeaderLineIndexes(lines))
         {
             var line = lines[i].TrimEnd('\r');
-            var match = Header_Regex().Match(line);
+            var index = Read_Index_OrNull(Header_Regex().Match(line));
 
-            if (match.Success)
-                headers.Add((i + 1, int.Parse(match.Groups[1].Value), line.Trim()));
+            // An index this system cannot use opens no entry (see Read_Index_OrNull), so reporting
+            // it here would describe a header that nothing downstream honours.
+            if (index != null)
+                headers.Add((i + 1, index.Value, line.Trim()));
         }
 
         return headers;
@@ -164,7 +253,8 @@ public static partial class ChannelEntry_Parser
 
     static IChannelEntry Build_Entry(Match header, IReadOnlyList<string> entryLines)
     {
-        var index = int.Parse(header.Groups[1].Value);
+        var index = Read_Index_OrNull(header)
+            ?? throw new Exception($"Build_Entry reached an unusable index '{header.Groups[1].Value}' — Add_Entry_IfUsable must filter it");
         var author = Parse_Author(header.Groups[2].Value);
         var afterAuthor = header.Groups[3].Value;
 
@@ -241,6 +331,24 @@ public static partial class ChannelEntry_Parser
         };
     }
 
+    /// <summary>
+    /// WHEN A HEADER CARRIES ONLY ONE FIELD, ITS SHAPE DECIDES WHICH FIELD IT IS.
+    ///
+    /// <para>
+    /// Observed 2026-09-15: a header with a single em dash — <c>## [12] FROM supervisor — QUESTION:
+    /// quale opzione?</c> — put the whole tail in the DATE and left the subject empty, because the
+    /// split was positional. The mirror falls back to the subject when an entry's body is nothing but
+    /// marker lines, so an empty subject reached the owner as a message that was only the speaker
+    /// prefix, with a notification and no text. It happened seven times in one export.
+    /// </para>
+    /// <para>
+    /// The template is <c>— {stamp} — {subject}</c>, and a stamp has a recognisable shape while a
+    /// subject does not, so the one-field case asks the field what it looks like rather than guessing
+    /// from its position. Text that is not a stamp is the SUBJECT: losing the date costs a "time on
+    /// task" reading that <c>Describe_SinceStamp_OrNull</c> already refuses to guess at, while losing
+    /// the subject costs the owner the message.
+    /// </para>
+    /// </summary>
     static (string DateText, string Subject) Split_DateAndSubject(string afterAuthor)
     {
         var firstDash = afterAuthor.IndexOf(EM_DASH, StringComparison.Ordinal);
@@ -251,7 +359,11 @@ public static partial class ChannelEntry_Parser
         var secondDash = afterFirst.IndexOf(EM_DASH, StringComparison.Ordinal);
 
         if (secondDash < 0)
-            return (afterFirst.Trim(), string.Empty);
+        {
+            var only = afterFirst.Trim();
+
+            return Stamp_Regex().IsMatch(only) ? (only, string.Empty) : (string.Empty, only);
+        }
 
         var dateText = afterFirst[..secondDash].Trim();
         var subject = afterFirst[(secondDash + EM_DASH.Length)..].Trim();

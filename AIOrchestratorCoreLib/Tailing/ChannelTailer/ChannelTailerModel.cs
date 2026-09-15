@@ -449,17 +449,20 @@ internal sealed class ChannelTailerModel : IChannelTailer
         return entries;
     }
 
+    /// <summary>
+    /// WHERE THIS APPEND IS CUT — asked of the parser, never answered here.
+    ///
+    /// <para>
+    /// It used to be its own loop over <c>Is_HeaderLine</c>, which made it a SECOND opinion about
+    /// what opens an entry. The two came apart the moment the parser learned to ignore a header
+    /// quoted inside a fenced block (2026-09-15): this loop would still have cut the append at the
+    /// quotation and handed the mirror a fragment the parser does not believe in — half a message,
+    /// signed by whoever was quoted. Same rule, one home.
+    /// </para>
+    /// </summary>
     static IReadOnlyList<int> Find_HeaderLineIndexes(IReadOnlyList<string> lines)
     {
-        List<int> indexes = [];
-
-        for (var i = 0; i < lines.Count; i++)
-        {
-            if (ChannelEntry_Parser.Is_HeaderLine(lines[i]))
-                indexes.Add(i);
-        }
-
-        return indexes;
+        return ChannelEntry_Parser.Read_HeaderLineIndexes(lines);
     }
 
     /// <summary>

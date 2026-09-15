@@ -44,14 +44,24 @@ public static partial class ChannelShape_Validator
 
         var lines = channelText.Split('\n');
 
+        // A header-shaped line inside a CLOSED fence is a quotation the author meant to show, not an
+        // entry they failed to write (see ChannelFence_Screen). Flagging it would be the false
+        // positive this detector's own header warns about — and since 2026-09-15 the parser skips
+        // those lines too, so a flag here would describe a loss that no longer happens.
+        var quoted = ChannelFence_Screen.Map_QuotedLines(lines);
+
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i].TrimEnd('\r');
 
-            if (!Looks_LikeAttemptedHeader(line))
+            if (quoted[i] || !Looks_LikeAttemptedHeader(line))
                 continue;
 
-            if (ChannelEntry_Parser.Is_HeaderLine(line))
+            // Opens_AnEntry, not Is_HeaderLine: `## [0]` and an index too large for `int` are
+            // header-SHAPED and become no entry at all, so their content is exactly as invisible as
+            // a malformed header's and belongs in the same report. Before 2026-09-15 they were worse
+            // than invisible — they threw every two seconds and killed the channel outright.
+            if (ChannelEntry_Parser.Opens_AnEntry(line))
                 continue;
 
             malformed.Add((i + 1, line.Trim()));

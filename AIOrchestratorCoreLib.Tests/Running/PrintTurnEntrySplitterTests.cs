@@ -73,12 +73,41 @@ public class PrintTurnEntrySplitterTests
     /// </summary>
     [Theory]
     [InlineData("[2] FROM implementer — 2026-09-06 — no hashes", "[2] FROM implementer — 2026-09-06 — no hashes")]
-    [InlineData("## [9] FROM implementer — one dash only", "[9] FROM implementer — one dash only")]
     public void ALineTheParserDoesNotReadAsAHeader_IsOnlyStripped(string first, string expected)
     {
         var (subject, _) = PrintTurnEntry_Splitter.Split($"{first}\n\nbody");
 
         Assert.Equal(expected, subject);
+        Assert.False(ChannelEntry_Parser.Is_HeaderLine(subject));
+    }
+
+    /// <summary>
+    /// A ONE-EM-DASH ECHOED HEADER CROSSED THE BOUNDARY ON 2026-09-15, and it crossed it the right way.
+    ///
+    /// <para>
+    /// It used to sit in the theory above, expecting <c>[9] FROM implementer — one dash only</c> — the
+    /// line with its hashes stripped and nothing else — because <c>Split_DateAndSubject</c> read the
+    /// single field POSITIONALLY as a date and left the subject empty, so the recovery in
+    /// <c>Clean_SubjectLine</c> found nothing to use and fell through.
+    /// </para>
+    /// <para>
+    /// That empty subject was a defect in its own right: the mirror falls back to the subject when a
+    /// body is all marker lines, and an empty one reached the owner as a message that was nothing but
+    /// the speaker prefix. The parser now asks the field what it LOOKS like, so this header recovers a
+    /// real subject — which puts this case on the same side as every other echoed header, and
+    /// satisfies what the sibling test above already demanded of them: the invented index and author
+    /// are GONE, not merely moved into the subject.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AnEchoedHeaderWithOneEmDash_RecoversItsSubject_AndDropsTheInventedIndex()
+    {
+        var (subject, _) = PrintTurnEntry_Splitter.Split("## [9] FROM implementer — one dash only\n\nbody");
+
+        Assert.Equal("one dash only", subject);
+
+        Assert.DoesNotContain("[9]", subject);
+        Assert.DoesNotContain("FROM implementer", subject);
         Assert.False(ChannelEntry_Parser.Is_HeaderLine(subject));
     }
 
