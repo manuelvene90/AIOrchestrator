@@ -133,19 +133,50 @@ public static partial class ChannelEntry_Parser
     /// </para>
     /// </summary>
     /// <remarks>
-    /// IT SPLITS THE TEXT NOW, where it used to walk it as a span. Fence awareness needs to know
-    /// whether a delimiter further down ever closes (see <see cref="ChannelFence_Screen"/>), which a
-    /// single forward pass cannot answer — and the alternative, a second counting rule that reads
-    /// fences differently from <see cref="Parse_All"/>, is the drift this file's own header warns
-    /// about. The point of this method was never the span: it was not BUILDING the entries, and it
-    /// still does not.
+    /// <para>
+    /// IT STAYS ALLOCATION-FREE FOR THE FILE THAT HAS NO FENCES, which is nearly every file and
+    /// certainly every tick's common case. Fence awareness needs to know whether a delimiter further
+    /// down ever CLOSES, which one forward pass cannot answer — but a file containing no delimiter at
+    /// all cannot hold a quoted header, so the cheap span walk is already the exact answer there and
+    /// only a file that has one pays for <see cref="ChannelFence_Screen.Map_QuotedLines"/>. Writing a
+    /// second fence rule that a span could evaluate in one pass was the alternative, and it is the
+    /// drift this file's own header warns about.
+    /// </para>
+    /// <para>
+    /// IT COUNTS HEADER LINES, and since 2026-09-15 that is no longer the same as the number
+    /// <see cref="Parse_All"/> returns: a header carrying an index this system cannot use opens no
+    /// entry (see <see cref="Read_Index_OrNull"/>) but is still counted here. Harmless for the one
+    /// caller — a pre-filter that over-counts asks the compactor to look, and the compactor parses
+    /// before it archives anything. <c>CountEntriesAgreesWithTheHeaderScan</c> pins the equality that
+    /// does hold.
+    /// </para>
     /// </remarks>
     public static int Count_Entries(string channelText)
     {
         if (string.IsNullOrEmpty(channelText))
             return 0;
 
-        return Read_HeaderLineIndexes(channelText.Split('\n')).Count;
+        var count = 0;
+        var sawFence = false;
+        var remaining = channelText.AsSpan();
+
+        while (!remaining.IsEmpty)
+        {
+            var lineBreak = remaining.IndexOf('\n');
+            var line = (lineBreak < 0 ? remaining : remaining[..lineBreak]).TrimEnd('\r');
+
+            if (ChannelFence_Screen.Looks_LikeDelimiter(line))
+                sawFence = true;
+            else if (Header_Regex().IsMatch(line))
+                count++;
+
+            if (lineBreak < 0)
+                break;
+
+            remaining = remaining[(lineBreak + 1)..];
+        }
+
+        return sawFence ? Read_HeaderLineIndexes(channelText.Split('\n')).Count : count;
     }
 
     /// <summary>

@@ -291,4 +291,33 @@ public class ChannelEntryParserTests
 
         Assert.Empty(ChannelEntry_Parser.Read_HeaderLines(channelText));
     }
+
+    /// <summary>
+    /// THE FAST PATH AND THE EXACT PATH MUST AGREE, or the cheap one is a second rule.
+    ///
+    /// <para>
+    /// <see cref="ChannelEntry_Parser.Count_Entries"/> runs on every channel on every two-second tick,
+    /// so it walks the text as a span and allocates nothing — but fence awareness cannot be settled in
+    /// one forward pass, because whether a delimiter CLOSES is only known later. It resolves that by
+    /// noticing that a file with no delimiter at all cannot hold a quoted header, and falling back to
+    /// the exact scan only for a file that has one. This pins the two against each other over the
+    /// shapes where they could come apart — which is the whole licence for having a fast path.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("## [1] FROM supervisor — 2026-09-15 10:00 — one\nbody\n")]
+    [InlineData("no headers here at all\njust prose\n")]
+    [InlineData(SUPERVISOR_QUOTING_AN_ENTRY)]
+    [InlineData("## [1] FROM supervisor — d — a\n```\n## [2] FROM implementer — d — b\n")]
+    [InlineData("## [1] FROM supervisor — d — a\n~~~\n## [2] FROM implementer — d — b\n~~~\ntail\n")]
+    [InlineData("```\n## [1] FROM supervisor — d — quoted at the very top\n```\n")]
+    [InlineData("## [1] FROM supervisor — d — a\r\n```\r\n## [2] FROM implementer — d — b\r\n```\r\n")]
+    public void Count_Entries_AgreesWithTheHeaderScan(string channelText)
+    {
+        var exact = ChannelEntry_Parser.Read_HeaderLineIndexes(channelText.Split('\n')).Count;
+
+        Assert.Equal(exact, ChannelEntry_Parser.Count_Entries(channelText));
+    }
+
 }

@@ -41,6 +41,27 @@ public static partial class ChannelFence_Screen
     private static partial Regex Fence_Regex();
 
     /// <summary>
+    /// Whether this line is a fence delimiter AT ALL — the cheap half, for a caller that only needs
+    /// to know whether fences are in play.
+    ///
+    /// <para>
+    /// A file with no delimiter anywhere cannot contain a quoted header, so a scan that sees none can
+    /// skip <see cref="Map_QuotedLines"/> and its allocations entirely. That is what keeps
+    /// <c>ChannelEntry_Parser.Count_Entries</c> — asked of every channel on every two-second tick —
+    /// from splitting the whole file into strings just to find out that nothing was quoted.
+    /// </para>
+    /// <para>
+    /// IT IS NOT A SECOND COPY OF THE RULE: pairing, and therefore the decision, stays in
+    /// <see cref="Map_QuotedLines"/>. This answers only "is there a delimiter on this line", which is
+    /// the same question the map's first step asks, through the same regex.
+    /// </para>
+    /// </summary>
+    public static bool Looks_LikeDelimiter(ReadOnlySpan<char> line)
+    {
+        return Fence_Regex().IsMatch(line);
+    }
+
+    /// <summary>
     /// One flag per line: true when that line lies inside a CLOSED fenced block, delimiters included.
     ///
     /// <para>
