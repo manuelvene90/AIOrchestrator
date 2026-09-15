@@ -19,6 +19,7 @@
 - **Branch:** `feat/one-wake-model`, worktree `../AIOrchestrator-relations`. Stage explicit paths, never `git add -A`. Multi-line messages via `git commit -F <tempfile>`. Commits in English, `type(scope): a descriptive clause`.
 - **Known reds:** the four `OrchestratorConfigFactoryTests` cases are a ruled exception (plan 01 of the fork merge); the file-lock / wall-clock family under `Bridge/` is a known flakiness campaign. Any OTHER red is yours.
 - **Run the suite as** `dotnet test AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj`. Filter a single test with `--filter "FullyQualifiedName~<ClassName>"`.
+- **`dotnet` is NOT on PATH on the owner's Mac.** It lives at `~/.dotnet/dotnet` (SDK 10.0.401); the lib and tests target `net10.0`, which is platform-neutral and builds on macOS. Start every shell with `export PATH="$HOME/.dotnet:$PATH"`. Measured 2026-09-15; a full run is ~3 min 20 s, 3 923 passing / 10 skipped / **0 failing** — so on this machine the two "known red" families above are currently GREEN, and any red you see is yours.
 
 ---
 
@@ -243,13 +244,37 @@ public class WakeModeConfigTests
         Assert.Equal(WakeModes.Watcher, configs.Get_ForRole(SessionRoles.Implementer).Wake);
     }
 
+    /// <summary>
+    /// AND THE REST OF THE NODE IS STILL READ. Asserting only that the mode is Watcher passes for TWO
+    /// reasons — the word fell back, or nothing parses `wake` at all — and an assertion with two routes
+    /// to its state pins neither (CLAUDE.md decision 20). Pin `runner` and `resume` beside it.
+    /// </summary>
     [Fact]
-    public void An_unknown_word_falls_back_to_the_watcher_rather_than_throwing()
+    public void An_unknown_word_falls_back_to_the_watcher_without_costing_the_rest_of_the_node()
     {
-        var configs = RunnerConfigs_Json.Parse("""{"supervisor":{"wake":"telepathy"}}""");
-        Assert.Equal(WakeModes.Watcher, configs.Get_ForRole(SessionRoles.Supervisor).Wake);
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""{"runners":{"supervisor":{"runner":"print","resume":"fresh","wake":"telepathy"}}}""") as JsonObject);
+        var role = configs.Get_ForRole(SessionRoles.Supervisor);
+
+        Assert.Equal(WakeModes.Watcher, role.Wake);
+        Assert.Equal(SessionRunners.Print, role.Runner);
+        Assert.Equal(ResumeModes.Fresh, role.Resume);
+    }
+
+    /// <summary>AND IT SURVIVES A SAVE — see the Write note in Step 5.</summary>
+    [Fact]
+    public void An_explicit_wake_mode_survives_a_save_and_a_reload()
+    {
+        var parsed = RunnerConfigs_Json.Parse(JsonNode.Parse("""{"runners":{"supervisor":{"runner":"terminal","wake":"ticket"}}}""") as JsonObject);
+        var written = new JsonObject();
+        RunnerConfigs_Json.Write(written, parsed);
+
+        Assert.Equal(WakeModes.Ticket, RunnerConfigs_Json.Parse(written).Get_ForRole(SessionRoles.Supervisor).Wake);
     }
 }
+
+> **Signature note, verified 2026-09-15:** `RunnerConfigs_Json.Parse` takes a `JsonObject?`, NOT a
+> string, and the roles live under a `"runners"` wrapper. Follow `RunnerConfigsJsonTests.cs` for the
+> house shape: `RunnerConfigs_Json.Parse(JsonNode.Parse(json) as JsonObject)`.
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -326,7 +351,9 @@ In `RunnerConfigs_Json.cs`, beside the existing `resume` read, add:
 var wake = WakeMode_Names.Parse_OrNull(Read_String_OrNull(element, "wake")) ?? WakeModes.Watcher;
 ```
 
-and pass `wake` into every `RoleRunnerConfig_Factory.Create(...)` call in the file (there are two: the terminal branch at line ~180 and the bridge branch above it).
+and pass `wake` into every `RoleRunnerConfig_Factory.Create(...)` call in the file. **There are THREE, not two** (counted 2026-09-15): the non-bg branch, the bg-refused-falls-back-to-terminal branch, and the bg-accepted branch. Miss one and that path silently drops the setting. Confirm with `grep -n "RoleRunnerConfig_Factory.Create(" RunnerConfigs_Json.cs` after editing.
+
+**And `Write` must emit it too.** `RunnerConfigs_Json.Write` is called on every save (`OrchestratorConfig_Loader.cs:259`) and emitted runner, resume, permission_mode and settings only — so an explicit `"wake": "ticket"` was silently returned to the default by the app's own next save, against this file's own header promise that *"every role and every limit is written"*. Add `[WAKE_KEY] = WakeMode_Names.Get_Word(roleConfig.Wake),` beside the `RESUME_KEY` line. The whole series ships behind this key: "reversible in one edit" is false if a save undoes the edit.
 
 - [ ] **Step 6: Run the test and watch it pass**
 
