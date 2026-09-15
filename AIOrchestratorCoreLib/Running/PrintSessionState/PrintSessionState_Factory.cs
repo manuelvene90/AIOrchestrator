@@ -69,7 +69,8 @@ public static class PrintSessionState_Factory
             cursors,
             Math.Max(source.NextTurnNumber, executed.TurnNumber + 1),
             0,
-            [.. source.ExecutedTurns, executed]);
+            [.. source.ExecutedTurns, executed],
+            drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>
@@ -80,7 +81,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_Cursors(IPrintSessionState source, IReadOnlyList<ITurnCursor> cursors)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc, drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>
@@ -90,7 +91,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_SessionClaimed(IPrintSessionState source, string sessionId)
     {
-        return Create(sessionId, true, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc);
+        return Create(sessionId, true, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc, drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>
@@ -101,7 +102,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_SessionUnclaimed(IPrintSessionState source, string sessionId)
     {
-        return Create(sessionId, false, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc);
+        return Create(sessionId, false, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc, drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>
@@ -111,7 +112,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_Relaunched(IPrintSessionState source, string workingDirectory, string? model)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, workingDirectory, model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, workingDirectory, model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc, drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>
@@ -121,7 +122,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_AttemptFailed(IPrintSessionState source)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts + 1, source.ExecutedTurns);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts + 1, source.ExecutedTurns, drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>
@@ -133,7 +134,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_LimitDeferred(IPrintSessionState source, DateTime retryNotBeforeUtc)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, retryNotBeforeUtc);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, retryNotBeforeUtc, drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>
@@ -146,7 +147,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_LimitDeferralCleared(IPrintSessionState source)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, null);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, null, drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>
@@ -155,12 +156,12 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_AttemptsReset(IPrintSessionState source)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, 0, source.ExecutedTurns);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, 0, source.ExecutedTurns, drivesTurns: source.DrivesTurns);
     }
 
     /// <summary>A request id found already executed: the turn number is skipped without running anything, and nothing is left waiting on it.</summary>
     public static IPrintSessionState CreateFrom_Existing_TurnSkipped(IPrintSessionState source)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber + 1, 0, source.ExecutedTurns);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber + 1, 0, source.ExecutedTurns, drivesTurns: source.DrivesTurns);
     }
 }

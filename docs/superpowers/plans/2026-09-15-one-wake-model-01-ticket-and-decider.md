@@ -47,7 +47,7 @@
 | `AIOrchestratorCoreLib/Running/PrintSessionState/IPrintSessionState.cs` | `+ bool DrivesTurns` |
 | `AIOrchestratorCoreLib/Running/PrintSessionState/PrintSessionStateModel.cs` | same |
 | `AIOrchestratorCoreLib/Running/PrintSessionState/PrintSessionState_Factory.cs` | same, defaulting `true` |
-| `AIOrchestratorCoreLib/Running/PrintSessionState_Store.cs` | read/write the field; absent ⇒ `true` |
+| `AIOrchestratorCoreLib/Running/PrintSessionState/PrintSessionState_Store.cs` | read/write the field; absent ⇒ `true`. **On-disk keys are snake_case** (`session_id`, `sources`, `next_turn_number`): the new one is `drives_turns`. |
 | `AIOrchestratorCoreLib/Running/PrintTurnDispatcher/PrintTurnDispatcherModel.cs` | discovery screens on `DrivesTurns`; the inline decision calls the resolver |
 | `AIOrchestratorCoreLib/Launching/OrchestrationLauncher/OrchestrationLauncherModel.cs:554` | terminal writes `DrivesTurns=false` instead of deleting |
 | `AIOrchestratorCoreLib/Running/RoleRunnerConfig/*` | `+ WakeModes Wake`, default `Watcher` |
@@ -472,6 +472,15 @@ Expected: compile error — `DrivesTurns` / `drivesTurns` do not exist.
 ```
 
 Mirror it in `PrintSessionStateModel.cs` and add `bool drivesTurns = true` as the last parameter of `PrintSessionState_Factory.Create`.
+
+**AND EVERY `CreateFrom_Existing_*` MUST FORWARD IT — there are TEN, and the default makes omission
+silent.** Pass it NAMED (`drivesTurns: source.DrivesTurns`), never positionally: three of these end at
+`source.ExecutedTurns`, where a positional argument lands in the optional `retryNotBeforeUtc` slot
+instead. This is not hypothetical — `CreateFrom_Existing_Cursors` is what Task 8's sweep calls to
+advance a terminal session's cursor, so without this the FIRST wake ticket puts that session back
+under the dispatcher while it still has a window: a window and headless turns answering one brief,
+the exact failure the launcher's delete existed to prevent. Pin it with a census test that asserts
+how many `CreateFrom_Existing_*` methods exist, so an eleventh cannot be added silently.
 
 - [ ] **Step 4: Read and write it in the store**
 
