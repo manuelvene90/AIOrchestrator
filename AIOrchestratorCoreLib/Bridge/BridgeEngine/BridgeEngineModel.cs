@@ -15185,9 +15185,9 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// APP-WIDE. Every open orchestration is told, the general supervisor is told, every topic gets
-    /// the ✈ glyph and one notice. The app coordinates all of it directly — supervisors relaying
-    /// this to each other would be slower, lossier, and would cost tokens to do worse.
+    /// APP-WIDE. Every open orchestration's SUPERVISOR is told in its own channel, and the OWNER is
+    /// told once, in General. The app coordinates all of it directly — supervisors relaying this to
+    /// each other would be slower, lossier, and would cost tokens to do worse.
     /// </summary>
     async Task Enter_AwayMode_Async(CancellationToken cancellationToken)
     {
@@ -15219,11 +15219,23 @@ internal sealed class BridgeEngineModel(
             Raise_OrchestrationActivity(session.OrchId);
 
             await Park_OpenQuestions_Async(session.OrchId, cancellationToken);
-            // AWAY MODE FIRES AFTER FIFTEEN MINUTES OF THE OWNER'S OWN SILENCE — which is to say,
-            // usually because they are asleep. Waking them to say "you seem to be away" is the
-            // purest possible case of an alert they cannot act on.
-            await Send_AwayNotice_Async(session, AwayMode_Policy.AWAY_ON_NOTICE, TelegramSendSounds.Silent, cancellationToken);
         }
+
+        // ONCE, IN GENERAL, AND NEVER PER TOPIC (owner, 2026-09-15). Away mode is app-wide and the
+        // notice says so in its own words — "it clears away mode everywhere" — so N open
+        // orchestrations meant the owner reading one sentence N times, in the N places it was least
+        // about. General is where the app speaks about ITSELF, and it was the one place this never
+        // reached: the General entry above is Agent-audience, written for the general supervisor and
+        // never texted, so the owner's own topic got nothing while every other topic got a copy.
+        //
+        // EACH TOPIC KEEPS ITS OWN ✈, and that is what makes this a duplicate rather than a loss:
+        // the glyph lives in PULSE's header (TopicStatusLine_Builder, fed by IsAway), a line EDITED
+        // in place, so the per-topic marker costs no notification and is already there.
+        //
+        // AWAY MODE FIRES AFTER FIFTEEN MINUTES OF THE OWNER'S OWN SILENCE — which is to say,
+        // usually because they are asleep. Waking them to say "you seem to be away" is the purest
+        // possible case of an alert they cannot act on.
+        await Send_AwayNotice_ToGeneral_Async(AwayMode_Policy.AWAY_ON_NOTICE, TelegramSendSounds.Silent, cancellationToken);
     }
 
     async Task Exit_AwayMode_Async(CancellationToken cancellationToken)
@@ -15250,11 +15262,12 @@ internal sealed class BridgeEngineModel(
                 + "the mess this mode exists to prevent.");
 
             Raise_OrchestrationActivity(session.OrchId);
-
-            // AND ONCE PER OPEN ORCHESTRATION, so five open topics meant five notifications saying
-            // the same thing about a state the owner had just ended themselves by speaking.
-            await Send_AwayNotice_Async(session, AwayMode_Policy.AWAY_OFF_NOTICE, TelegramSendSounds.Silent, cancellationToken);
         }
+
+        // ONCE, IN GENERAL — the reasoning is AWAY MODE ON's above, and this was the worse of the
+        // two: five open topics meant five notifications saying the same thing about a state the
+        // owner had just ended themselves by speaking.
+        await Send_AwayNotice_ToGeneral_Async(AwayMode_Policy.AWAY_OFF_NOTICE, TelegramSendSounds.Silent, cancellationToken);
     }
 
     /// <summary>
@@ -15267,13 +15280,34 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_AwayNotice_Async(IOrchestrationSession session, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
+        await Send_AwayNotice_Async(session.OrchId, session.TelegramTopicId, text, sound, cancellationToken);
+    }
+
+    /// <summary>
+    /// The APP-WIDE half of away mode, which has exactly one place to be said. A null thread id IS
+    /// the General topic for this client, and the gate below asks about General on the same terms as
+    /// any topic — the owner sitting at General's terminal, or an app-wide DND, still silences it.
+    /// <para>
+    /// ONE SENDER FOR BOTH ADDRESSES, deliberately (decision 12). A second copy of the body below
+    /// would be a second place for the mode gate and the cancellation filter to drift, and the
+    /// per-topic notices this joins — quiet, ledger movement — are the ones that must keep behaving
+    /// identically to it.
+    /// </para>
+    /// </summary>
+    async Task Send_AwayNotice_ToGeneral_Async(string text, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        await Send_AwayNotice_Async(ChannelDiscovery.GENERAL_ORCH_ID, messageThreadId: null, text, sound, cancellationToken);
+    }
+
+    async Task Send_AwayNotice_Async(string orchId, long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null || Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
             return;
 
         try
         {
             await TelegramProse_Sender.Send_Async(
-                _telegramClient, _log, session.OrchId, session.TelegramTopicId, text, sound, cancellationToken);
+                _telegramClient, _log, orchId, messageThreadId, text, sound, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -15285,7 +15319,7 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Warning(session.OrchId, $"Away-mode notice send failed: {ex.Message}");
+            _log.Log_Warning(orchId, $"Away-mode notice send failed: {ex.Message}");
         }
     }
 

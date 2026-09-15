@@ -157,6 +157,72 @@ public class AwaySuppressesAppAlertsScanTests
         Assert.Contains("Note_OwnerSpoke_AndWasAway()", body);
     }
 
+    /// <summary>
+    /// AN APP-WIDE STATE IS ANNOUNCED IN ONE PLACE (owner, 2026-09-15). Away mode is app-wide — the
+    /// notice says so in its own words, *"it clears away mode everywhere"* — and both notices were
+    /// sent inside the per-orchestration loop, so N open orchestrations put the same sentence on the
+    /// owner's phone N times. General, the topic they pinned and read, got neither: the General entry
+    /// those methods write is <c>AppEntryAudiences.Agent</c>, which by definition is never texted.
+    ///
+    /// <para>
+    /// WHAT REPLACES THE PER-TOPIC COPY is already there: PULSE's header carries ✈ per topic
+    /// (<c>TopicStatusLine_Builder</c>, fed by <c>IsAway</c>), and that line is EDITED rather than
+    /// sent, so the marker survives at no notification cost. This test exists because a fan-out is
+    /// the natural shape of a loop — the next hand to add an app-wide announcement will reach for
+    /// the loop that is already open, which is how this one got there.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheAwayNotices_AreSentOnceInGeneral_AndNeverPerTopic()
+    {
+        foreach (var signature in new[] { "async Task Enter_AwayMode_Async", "async Task Exit_AwayMode_Async" })
+        {
+            var body = Extract_Method(signature);
+
+            // The harness proves it found the right method before judging what is inside it.
+            Assert.Contains("_store.Load_All()", body);
+
+            Assert.Contains("Send_AwayNotice_ToGeneral_Async(AwayMode_Policy.AWAY_", body);
+
+            Assert.DoesNotContain("Send_AwayNotice_Async(session", body);
+        }
+    }
+
+    /// <summary>
+    /// ONCE EACH, ACROSS THE WHOLE ENGINE. The test above reads two method bodies; this one closes
+    /// the other half — a second sender anywhere else would restore the duplication without either
+    /// of those bodies changing.
+    /// </summary>
+    [Fact]
+    public void EachAwayNoticeHasExactlyOneSender()
+    {
+        var source = Read_EngineSource();
+
+        Assert.Equal(1, source.Split("AwayMode_Policy.AWAY_ON_NOTICE").Length - 1);
+        Assert.Equal(1, source.Split("AwayMode_Policy.AWAY_OFF_NOTICE").Length - 1);
+    }
+
+    /// <summary>
+    /// GENERAL IS ADDRESSED AS GENERAL, both halves of it. A null thread id IS the General topic for
+    /// this client, and the mode gate has to be asked about <c>GENERAL_ORCH_ID</c> rather than about
+    /// the engine's <c>GLOBAL_ORCH_ID</c> (<c>""</c>): the resolver decides <c>isGeneral</c> by that
+    /// exact comparison, so the empty id would silently take the branch for a topic that does not
+    /// exist — no presence, no General terminal check — and text a phone the owner is not holding.
+    /// </summary>
+    [Fact]
+    public void TheGeneralAwayNotice_IsAddressedAndGatedAsGeneral()
+    {
+        var source = Read_EngineSource();
+
+        Assert.Contains(
+            "Send_AwayNotice_Async(ChannelDiscovery.GENERAL_ORCH_ID, messageThreadId: null, text, sound, cancellationToken)",
+            source);
+
+        var body = Extract_Method("async Task Send_AwayNotice_Async(string orchId");
+
+        Assert.Contains("Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal", body);
+    }
+
     static string Extract_Method(string signatureMark)
     {
         var source = Read_EngineSource();
