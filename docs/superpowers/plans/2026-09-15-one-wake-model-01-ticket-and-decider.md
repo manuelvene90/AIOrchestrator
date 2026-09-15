@@ -94,9 +94,11 @@ def test_counts_wakes_by_cause():
         assert got["entries_by_author"]["owner"] == 1
         assert got["entries_by_author"]["app"] == 1
         assert got["entries_by_author"]["implementer"] == 1
-        assert got["supervisor_wake_causes"]["owner"] == 1
-        assert got["supervisor_wake_causes"]["member"] == 1
-        assert got["supervisor_wake_causes"]["app"] == 0
+        # Under the watcher EVERY author wakes the supervisor, the app's own bookkeeping included.
+        assert got["wake_causes_under_watcher"]["app"] == 1
+        # Under the app's policy the bookkeeping wakes nobody. The gap is what this series buys.
+        assert got["wake_causes_under_ticket"]["app"] == 0
+        assert got["wakes_avoided_by_the_ticket"] == 1
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -122,17 +124,28 @@ def read_headers(path):
             yield {"index": int(m.group(1)), "author": m.group(2), "stamp": m.group(3), "subject": m.group(4)}
 
 def collect(root):
-    by_author, causes = collections.Counter(), collections.Counter({"owner": 0, "member": 0, "app": 0})
+    """TWO readings of the same entries — the gap between them is the whole point.
+
+    Under the bash watcher a channel change is a wake, so an app-authored entry wakes the supervisor
+    exactly like a member's report. Under the app's policy it wakes nobody. NEITHER column may be
+    seeded with a constant and then asserted to be that constant: that pins nothing (decision 20).
+    """
+    by_author = collections.Counter()
+    watcher = collections.Counter({"owner": 0, "member": 0, "app": 0})
+    ticket = collections.Counter({"owner": 0, "member": 0, "app": 0})
     for channel in sorted(root.glob("*/**/channel.md")) + sorted(root.glob("*/owner-channel.md")):
         for h in read_headers(channel):
-            by_author[h["author"]] += 1
-            if h["author"] == "owner":
-                causes["owner"] += 1
-            elif h["author"] in MEMBERS:
-                causes["member"] += 1
-            elif h["author"] == "app":
-                causes["app"] += 1
-    return {"entries_by_author": dict(by_author), "supervisor_wake_causes": dict(causes)}
+            author = h["author"]
+            by_author[author] += 1
+            kind = "owner" if author == "owner" else "member" if author in MEMBERS else "app" if author == "app" else None
+            if kind is None:
+                continue
+            watcher[kind] += 1          # the monitor fires on any change: every author counts
+            if kind != "app":
+                ticket[kind] += 1       # Is_Inbound excludes ChannelAuthors.App
+    return {"entries_by_author": dict(by_author), "wake_causes_under_watcher": dict(watcher),
+            "wake_causes_under_ticket": dict(ticket),
+            "wakes_avoided_by_the_ticket": sum(watcher.values()) - sum(ticket.values())}
 
 def main():
     p = argparse.ArgumentParser()
@@ -144,19 +157,27 @@ def main():
         json.dump(result, sys.stdout)
     else:
         for section, values in result.items():
-            print(f"== {section} ==")
-            for k, v in sorted(values.items(), key=lambda kv: -kv[1]):
-                print(f"  {k:16s} {v}")
+            # A section is a breakdown OR a single number. Cover both, and TEST the text path: a
+            # json-only test stayed green while this crashed on the scalar.
+            if isinstance(values, dict):
+                print(f"== {section} ==")
+                for k, v in sorted(values.items(), key=lambda kv: -kv[1]):
+                    print(f"  {k:16s} {v}")
+            else:
+                print(f"== {section} == {values}")
     return 0
 
 if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [ ] **Step 4: Run it and watch it pass — and run the TEXT path by hand**
 
 Run: `python3 -m pytest tools/wake-baseline/test_baseline.py -q`
-Expected: PASS.
+Expected: PASS, 2 tests (the second covers `--format text`; a json-only test hid a crash on the scalar section).
+
+Then run the command a person would actually type, against a temp root, and read the output:
+`python3 tools/wake-baseline/baseline.py --root <temp>`
 
 - [ ] **Step 5: Write the README**
 
