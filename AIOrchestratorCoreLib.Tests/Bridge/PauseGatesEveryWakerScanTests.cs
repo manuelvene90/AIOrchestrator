@@ -48,6 +48,13 @@ public class PauseGatesEveryWakerScanTests
         { "void Flag_IdleMembers", "IdleMember" },
         { "async Task Resume_AllSessions_Async", "GO AHEAD — resume" },
         { "async Task Push_AwayDigests_Async", "AwayDigest_Decider.Should_Send" },
+
+        // THE WAKE-TICKET SWEEP (one-wake-model, 2026-09-15). It writes no channel entry at all — it
+        // writes the file a terminal session's monitor polls — which makes it the LOUDEST waker in the
+        // list rather than an exception to it: in ticket mode this is the whole of what starts that
+        // session's turn, so a paused orchestration whose supervisor still gets tickets is not asleep
+        // in any sense the owner would recognise.
+        { "async Task Sweep_WakeTickets_Async", "Write_WakeTicket(registered.StateFile" },
     };
 
     [Theory]

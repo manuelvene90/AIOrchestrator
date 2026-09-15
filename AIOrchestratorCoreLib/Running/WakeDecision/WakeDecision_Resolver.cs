@@ -223,10 +223,21 @@ public static class WakeDecision_Resolver
     /// <c>PrintTurnDispatcherModel.MAX_ATTEMPTS</c> and the retry backoff like any other turn, because a
     /// supervisor whose one and only turn died is exactly the case where giving up is silent.
     /// </para>
+    /// <para>
+    /// AND NEVER FOR A SESSION THIS APP DOES NOT DRIVE (<see cref="IPrintSessionState.DrivesTurns"/>).
+    /// A terminal session HAS a process from the moment it is spawned — the window carries its role
+    /// command and the greeting is the first thing it does — so the no-process deadlock this rule
+    /// exists to break cannot happen to it. Two things go wrong without the clause, both found while
+    /// wiring the wake-ticket sweep (one-wake-model Task 8): nothing ever records an executed turn for
+    /// a terminal session, so "has not taken a turn yet" is permanently TRUE — it would be handed a
+    /// wake ticket on every tick for ever with nothing pending, and every ticket it did earn would be
+    /// stamped with this reason instead of the one that actually woke it. The dispatcher is unaffected:
+    /// <c>Consider_Session</c> returns above this on the same flag.
+    /// </para>
     /// </summary>
     public static bool Needs_BootTurn(IPrintSessionState state)
     {
-        return state.ExecutedTurns.Count == 0 && state.Role is SessionRoles.Supervisor or SessionRoles.Solo;
+        return state.DrivesTurns && state.ExecutedTurns.Count == 0 && state.Role is SessionRoles.Supervisor or SessionRoles.Solo;
     }
 
     /// <summary>

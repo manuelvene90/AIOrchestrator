@@ -6,6 +6,8 @@ using AIOrchestratorCoreLib.Running.ClosingTurn;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.RegisteredSessions;
+using AIOrchestratorCoreLib.Running.SessionCursors;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.Running.TurnCursor;
 using AIOrchestratorCoreLib.Running.TurnExecutor;
@@ -652,41 +654,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     IReadOnlyList<(string StateFile, SessionRoles Role, string OrchId, string MemberId)> Discover_RegisteredSessions()
     {
-        List<(string, SessionRoles, string, string)> found = [];
-
-        var generalFile = PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch.SessionLaunch_Factory.GENERAL_MEMBER_ID);
-
-        if (File.Exists(generalFile))
-            found.Add((generalFile, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch.SessionLaunch_Factory.GENERAL_MEMBER_ID));
-
-        foreach (var session in _store.Load_All())
-        {
-            if (session.ClosedUtc != null)
-                continue;
-
-            // THE SUPERVISOR IS NOT IN THE MEMBER ROSTER — it is the orchestration itself — so a
-            // loop over Members alone finds every implementer and never the one role the stream
-            // runner exists for. Its registration lives under a role-prefixed name beside
-            // session.json (PrintSessionState_Store knows where); found here or found nowhere.
-            var supervisorFile = PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.Supervisor, session.OrchId, SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID);
-
-            if (File.Exists(supervisorFile))
-                found.Add((supervisorFile, SessionRoles.Supervisor, session.OrchId, SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID));
-
-            foreach (var member in session.Members)
-            {
-                if (member.ClosedUtc != null)
-                    continue;
-
-                var role = SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(member.MemberId));
-                var stateFile = PrintSessionState_Store.Get_StateFile(_paths, role, session.OrchId, member.MemberId);
-
-                if (File.Exists(stateFile))
-                    found.Add((stateFile, role, session.OrchId, member.MemberId));
-            }
-        }
-
-        return found;
+        // THE WALK IS SHARED WITH THE WAKE-TICKET SWEEP (RegisteredSessions_Reader): it answers
+        // "which sessions have a state file", and the SCREEN below — Is_StillBridgeDriven — is the
+        // half that is this dispatcher's. Two walks would have drifted on the day a role stops being
+        // in the member roster, which the supervisor already is not.
+        return RegisteredSessions_Reader.Find_All(_paths, _store);
     }
 
     /// <summary>
@@ -906,44 +878,21 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // value anyway: the state is not replaced until every source has been read.
         var current = state;
 
-        List<ITurnCursor> cursors = [];
-        var changed = false;
-
-        var reads = WakeDecision_Resolver.Read_Pending(state, role, sources, (source, cursor, entries, cursorIsNew) =>
+        // THE COLLECTING AND THE WRITE ARE SessionCursors_Bookkeeper's, shared with the wake-ticket
+        // sweep (CLAUDE.md decision 12). What is left here is what is this dispatcher's alone: the
+        // two log lines and the archive-gap warning.
+        return SessionCursors_Bookkeeper.Read_AndPersist(stateFile, ref state, role, sources, (source, cursor, entries, cursorIsNew) =>
         {
             if (cursorIsNew)
             {
-                changed = true;
-
                 if (cursor.Delivered.Count > 0)
                     _log.Log_Warning(current.OrchId, $"'{current.MemberId}' had no cursors at all, so channel '{source.Key}' was baselined on sight: the {cursor.Delivered.Count} inbound entr{(cursor.Delivered.Count == 1 ? "y" : "ies")} already in it are HISTORY and will not start a turn");
                 else
                     _log.Log_Info(current.OrchId, $"'{current.MemberId}' is now also woken by channel '{source.Key}'");
             }
 
-            cursors.Add(cursor);
             Warn_IfEntriesWereArchivedUndelivered(current, source, cursor, entries);
         });
-
-        // A CURSOR IS NEVER DROPPED FOR A SOURCE THAT MERELY DID NOT RESOLVE THIS TICK. It used to be,
-        // to keep the file tidy — and the roster read that decides is best-effort: an absent session.json
-        // resolves to the owner channel alone, and rewriting the durable record from that transient
-        // answer loses every spoke cursor irreversibly. The next successful read then meets them all as
-        // unknown keys and re-delivers whole channels. Keeping a stale key costs one line in a JSON file
-        // nobody counts; dropping it costs a supervisor re-answering every member it has.
-        foreach (var cursor in state.Cursors)
-        {
-            if (!sources.Any(source => SOURCE_KEYS.Equals(source.Key, cursor.SourceKey)))
-                cursors.Add(cursor);
-        }
-
-        if (changed)
-        {
-            state = PrintSessionState_Factory.CreateFrom_Existing_Cursors(state, cursors);
-            PrintSessionState_Store.Write(stateFile, state);
-        }
-
-        return reads;
     }
 
     /// <summary>
@@ -1058,6 +1007,22 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             return tracker.DigestHeldSince;
         }
+    }
+
+    /// <summary>
+    /// <see cref="IPrintTurnDispatcher.Resolve_DigestHold"/> — the same clock the dispatcher's own
+    /// tick reads, addressed by session key so the wake-ticket sweep can borrow it for a session this
+    /// dispatcher does not run.
+    /// </summary>
+    public DateTime? Resolve_DigestHold(string orchId, string memberId, DateTime nowLocal, bool digestableTrafficPending)
+    {
+        return Resolve_DigestHold(Get_Tracker(Describe_SessionKey(orchId, memberId)), nowLocal, digestableTrafficPending);
+    }
+
+    /// <summary><see cref="IPrintTurnDispatcher.Note_TrafficDelivered"/>.</summary>
+    public void Note_TrafficDelivered(string orchId, string memberId)
+    {
+        Note_TrafficDelivered(Get_Tracker(Describe_SessionKey(orchId, memberId)));
     }
 
     SessionTracker Get_Tracker(string key)
@@ -1695,33 +1660,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return refreshed;
     }
 
-    IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending, IReadOnlySet<string>? answeredSourceKeys = null)
+    /// <summary>
+    /// SessionCursors_Bookkeeper's, shared with the wake-ticket sweep — the same set of entries has
+    /// to mean "handed over" whichever of the two recorded it (CLAUDE.md decision 12).
+    /// </summary>
+    static IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending, IReadOnlySet<string>? answeredSourceKeys = null)
     {
-        var byKey = state.Cursors.ToDictionary(cursor => cursor.SourceKey, SOURCE_KEYS);
-
-        List<ITurnCursor> advanced = [];
-
-        foreach (var source in sources)
-        {
-            if (!byKey.TryGetValue(source.Key, out var cursor))
-                continue;
-
-            // THE CLOSING TURN'S EXCEPTION, and only its (see Close_Down_KilledTurn_Async). Nothing is
-            // dropped here: the cursor is carried over untouched, so the source keeps its history and
-            // its entries are pending again on the next tick.
-            if (answeredSourceKeys != null && !answeredSourceKeys.Contains(source.Key))
-            {
-                advanced.Add(cursor);
-                continue;
-            }
-
-            var delivered = pending.Where(item => SOURCE_KEYS.Equals(item.Source.Key, source.Key)).Select(item => item.Entry).ToList();
-            var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
-
-            advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
-        }
-
-        return advanced;
+        return SessionCursors_Bookkeeper.Advance(state, sources, pending, answeredSourceKeys);
     }
 
     // ----- the reply -----
