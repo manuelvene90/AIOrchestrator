@@ -34,8 +34,10 @@ description: Use whenever you are about to delegate — spawn a sub-agent, fan o
 ## Defaults per role, choice per task
 
 The bridge's config gives only a DEFAULT model per role — `supervisorModel`, `implementerModel`,
-`communicatorModel`, `generalSupervisorModel` (read in `OrchestratorConfig_Loader.cs`, one key per
-role; there is no `reviewerModel` or `soloModel` — those roles ride the implementer's default). That
+`reviewerModel`, `soloModel`, `communicatorModel`, `generalSupervisorModel` (read in
+`OrchestratorConfig_Loader.cs:466-467`, one key per role, registered in `SettingsCatalog.cs:197,199`;
+an ABSENT `reviewerModel` or `soloModel` falls to the implementer's value before any shipped default —
+`OrchestratorConfig_Factory.cs:162-163` — which is the compatibility ladder, not the absence of a key). That
 default is a floor for how the role's own terminal session is spawned, not a ceiling on what it asks
 for: when a supervisor requests a member for a task, IT picks the model for that task the same way
 this skill calibrates a sub-agent above — mechanical, well-specified work → Sonnet; judgement,
