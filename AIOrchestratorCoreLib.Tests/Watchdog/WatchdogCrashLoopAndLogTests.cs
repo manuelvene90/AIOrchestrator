@@ -10,6 +10,7 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 using Xunit;
 
@@ -117,7 +118,7 @@ public class WatchdogCrashLoopAndLogTests : IDisposable
     /// observed whether or not the grace is still running; otherwise an app restart inside the grace
     /// carries a healthy slot's count forward.
     /// </summary>
-    [Fact]
+    [RequiresLiveShellFact]
     public void ALiveSessionInsideTheSpawnGrace_ClearsItsCounter()
     {
         var (watchdog, orchId) = Create_WithBasicOrchestration(PluginGate_Factory.Create_Allowing());
