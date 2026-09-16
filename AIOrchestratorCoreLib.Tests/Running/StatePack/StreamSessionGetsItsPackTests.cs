@@ -2,6 +2,7 @@ using System.IO;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.SessionLaunch;
+using AIOrchestratorCoreLib.Running.StatePack;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Running.StatePack;
@@ -73,5 +74,68 @@ public class StreamSessionGetsItsPackTests
         await dispatcher.Stop_Async();
 
         Assert.Null(harness.Read_Pack_OrNull(SessionRoles.Supervisor, ORCH, memberId));
+    }
+
+    /// <summary>
+    /// THE ENTRIES TRAVEL ONCE. With the pack written (the case above) and the follow-up prompt
+    /// unchanged, a fresh stream turn paid for its pending entries TWICE in the same turn — once in
+    /// the file and once on stdin. On the supervisor, whose entries are the expensive part, that is
+    /// the saving handed straight back. The print transport never had this problem: a fresh print
+    /// turn sends nothing on stdin at all. A stream process must be sent something, so it is sent the
+    /// shortest thing that still carries the one item stdin is needed for — the bridge-turn marker,
+    /// which the entry splitter and the per-stage accounting read.
+    /// </summary>
+    [Fact]
+    public async Task A_fresh_stream_turn_is_pointed_at_its_pack_instead_of_being_sent_its_entries()
+    {
+        using var harness = new PrintRunnerTestHarness("supervisor:stream", resumeForMembers: "fresh");
+        var memberId = Supervisor(harness);
+        harness.Write_Scenario("""{"turns":[{"result":"sup online"},{"result":"VERDICT — merged\n\nDone."}]}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Assert.True(ChannelAppender.Append_OwnerEntry(harness.Paths.Get_OwnerChannelFile(ORCH), "do the merge", DateTime.Now));
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => Turned(harness, 1), PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        var turnMessage = Assert.Single(Messages(harness), prompt => prompt.StartsWith("[bridge turn ", StringComparison.Ordinal));
+
+        Assert.Contains(StatePack_Locator.SUPERVISOR_FILE_NAME, turnMessage);
+        Assert.DoesNotContain("do the merge", turnMessage);
+
+        // …which is in the pack, where it is paid for once.
+        Assert.Contains("do the merge", harness.Read_Pack_OrNull(SessionRoles.Supervisor, ORCH, memberId)!);
+    }
+
+    /// <summary>
+    /// A RESUMED TURN IS UNCHANGED — its entries still ride stdin, because it has no pack and its
+    /// transcript is what it reads them against. The pointer must not reach it.
+    /// </summary>
+    [Fact]
+    public async Task A_resumed_stream_turn_still_carries_its_entries()
+    {
+        using var harness = new PrintRunnerTestHarness("supervisor:stream", resumeForMembers: "transcript");
+        Supervisor(harness);
+        harness.Write_Scenario("""{"turns":[{"result":"sup online"},{"result":"VERDICT — merged\n\nDone."}]}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Assert.True(ChannelAppender.Append_OwnerEntry(harness.Paths.Get_OwnerChannelFile(ORCH), "do the merge", DateTime.Now));
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => Turned(harness, 1), PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        var turnMessage = Assert.Single(Messages(harness), prompt => prompt.StartsWith("[bridge turn ", StringComparison.Ordinal));
+
+        Assert.Contains("do the merge", turnMessage);
+        Assert.DoesNotContain(StatePack_Locator.SUPERVISOR_FILE_NAME, turnMessage);
+    }
+
+    /// <summary>Every message written on a stream session's stdin, in order.</summary>
+    static IReadOnlyList<string> Messages(PrintRunnerTestHarness harness)
+    {
+        return
+        [
+            .. harness.Read_Invocations()
+                .Where(line => line["line_kind"]?.GetValue<string>() == "stream-message")
+                .Select(line => line["prompt"]!.GetValue<string>())
+        ];
     }
 }

@@ -154,7 +154,13 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
             return bootResult;
         }
 
-        var prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
+        // POINTED AT THE PACK, OR SENT THE ENTRIES — never both. `packFile` is null for a resumed
+        // turn AND for a fresh turn whose pack could not be written, and in both of those the session
+        // must still be told what woke it. That is the fallback working, not a gap: a failed pack
+        // costs context, never the turn.
+        var prompt = packFile != null
+            ? PrintTurnPrompt_Builder.Build_FreshTurnPointer(requestId, packFile)
+            : PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
         var outcome = await process.Send_AndAwaitResult_Async(prompt, deadline, SilenceLimit, cancellationToken);
 
         Record_RateLimit_IfNew(state, outcome);

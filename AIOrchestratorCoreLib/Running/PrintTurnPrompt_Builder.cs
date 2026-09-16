@@ -82,6 +82,29 @@ public static class PrintTurnPrompt_Builder
         return prompt.ToString();
     }
 
+    /// <summary>
+    /// THE WHOLE STDIN MESSAGE OF A FRESH STREAM TURN. Its memory is in the pack — a FILE, for the
+    /// reason <see cref="StatePack.StatePack_Builder"/> states: stdin is APPENDED to the positional
+    /// prompt in the same message, so a slash command's $ARGUMENTS swallows it. The pending entries
+    /// are in that pack too, so everything left to say here is which turn this is and where the pack
+    /// is. A fresh PRINT turn says even less — it sends nothing at all — but a living stream process
+    /// has to be sent something to answer.
+    ///
+    /// <para>
+    /// THE MARKER IS NOT DECORATION. <c>[bridge turn …]</c> is what <see cref="PrintTurnEntry_Splitter"/>
+    /// and the per-stage accounting read; a message without it is a turn nothing can attribute
+    /// (2026-09-08 token-efficiency spec, C7).
+    /// </para>
+    /// </summary>
+    public static string Build_FreshTurnPointer(string requestId, string packFile)
+    {
+        return $"[bridge turn {requestId}]\n"
+            + $"You are a FRESH session and your state pack is at {packFile}. Read it FIRST and whole: it holds "
+            + "the entries that woke you, your brief, your last report, the ledger, the code state and the conclusions "
+            + "you recorded earlier. Then act and write your entry. Do not go looking through the channels for what "
+            + "woke you — it is in the pack.";
+    }
+
     public static string Build_FollowUp(string requestId, IReadOnlyList<PendingEntry> pending, IReadOnlyList<int> alreadyExecutedTurns, IReadOnlyList<ITurnSource> sources)
     {
         var prompt = new StringBuilder();
