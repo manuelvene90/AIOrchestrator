@@ -80,14 +80,64 @@ source**, `feat/supervisor-fresh` at `c3b53fc` (2026-09-15). Specifically **not*
 
 ## 5. The reds
 
-Recorded per task in §6 below. The three known-flaky families (`ClosingTurnReviewFix…`,
-`TolerantFileReader…`, `EffortDial…`) are re-run alone before any red in them is believed.
+**None.** Full suite, 2026-09-15, `dotnet test AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj`
+(dotnet 10.0.401 at `~/.dotnet`):
+
+```
+Failed: 0, Passed: 3991, Skipped: 10, Total: 4001, Duration: 3 m 1 s
+```
+
+Baseline before this work was **3 955 passed / 10 skipped / 0 failed** `[documented — the brief's
+figure]`, so this series adds **36 tests and no red**. The three known-flaky families
+(`ClosingTurnReviewFix…`, `TolerantFileReader…`, `EffortDial…`) were green in the full run and needed
+no isolated re-run.
 
 ---
 
 ## 6. What was done
 
-Filled in per task as the work lands.
+**Tasks 1–7 implemented, one commit each, each red-first.** Task 8 is the flip and is not startable
+(§2). Tasks 9–10 follow it.
+
+| task | commit | what it closed | evidence |
+|---|---|---|---|
+| 1 | `16e0875` | the 91 % was quoted, never re-derived — `context_share.py` reads it, deduping by `message.id` across all files, `cache_creation` counted as new | 6 pytest cases; red 6/6 first |
+| 2 | `7d2b339` | the three preconditions become one command that exits **2** when it cannot check | self-test PASS; **4 sabotages each caught** |
+| 3 | `2dd627a` | **`StreamTurnExecutorModel` wrote no pack at all** — the supervisor's own transport | red 1/2, then 2/2; 98 existing oracles green, unedited |
+| 4 | `99dba94` | a fresh stream turn paid for its entries twice — file and stdin | red 1/4, then green; 50 oracles |
+| 5 | `02f5843` | **the supervisor had nowhere to write a conclusion** — `Get_ConclusionsFile_OrNull`, the pack section, the skill paragraph | compile-red, then 8/8; 45 pack oracles green, unedited |
+| 6 | `c019faf` | the app refuses to make a supervisor or solo fresh while its conclusions are empty | red, then 8/8; 104 oracles; `~General` 177 green |
+| 7 | `2486417` | the transcript-era verdicts are captured **before** the era ends, archive included | self-test PASS; **3 sabotages each caught** |
+
+### The three findings that changed the work
+
+1. **`StreamTurnExecutorModel` contained zero references to `StatePack`.** The supervisor runs on
+   `stream` by design. So `resume: fresh` on the supervisor — the entire content of spec step 6 —
+   would have handed it a role command and its pending entries and nothing else. The spec gates step
+   6 on "the pack proven on both runners" and assumes both runners have one. Closed by Task 3.
+2. **`StatePack_Locator.Get_ProgressFile_OrNull` returns null for `SessionRoles.Supervisor`.** It has
+   no member folder, so it had nowhere to put a conclusion. Closed by Task 5.
+3. **`STATE:` is already taken** — `DeclaredState_Parser` reads it as one line capped at 120
+   characters for the PULSE row. The C1.2 block is five keys and ≤ 2 KB. **Not decided here**: plan
+   open question 1.
+
+### Two defects found by the tests, in this work
+
+- **Task 3:** the pack was first gated on `resumeTranscript` rather than on the resume MODE. The two
+  differ on the first turn of a transcript-mode session — it has no transcript to resume yet — so a
+  session that had not asked for a pack was handed one. Caught by the second case, which exists to
+  stop the fix over-reaching.
+- **Task 6:** the one-shot notice was keyed on `"<orchId>/<memberId>"`, so two orchestrations sharing
+  a logical id under different supervision roots shared a key. Not hypothetical — it is every test in
+  the class, and the first case to run spent the key for all the others. Keyed on the channel file.
+
+### And one about a harness, which is the reason both shell tools carry a `--self-test`
+
+The preflight's first self-test **passed with its own P3 check deleted.** The empty-conclusions case
+asserted only `rc = 1` while the pack was also too young, so it passed via P2 and pinned nothing about
+P3 — an assertion with two routes to its state pins neither (decision 20). Each case now satisfies the
+two preconditions it is not about and asserts the failing one **by name**. Both shell tools were then
+sabotaged, seven times between them, and every sabotage was caught.
 
 ---
 
