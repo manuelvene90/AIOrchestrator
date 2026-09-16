@@ -60,8 +60,18 @@ public class AppAuthoredWritesCensusTests
     /// the app decides to say something. <c>AppNote_Writer.Write(</c> is in
     /// <see cref="APPEND_NAMES"/> for the same reason the four wrappers are: tasks 5-9 move sites onto
     /// it, and a site that changed which helper it calls must not read here as a site that disappeared.
+    ///
+    /// <para>
+    /// EIGHT since 2026-09-16 (plan 02 tasks 7-9), and the two additions are both bodies rather than
+    /// sites: <c>BridgeEngineModel.Route_SupervisorNote</c> and <c>BridgeEngineModel.Route_ChannelNote</c>
+    /// each call the router once, and neither is a place the app decides to say anything — they are the
+    /// engine's two adapters onto <c>AppNote_Writer</c>, one for a channel resolved from a role and one
+    /// for a channel the mirror discovered. <c>EXPECTED_EVENT_SITES</c> did NOT move with them, which is
+    /// the arithmetic those tasks have to satisfy: nine sites changed which helper they call and not one
+    /// stopped being a site.
+    /// </para>
     /// </summary>
-    const int HELPER_BODIES = 6;
+    const int HELPER_BODIES = 8;
 
     static readonly string[] APPEND_NAMES =
     [
@@ -72,6 +82,14 @@ public class AppAuthoredWritesCensusTests
         "Append_SupervisorAttention_UnlessMeeting(",
         "Announce(",
         "AppNote_Writer.Write(",
+
+        // THE FIVE QUESTION-COACHING SITES CALL THIS AND NOTHING ELSE (plan 02 task 9). Leaving it out
+        // would have dropped the count by five the moment they were routed, and a register that reads a
+        // MOVE as a disappearance is a register that gets its constant edited instead of read.
+        // Route_SupervisorNote deliberately is NOT here: its callers reach it through
+        // Append_SupervisorAttention_UnlessMeeting, which is already in this list, so they are counted
+        // once where they always were.
+        "Route_ChannelNote(",
     ];
 
     [Fact]
@@ -91,8 +109,10 @@ public class AppAuthoredWritesCensusTests
                 // A DECLARATION IS NOT A CALL. The four wrappers declare themselves with these very
                 // names; counting a declaration would make the total drift by exactly the number of
                 // wrappers every time one is renamed, which is the kind of noise that gets a register
-                // deleted.
-                if (Regex.IsMatch(line, @"^\s*(?:bool|void|static|async|public|private|internal)\b.*\b(?:Append_\w+|Announce)\s*\("))
+                // deleted. `Route_\w+` joined the alternation on 2026-09-16 with the engine's two
+                // router adapters, for exactly that reason and no other: `bool Route_ChannelNote(` is
+                // where the helper is written, not a sixth place the app coaches a session.
+                if (Regex.IsMatch(line, @"^\s*(?:bool|void|static|async|public|private|internal)\b.*\b(?:Append_\w+|Announce|Route_\w+)\s*\("))
                     continue;
 
                 foreach (var name in APPEND_NAMES)
