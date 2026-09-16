@@ -10,8 +10,17 @@ namespace AIOrchestratorCoreLib.Running.PrintSessionState;
 /// <summary>
 /// Reads and writes <c>print-session.json</c>, and knows where it lives for each role: beside a
 /// member's channel, in the general supervisor's home, and (for the singleton roles) beside the
-/// orchestration's session.json under a role-prefixed name. The file's presence is what tells the
-/// watchdog "this slot has no pid file BY DESIGN", so the location rule lives here and nowhere else.
+/// orchestration's session.json under a role-prefixed name. The location rule lives here and nowhere
+/// else.
+///
+/// <para>
+/// ITS PRESENCE NO LONGER ANSWERS "IS THIS SESSION BRIDGE-DRIVEN" (one-wake-model, Task 5). It used
+/// to: a terminal spawn deleted the file, so the watchdog read existence as "this slot has no pid
+/// file BY DESIGN". A terminal session now KEEPS the file for its cursors and its state pack, with
+/// <see cref="IPrintSessionState.DrivesTurns"/> false, and that flag is what the watchdog and the
+/// engine ask. Deleting a registration is therefore no longer a thing anything does — the launcher
+/// rewrites the flag (<c>OrchestrationLauncherModel.Demote_ToTerminal</c>) instead.
+/// </para>
 ///
 /// <para>
 /// WHICH CHANNELS a session is woken by is NOT here — that is
@@ -38,29 +47,6 @@ public static class PrintSessionState_Store
     public static bool Exists(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
     {
         return File.Exists(Get_StateFile(paths, role, orchId, memberId));
-    }
-
-    /// <summary>
-    /// Clears a registration — the role is no longer bridge-driven, so the session goes back to a
-    /// terminal. Returns whether a file was actually removed. Best-effort: a file that cannot be
-    /// deleted is reported by the caller, never thrown at a spawn that is otherwise fine.
-    /// </summary>
-    public static bool Delete_IfExists(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
-    {
-        var stateFile = Get_StateFile(paths, role, orchId, memberId);
-
-        try
-        {
-            if (!File.Exists(stateFile))
-                return false;
-
-            File.Delete(stateFile);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     /// <summary>Null for an absent file. A corrupt one throws — that is a session whose identity is gone, not a default.</summary>
