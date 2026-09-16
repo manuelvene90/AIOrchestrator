@@ -49,7 +49,7 @@ grep -rn --include='*.cs' \
   AIOrchestratorCoreLib/ | grep -v '/bin/\|/obj/'
 ```
 
-**77 sites write an app-authored channel entry.** (75 raw hits of the five append names, minus 5 that are the bodies of the pass-through helpers `Append_GeneralAppEntry`, `Append_OrchestrationAppEntry`, `Append_AppEntry_Safe`, the choke point `Append_SupervisorAttention_UnlessMeeting`, and the retry transport `Drain_PendingAnnouncements`; plus the 7 sites that write through the `Announce` queue.)
+**78 sites write an app-authored channel entry** (77 when this table was counted on 2026-09-15; `FreshSupervisor_Gate` arrived from another branch on 2026-09-16 and is classified into bucket G below, by task 4). (75 raw hits of the five append names, minus 5 that are the bodies of the pass-through helpers `Append_GeneralAppEntry`, `Append_OrchestrationAppEntry`, `Append_AppEntry_Safe`, the choke point `Append_SupervisorAttention_UnlessMeeting`, and the retry transport `Drain_PendingAnnouncements`; plus the 7 sites that write through the `Announce` queue.)
 
 | # | bucket | sites | audience | this plan |
 |---|---|---|---|---|
@@ -59,10 +59,10 @@ grep -rn --include='*.cs' \
 | D | **Contract and question coaching** — message contract broken (13084), question incomplete and NOT sent (13112), earlier question superseded (13284), question already decided (13339), question already open (13363). | **5** | `Agent` | **MOVES** (Task 9) |
 | E | **`STATUS`** — `Post_StatusEntry` (15711), whose only caller is `Push_AwayDigests_Async` (14799). | **1** | **`Owner`** | **STAYS.** See "What does not move", below. |
 | F | **Owner-facing app entries** — request confirmations and failures (`start-orchestration`, `add-implementer`, `close-*`, `promote-*`, `set-model`, `/model`, `/effort`), question defaults, topic-delete failures, the wake-ticket stall alarm, the kit refusal. | **22** | `Owner` | **STAYS.** These are the owner's phone. |
-| G | **Agent-facing conversation** — request rejections and holds the requester must act on, nudges (the member nudge whose non-answer starts the orphan clock, the idle-supervisor nudge, the two owner-is-waiting nudges), `/resume`'s GO AHEAD, the DND / AWAY-MODE on-off announcements, the malformed-header report, the merge ritual, the presence entries, the too-long-for-a-phone nudge, the guards-not-in-force marker, the idle-member flag, the kit recovery note. | **37** | `Agent` | **STAYS.** See "What does not move". |
+| G | **Agent-facing conversation** — request rejections and holds the requester must act on, nudges (the member nudge whose non-answer starts the orphan clock, the idle-supervisor nudge, the two owner-is-waiting nudges), `/resume`'s GO AHEAD, the DND / AWAY-MODE on-off announcements, the malformed-header report, the merge ritual, the presence entries, the too-long-for-a-phone nudge, the guards-not-in-force marker, the idle-member flag, the kit recovery note, and `FreshSupervisor_Gate`'s "your conclusions file is empty" notice. | **38** | `Agent` | **STAYS.** See "What does not move". |
 
 **Moved: 17 sites** — 11 unconditionally, 6 only when their audience resolves to `Agent`.
-**Unmoved: 60 sites** — 23 because they are the owner's (F + E), 37 because they are the conversation or a deliberate waker (G).
+**Unmoved: 61 sites** — 23 because they are the owner's (F + E), 38 because they are the conversation or a deliberate waker (G).
 
 ### What does not move, and why
 
@@ -79,6 +79,8 @@ grep -rn --include='*.cs' \
 4. **Request confirmations stay** (brief constraint 5). CLAUDE.md decision 7 makes the `FROM app` confirmation a first-class entry that wakes the requester's watcher; 22 of the 36 are `Owner`-audience and are the owner's only receipt. The 14 agent-facing ones are instructions the requester must act on ("promotion REFUSED — file your HANDOVER entry first"), which is conversation, not bookkeeping.
 
 5. **`/resume` and the AWAY/DND announcements stay.** `/resume` exists for the case where nothing else will ever speak to a session again; the away announcements change how a session behaves for hours. Both are the app speaking on the owner's behalf, and the channel is where the owner's words live.
+
+6. **`FreshSupervisor_Gate`'s notice stays — bucket G (classified 2026-09-16 by task 4).** It arrived from another branch after this table was counted, which is why the census read 78 while the table read 77. It is `Agent`-audience coaching: the refusal to make a supervisor or solo fresh while its conclusions file is empty, filed ONCE per orchestration. Two reasons it does not move, and the first is mechanical: the gate answers *"have I already said this"* by **reading the notice back out of the channel** (`Has_AlreadySaidIt`, over live + archive per decision 13), because its in-process set is dropped at every bridge restart. Route the entry and leave the reader, and the notice is re-filed at every boot — a waterfall with a longer period, which the gate's own comment names as the thing it must not become. That is brief constraint 5: the entry **is** the durable trace of the event. Moving it would be a task of the shape of Task 5 (`turn_ended` + `StallAlert_Decider` move together), and there is no such task here. The second reason is what it says: it is not a receipt for work that happened but an instruction to the supervisor to write a file — conversation, in exactly bucket G's sense — and at one entry per orchestration for ever it contributes nothing to the boot-read volume this series exists to cut.
 
 ---
 
@@ -970,6 +972,14 @@ git commit -F /tmp/cm.txt   # "feat(running): a bookkeeping sink per role, defau
 
 - [ ] **Step 1: Write the failing test**
 
+> **THE SKETCH BELOW PREDATES THE SIGNATURE CORRECTION.** As shipped (2026-09-16) every call passes an
+> `IPrintSessionState?` after the role config, and **every case that means to exercise the `Log` sink
+> must pass a session with `DrivesTurns: true`** — the policy refuses the log for a null state, so a
+> sketch that passes none finds its note in the channel whatever the router did with the audience, and
+> the oracle would pass for the wrong reason. Read
+> `AIOrchestratorCoreLib.Tests/Channels/AppNoteRoutingTests.cs` on this branch for the shipped shape;
+> it also adds the demoted-session case and the agent-audience counterpart of the theory.
+
 ```csharp
 // AIOrchestratorCoreLib.Tests/Channels/AppNoteRoutingTests.cs
 using AIOrchestratorCoreLib.Channels;
@@ -1182,6 +1192,7 @@ public static class AppNote_Writer
         string channelFilePath,
         string statusLogFilePath,
         IRoleRunnerConfig roleConfig,
+        IPrintSessionState? state,       // SIGNATURE AS SHIPPED 2026-09-16 — see the box at the top of this task
         AppNoteKinds kind,
         AppEntryAudiences audience,
         string subject,
