@@ -112,7 +112,7 @@ public class StallAlertDeciderTests
             App(5, "[agent] turn_ended sup turn 35 — error"),
         ];
 
-        Assert.Equal(AppEntryAudiences.Agent, StallAlert_Decider.Resolve_Audience(AppEntryAudiences.Owner, entries, "sup", 35));
+        Assert.Equal(AppEntryAudiences.Agent, StallAlert_Decider.Resolve_Audience(AppEntryAudiences.Owner, entries, [], "sup", 35));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class StallAlertDeciderTests
             App(3, "[agent] turn_ended sup turn 35 — error"),
         ];
 
-        Assert.True(StallAlert_Decider.Has_AlreadyReachedOwner(entries, "sup", 35));
+        Assert.True(StallAlert_Decider.Has_AlreadyReachedOwner(entries, [], "sup", 35));
     }
 
     [Fact]
@@ -133,10 +133,10 @@ public class StallAlertDeciderTests
     {
         IReadOnlyList<IChannelEntry> entries = [App(1, "turn stalled sup turn 35 — error × 3")];
 
-        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner(entries, "sup", 36));
-        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner(entries, "sup", 3));
-        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner(entries, "su", 35));
-        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner([App(1, "turn stalled sup turn 350 — error × 3")], "sup", 35));
+        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner(entries, [], "sup", 36));
+        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner(entries, [], "sup", 3));
+        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner(entries, [], "su", 35));
+        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner([App(1, "turn stalled sup turn 350 — error × 3")], [], "sup", 35));
     }
 
     /// <summary>
@@ -154,13 +154,13 @@ public class StallAlertDeciderTests
             App(3, "[agent] turn_ended sup turn 1 — error"),
         ];
 
-        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner(entries, "sup", 1));
+        Assert.False(StallAlert_Decider.Has_AlreadyReachedOwner(entries, [], "sup", 1));
     }
 
     [Fact]
     public void AnAgentAudienceStall_StaysAgent()
     {
-        Assert.Equal(AppEntryAudiences.Agent, StallAlert_Decider.Resolve_Audience(AppEntryAudiences.Agent, [], "imp-1", 4));
+        Assert.Equal(AppEntryAudiences.Agent, StallAlert_Decider.Resolve_Audience(AppEntryAudiences.Agent, [], [], "imp-1", 4));
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class StallAlertDeciderTests
         var subject = StallAlert_Decider.Build_Subject("sup", 35, "error × 3");
 
         Assert.Equal("turn stalled sup turn 35 — error × 3", subject);
-        Assert.True(StallAlert_Decider.Has_AlreadyReachedOwner([App(1, subject)], "sup", 35));
+        Assert.True(StallAlert_Decider.Has_AlreadyReachedOwner([App(1, subject)], [], "sup", 35));
     }
 
     static void Boot(PrintRunnerTestHarness harness)

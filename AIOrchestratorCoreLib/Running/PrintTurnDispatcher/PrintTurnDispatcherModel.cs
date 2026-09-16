@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Channels.StatusLog;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running.ClosingTurn;
@@ -775,7 +776,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // silence, so the owner's message got its ✓ ack from the bridge and then nothing for hours.
         if (state.RetryNotBeforeUtc != null && nowLocal.ToUniversalTime() < state.RetryNotBeforeUtc.Value)
         {
-            Announce_Deferral_IfTrafficIsNew(state, tracker, signature, ordered, state.RetryNotBeforeUtc.Value, nowLocal);
+            Announce_Deferral_IfTrafficIsNew(state, configs.Get_ForRole(state.Role), tracker, signature, ordered, state.RetryNotBeforeUtc.Value, nowLocal);
             return;
         }
 
@@ -838,7 +839,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// <c>ChannelLock_Diagnostics</c> already reports refused writes.
     /// </para>
     /// </summary>
-    void Announce_Deferral_IfTrafficIsNew(IPrintSessionState state, SessionTracker tracker, string signature, IReadOnlyList<PendingEntry> pending, DateTime retryAtUtc, DateTime nowLocal)
+    void Announce_Deferral_IfTrafficIsNew(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, SessionTracker tracker, string signature, IReadOnlyList<PendingEntry> pending, DateTime retryAtUtc, DateTime nowLocal)
     {
         // NOTHING PENDING IS NOT NEWS. A supervisor's boot turn reaches this branch with an empty set,
         // and "new traffic is waiting" about no traffic is exactly the confident wrong line the entry
@@ -848,8 +849,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         var appointment = LimitDeferral_Wording.Describe_Appointment(retryAtUtc, nowLocal.ToUniversalTime());
 
-        var appended = ChannelAppender.Append_AppEntry(
+        var appended = AppNote_Writer.Write(
             state.ChannelFilePath,
+            Status_LogFile(state),
+            roleConfig,
+            state,
+            AppNoteKinds.TurnMachinery,
             Stall_Audience(state),
             $"{PrintTurn_Words.NEW_TRAFFIC_LIMITED_SUBJECT} {state.MemberId} — runs {appointment}",
             $"'{state.MemberId}' was refused for a usage limit and is waiting until {appointment}. What has just arrived is NOT lost — it is pending, it will ride the turn that runs then, and no attempt has been spent on it.\n\nIf it cannot wait, /resume drops the appointment and the session runs on the next tick.\n\n{Describe_Traffic(pending)}",
@@ -1114,7 +1119,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             _log.Log_Error(state.OrchId, $"Turn for '{state.MemberId}' failed outside the process", ex);
             tracker.LastFailureAt = DateTime.Now;
-            Record_OutOfProcessFailure(stateFile, state, pending, tracker, ex);
+            Record_OutOfProcessFailure(stateFile, state, configs.Get_ForRole(state.Role), pending, tracker, ex);
         }
         finally
         {
@@ -1150,7 +1155,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// faulted with nobody awaiting it, which is a worse silence than the one it is fixing.
     /// </para>
     /// </summary>
-    void Record_OutOfProcessFailure(string stateFile, IPrintSessionState captured, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, Exception cause)
+    void Record_OutOfProcessFailure(string stateFile, IPrintSessionState captured, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, Exception cause)
     {
         try
         {
@@ -1169,8 +1174,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             _log.Log_Error(state.OrchId, alert, null);
 
-            ChannelAppender.Append_AppEntry(
+            AppNote_Writer.Write(
                 state.ChannelFilePath,
+                Status_LogFile(state),
+                roleConfig,
+                state,
+                AppNoteKinds.TurnMachinery,
                 Resolve_StallAlertAudience(state),
                 StallAlert_Decider.Build_Subject(state.MemberId, state.NextTurnNumber, $"failed outside the process × {failed.FailedAttempts}"),
                 $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast error: {cause.GetType().Name}: {cause.Message}",
@@ -1307,24 +1316,24 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             // BEFORE THE TURN'S OWN ENTRY, in the order they were written. A final message the turn
             // then superseded is content the result does not carry, and this is the only place it
             // still exists — see ITurnResult.SupersededFinals.
-            if (!await Write_SupersededFinals_Async(state, sources, result, requestId))
+            if (!await Write_SupersededFinals_Async(state, roleConfig, sources, result, requestId))
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but a superseded final message could not be appended — the channel stayed locked; the turn will be retried", null);
-                Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
+                Record_Failure(stateFile, state, roleConfig, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
                 return;
             }
 
-            if (!(await Write_Reply_Async(state, sources, result.ResultText, Find_AnsweredOwnerEntry_OrNull(state, pending))).AllLanded)
+            if (!(await Write_Reply_Async(state, roleConfig, sources, result.ResultText, Find_AnsweredOwnerEntry_OrNull(state, pending))).AllLanded)
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
-                Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
+                Record_Failure(stateFile, state, roleConfig, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
                 return;
             }
 
             // AFTER BOTH ARE FILED, because it says both were.
-            Append_SupersededNotice(state, result);
+            Append_SupersededNotice(state, roleConfig, result);
 
-            Append_TurnEnded(state, requestId, attempt, pending, result, outcome, null);
+            Append_TurnEnded(state, roleConfig, requestId, attempt, pending, result, outcome, null);
 
             // A BOOT TURN ANSWERED NO ENTRY. Zero is not an index any channel has — they are numbered
             // from 1 — so the record reads as "none" rather than borrowing the first entry of a turn
@@ -1356,7 +1365,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return;
         }
 
-        Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, null);
+        Record_Failure(stateFile, state, roleConfig, pending, tracker, result, requestId, attempt, executor, null);
     }
 
     /// <summary>
@@ -1427,7 +1436,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // channel three times. A record a supervisor reads is not a plan, it is what happened.
         void Record_KilledTurn(string note)
         {
-            Append_TurnEnded(state, requestId, attempt, pending, killed, TurnOutcomes.TIMEOUT, note);
+            Append_TurnEnded(state, roleConfig, requestId, attempt, pending, killed, TurnOutcomes.TIMEOUT, note);
         }
 
         void Record_KilledTurn_Retried(string why)
@@ -1439,7 +1448,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             _log.Log_Warning(state.OrchId, $"Turn {requestId} was {ClosingTurn_Words.Describe_Kill(killed)} but this session has no transcript id to resume — no closing turn is possible, so its entries stay pending and are retried as before");
             Record_KilledTurn_Retried("there is no transcript id to resume, so no closing turn was possible");
-            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            Record_Failure(stateFile, state, roleConfig, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
             return;
         }
 
@@ -1463,7 +1472,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             _log.Log_Error(state.OrchId, $"Closing turn {closingRequestId} could not be started — the killed turn's entries stay pending and are retried as before", ex);
             Record_KilledTurn_Retried("the closing turn could not be started");
-            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            Record_Failure(stateFile, state, roleConfig, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
             return;
         }
 
@@ -1471,7 +1480,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             _log.Log_Warning(state.OrchId, $"'{state.MemberId}' runs on the {SessionRunner_Names.Get_Word(executor.Kind)} transport, which has no print rung wired beneath it: no closing turn can be run for {requestId}, so its entries stay pending and are retried as before");
             Record_KilledTurn_Retried($"the {SessionRunner_Names.Get_Word(executor.Kind)} transport has no print rung to run a closing turn on");
-            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            Record_Failure(stateFile, state, roleConfig, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
             return;
         }
 
@@ -1481,8 +1490,8 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             _log.Log_Warning(state.OrchId, $"Closing turn {closingRequestId} reported nothing ({closingOutcome}, exit {closing.ExitCode}) — no state was written, so the killed turn's entries stay pending and are retried as before; {Tail(closing.RawStderr, 200)}");
             Record_KilledTurn_Retried($"the closing turn reported nothing ({closingOutcome})");
-            Append_TurnEnded(state, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_FAILED_NOTE);
-            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
+            Append_TurnEnded(state, roleConfig, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_FAILED_NOTE);
+            Record_Failure(stateFile, state, roleConfig, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
             return;
         }
 
@@ -1495,19 +1504,19 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             _log.Log_Warning(state.OrchId, $"Closing turn {closingRequestId} ended cleanly but said nothing — there is no state to file, so the killed turn's entries stay pending and are retried as before");
             Record_KilledTurn_Retried("the closing turn ended cleanly but said nothing");
-            Append_TurnEnded(state, closingRequestId, 1, pending, closing, TurnOutcomes.ERROR, CLOSING_TURN_EMPTY_NOTE);
-            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
+            Append_TurnEnded(state, roleConfig, closingRequestId, 1, pending, closing, TurnOutcomes.ERROR, CLOSING_TURN_EMPTY_NOTE);
+            Record_Failure(stateFile, state, roleConfig, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
             return;
         }
 
-        var delivery = await Write_Reply_Async(state, sources, closing.ResultText);
+        var delivery = await Write_Reply_Async(state, roleConfig, sources, closing.ResultText);
 
         if (!delivery.AllLanded)
         {
             _log.Log_Error(state.OrchId, $"Closing turn {closingRequestId} reported but its entry could not be appended — the channel stayed locked, so the killed turn's entries stay pending and are retried as before", null);
             Record_KilledTurn_Retried("the closing turn reported but its entry could not be appended (channel locked)");
-            Append_TurnEnded(state, closingRequestId, 1, pending, closing, TurnOutcomes.ERROR, "closing turn — the state was reported but its entry could not be appended (channel locked)");
-            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
+            Append_TurnEnded(state, roleConfig, closingRequestId, 1, pending, closing, TurnOutcomes.ERROR, "closing turn — the state was reported but its entry could not be appended (channel locked)");
+            Record_Failure(stateFile, state, roleConfig, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
             return;
         }
 
@@ -1523,7 +1532,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             ? killedNote
             : $"{killedNote}, except {string.Join(", ", unanswered)} — the report did not address {(unanswered.Count == 1 ? "that channel" : "those channels")}, so its entries stay pending and are handed to the next turn");
 
-        Append_TurnEnded(state, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_NOTE);
+        Append_TurnEnded(state, roleConfig, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_NOTE);
 
         // ONE record for the pair, under the KILLED turn's number and request id — which is what
         // makes those entries stop being pending, and what stops the same request id ever running
@@ -1556,7 +1565,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         _log.Log_Info(state.OrchId, $"Closing turn {closingRequestId} ended — {closingOutcome}, {Describe_Cost(closing)}, {closing.Elapsed.TotalSeconds:F1} s wall; {(unanswered.Count == 0 ? "the killed turn's entries are delivered" : $"the killed turn's entries are delivered except {string.Join(", ", unanswered)}, which the report did not address and which stay pending")} and the next turn for '{state.MemberId}' starts from the channel");
 
-        Warn_IfDeadlineKillsRepeat(state, recorded.ExecutedTurns, requestId);
+        Warn_IfDeadlineKillsRepeat(state, roleConfig, recorded.ExecutedTurns, requestId);
     }
 
     /// <summary>
@@ -1579,7 +1588,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// work to be broken up).
     /// </para>
     /// </summary>
-    void Warn_IfDeadlineKillsRepeat(IPrintSessionState state, IReadOnlyList<IExecutedTurn> executedTurns, string requestId)
+    void Warn_IfDeadlineKillsRepeat(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<IExecutedTurn> executedTurns, string requestId)
     {
         var kills = ClosingTurn_Rule.Count_TrailingDeadlineKills(executedTurns);
 
@@ -1593,8 +1602,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         _log.Log_Warning(state.OrchId, alert);
 
-        ChannelAppender.Append_AppEntry(
+        AppNote_Writer.Write(
             state.ChannelFilePath,
+            Status_LogFile(state),
+            roleConfig,
+            state,
+            AppNoteKinds.TurnMachinery,
             Stall_Audience(state),
             $"{DEADLINE_KILLS_SUBJECT} — '{state.MemberId}', {kills} turns in a row",
             $"{alert}\n\nNothing is retried and nothing is waiting: each killed turn was closed down and its entries answered. If they were deadline kills, the briefs are bigger than a turn — the next one wants to be smaller, or split. If the silence brake or the loop detector fired, the member is stuck rather than slow — look at what it was doing, not at the size of the brief.\n\nlast request_id: {requestId}\nturns: {string.Join(", ", executedTurns.TakeLast(kills).Select(turn => turn.RequestId))}",
@@ -1723,7 +1736,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// reader cannot recover from.
     /// </para>
     /// </summary>
-    async Task<bool> Write_SupersededFinals_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, ITurnResult result, string requestId)
+    async Task<bool> Write_SupersededFinals_Async(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<ITurnSource> sources, ITurnResult result, string requestId)
     {
         if (result.SupersededFinals.Count == 0)
             return true;
@@ -1732,7 +1745,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var superseded in result.SupersededFinals)
         {
-            if (!(await Write_Reply_Async(state, sources, superseded)).AllLanded)
+            if (!(await Write_Reply_Async(state, roleConfig, sources, superseded)).AllLanded)
                 return false;
         }
 
@@ -1745,7 +1758,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// asked for, with no way to find out why. Agent audience (decision 15): the action is the
     /// session's, and the owner cannot take it.
     /// </summary>
-    void Append_SupersededNotice(IPrintSessionState state, ITurnResult result)
+    void Append_SupersededNotice(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, ITurnResult result)
     {
         var count = result.SupersededFinals.Count;
 
@@ -1754,8 +1767,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         var plural = count == 1 ? string.Empty : "s";
 
-        ChannelAppender.Append_AppEntry(
+        AppNote_Writer.Write(
             state.ChannelFilePath,
+            Status_LogFile(state),
+            roleConfig,
+            state,
+            AppNoteKinds.TurnMachinery,
             AppEntryAudiences.Agent,
             $"{SUPERSEDED_FINAL_SUBJECT} — {state.MemberId}, {count} message{plural}",
             $"This turn wrote {count} final-looking message{plural} and then carried on working; a LATER message became the turn's result, and the result is what the bridge files as the entry. "
@@ -1783,7 +1800,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return null;
     }
 
-    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText, int? answersOwnerEntry = null)
+    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<ITurnSource> sources, string? resultText, int? answersOwnerEntry = null)
     {
         var author = SessionRole_Names.Get_Author(state.Role);
         var ownChannel = state.ChannelFilePath;
@@ -1867,8 +1884,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // its id — reads about it instead of wondering why the member never answered.
         if (misaddressed.Count > 0)
         {
-            ChannelAppender.Append_AppEntry(
+            AppNote_Writer.Write(
                 ownChannel,
+                Status_LogFile(state),
+                roleConfig,
+                state,
+                AppNoteKinds.TurnMachinery,
                 AppEntryAudiences.Agent,
                 $"{MISADDRESSED_SUBJECT} {state.MemberId} — {string.Join(", ", misaddressed.Distinct())}",
                 $"Part(s) of the last turn were addressed to {string.Join(", ", misaddressed.Distinct().Select(key => $"'{key}'"))}, which {(misaddressed.Distinct().Count() == 1 ? "is not a channel" : "are not channels")} this session is woken by. They were written HERE instead, in order.\n\nAddressable this turn: {string.Join(", ", sources.Select(source => source.Key))}",
@@ -1906,12 +1927,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// transcript was gone, nothing listened, and the dead id stayed claimed to be resumed and
     /// refused for ever, which is the exact stall the recovery below was written to end.
     /// </param>
-    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note, bool turnEndedAlreadyAppended = false, ITurnResult? closingResult = null)
+    void Record_Failure(string stateFile, IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note, bool turnEndedAlreadyAppended = false, ITurnResult? closingResult = null)
     {
         var outcome = note == null ? TurnOutcomes.Describe(result) : TurnOutcomes.ERROR;
 
         if (!turnEndedAlreadyAppended)
-            Append_TurnEnded(state, requestId, attempt, pending, result, outcome, note);
+            Append_TurnEnded(state, roleConfig, requestId, attempt, pending, result, outcome, note);
 
         // THE TRANSCRIPT IS NOT THERE, AND THE CLI SAID SO. The id is claimed BEFORE the process starts,
         // so a first turn that dies before the CLI creates the transcript — an invalid --model, an auth
@@ -1942,7 +1963,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             tracker.StalledOnSignature = null;
         }
 
-        if (Record_UsageLimit_IfNamed(stateFile, state, pending, tracker, result, requestId))
+        if (Record_UsageLimit_IfNamed(stateFile, state, roleConfig, pending, tracker, result, requestId))
             return;
 
         var failed = PrintSessionState_Factory.CreateFrom_Existing_AttemptFailed(state);
@@ -1956,8 +1977,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             var alert = $"Turn {requestId} failed {failed.FailedAttempts} times ({outcome}{(note == null ? string.Empty : $": {note}")}) — not retried until new traffic arrives in the channels";
             _log.Log_Error(state.OrchId, alert, null);
 
-            ChannelAppender.Append_AppEntry(
+            AppNote_Writer.Write(
                 state.ChannelFilePath,
+                Status_LogFile(state),
+                roleConfig,
+                state,
+                AppNoteKinds.TurnMachinery,
                 Resolve_StallAlertAudience(state),
                 StallAlert_Decider.Build_Subject(state.MemberId, state.NextTurnNumber, $"{outcome} × {failed.FailedAttempts}"),
                 $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast exit_code: {result.ExitCode}\napi_error_status: {Describe_ApiErrorStatus(result)}\nstderr (tail): {Tail(result.RawStderr, 600)}",
@@ -1998,7 +2023,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// meantime is still never re-run.
     /// </para>
     /// </summary>
-    bool Record_UsageLimit_IfNamed(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId)
+    bool Record_UsageLimit_IfNamed(string stateFile, IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId)
     {
         // THE WHOLE RESULT, NOT ITS PROSE. LimitReset_Parser.Is_Refusal also answers "did this turn
         // report success", which a text-only gate could not: probe 2026-09-09 parked a session that
@@ -2036,14 +2061,18 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // CHECKED, LIKE Append_TurnEnded's (F5, 2026-09-09). The return was dropped here, so a locked
         // channel swallowed the one entry that says why the session has gone quiet — and the state file
         // still holds the appointment, so the silence is real and nothing anywhere accounts for it.
-        if (!ChannelAppender.Append_AppEntry(
+        if (!AppNote_Writer.Write(
                 state.ChannelFilePath,
+                Status_LogFile(state),
+                roleConfig,
+                state,
+                AppNoteKinds.TurnMachinery,
                 Stall_Audience(state),
                 $"{TURN_LIMITED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — resumes {appointment}",
                 $"Turn {requestId} was refused for a usage limit and is scheduled to run again {appointment}, read from {reading.Describe_Source()}. Nothing is lost and nothing else is needed: the attempt was NOT counted against the {MAX_ATTEMPTS}-attempt limit, and the same traffic is still pending under the same request id.\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\napi_error_status: {Describe_ApiErrorStatus(result)}",
                 DateTime.Now))
         {
-            _log.Log_Warning(state.OrchId, $"the usage-limit notice for {requestId} could not be appended (channel locked) — the appointment IS recorded in the state file, so the session resumes {appointment} with nothing in its channel saying why it went quiet");
+            _log.Log_Warning(state.OrchId, $"the usage-limit notice for {requestId} could not be written (the channel stayed locked, or the status log is unwritable) — the appointment IS recorded in the state file, so the session resumes {appointment} with nothing saying why it went quiet");
         }
 
         return true;
@@ -2081,7 +2110,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// vanish; a turn that failed is visible where the brief was written. It goes in the session's OWN
     /// channel whichever channels the turn read, so one turn leaves exactly one record.
     /// </summary>
-    void Append_TurnEnded(IPrintSessionState state, string requestId, int attempt, IReadOnlyList<PendingEntry> pending, ITurnResult result, string outcome, string? note)
+    void Append_TurnEnded(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, string requestId, int attempt, IReadOnlyList<PendingEntry> pending, ITurnResult result, string outcome, string? note)
     {
         var body =
             $"request_id: {requestId}\n" +
@@ -2094,8 +2123,19 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             $"exit_code: {result.ExitCode}{(result.TimedOut ? $" ({ClosingTurn_Words.Describe_Kill(result)})" : string.Empty)}\n" +
             $"session_id: {result.SessionId ?? state.SessionId}";
 
-        if (!ChannelAppender.Append_AppEntry(state.ChannelFilePath, AppEntryAudiences.Agent, $"{TURN_ENDED_SUBJECT} {state.MemberId} turn {requestId[(requestId.LastIndexOf('/') + 1)..]} — {outcome}", body, DateTime.Now))
-            _log.Log_Warning(state.OrchId, $"turn_ended for {requestId} could not be appended (channel locked) — the turn itself is recorded in the state file");
+        if (!AppNote_Writer.Write(
+                state.ChannelFilePath,
+                Status_LogFile(state),
+                roleConfig,
+                state,
+                AppNoteKinds.TurnEnded,
+                AppEntryAudiences.Agent,
+                $"{TURN_ENDED_SUBJECT} {state.MemberId} turn {requestId[(requestId.LastIndexOf('/') + 1)..]} — {outcome}",
+                body,
+                DateTime.Now))
+        {
+            _log.Log_Warning(state.OrchId, $"turn_ended for {requestId} could not be written (the channel stayed locked, or the status log is unwritable) — the turn itself is recorded in the state file");
+        }
     }
 
     /// <summary>
@@ -2170,6 +2210,23 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// act on, so for those roles it is addressed to them.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// This session's status log — where its bookkeeping goes when its role's sink is the log. Not
+    /// cached: a session's role, orchestration and member id are fixed for its life, so the path is a
+    /// pure function of them, and a field would be one more thing to keep in step with a respawn.
+    ///
+    /// <para>
+    /// IT IS READ UNCONDITIONALLY, never behind a check on the sink. A machine that has just been
+    /// switched back to <c>channel</c> still has yesterday's notes in the log, and a reader that
+    /// consulted the log only while the sink said <c>log</c> would lose them the moment the key
+    /// changed — the transition this plan's constraint 3 exists for. An absent log reads as empty.
+    /// </para>
+    /// </summary>
+    string Status_LogFile(IPrintSessionState state)
+    {
+        return StatusLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId);
+    }
+
     static AppEntryAudiences Stall_Audience(IPrintSessionState state)
     {
         return state.Role is SessionRoles.Solo or SessionRoles.General or SessionRoles.Supervisor
@@ -2190,7 +2247,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (roleAudience != AppEntryAudiences.Owner)
             return roleAudience;
 
-        var audience = StallAlert_Decider.Resolve_Audience(roleAudience, ChannelHistory_Cache.Read_Entries(state.ChannelFilePath), state.MemberId, state.NextTurnNumber);
+        var audience = StallAlert_Decider.Resolve_Audience(
+            roleAudience,
+            ChannelHistory_Cache.Read_Entries(state.ChannelFilePath),
+            StatusLog_Store.Read_Entries(Status_LogFile(state)),
+            state.MemberId,
+            state.NextTurnNumber);
 
         if (audience != roleAudience)
             _log.Log_Info(state.OrchId, StallAlert_Decider.Describe_Repeat(state.MemberId, state.NextTurnNumber));

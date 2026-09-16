@@ -61,12 +61,17 @@ public static class StallAlert_Decider
     /// to for this role (the dispatcher's <c>Stall_Audience</c>); an agent-audience alert is returned
     /// unchanged, because it never reached the phone in the first place.
     /// </summary>
-    public static AppEntryAudiences Resolve_Audience(AppEntryAudiences roleAudience, IReadOnlyList<IChannelEntry> channelEntries, string memberId, int turnNumber)
+    public static AppEntryAudiences Resolve_Audience(
+        AppEntryAudiences roleAudience,
+        IReadOnlyList<IChannelEntry> channelEntries,
+        IReadOnlyList<IChannelEntry> statusLogEntries,
+        string memberId,
+        int turnNumber)
     {
         if (roleAudience != AppEntryAudiences.Owner)
             return roleAudience;
 
-        return Has_AlreadyReachedOwner(channelEntries, memberId, turnNumber)
+        return Has_AlreadyReachedOwner(channelEntries, statusLogEntries, memberId, turnNumber)
             ? AppEntryAudiences.Agent
             : AppEntryAudiences.Owner;
     }
@@ -81,17 +86,41 @@ public static class StallAlert_Decider
     /// over, which is what a deleted <c>print-session.json</c> does. An alert older than that belongs
     /// to another turn that happened to carry the same number, and must not silence this one.
     /// </para>
+    /// <para>
+    /// TWO FILES SINCE 2026-09-15. <c>turn_ended</c> is routed to the session's
+    /// <see cref="Channels.StatusLog.StatusLog_Store"/> when its role's bookkeeping sink is the log,
+    /// so the evidence this walk needs is split: the stall alerts that reached the owner are in the
+    /// channel (they are owner-facing and the router never moves one), and the endings that separate
+    /// one turn from the next may be in the log.
+    /// </para>
+    /// <para>
+    /// AND THE DIRECTION OF THE DAMAGE IS SILENCE, NOT A WATERFALL — plan 02 task 5 states the
+    /// opposite and is wrong (verified 2026-09-16 by reading this walk). A <c>turn_ended</c> record
+    /// naming THIS turn only ever CONTINUES the walk, so losing it changes nothing on its own; what
+    /// is lost is every <c>turn_ended</c> naming ANOTHER turn, and those are the records that STOP
+    /// the walk and answer false. Read the channel alone and a session whose numbering has moved on —
+    /// or started over, which is what a deleted <c>print-session.json</c> does — walks straight past
+    /// the ending that separated the two turns, finds the OLD turn's owner-facing alert, and files the
+    /// new stall for the session only. The owner is never told their orchestration stopped, which is
+    /// the silence this alert exists to break.
+    /// </para>
     /// </summary>
-    public static bool Has_AlreadyReachedOwner(IReadOnlyList<IChannelEntry> channelEntries, string memberId, int turnNumber)
+    public static bool Has_AlreadyReachedOwner(
+        IReadOnlyList<IChannelEntry> channelEntries,
+        IReadOnlyList<IChannelEntry> statusLogEntries,
+        string memberId,
+        int turnNumber)
     {
+        var entries = Interleave_ByStamp(channelEntries, statusLogEntries);
+
         var stalledStem = Build_SubjectStem(memberId, turnNumber);
         var endedStem = $"{PrintTurn_Words.TURN_ENDED_SUBJECT} {memberId} turn {turnNumber}";
         var stalledOfMember = $"{PrintTurn_Words.TURN_STALLED_SUBJECT} {memberId} turn ";
         var endedOfMember = $"{PrintTurn_Words.TURN_ENDED_SUBJECT} {memberId} turn ";
 
-        for (var index = channelEntries.Count - 1; index >= 0; index--)
+        for (var index = entries.Count - 1; index >= 0; index--)
         {
-            var entry = channelEntries[index];
+            var entry = entries[index];
 
             if (entry.Author != ChannelAuthors.App)
                 continue;
@@ -134,6 +163,51 @@ public static class StallAlert_Decider
         return subject.Length == stem.Length
             ? subject == stem
             : subject.StartsWith(stem + " ", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Both lists in one, ordered by the stamp the APP wrote — which, unlike an agent's, can be
+    /// trusted (CLAUDE.md decision 12; <see cref="ChannelAppender"/> and
+    /// <see cref="Channels.StatusLog.StatusLog_Store"/> both write it themselves). An entry whose
+    /// stamp cannot be parsed keeps its position relative to its own file rather than being dropped:
+    /// this walk answers "has the owner already been told", and dropping evidence answers it wrongly
+    /// in the direction of silence.
+    ///
+    /// <para>
+    /// THE CHANNEL'S OWN ORDER IS RETURNED UNTOUCHED WHEN THE LOG IS EMPTY — which is every session on
+    /// the default sink, i.e. every machine until somebody sets <c>bookkeeping</c>. A merge that
+    /// re-sorted the channel by its minute-resolution stamps would reorder entries written inside the
+    /// same minute, so the no-log path does not sort at all.
+    /// </para>
+    /// </summary>
+    static IReadOnlyList<IChannelEntry> Interleave_ByStamp(IReadOnlyList<IChannelEntry> channelEntries, IReadOnlyList<IChannelEntry> statusLogEntries)
+    {
+        if (statusLogEntries.Count == 0)
+            return channelEntries;
+
+        return
+        [
+            .. channelEntries
+                .Select((entry, position) => (entry, file: 0, position))
+                .Concat(statusLogEntries.Select((entry, position) => (entry, file: 1, position)))
+                .OrderBy(item => Stamp_OrMax(item.entry))
+                .ThenBy(item => item.file)
+                .ThenBy(item => item.position)
+                .Select(item => item.entry)
+        ];
+    }
+
+    /// <summary>
+    /// <see cref="DateTime.MaxValue"/> for a stamp that cannot be read, so an unparseable entry sorts
+    /// LAST and is walked FIRST. That is the safe direction here: it is seen, and the walk stops on it
+    /// only if it names another turn of this member — which is exactly the evidence it would have
+    /// carried anyway.
+    /// </summary>
+    static DateTime Stamp_OrMax(IChannelEntry entry)
+    {
+        return DateTime.TryParseExact(entry.DateText, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var stamp)
+            ? stamp
+            : DateTime.MaxValue;
     }
 
     static string Strip_AgentTag(string subject)

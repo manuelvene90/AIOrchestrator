@@ -202,4 +202,32 @@ public class AppNoteRoutingTests
         // quietly reappear in the boot read; the false is the whole of the report.
         Assert.Single(files.ChannelEntries());
     }
+
+    /// <summary>
+    /// THE SAME EVENT, TWO DESTINATIONS, DECIDED BY WHO IT IS FOR. A stall on a member is bookkeeping
+    /// its supervisor reads at its next turn; the identical stall on the SUPERVISOR is the owner's
+    /// only warning that their orchestration has stopped, and the dispatcher's <c>Stall_Audience</c>
+    /// already says so. Routing on the audience is what makes plan 02 unable to take anything off the
+    /// owner's phone — the seven turn-machinery sites of task 6 pass that value straight through and
+    /// add no branch of their own.
+    /// </summary>
+    [Fact]
+    public void AStallOnAMemberMoves_TheSameStallOnASupervisorDoesNot()
+    {
+        using var members = new Files();
+        using var supervisors = new Files();
+
+        Assert.True(AppNote_Writer.Write(members.Channel, members.Log, Role(BookkeepingSinks.Log), Session(drivesTurns: true),
+            AppNoteKinds.TurnMachinery, AppEntryAudiences.Agent, "turn stalled imp-1 turn 9", "no reply", NOW));
+
+        Assert.True(AppNote_Writer.Write(supervisors.Channel, supervisors.Log, Role(BookkeepingSinks.Log), Session(drivesTurns: true),
+            AppNoteKinds.TurnMachinery, AppEntryAudiences.Owner, "turn stalled supervisor turn 9", "no reply", NOW));
+
+        Assert.Single(members.ChannelEntries());
+        Assert.Equal("[agent] turn stalled imp-1 turn 9", Assert.Single(StatusLog_Store.Read_Entries(members.Log)).Subject);
+
+        Assert.Equal(2, supervisors.ChannelEntries().Count);
+        Assert.Equal("turn stalled supervisor turn 9", supervisors.ChannelEntries()[^1].Subject);
+        Assert.Empty(StatusLog_Store.Read_Entries(supervisors.Log));
+    }
 }
