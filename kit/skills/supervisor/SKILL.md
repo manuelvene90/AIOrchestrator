@@ -40,6 +40,15 @@ check against the code before accepting. The owner interfaces with the project m
   where a list of remembered phrases was not. **It changes nothing about how you read the entry** —
   read both kinds — it tells you whether the owner has already seen it, which decides whether you need
   to relay it.
+- **Not every app note stays in this channel.** Where the machine sets `runners.supervisor.bookkeeping`
+  to `log` (the default is `channel`, so on most machines nothing has moved), the app's bookkeeping
+  about you — each turn's `turn_ended` record, the `PLAN.md` ledger advisories, the report that a
+  member has stopped answering, the coaching when a question of yours was NOT sent, the note that a
+  `TO:` block named a channel you are not woken by — is written to a `status.jsonl` beside this
+  channel instead of into it. What never moves: the conversation, every
+  request confirmation, and every untagged owner-facing entry, which includes the stall and
+  usage-limit notices about your own turns. So the ABSENCE of an app note here is not evidence that
+  what it would have reported did not happen.
 
 **FIRST, RESOLVE YOUR ENVIRONMENT — one Bash call, before anything else.** You cannot see
 environment variables; the Read tool does not expand them, and a path you type from memory is the

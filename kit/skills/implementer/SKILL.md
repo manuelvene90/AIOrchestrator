@@ -75,6 +75,12 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   owner** — `## [12] FROM app — … — [agent] your writing window is still open`. An app entry without it
   is owner-facing and reached their phone too. The tag is set by the app where the entry is written,
   never inferred from its wording. You never need to write it; it is there so you know who else saw it.
+- **Not every app note stays in this channel.** Where the machine sets `runners.implementer.bookkeeping`
+  to `log` (the default is `channel`, so on most machines nothing has moved), the app's bookkeeping
+  about your turns — the `turn_ended` record, the stall, usage-limit and deadline-kill notices, the
+  note that a later message superseded your report — is written to a `status.jsonl` beside this
+  channel instead of into it. The conversation with your supervisor never moves. So the ABSENCE of an
+  app note here is not evidence that what it would have reported did not happen.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
@@ -327,9 +333,15 @@ The owner can send `/resume` to wake every session at once — it exists for the
 where a turn ends without doing its work and nothing would speak to you again on its own.
 
 Pick up exactly where you left off: re-read your channel from your last entry down, and if your last
-turn was cut short by a usage limit, redo that step now. If you were genuinely finished and waiting,
-say so in one line and go back to waiting — do NOT invent work to look busy, and do not re-run
-anything you already completed.
+turn was cut short — by a usage limit, by the deadline, by a failure — redo that step now. If you
+were genuinely finished and waiting, say so in one line and go back to waiting — do NOT invent work
+to look busy, and do not re-run anything you already completed.
+
+**Do not expect the channel to TELL you the turn was cut.** The app's record of your turns is
+addressed to you and not to the owner, so under `runners.<role>.bookkeeping = log` it is in your
+`status.jsonl` and not in this channel at all. What the channel always carries is your own last
+entry: if it is a report you meant to be final, you finished; if it is a closing report, or if
+nothing of yours follows the entry that woke you, you were cut.
 
 
 ## RUN TO THE END — the default is never to stop (owner directive, 2026-08-20)

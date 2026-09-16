@@ -266,6 +266,12 @@ than the first round's, by rule (owner, 2026-09-11):
   app where the entry is written, never inferred from its wording, and you never write it yourself.
   **Quoting one in a finding is safe** — it is read as a prefix, so a tag mentioned mid-subject or in a
   body is not a tag, exactly as the window markers work.
+- **Not every app note stays in this channel.** Where the machine sets `runners.reviewer.bookkeeping`
+  to `log` (the default is `channel`, so on most machines nothing has moved), the app's bookkeeping
+  about your turns — the `turn_ended` record, the stall, usage-limit and deadline-kill notices, the
+  note that a later message superseded your report — is written to a `status.jsonl` beside this
+  channel instead of into it. The conversation with your supervisor never moves. So the ABSENCE of an
+  app note here is not evidence that what it would have reported did not happen.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
@@ -362,9 +368,15 @@ The owner can send `/resume` to wake every session at once — it exists for the
 where a turn ends without doing its work and nothing would speak to you again on its own.
 
 Pick up exactly where you left off: re-read your channel from your last entry down, and if your last
-turn was cut short by a usage limit, redo that step now. If you were genuinely finished and waiting,
-say so in one line and go back to waiting — do NOT invent work to look busy, and do not re-run
-anything you already completed.
+turn was cut short — by a usage limit, by the deadline, by a failure — redo that step now. If you
+were genuinely finished and waiting, say so in one line and go back to waiting — do NOT invent work
+to look busy, and do not re-run anything you already completed.
+
+**Do not expect the channel to TELL you the turn was cut.** The app's record of your turns is
+addressed to you and not to the owner, so under `runners.<role>.bookkeeping = log` it is in your
+`status.jsonl` and not in this channel at all. What the channel always carries is your own last
+entry: if it is a report you meant to be final, you finished; if it is a closing report, or if
+nothing of yours follows the entry that woke you, you were cut.
 
 ## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
 
