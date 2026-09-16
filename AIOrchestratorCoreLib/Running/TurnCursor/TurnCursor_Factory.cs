@@ -39,7 +39,7 @@ public static class TurnCursor_Factory
 
         foreach (var entry in liveEntries)
         {
-            if (!PrintTurn_Trigger.Is_Inbound(role, entry.Author))
+            if (!PrintTurn_Trigger.Is_Inbound(role, entry))
                 continue;
 
             delivered.Add(ChannelEntry_Digest.Compute(entry));
@@ -76,7 +76,7 @@ public static class TurnCursor_Factory
         // again, and the one after.
         foreach (var entry in liveEntries)
         {
-            if (PrintTurn_Trigger.Is_Inbound(role, entry.Author) || PrintTurn_Trigger.Is_AgentNote(entry))
+            if (PrintTurn_Trigger.Is_Inbound(role, entry) || PrintTurn_Trigger.Is_AgentNote(entry))
                 stillLive.Add(ChannelEntry_Digest.Compute(entry));
         }
 
@@ -108,7 +108,7 @@ public static class TurnCursor_Factory
 
             // The high-water mark is about TRAFFIC — the archive-gap warning reads it — so a note that
             // rode along does not move it.
-            if (PrintTurn_Trigger.Is_Inbound(role, entry.Author))
+            if (PrintTurn_Trigger.Is_Inbound(role, entry))
                 highWater = Math.Max(highWater, entry.Index);
         }
 

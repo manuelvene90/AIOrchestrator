@@ -247,6 +247,31 @@ public class WakeUpPolicyTests
     }
 
     /// <summary>
+    /// AND THE DOOR OPENED IN 2026-09-15's STEP 4 IS ONE ENTRY WIDE. The entry-level overload admits
+    /// a routed report for a reviewer and nothing else; this asserts the negative half from THIS
+    /// file, because the guard above now describes only one of the two overloads.
+    ///
+    /// <para>
+    /// THE ROUTED REPORT IS ASSERTED BESIDE IT, and that is not decoration: a "nothing is inbound"
+    /// sweep passes just as well against an overload that answers false to everything, which is the
+    /// state this file would have been left pinning if the one thing the door exists for were tested
+    /// only next door.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheAppsOwnEntries_AreInboundForNobody_ThroughTheEntryOverloadToo()
+    {
+        var bookkeeping = Entry("app", "[agent] turn_ended imp-1 turn 4 — ok");
+
+        foreach (var role in SessionRole_Names.ALL)
+            Assert.False(PrintTurn_Trigger.Is_Inbound(role, bookkeeping), $"an app entry is inbound for {role}");
+
+        var routed = Entry("app", AppEntryAudience_Tag.Apply(RoutedReport_Tag.Apply("re-review"), AppEntryAudiences.Agent));
+
+        Assert.True(PrintTurn_Trigger.Is_Inbound(SessionRoles.Reviewer, routed));
+    }
+
+    /// <summary>
     /// A ZERO WINDOW IS THE DIGEST TURNED OFF, not a zero-length wait that still holds for a tick.
     /// It is the owner's way back to one-entry-one-turn without a deployment.
     /// </summary>

@@ -105,6 +105,21 @@ public static class ChannelGrammar
 
     public static string STATE => Marker("state");
 
+    /// <summary>
+    /// THE SUPERVISOR'S RE-REVIEW CONTRACT: `REROUTE: &lt;reviewer&gt; from &lt;commit&gt;`, written at the end
+    /// of a fix brief. It means "when that implementer declares FIXED, hand the delta and everything
+    /// I wrote below this line to that reviewer, and do not wake me for it". Read by
+    /// <c>Reviewing.RerouteContract_Parser</c>.
+    /// </summary>
+    public static string REROUTE => Marker("reroute");
+
+    /// <summary>
+    /// THE IMPLEMENTER'S ANSWER TO ONE: `FIXED: &lt;commit&gt;`, the head of the delta a re-review reads.
+    /// It is what makes "does this report satisfy the contract" a mechanical question rather than a
+    /// reading of prose — see <c>Reviewing.FixReport_Matcher</c>.
+    /// </summary>
+    public static string FIXED => Marker("fixed");
+
     public static string BLOCKED_ON_OWNER => Marker("blocked_on_owner");
 
     public static string ANSWERED => Marker("answered");

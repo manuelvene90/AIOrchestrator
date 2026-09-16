@@ -40,7 +40,7 @@ public static class PrintTurn_Trigger
 
         foreach (var entry in entries)
         {
-            if (!Is_Inbound(role, entry.Author))
+            if (!Is_Inbound(role, entry))
                 continue;
 
             if (cursor.Delivered.Contains(ChannelEntry_Digest.Compute(entry)))
@@ -77,7 +77,11 @@ public static class PrintTurn_Trigger
     {
         return entry.Author == ChannelAuthors.App
             && AppEntryAudience_Tag.Is_AgentTagged(entry.Subject)
-            && !entry.Subject.Contains(PrintTurn_Words.TURN_ENDED_SUBJECT, StringComparison.Ordinal);
+            && !entry.Subject.Contains(PrintTurn_Words.TURN_ENDED_SUBJECT, StringComparison.Ordinal)
+            // A ROUTED REPORT IS A BRIEF, NOT A NOTE. It is agent-tagged because the owner cannot act
+            // on it (decision 15), and without this clause it would be a riding note AND inbound at
+            // once — two answers to "does this start a turn" in one expression.
+            && !RoutedReport_Tag.Is_Routed(entry.Subject);
     }
 
     /// <summary>
@@ -138,6 +142,42 @@ public static class PrintTurn_Trigger
         var ordered = notes.OrderBy(note => note.StampedLocal).Select(note => note.Entry).ToList();
 
         return ordered.Count <= MAXIMUM_AGENT_NOTES ? ordered : [.. ordered.Skip(ordered.Count - MAXIMUM_AGENT_NOTES)];
+    }
+
+    /// <summary>
+    /// WHETHER THIS WHOLE ENTRY IS INBOUND — the author's answer, plus the one exception that cannot
+    /// be read from an author: a ROUTED REPORT (<see cref="Channels.RoutedReport_Tag"/>), which the
+    /// app writes into a reviewer's channel when an implementer files the fix a re-review contract
+    /// was waiting for.
+    ///
+    /// <para>
+    /// A SECOND OVERLOAD RATHER THAN A WIDER FIRST ONE, deliberately. The author-only test is the one
+    /// <see cref="PendingTraffic.WakeUp_Policy"/>'s docstring quotes, and
+    /// <c>WakeUpPolicyTests.TheAppsOwnEntries_AreInboundForNobody</c> pins it for every role so that
+    /// "a later change cannot quietly make app traffic a reason to wake the most expensive role in
+    /// the system". That guard is still exactly true. What changed is that ONE app entry in a
+    /// reviewer's channel is now a brief, and it is recognisable only by its subject.
+    /// </para>
+    /// <para>
+    /// AND THE HUB-AND-SPOKE TOPOLOGY IS UNTOUCHED (CLAUDE.md decision 4). The relay is written by
+    /// the APP into the reviewer's OWN channel. No member reads another member's file, and the author
+    /// screen below means a member cannot forge one by writing the tag itself.
+    /// </para>
+    /// </summary>
+    public static bool Is_Inbound(SessionRoles role, IChannelEntry entry)
+    {
+        return Is_Inbound(role, entry.Author) || Is_RoutedReport(role, entry);
+    }
+
+    /// <summary>
+    /// The four screens, all required: written by the app, tagged by the relay at the FRONT of the
+    /// subject, and read by a REVIEWER. Nothing else about <see cref="ChannelAuthors.App"/> moves.
+    /// </summary>
+    static bool Is_RoutedReport(SessionRoles role, IChannelEntry entry)
+    {
+        return role == SessionRoles.Reviewer
+            && entry.Author == ChannelAuthors.App
+            && RoutedReport_Tag.Is_Routed(entry.Subject);
     }
 
     public static bool Is_Inbound(SessionRoles role, ChannelAuthors author)
