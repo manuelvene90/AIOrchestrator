@@ -38,6 +38,24 @@ public static class StatePack_Builder
     /// </summary>
     public const int CONCLUSIONS_CAP = 8_000;
 
+    /// <summary>
+    /// The standing notes' budget IN CHARACTERS, on top of the ceiling of five notes the screen
+    /// already applies (<see cref="StatePackInputs_Reader.Select_StandingNotes"/>). Two ceilings and
+    /// not one because they bound different things: five bounds how many notes a busy hour can put in
+    /// front of a session, this bounds how long any one of them can be — an orphan report names every
+    /// silent member, and nothing caps what a note's body says. The pack has a ≤ 6k-token budget and
+    /// bookkeeping is the one section in it that grows with the traffic, so it is the one that may
+    /// not be left open-ended. Over the cap the section SAYS SO, as every other section does.
+    /// </summary>
+    public const int STANDING_NOTES_CAP = 4_000;
+
+    /// <summary>
+    /// Says in the heading what <c>PrintTurnPrompt_Builder.AGENT_NOTES_LINE</c> says for the riding
+    /// notes, and for the same reason: a session that mistakes an app note for the owner's words
+    /// answers a nudge on the owner's phone.
+    /// </summary>
+    public const string STANDING_NOTES_HEADING = "## What the app has told you (not the owner's words — act on them, do not answer them)";
+
     public const string PROGRESS_HEADING = "## Your progress note — progress.md, what you saved while working (resume from here)";
 
     public const string CONCLUSIONS_HEADING =
@@ -91,6 +109,16 @@ public static class StatePack_Builder
         {
             var tail = string.Join("\n\n", inputs.OwnerTail.Select(entry => entry.RawText.Trim()));
             Append_Block(text, $"## Owner channel — the last {inputs.OwnerTail.Count} entries", tail, OWNER_TAIL_CAP, "owner-channel.md");
+        }
+
+        // LAST BEFORE THE TRIGGER, because these are the things the session must hold while it reads
+        // what woke it — and keepTail for the progress note's reason: the newest notes are the ones
+        // still standing, and a cap that dropped them would leave the session with the oldest.
+        if (inputs.StandingNotes.Count > 0)
+        {
+            var notes = string.Join("\n\n", inputs.StandingNotes.Select(note => note.RawText.Trim()));
+
+            Append_Block(text, STANDING_NOTES_HEADING, notes, STANDING_NOTES_CAP, Channels.StatusLog.StatusLog_Store.FILE_NAME, keepTail: true);
         }
 
         text.Append(PENDING_HEADING).Append('\n').Append('\n');
