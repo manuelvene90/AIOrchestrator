@@ -40,26 +40,51 @@ public class PauseGatesEveryWakerScanTests
     /// the method it means rather than some other one. `Append_SupervisorAttention_UnlessMeeting`
     /// stops the supervisor-facing traffic in one place; these write to members, to flag files or to
     /// every channel at once, which is why they sit outside it and need a guard each.
+    ///
+    /// <para>
+    /// THE THIRD COLUMN IS THE SPELLING OF THE SCREEN, and it is per row rather than one literal for
+    /// all of them (plan 02 task 12, 2026-09-15). A sweep that already holds a session in its hand
+    /// reads <c>session.Paused</c>; a writer that holds only an orchestration id asks
+    /// <c>Is_Paused</c>, which is the ONE implementation of the question and the same call the choke
+    /// point below makes. Forcing the first spelling everywhere would have meant copying that
+    /// one-line accessor into a method that has no session — a second copy of a rule, which is the
+    /// thing CLAUDE.md decision 12 is about, written to satisfy a string match in a test. Each row
+    /// still pins exactly one literal, so no case can pass for two reasons.
+    /// </para>
     /// </summary>
-    public static TheoryData<string, string> TheWakers => new()
+    public static TheoryData<string, string, string> TheWakers => new()
     {
-        { "async Task Nudge_IdleImplementers_Async", "Nudge_IdleSupervisor" },
-        { "async Task Check_LedgerHealth_Async", "_ledgerDebtSinceUtc" },
-        { "void Flag_IdleMembers", "IdleMember" },
-        { "async Task Resume_AllSessions_Async", "GO AHEAD — resume" },
-        { "async Task Push_AwayDigests_Async", "AwayDigest_Decider.Should_Send" },
+        { "async Task Nudge_IdleImplementers_Async", "Nudge_IdleSupervisor", "session.Paused" },
+        { "async Task Check_LedgerHealth_Async", "_ledgerDebtSinceUtc", "session.Paused" },
+        { "void Flag_IdleMembers", "IdleMember", "session.Paused" },
+        { "async Task Resume_AllSessions_Async", "GO AHEAD — resume", "session.Paused" },
+        { "async Task Push_AwayDigests_Async", "AwayDigest_Decider.Should_Send", "session.Paused" },
+
+        // THE NOTE ROUTER'S SECOND ADAPTER (plan 02, 2026-09-15). AppNote_Writer itself is a
+        // pass-through — it writes what its caller decided to write — so the row belongs to the
+        // engine method that decides, and there are two. `Route_SupervisorNote` is NOT here: it is
+        // only reachable through `Append_SupervisorAttention_UnlessMeeting`, whose own ordering Fact
+        // sits below. `Route_ChannelNote` has no choke point above it and writes to a MEMBER's spoke
+        // (and to the general channel), so it asks for itself.
+        //
+        // IT WAS NOT UNGATED IN PRACTICE, AND THAT IS WHY IT NEEDED A ROW. Its five callers are
+        // reached from the mirror tick, and a paused orchestration resolves to Deferred, which
+        // freezes its offsets and drops its channels out of `Find_ActiveChannels` — a delivery-mode
+        // screen, in another method, that happens to cover a pause. A guard that holds for a reason
+        // nobody wrote down is a guard the next caller does not inherit.
+        { "bool Route_ChannelNote", "AppNote_Writer.Write", "Is_Paused(channel.OrchId)" },
 
         // THE WAKE-TICKET SWEEP (one-wake-model, 2026-09-15). It writes no channel entry at all — it
         // writes the file a terminal session's monitor polls — which makes it the LOUDEST waker in the
         // list rather than an exception to it: in ticket mode this is the whole of what starts that
         // session's turn, so a paused orchestration whose supervisor still gets tickets is not asleep
         // in any sense the owner would recognise.
-        { "async Task Sweep_WakeTickets_Async", "Write_WakeTicket(registered.StateFile" },
+        { "async Task Sweep_WakeTickets_Async", "Write_WakeTicket(registered.StateFile", "session.Paused" },
     };
 
     [Theory]
     [MemberData(nameof(TheWakers))]
-    public void EveryWakerThatWritesToAChannel_SkipsAPausedOrchestration(string signatureMark, string anchor)
+    public void EveryWakerThatWritesToAChannel_SkipsAPausedOrchestration(string signatureMark, string anchor, string pauseMark)
     {
         var body = Extract_Method(signatureMark);
 
@@ -68,9 +93,30 @@ public class PauseGatesEveryWakerScanTests
         Assert.Contains(anchor, body, StringComparison.Ordinal);
 
         Assert.Contains(
-            "session.Paused",
+            pauseMark,
             body,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// AND THE ROUTER'S SCREEN IS ABOVE ITS WRITE, which is the half the row above cannot see. The
+    /// same claim the choke point makes and for the same reason: below the write the entry is on
+    /// disk and the session it was told not to poke is awake, whatever the method returns.
+    /// </summary>
+    [Fact]
+    public void TheChannelNoteRouter_AsksAboutThePause_BeforeItWritesAnything()
+    {
+        var body = Extract_Method("bool Route_ChannelNote");
+
+        var gate = body.IndexOf("Is_Paused(channel.OrchId)", StringComparison.Ordinal);
+        var write = body.IndexOf("AppNote_Writer.Write(", StringComparison.Ordinal);
+
+        Assert.True(gate >= 0, "the note router no longer asks whether the orchestration is paused, so the five coaching sites can poke a sleeping session");
+        Assert.True(write >= 0, "the note router no longer calls the writer — this scan is reading a method it does not understand");
+
+        Assert.True(
+            gate < write,
+            "the pause is checked AFTER the note is written: the coaching is already on disk and the session the owner put to sleep has been woken by it");
     }
 
     /// <summary>

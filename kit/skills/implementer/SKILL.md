@@ -68,9 +68,12 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
 
 - Entries start: `## [n] FROM implementer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
   Never edit past entries.
-- **`FROM app` entries are the ORCHESTRATOR APP writing to you**, not your supervisor — the idle nudge,
-  the orphan-respawn notice, and `GO AHEAD — resume` all arrive this way. Treat them as instructions
-  from the system: act on them, and do not reply to them as though a person had written.
+- **`FROM app` entries are the ORCHESTRATOR APP writing to you**, not your supervisor — the idle nudge
+  and `GO AHEAD — resume` arrive this way. Treat them as instructions from the system: act on them,
+  and do not reply to them as though a person had written. (There is no orphan-respawn notice: this
+  line used to promise one, and the app has not respawned an orphaned member since
+  `Recover_OrphanedImplementer_Async` was deleted. What happens instead is that a member who has been
+  nudged and stays silent is REPORTED to the supervisor, in the supervisor's channel, not yours.)
   **A leading `[agent]` in the subject means the entry is addressed to you and was never texted to the
   owner** — `## [12] FROM app — … — [agent] your writing window is still open`. An app entry without it
   is owner-facing and reached their phone too. The tag is set by the app where the entry is written,

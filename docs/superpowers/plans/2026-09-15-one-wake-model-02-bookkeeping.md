@@ -97,7 +97,7 @@ grep -rn --include='*.cs' \
 | `AIOrchestratorCoreLib/Channels/StatusLog/BookkeepingSinks.cs` | `Channel` \| `Log`, with the config words |
 | `AIOrchestratorCoreLib/Channels/StatusLog/BookkeepingSink_Policy.cs` | resolves the sink for a role, and REFUSES `Log` where no pack is written |
 | `AIOrchestratorCoreLib/Running/StatusNotes/StatusNotes_Bookkeeper.cs` | reads the log's notes and advances their cursor, through the existing rule |
-| `AIOrchestratorCoreLib.Tests/Channels/AppAuthoredWritesCensusTests.cs` | the register: 77 sites, and a new one fails until it is classified |
+| `AIOrchestratorCoreLib.Tests/Channels/AppAuthoredWritesCensusTests.cs` | the register: 78 sites (77 when this plan was written), and a new one fails until it is classified |
 | `AIOrchestratorCoreLib.Tests/Channels/StatusLogStoreTests.cs` | |
 | `AIOrchestratorCoreLib.Tests/Channels/AppNoteRoutingTests.cs` | including the owner-never-moves oracle |
 | `AIOrchestratorCoreLib.Tests/Running/NotesRideFromTheStatusLogTests.cs` | |
@@ -2502,7 +2502,9 @@ Expected: **3 955 + the new cases passed, 10 skipped, 0 failed**, ~3 min 20 s. A
 
 Run: `~/.dotnet/dotnet test AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj --filter "FullyQualifiedName~AppAuthoredWritesCensusTests"`
 
-17 of the 77 sites now call `AppNote_Writer.Write` instead of an appender, so the raw count has changed. **Update the constants and write the new breakdown into the report**: how many sites call the router, how many still call an appender directly, and that the two add to 77 plus the helper bodies. If they do not add up, a site was converted twice or a new one was added; find it before committing.
+17 of the **78** sites now reach `AppNote_Writer` instead of calling an appender directly, so the raw count has changed. **Update the constants and write the new breakdown into the report**: how many sites call the router, how many still call an appender directly, and that the two add to 78 plus the helper bodies. If they do not add up, a site was converted twice or a new one was added; find it before committing.
+
+> **EXECUTED 2026-09-15 AT 78, NOT 77.** The count is 78 and has been since `FreshSupervisor_Gate` arrived on 2026-09-16 (see the classification table's own note). `EXPECTED_EVENT_SITES` was already 78 and needed no change; `HELPER_BODIES` was already 8. What was stale was PROSE: this plan says 77 in the places written before that date, and the census test's own METHOD NAME said `…IsOneOfTheClassifiedSeventySeven`. The method is renamed and the split is written into the file's own docstring. `AppNoteKinds.cs` and `AppNote_Writer.cs` were already correct at 78 — the briefing that sent this task believed otherwise, which is decision 18's lesson arriving from the other side: a finding about one copy is not a finding about another, and a finding also expires.
 
 - [ ] **Step 6: Commit**
 

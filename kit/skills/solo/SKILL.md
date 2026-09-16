@@ -117,12 +117,14 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   matters more to you than to anyone: this is the owner's channel, so an untagged app entry is
   something they have ALREADY seen and you should not repeat it back to them. The tag is set by the
   app where the entry is written, never inferred from wording, and you never write it yourself.
-- **One app note does not stay in this channel.** Where the machine sets `runners.solo.bookkeeping` to
-  `log` (the default is `channel`), the `turn_ended` record of each of your turns is written to a
-  `status.jsonl` beside this channel instead of into it. Everything else you get here stays here —
-  the conversation, the request confirmations, and the owner-facing notices about your own turns
-  (stall, usage limit), which are untagged because the owner sees them too. So the ABSENCE of a
-  `turn_ended` here is not evidence that a turn did not run.
+- **Three app notes do not stay in this channel.** Where the machine sets `runners.solo.bookkeeping`
+  to `log` (the default is `channel`), the app's bookkeeping about your own turns — each turn's
+  `turn_ended` record, the note that a LATER message replaced the one you meant as your entry, and
+  the note that a `TO:` block named a channel you are not woken by — is written to a `status.jsonl`
+  beside this channel instead of into it. Everything else you get here stays here — the
+  conversation, the request confirmations, and the owner-facing notices about your own turns
+  (stall, usage limit), which are untagged because the owner sees them too. So the ABSENCE of an
+  app note here is not evidence that what it would have reported did not happen.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
