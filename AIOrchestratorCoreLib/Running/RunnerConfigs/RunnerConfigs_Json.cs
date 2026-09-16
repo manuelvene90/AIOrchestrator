@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Channels.StatusLog;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 
 namespace AIOrchestratorCoreLib.Running.RunnerConfigs;
@@ -28,6 +29,7 @@ public static class RunnerConfigs_Json
     public const string RUNNER_KEY = "runner";
     public const string RESUME_KEY = "resume";
     public const string WAKE_KEY = "wake";
+    public const string BOOKKEEPING_KEY = "bookkeeping";
     public const string PERMISSION_MODE_KEY = "permission_mode";
     public const string SETTINGS_KEY = "settings";
     public const string MAX_CONCURRENT_TURNS_KEY = "maxConcurrentTurns";
@@ -135,6 +137,7 @@ public static class RunnerConfigs_Json
                 [RUNNER_KEY] = SessionRunner_Names.Get_Word(roleConfig.Runner),
                 [RESUME_KEY] = ResumeMode_Names.Get_Word(roleConfig.Resume),
                 [WAKE_KEY] = WakeMode_Names.Get_Word(roleConfig.Wake),
+                [BOOKKEEPING_KEY] = BookkeepingSink_Names.Get_Word(roleConfig.Bookkeeping),
                 [PERMISSION_MODE_KEY] = roleConfig.PermissionMode,
                 [SETTINGS_KEY] = roleConfig.Settings,
             };
@@ -169,21 +172,22 @@ public static class RunnerConfigs_Json
         var runner = SessionRunner_Names.Parse_OrNull(Read_String_OrNull(roleNode, RUNNER_KEY)) ?? defaults.Runner;
         var resume = ResumeMode_Names.Parse_OrNull(Read_String_OrNull(roleNode, RESUME_KEY)) ?? defaults.Resume;
         var wake = WakeMode_Names.Parse_OrNull(Read_String_OrNull(roleNode, WAKE_KEY)) ?? defaults.Wake;
+        var bookkeeping = BookkeepingSink_Names.Parse_OrNull(Read_String_OrNull(roleNode, BOOKKEEPING_KEY)) ?? defaults.Bookkeeping;
         var permissionMode = Read_String_OrNull(roleNode, PERMISSION_MODE_KEY);
         var settings = Read_String_OrNull(roleNode, SETTINGS_KEY);
 
         if (runner != SessionRunners.Bg)
-            return RoleRunnerConfig_Factory.Create(runner, resume, permissionMode, settings, wake);
+            return RoleRunnerConfig_Factory.Create(runner, resume, permissionMode, settings, wake, bookkeeping);
 
         var (bgSettings, refusal) = BgSettings_Rule.Resolve(settings);
 
         if (refusal != null)
         {
             rejections.Add($"role '{SessionRole_Names.Get_ConfigKey(role)}' asks for runner '{SessionRunner_Names.BG}' but {refusal} — refused, the role runs in a terminal instead");
-            return RoleRunnerConfig_Factory.Create(SessionRunners.Terminal, resume, permissionMode, settings, wake);
+            return RoleRunnerConfig_Factory.Create(SessionRunners.Terminal, resume, permissionMode, settings, wake, bookkeeping);
         }
 
-        return RoleRunnerConfig_Factory.Create(runner, resume, permissionMode, bgSettings, wake);
+        return RoleRunnerConfig_Factory.Create(runner, resume, permissionMode, bgSettings, wake, bookkeeping);
     }
 
     /// <summary>

@@ -696,7 +696,7 @@ git commit -F /tmp/cm.txt   # "feat(channels): a per-session status log that sto
 - Test: `AIOrchestratorCoreLib.Tests/Running/BookkeepingSinkConfigTests.cs`
 
 **Interfaces:**
-- Produces: `BookkeepingSinks { Channel, Log }`, `BookkeepingSink_Names`, `IRoleRunnerConfig.Bookkeeping`, and `BookkeepingSink_Policy.Resolve(roleConfig)`. Task 4 is its only consumer.
+- Produces: `BookkeepingSinks { Channel, Log }`, `BookkeepingSink_Names`, `IRoleRunnerConfig.Bookkeeping`, and `BookkeepingSink_Policy.Resolve(roleConfig, state)`. Task 4 is its only consumer.
 
 **The interlock:** the spec says step 3 is safe only after step 2, "because until then the terminal watcher's only knowledge of anything is the channel file". That is a per-session fact, not a per-release one: a TERMINAL session in `wake = watcher` gets no state pack and no riding notes, so a note in the log would reach it never. The policy refuses `Log` for exactly that combination — which means the gate cannot be misconfigured into silence.
 
@@ -946,6 +946,17 @@ git commit -F /tmp/cm.txt   # "feat(running): a bookkeeping sink per role, defau
 
 ## Task 4: `AppNote_Writer` — the one place the routing decision is made
 
+> **SIGNATURE CORRECTED AT TASK 3 (2026-09-16).** The policy takes the SESSION STATE as well as the
+> role config — `Resolve(IRoleRunnerConfig, IPrintSessionState?)` — because config speaks for the
+> ROLE and `DrivesTurns` speaks for the SESSION, and they disagree in a real case: a member demoted
+> by `OrchestrationLauncherModel.Demote_ToTerminal` still reads `runner: print` in config while its
+> own file says the dispatcher let it go, and NOBODY writes it a pack. The role-only version this
+> plan first proposed would have answered `Log` and made that session deaf. So `AppNote_Writer.Write`
+> takes an `IPrintSessionState? state` too and passes it through; read it with
+> `PrintSessionState_Store.Read_OrNull(PrintSessionState_Store.Get_StateFile(...))`.
+> `Describe_Refusal` is likewise `Describe_Refusal_OrNull(SessionRoles, IRoleRunnerConfig, IPrintSessionState?)`
+> and returns null when nothing was refused, so a caller cannot log a refusal that did not happen.
+
 **Files:**
 - Create: `AIOrchestratorCoreLib/Channels/StatusLog/AppNoteKinds.cs`
 - Create: `AIOrchestratorCoreLib/Channels/StatusLog/AppNote_Writer.cs`
@@ -1183,7 +1194,7 @@ public static class AppNote_Writer
         // is what makes the switch reversible with no migration.
         _ = kind;
 
-        if (audience == AppEntryAudiences.Owner || BookkeepingSink_Policy.Resolve(roleConfig) == BookkeepingSinks.Channel)
+        if (audience == AppEntryAudiences.Owner || BookkeepingSink_Policy.Resolve(roleConfig, state) == BookkeepingSinks.Channel)
             return ChannelAppender.Append_AppEntry(channelFilePath, audience, subject, body, nowLocal);
 
         return StatusLog_Store.Append(statusLogFilePath, subject, body, nowLocal);

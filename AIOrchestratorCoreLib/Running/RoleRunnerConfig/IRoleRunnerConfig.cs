@@ -14,6 +14,15 @@ public interface IRoleRunnerConfig
     WakeModes Wake { get; }
 
     /// <summary>
+    /// Where the app's own AGENT-facing bookkeeping about this role's sessions is written —
+    /// <see cref="Channels.StatusLog.BookkeepingSinks.Channel"/> (where it has always gone) unless
+    /// config.json says otherwise. NOT the last word: what a session actually gets is
+    /// <c>BookkeepingSink_Policy.Resolve</c>, which refuses the log for a session no state pack is
+    /// written for. An owner-facing entry is never governed by this at all.
+    /// </summary>
+    Channels.StatusLog.BookkeepingSinks Bookkeeping { get; }
+
+    /// <summary>
     /// Passed as <c>--permission-mode</c> to a bridge-driven session. Null keeps today's behaviour,
     /// <c>--dangerously-skip-permissions</c> (owner directive: an unattended session must never
     /// hang on a prompt). The terminal runner does not read it.
