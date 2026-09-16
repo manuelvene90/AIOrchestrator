@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Channels.StatusLog;
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
@@ -292,6 +293,34 @@ public static class SettingsCatalog
                     "(never --continue, which guesses among the sessions sharing a repo directory); 'fresh' starts empty with " +
                     "only what the session re-reads from disk. The general supervisor ships 'fresh' by owner directive " +
                     "(CLAUDE.md decision 8) — a resumed conversation once re-ran a failed request on boot.",
+                restart: RestartKinds.NextSpawn));
+
+            kernel.Add(SettingDefinition_Factory.Create_Enum(
+                path: $"{RunnerConfigs_Json.RUNNERS_KEY}.{key}.{RunnerConfigs_Json.WAKE_KEY}",
+                values: [WakeMode_Names.WATCHER, WakeMode_Names.TICKET],
+                shippedDefault: WakeMode_Names.Get_Word(roleDefault.Wake),
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Kernel,
+                label: $"{key} wake",
+                description:
+                    $"How a {key} session learns a turn is due. 'watcher' is today's shape — the session's own bash " +
+                    "monitor fingerprints its channels and decides for itself; 'ticket' has the app decide instead, with " +
+                    "the same policy the bridge uses, and say so by writing a wake ticket file. Read only where the " +
+                    $"{key} runner is 'terminal' — a bridge-driven session needs no ticket at all.",
+                restart: RestartKinds.NextSpawn));
+
+            kernel.Add(SettingDefinition_Factory.Create_Enum(
+                path: $"{RunnerConfigs_Json.RUNNERS_KEY}.{key}.{RunnerConfigs_Json.BOOKKEEPING_KEY}",
+                values: [BookkeepingSink_Names.CHANNEL, BookkeepingSink_Names.LOG],
+                shippedDefault: BookkeepingSink_Names.Get_Word(roleDefault.Bookkeeping),
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Kernel,
+                label: $"{key} bookkeeping",
+                description:
+                    $"Where the app's own AGENT-facing bookkeeping about a {key} session is written. 'channel' is today's " +
+                    "shape — into the session's own channel, re-read at every boot; 'log' writes into the status log " +
+                    "instead, shown to the session through its state pack and riding notes. NEVER governs an owner-facing " +
+                    "entry — that always reaches Telegram through the channel regardless of this key.",
                 restart: RestartKinds.NextSpawn));
         }
 
