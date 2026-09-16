@@ -81,35 +81,63 @@ public static class PrintTurn_Trigger
     }
 
     /// <summary>
-    /// The app notes of the session's OWN channel that it has not been shown, to ride the turn about
-    /// to start — never to start one. Only notes stamped within <see cref="AGENT_NOTE_WINDOW"/>, and
-    /// only the newest <see cref="MAXIMUM_AGENT_NOTES"/>: the first turn after this shipped would
-    /// otherwise have handed every session its channel's entire history of notes.
+    /// The app notes this session has not been shown, to ride the turn about to start — never to
+    /// start one. Only notes stamped within <see cref="AGENT_NOTE_WINDOW"/>, and only the newest
+    /// <see cref="MAXIMUM_AGENT_NOTES"/>: the first turn after this shipped would otherwise have
+    /// handed every session its channel's entire history of notes.
+    ///
+    /// <para>
+    /// TWO FILES SINCE 2026-09-15, ONE RULE. A note used to be an entry in the session's own channel
+    /// and nothing else; plan 02 routes the bookkeeping kinds to
+    /// <see cref="Channels.StatusLog.StatusLog_Store"/>, whose records ARE channel entries, and the
+    /// caller hands both lists here together. The window and the cap therefore apply to the MERGED
+    /// set, which is the point: five notes total, not five per file.
+    /// </para>
+    /// <para>
+    /// THE DELIVERED TEST IS A PREDICATE RATHER THAN A CURSOR, and that is the only reason the
+    /// signature changed. There are two cursors now — the session's own channel and
+    /// <see cref="Channels.StatusLog.StatusLog_Store.CURSOR_KEY"/> — and an entry is already
+    /// delivered if EITHER says so. Passing one cursor would have forced this method to know which
+    /// list an entry came from, which is exactly the knowledge it must not need.
+    /// </para>
+    /// <para>
+    /// "THE NEWEST FIVE" IS BY STAMP, NOT BY POSITION, and that is not a nicety once there are two
+    /// lists: concatenating a channel and a log puts every log note behind every channel note, so a
+    /// tail-of-the-list cap would drop a note written a minute ago in favour of one written two
+    /// hours ago purely because of which file it landed in. One list in, sorted once, capped once.
+    /// The sort is STABLE, so a single source whose stamps are already in order is handed back in
+    /// exactly the order it arrived — which is what every caller before 2026-09-15 relied on.
+    /// </para>
     /// </summary>
-    public static IReadOnlyList<IChannelEntry> Select_AgentNotes(IReadOnlyList<IChannelEntry> entries, ITurnCursor cursor, DateTime nowLocal)
+    public static IReadOnlyList<IChannelEntry> Select_AgentNotes(
+        IReadOnlyList<IChannelEntry> entries,
+        Func<IChannelEntry, bool> alreadyDelivered,
+        DateTime nowLocal)
     {
-        List<IChannelEntry> notes = [];
+        List<(IChannelEntry Entry, DateTime StampedLocal)> notes = [];
 
         foreach (var entry in entries)
         {
             if (!Is_AgentNote(entry))
                 continue;
 
-            if (cursor.Delivered.Contains(ChannelEntry_Digest.Compute(entry)))
+            if (alreadyDelivered(entry))
                 continue;
 
-            // The app writes this stamp itself (ChannelAppender), so unlike an agent's it can be read.
-            // One that cannot be parsed is not trusted to be recent.
+            // The app writes this stamp itself (ChannelAppender, StatusLog_Store), so unlike an
+            // agent's it can be read. One that cannot be parsed is not trusted to be recent.
             if (!DateTime.TryParseExact(entry.DateText, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var stampedLocal))
                 continue;
 
             if (nowLocal - stampedLocal > AGENT_NOTE_WINDOW)
                 continue;
 
-            notes.Add(entry);
+            notes.Add((entry, stampedLocal));
         }
 
-        return notes.Count <= MAXIMUM_AGENT_NOTES ? notes : [.. notes.Skip(notes.Count - MAXIMUM_AGENT_NOTES)];
+        var ordered = notes.OrderBy(note => note.StampedLocal).Select(note => note.Entry).ToList();
+
+        return ordered.Count <= MAXIMUM_AGENT_NOTES ? ordered : [.. ordered.Skip(ordered.Count - MAXIMUM_AGENT_NOTES)];
     }
 
     public static bool Is_Inbound(SessionRoles role, ChannelAuthors author)

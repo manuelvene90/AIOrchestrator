@@ -3,6 +3,7 @@ using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
+using AIOrchestratorCoreLib.Running.StatusNotes;
 using AIOrchestratorCoreLib.Running.TurnCursor;
 using AIOrchestratorCoreLib.Running.TurnSource;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -72,7 +73,7 @@ public static class WakeDecision_Resolver
 
         var ordered = PendingTraffic_Orderer.Order([.. reads.Select(read => (read.Source, read.Pending))]);
 
-        return Decide_OrNull(state, sources, ordered, Describe_FirstContactSources(reads), digestHeldSince, nowLocal, configs.MemberDigestWindow);
+        return Decide_OrNull(paths, state, sources, ordered, Describe_FirstContactSources(reads), digestHeldSince, nowLocal, configs.MemberDigestWindow);
     }
 
     /// <summary>
@@ -141,6 +142,7 @@ public static class WakeDecision_Resolver
     /// <see cref="Resolve_OrNull"/> enters here after reading for itself. One body either way.
     /// </summary>
     public static IWakeDecision? Decide_OrNull(
+        ISupervisionPaths paths,
         IPrintSessionState state,
         IReadOnlyList<ITurnSource> sources,
         IReadOnlyList<PendingEntry> ordered,
@@ -175,7 +177,7 @@ public static class WakeDecision_Resolver
         if (wakeReason == null)
             return null;
 
-        return WakeDecision_Factory.Create(wakeReason, With_AgentNotes(state, sources, ordered, nowLocal), sources);
+        return WakeDecision_Factory.Create(wakeReason, With_AgentNotes(paths, state, sources, ordered, nowLocal), sources);
     }
 
     /// <summary>
@@ -184,23 +186,59 @@ public static class WakeDecision_Resolver
     /// for what they are and why nothing carried them before). Added AFTER every wake-up rule has
     /// decided, so a note can neither start a turn nor change which rule released one. A boot turn
     /// carries none: its empty pending set is what tells the executor it is a boot.
+    ///
+    /// <para>
+    /// TWO FILES SINCE 2026-09-15, ONE RULE, ONE CAP. Plan 02 routes the bookkeeping kinds to
+    /// <see cref="Channels.StatusLog.StatusLog_Store"/> when a role's sink says so, and NOTHING
+    /// MIGRATES what is already in the channel — so for the whole of the transition a session's notes
+    /// live in both files and both are read here, ONCE, into one call of the selector. Asking each
+    /// source for its own newest five and concatenating would put ten notes at the head of a prompt,
+    /// which is the growing boot this series exists to shrink (CLAUDE.md decision 12: the rule grows a
+    /// source, never a second implementation).
+    /// </para>
+    /// <para>
+    /// THE LOG IS READ WHATEVER THE SINK SAYS. It is not asked whether this role's bookkeeping is
+    /// routed today: a machine that sets the key and then unsets it would otherwise strand every note
+    /// written in between, unread, for ever. An absent log reads as no entries and costs one
+    /// <c>File.Exists</c>.
+    /// </para>
+    /// <para>
+    /// THE CHANNEL HALF STILL NEEDS ITS CURSOR AND THE LOG HALF DELIBERATELY DOES NOT, which is the one
+    /// asymmetry here. A session with no cursor for its own channel has never been read through
+    /// <c>Read_Pending</c>'s baseline, and that baseline is what declares a live channel's whole
+    /// history to be history; handing its notes over on the strength of "no cursor says otherwise"
+    /// would replay a channel's every note into one turn. The log has no baseline BY DESIGN
+    /// (<see cref="StatusNotes_Bookkeeper.Is_Delivered"/> says why): a missing <c>.status</c> cursor
+    /// means a session that existed before the log did, and the notes written to it since are exactly
+    /// what the first turn after the upgrade should carry.
+    /// </para>
     /// </summary>
-    static IReadOnlyList<PendingEntry> With_AgentNotes(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> ordered, DateTime nowLocal)
+    static IReadOnlyList<PendingEntry> With_AgentNotes(ISupervisionPaths paths, IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> ordered, DateTime nowLocal)
     {
         if (ordered.Count == 0)
             return ordered;
 
         var own = sources.FirstOrDefault(source => string.Equals(source.ChannelFilePath, state.ChannelFilePath, StringComparison.OrdinalIgnoreCase));
-        var cursor = own == null ? null : state.Cursors.FirstOrDefault(candidate => SOURCE_KEYS.Equals(candidate.SourceKey, own.Key));
 
-        if (own == null || cursor == null)
+        if (own == null)
             return ordered;
 
-        var notes = PrintTurn_Trigger.Select_AgentNotes(ChannelHistory_Cache.Read_Entries(own.ChannelFilePath), cursor, nowLocal);
+        var ownCursor = state.Cursors.FirstOrDefault(candidate => SOURCE_KEYS.Equals(candidate.SourceKey, own.Key));
+
+        IReadOnlyList<IChannelEntry> channelEntries = ownCursor == null ? [] : ChannelHistory_Cache.Read_Entries(own.ChannelFilePath);
+        var logEntries = StatusNotes_Bookkeeper.Read_Entries(paths, state);
+
+        var notes = PrintTurn_Trigger.Select_AgentNotes(
+            [.. channelEntries, .. logEntries],
+            entry => ownCursor?.Delivered.Contains(ChannelEntry_Digest.Compute(entry)) == true
+                || StatusNotes_Bookkeeper.Is_Delivered(state, entry),
+            nowLocal);
 
         if (notes.Count == 0)
             return ordered;
 
+        // The notes are labelled under the session's OWN channel, as they always were: the prompt
+        // groups traffic by source and the session has never been told the status log exists.
         return [.. notes.Select(note => new PendingEntry(own, note)), .. ordered];
     }
 

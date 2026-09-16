@@ -792,7 +792,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // channels and the state file, which a terminal session's monitor can read too, so it lives in
         // WakeDecision_Resolver where both can ask it. Everything above reads the in-memory tracker —
         // what THIS process has already done — and stays here.
-        var decision = WakeDecision_Resolver.Decide_OrNull(state, sources, ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
+        var decision = WakeDecision_Resolver.Decide_OrNull(_paths, state, sources, ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
 
         if (decision == null)
             return;
@@ -1682,9 +1682,9 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// SessionCursors_Bookkeeper's, shared with the wake-ticket sweep — the same set of entries has
     /// to mean "handed over" whichever of the two recorded it (CLAUDE.md decision 12).
     /// </summary>
-    static IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending, IReadOnlySet<string>? answeredSourceKeys = null)
+    IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending, IReadOnlySet<string>? answeredSourceKeys = null)
     {
-        return SessionCursors_Bookkeeper.Advance(state, sources, pending, answeredSourceKeys);
+        return SessionCursors_Bookkeeper.Advance(_paths, state, sources, pending, answeredSourceKeys);
     }
 
     // ----- the reply -----

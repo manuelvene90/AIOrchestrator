@@ -1954,7 +1954,7 @@ internal sealed class BridgeEngineModel(
                 Running.PendingTraffic.WakeUp_Policy.Contains_DigestableTraffic(ordered, firstContactSources));
 
             var decision = Running.WakeDecision.WakeDecision_Resolver.Decide_OrNull(
-                state, sources, ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
+                _paths, state, sources, ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
 
             if (decision == null)
                 continue;
@@ -2178,7 +2178,7 @@ internal sealed class BridgeEngineModel(
         // again on its first ticket, which is the one thing the flag exists to prevent.
         Running.PrintSessionState.PrintSessionState_Store.Write(
             stateFile,
-            Running.PrintSessionState.PrintSessionState_Factory.CreateFrom_Existing_Cursors(state, Running.SessionCursors.SessionCursors_Bookkeeper.Advance(state, sources, decision.Pending)));
+            Running.PrintSessionState.PrintSessionState_Factory.CreateFrom_Existing_Cursors(state, Running.SessionCursors.SessionCursors_Bookkeeper.Advance(_paths, state, sources, decision.Pending)));
 
         // SPENT WHERE THE CURSORS ADVANCE, exactly as the dispatcher spends it: this is the moment the
         // entries were handed over, so the next held report starts a fresh window and a wake that did
