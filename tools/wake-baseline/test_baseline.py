@@ -19,14 +19,14 @@ def test_counts_wakes_by_cause():
         assert got["entries_by_author"]["app"] == 1
         assert got["entries_by_author"]["implementer"] == 1
         # Under the watcher every author wakes the supervisor, the app's own bookkeeping included.
-        assert got["wake_causes_under_watcher"]["owner"] == 1
-        assert got["wake_causes_under_watcher"]["member"] == 1
-        assert got["wake_causes_under_watcher"]["app"] == 1
+        assert got["wake_causes_under_watcher_measured"]["owner"] == 1
+        assert got["wake_causes_under_watcher_measured"]["member"] == 1
+        assert got["wake_causes_under_watcher_measured"]["app"] == 1
         # Under the app's policy the bookkeeping wakes nobody. This is the figure the series moves.
-        assert got["wake_causes_under_ticket"]["owner"] == 1
-        assert got["wake_causes_under_ticket"]["member"] == 1
-        assert got["wake_causes_under_ticket"]["app"] == 0
-        assert got["wakes_avoided_by_the_ticket"] == 1
+        assert got["wake_causes_under_ticket_MODELLED"]["owner"] == 1
+        assert got["wake_causes_under_ticket_MODELLED"]["member"] == 1
+        assert got["wake_causes_under_ticket_MODELLED"]["app"] == 0
+        assert got["wakes_the_ticket_would_avoid_MODELLED"] == 1
 
 
 def test_text_output_renders_every_section_including_the_scalar():
@@ -42,5 +42,5 @@ def test_text_output_renders_every_section_including_the_scalar():
             [sys.executable, "tools/wake-baseline/baseline.py", "--root", str(root)],
             capture_output=True, text=True)
         assert done.returncode == 0, done.stderr
-        assert "wake_causes_under_watcher" in done.stdout
-        assert "wakes_avoided_by_the_ticket == 1" in done.stdout.replace("== wakes_avoided_by_the_ticket ==", "wakes_avoided_by_the_ticket ==")
+        assert "wake_causes_under_watcher_measured" in done.stdout
+        assert "wakes_the_ticket_would_avoid_MODELLED == 1" in done.stdout.replace("== wakes_the_ticket_would_avoid_MODELLED ==", "wakes_the_ticket_would_avoid_MODELLED ==")

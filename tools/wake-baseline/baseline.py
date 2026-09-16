@@ -60,9 +60,9 @@ def collect(root):
 
     return {
         "entries_by_author": dict(by_author),
-        "wake_causes_under_watcher": dict(watcher),
-        "wake_causes_under_ticket": dict(ticket),
-        "wakes_avoided_by_the_ticket": sum(watcher.values()) - sum(ticket.values()),
+        "wake_causes_under_watcher_measured": dict(watcher),
+        "wake_causes_under_ticket_MODELLED": dict(ticket),
+        "wakes_the_ticket_would_avoid_MODELLED": sum(watcher.values()) - sum(ticket.values()),
     }
 
 

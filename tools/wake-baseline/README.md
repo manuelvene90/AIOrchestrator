@@ -3,7 +3,22 @@
 Measurement for the one-wake-model series. **Aggregates only** — nothing here ever prints a whole
 transcript, a whole channel, or any message text. Safe to run read-only against a live machine.
 
-## `baseline.py` — what wakes a session, and what would not
+## `baseline.py` — what wakes a session (measured), and what would not (MODELLED)
+
+**The two columns are not the same kind of number.** `..._measured` counts entries that exist and
+that the fingerprint monitor fired on. `..._MODELLED` applies the app's policy to those same entries
+and says what WOULD have woken a session: this script never reads `orchestrator.log.jsonl` and has
+never seen a ticket. The gap is a PREDICTION. The "after" is a different measurement.
+
+**Counting real tickets afterwards: do not grep `wake ticket <n>` naively.** Two different lines
+carry that phrase — the emission (`'imp-1': wake ticket 5 — <reason>`, info) and the stall warning
+(`'imp-1' was handed wake ticket 5 and has filed no entry…`, warning). Counting both doubles the
+figure.
+
+**And check the key actually took.** An unknown or misspelled `wake` value falls back to `watcher`
+without an error, by design — so `"tickt"` reads two days later as numbers identical to the before,
+and the honest reading of that is "the model does nothing". Confirm the mode is live before starting
+the clock.
 
     python3 tools/wake-baseline/baseline.py --root ~/.claude/supervision
 
