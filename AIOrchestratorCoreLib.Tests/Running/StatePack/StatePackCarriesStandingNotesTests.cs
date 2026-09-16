@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Running.PendingTraffic;
+using AIOrchestratorCoreLib.Running.TurnSource;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Channels.StatusLog;
 using AIOrchestratorCoreLib.Running;
@@ -163,6 +165,49 @@ public class StatePackCarriesStandingNotesTests : IDisposable
     public void AnAbsentLogReadsAsNothingToldAndIsNeverNamedUnavailable()
     {
         Assert.Empty(StatePackInputs_Reader.Select_StandingNotes(Path.Combine(Path.GetTempPath(), $"absent-{Guid.NewGuid():N}.jsonl"), NOW));
+    }
+
+    /// <summary>
+    /// NEVER TWICE IN ONE PACK — a defect neither task could see alone. Task 10 made app notes ride
+    /// the turn from the log as well as the channel, so a note that rode is in <c>pending</c>; this
+    /// reader would then find the same record still standing and render it a second time, under a
+    /// heading that says "the app has told you" beside one that says "act on these". The pending
+    /// section is the more specific of the two, so it wins and the standing section subtracts.
+    ///
+    /// <para>
+    /// BOTH ROADS ARE PINNED HERE: the riding note appears once and NOT among the standing notes,
+    /// and the note beside it that did NOT ride is still standing. Without the second half this case
+    /// would pass on a reader that simply dropped every standing note.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ANoteThatAlreadyRidesTheTurn_IsNotAlsoRenderedAsStanding()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"aiorch-standing-root-{Guid.NewGuid():N}");
+
+        try
+        {
+            var paths = SupervisionPaths_Factory.Create(root);
+            var channel = paths.Get_ImplementerChannelFile("repo-1", "imp-1");
+            var log = StatusLog_Store.Get_File(paths, SessionRoles.Implementer, "repo-1", "imp-1");
+
+            StatusLog_Store.Append(log, "your question was NOT sent to the owner — it is incomplete", "Ask again with every line present.", DateTime.Now.AddMinutes(-2));
+            StatusLog_Store.Append(log, "PLAN.md is behind your verdicts", "Update the ledger.", DateTime.Now.AddMinutes(-1));
+
+            var entries = StatusLog_Store.Read_Entries(log);
+            var rode = Assert.Single(entries, entry => entry.Subject.Contains("NOT sent", StringComparison.Ordinal));
+            var source = TurnSource_Factory.Create("imp-1", channel, isOwnerChannel: false);
+
+            var state = PrintSessionState_Factory.Create_New("sid", SessionRoles.Implementer, "repo-1", "imp-1", Path.Combine(root, "not-a-repo"), null, channel, []);
+            var inputs = StatePackInputs_Reader.Read(paths, state, "repo-1/imp-1/7", [new PendingEntry(source, rode)], [source]);
+
+            Assert.DoesNotContain(inputs.StandingNotes, note => note.Subject.Contains("NOT sent", StringComparison.Ordinal));
+            Assert.Contains(inputs.StandingNotes, note => note.Subject.Contains("PLAN.md is behind", StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
     }
 
     /// <summary>

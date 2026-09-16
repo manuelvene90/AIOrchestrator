@@ -1,3 +1,4 @@
+using System.Linq;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Git;
@@ -51,9 +52,20 @@ public static class StatePackInputs_Reader
             StatePack_Locator.Get_ConclusionsFile_OrNull(paths, state.Role, state.OrchId, state.MemberId),
             StatePack_Locator.CONCLUSIONS_FILE_NAME, unavailable);
 
+        // NEVER TWICE IN ONE PACK. Task 10 made app notes ride the turn from the log as well as the
+        // channel, so a note that rode is in `pending` — and this reader would find the same record
+        // still standing and render it again under a different heading, one saying "act on these" and
+        // the other "the app has told you". The pending section is the more specific of the two, so
+        // it wins and this one subtracts. A merge-time defect: neither task could see it alone.
+        var ridingIdentities = pending
+            .Select(item => Channels.ChannelEntry_Digest.Compute(item.Entry))
+            .ToHashSet(StringComparer.Ordinal);
+
         var standingNotes = Select_StandingNotes(
-            Channels.StatusLog.StatusLog_Store.Get_File(paths, state.Role, state.OrchId, state.MemberId),
-            DateTime.Now);
+                Channels.StatusLog.StatusLog_Store.Get_File(paths, state.Role, state.OrchId, state.MemberId),
+                DateTime.Now)
+            .Where(note => !ridingIdentities.Contains(Channels.ChannelEntry_Digest.Compute(note)))
+            .ToList();
 
         return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, progressNote, conclusions, standingNotes);
     }
@@ -93,11 +105,16 @@ public static class StatePackInputs_Reader
     /// </summary>
     public static IReadOnlyList<IChannelEntry> Select_StandingNotes(string statusLogFile, DateTime nowLocal)
     {
-        var nothingDelivered = TurnCursor.TurnCursor_Factory.Create(
-            Channels.StatusLog.StatusLog_Store.CURSOR_KEY, statusLogFile, 0, new HashSet<string>());
-
+        // NOTHING HAS BEEN DELIVERED, and that is the whole difference between this reader and the
+        // riding-notes one. A note rides ONCE — the cursor is how the dispatcher remembers it did —
+        // while the pack describes the state a session is handed, so it carries every note still
+        // standing whether or not that session has seen it before. A fresh session has no memory of
+        // having been shown anything, and this predicate says exactly that.
+        //
+        // It was an empty cursor until task 10 changed the parameter to a predicate (one selector,
+        // two readers, no second copy of the window rule) — same meaning, said directly.
         return PrintTurn_Trigger.Select_AgentNotes(
-            Channels.StatusLog.StatusLog_Store.Read_Entries(statusLogFile), nothingDelivered, nowLocal);
+            Channels.StatusLog.StatusLog_Store.Read_Entries(statusLogFile), _ => false, nowLocal);
     }
 
     /// <summary>
