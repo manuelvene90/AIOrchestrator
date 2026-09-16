@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Running.ClosingTurn;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.StatePack;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.Running.TurnCursor;
 using AIOrchestratorCoreLib.Running.TurnExecutor;
@@ -1371,7 +1372,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // effect (decision 21), so the change lands on the next turn and is logged where it happens.
         state = Refresh_GeneralModel_IfChanged(stateFile, state);
 
-        var fresh = roleConfig.Resume == ResumeModes.Fresh;
+        // THE GATE, not the config key alone. `fresh` is what throws the transcript away, and for the
+        // two roles that own an endeavour that is only safe once their conclusions are somewhere the
+        // pack can read them back — everything else in the pack is a fact re-derivable from disk, and
+        // a conclusion is not (2026-09-15 one-wake-model spec, step 6).
+        var fresh = roleConfig.Resume == ResumeModes.Fresh && FreshSupervisor_Gate.Allows(_paths, state, _log);
         var hasHistory = state.ExecutedTurns.Count > 0;
 
         // WHETHER THE ID IS SPENT, not whether a turn has succeeded. `--session-id` with a uuid the
