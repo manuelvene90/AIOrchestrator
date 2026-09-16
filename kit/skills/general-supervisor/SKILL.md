@@ -42,6 +42,12 @@ machine, runs HERE. Inside it:
   The tag is decided by the app where the entry is written, not guessed from its wording. **Read both
   kinds** — what it tells you is whether the owner has already seen it, and therefore whether you
   still need to relay it.
+- **Not every app note stays in this channel.** Where the machine sets `runners.general.bookkeeping`
+  to `log` (the default is `channel`), the app's bookkeeping about you — each turn's `turn_ended`
+  record, and the coaching when a question of yours was NOT sent to the owner — is written to a
+  `status.jsonl` beside this channel instead of into it. The conversation never moves, and neither
+  does anything owner-facing. So the ABSENCE of an app note here is not evidence that what it would
+  have reported did not happen.
 
 **FIRST, RESOLVE YOUR ENVIRONMENT — one Bash call, before anything else.** You cannot see
 environment variables; the Read tool does not expand them, and a path you type from memory is the
@@ -465,9 +471,22 @@ orchestration you called stuck an hour ago may have worked ever since. Before yo
 another orchestration is blocked, idle or not answering — in a digest or in passing — read its
 state in THIS turn:
 
-- **Mid-turn is WORKING.** In its `orchestrator.log.jsonl`, a `print turn <orch>/<member>/<n>
-  started` (or `stream turn …`) with no later `turn_ended <member> turn <n>` means that member is in
-  the middle of a turn right now, however quiet its channel looks.
+- **Mid-turn is WORKING, and `orchestrator.log.jsonl` is the file that answers it.** A
+  `print turn <orch>/<member>/<n> started` line (or `stream turn …`) with NO later line naming that
+  same `<orch>/<member>/<n>` means that member is in the middle of a turn right now, however quiet its
+  channel looks. When the turn is over the log says so under that id — `Turn <id> ended — …` on
+  success, `Turn <id> attempt <k> …` on a failure, `Turn <id> was killed …` at the deadline — so
+  what you look for is the id COMING BACK, not one particular word.
+  **Do not look for `turn_ended <member> turn <n>` in the log: it is a channel entry's subject, never
+  a log line.** And since 2026-09-15 it is not dependably a channel entry either — where a role's
+  `runners.<role>.bookkeeping` is `log` (the default is `channel`, so on most machines nothing has
+  moved yet), the app's bookkeeping about a session goes to a `status.jsonl` beside that session's
+  channel instead of into it. A member's channel with no `turn_ended` in it proves nothing in either
+  regime; the log line does, in both.
+  **Those turn lines exist only for a member the BRIDGE runs** (`print` or `stream`). A member spawned
+  in a terminal takes its turns without the dispatcher, so the log carries no turn lines for it at all
+  — and nothing under the supervision root answers "is it mid-turn right now" for one. Say you cannot
+  tell, rather than reading that silence as idle.
 - **An app `[agent]` entry is not evidence of a stall.** "The owner is still waiting for your
   reply", "unread traffic" and the like are coaching the app sends a session, and they have fired
   against sessions that were mid-turn.
