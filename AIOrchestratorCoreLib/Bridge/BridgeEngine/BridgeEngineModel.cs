@@ -12974,6 +12974,26 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     bool Route_ChannelNote(Channels.DiscoveredChannel.IDiscoveredChannel channel, Channels.StatusLog.AppNoteKinds kind, string subject, string body)
     {
+        // PAUSED — BRACES, AND THE BELT IS TWO THOUSAND LINES AWAY (plan 02 task 12, 2026-09-15).
+        //
+        // Route_SupervisorNote needs no screen of its own because it is only reachable through
+        // Append_SupervisorAttention_UnlessMeeting, which asks Is_Paused above its append. This one
+        // has no such choke point: its five callers are the message-contract and question-dedup
+        // coaching, reached from Mirror_Append_Async and Send_QuestionWithButtons_Async.
+        //
+        // TODAY THEY ARE UNREACHABLE WHILE PAUSED, AND NOT BY ANYTHING THAT SAYS "PAUSE". Pause
+        // resolves to Deferred (EffectiveMode_Resolver.Resolve), Deferred freezes offsets
+        // (Freezes_Offsets), and Find_ActiveChannels drops a frozen channel from the tick — so the
+        // mirror never reads the entry these notes would answer. That is a DELIVERY-MODE screen
+        // standing in for a pause screen, in another method, discovered by reading rather than
+        // stated anywhere; the day a caller arrives from outside the tailer it protects nothing.
+        // CLAUDE.md's PAUSE decision ends "miss one and dormancy is a word", and a coaching note
+        // landing in a paused orchestration's member channel is a poke at a session the owner put to
+        // sleep. So the screen is asked HERE, where the write is, and PauseGatesEveryWakerScanTests
+        // carries the row that keeps it.
+        if (Is_Paused(channel.OrchId))
+            return false;
+
         try
         {
             var general = channel.OrchId == Channels.ChannelDiscovery.GENERAL_ORCH_ID;

@@ -44,8 +44,9 @@ machine, runs HERE. Inside it:
   still need to relay it.
 - **Not every app note stays in this channel.** Where the machine sets `runners.general.bookkeeping`
   to `log` (the default is `channel`), the app's bookkeeping about you — each turn's `turn_ended`
-  record, and the coaching when a question of yours was NOT sent to the owner — is written to a
-  `status.jsonl` beside this channel instead of into it. The conversation never moves, and neither
+  record, the coaching when a question of yours was NOT sent to the owner, the note that a LATER
+  message replaced the one you meant as your entry, and the note that a `TO:` block named a channel
+  you are not woken by — is written to a `status.jsonl` beside this channel instead of into it. The conversation never moves, and neither
   does anything owner-facing. So the ABSENCE of an app note here is not evidence that what it would
   have reported did not happen.
 

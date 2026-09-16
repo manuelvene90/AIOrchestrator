@@ -52,6 +52,22 @@ public class AppAuthoredWritesCensusTests
     /// cut.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// RECONCILED 2026-09-15 (plan 02 task 12), because three documents carried two numbers. The
+    /// plan's prose still says 77 in the places written before <c>FreshSupervisor_Gate</c> arrived;
+    /// <c>AppNoteKinds</c> and <c>AppNote_Writer</c> say 78 and are right. THIS FILE IS THE
+    /// AUTHORITY and it was re-counted by hand as well as run: 86 hits of <see cref="APPEND_NAMES"/>
+    /// across <c>AIOrchestratorCoreLib</c>, minus the 8 helper bodies, is 78 event sites.
+    ///
+    /// <para>
+    /// THE SPLIT, for the record, since tasks 5-9 changed which helper a site calls and not how many
+    /// sites there are. 17 of the 78 reach <see cref="StatusLog.AppNote_Writer"/>: 8 in
+    /// <c>PrintTurnDispatcherModel</c> call it directly, 5 go through
+    /// <c>BridgeEngineModel.Route_ChannelNote</c>, and 4 pass a <c>routedKind</c> to
+    /// <c>Append_SupervisorAttention_UnlessMeeting</c> (three ledger advisories and the orphan
+    /// report). The other 61 still call an appender directly. 17 + 61 = 78.
+    /// </para>
+    /// </summary>
     const int EXPECTED_EVENT_SITES = 78;
 
     /// <summary>
@@ -93,7 +109,7 @@ public class AppAuthoredWritesCensusTests
     ];
 
     [Fact]
-    public void EveryPlaceTheAppWritesAChannelEntry_IsOneOfTheClassifiedSeventySeven()
+    public void EveryPlaceTheAppWritesAChannelEntry_IsOneOfTheClassifiedSeventyEight()
     {
         var hits = 0;
 

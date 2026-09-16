@@ -44,6 +44,7 @@ check against the code before accepting. The owner interfaces with the project m
   to `log` (the default is `channel`, so on most machines nothing has moved), the app's bookkeeping
   about you — each turn's `turn_ended` record, the `PLAN.md` ledger advisories, the report that a
   member has stopped answering, the coaching when a question of yours was NOT sent, the note that a
+  LATER message replaced the one you meant as your entry, the note that a
   `TO:` block named a channel you are not woken by — is written to a `status.jsonl` beside this
   channel instead of into it. What never moves: the conversation, every
   request confirmation, and every untagged owner-facing entry, which includes the stall and

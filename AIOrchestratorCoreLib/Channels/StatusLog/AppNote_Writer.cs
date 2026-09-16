@@ -24,10 +24,17 @@ namespace AIOrchestratorCoreLib.Channels.StatusLog;
 /// <c>print</c>. Asking the config directly here would put that refusal at every call site.
 /// </para>
 /// <para>
-/// IT IS NOT A WAKER, and the register that says so is
-/// <c>PauseGatesEveryWakerScanTests</c>: this writes what its caller decided to write and decides
-/// nothing about whether to speak. A caller that must be gated on the pause is gated where it
-/// already is.
+/// IT IS NOT ITSELF A WAKER — it writes what its caller decided to write and decides nothing about
+/// whether to speak — BUT IT IS ON THE WAKER REGISTER THROUGH ITS CALLERS, which is not the same
+/// thing and was originally written here as if it were (corrected 2026-09-15, plan 02 task 12). The
+/// engine reaches this through two adapters. <c>Route_SupervisorNote</c> sits inside
+/// <c>Append_SupervisorAttention_UnlessMeeting</c>, below its <c>Is_Paused</c> screen, so it is
+/// covered where every other piece of supervisor-facing traffic is. <c>Route_ChannelNote</c> had no
+/// screen anywhere on its own path: the five coaching sites were unreachable in a paused
+/// orchestration only because pause resolves to Deferred, Deferred freezes the channel's offsets and
+/// the tailer then drops it from the tick — a delivery-mode screen two thousand lines away, standing
+/// in for a pause screen that nobody had written. It asks for itself now, and
+/// <c>PauseGatesEveryWakerScanTests</c> carries the row.
 /// </para>
 /// </summary>
 public static class AppNote_Writer
