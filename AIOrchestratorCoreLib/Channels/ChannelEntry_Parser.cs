@@ -358,6 +358,28 @@ public static partial class ChannelEntry_Parser
             "owner" => ChannelAuthors.Owner,
             "app" => ChannelAuthors.App,
             "communicator" => ChannelAuthors.Communicator,
+
+            // THE SUPERVISOR'S MEMBER ID, AS A CLOSED HISTORICAL RESIDUE — not an alias vocabulary.
+            //
+            // Between 7d6949f (2026-09-10 18:56) and 2848172 (2026-09-14 15:04) channel-append.sh's
+            // derive_author preferred AIORCH_MEMBER over AIORCH_ROLE, and the supervisor's member id
+            // is "sup" (SessionLaunch_Factory.SUPERVISOR_MEMBER_ID). So the tool itself signed those
+            // entries: they are not typos and they did not bypass the append path — the VPS carries
+            // both `owner-channel.md.self-write.sup` and `.self-write.supervisor` records, which only
+            // channel-append.sh writes. Measured there 2026-09-15: 93 headers across fincanva-8 and
+            // fincanva-12, the last at 14:12, none after the fixed script was installed at 17:45.
+            //
+            // It is read because those entries are otherwise Unknown, and an Unknown supervisor entry
+            // is invisible to Brief_Finder — so a state pack rebuilt from disk for those
+            // orchestrations hands a member no brief at all, silently. Reading a real identifier of
+            // this system is not the same as accepting a misspelling.
+            //
+            // DO NOT EXTEND THIS TO OTHER MEMBER IDS. `imp-2`, `rev-1`, `solo-1` never reached a
+            // header — only the supervisor's own appends went through the tool on the affected hosts
+            // — and adding a second id here would turn one dated repair into an alias vocabulary with
+            // no boundary. The writer is fixed; this list must not grow.
+            "sup" => ChannelAuthors.Supervisor,
+
             _ => ChannelAuthors.Unknown,
         };
     }

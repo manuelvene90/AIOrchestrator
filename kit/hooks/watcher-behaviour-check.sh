@@ -52,16 +52,31 @@ check() {
 
 # ---------------------------------------------------------------------------------------------
 # Per-role facts. Only paths differ: which channel file the loop watches, which folder receives the
-# marker, and what the wake line says.
+# marker, what the wake line says, and how precisely the failure marker names the failed read.
 #
-#   role | channel path under the fake HOME | orchestration folder | wake phrase
+# THE FIFTH FIELD EXISTS BECAUSE ONE ROLE WATCHES SEVERAL FILES. Four of the five loops watch a
+# single channel, so `FP_ERR="md5sum"` names the failed read completely — there is only one file it
+# could be about. The supervisor watches every spoke plus the owner channel, so it writes
+# `FP_ERR="md5sum on $file"`, and that extra half is the ONLY actionable part of the marker for the
+# role that has more than one candidate: "md5sum failed" on a nine-member orchestration tells the
+# owner nothing they can act on, which is the failure mode CLAUDE.md decision 21 is about.
+#
+# This harness used to assert the bare literal for all five and had therefore reported a standing
+# failure against the one role that carries the useful message. Asserting a per-role expectation
+# keeps the comparison exact — a prefix or substring match would have made the check pass for a
+# marker that named no file at all, which is the behaviour being ruled out.
+#
+#   role | channel path under the fake HOME | orchestration folder | wake phrase | fingerprint scope
+#
+# fingerprint scope: `command` = the marker names the command only (one watched file)
+#                    `per-file` = it names the command AND the file (several watched files)
 # ---------------------------------------------------------------------------------------------
 ROLES="
-implementer|.claude/supervision/<orch-id>/<member-id>/channel.md|.claude/supervision/<orch-id>|YOUR CHANNEL CHANGED
-reviewer|.claude/supervision/<orch-id>/<member-id>/channel.md|.claude/supervision/<orch-id>|YOUR CHANNEL CHANGED
-solo|.claude/supervision/orch-under-test/owner-channel.md|.claude/supervision/orch-under-test|OWNER WROTE
-supervisor|.claude/supervision/orch-under-test/imp-1/channel.md|.claude/supervision/orch-under-test|CHANNELS CHANGED
-general-supervisor|.claude/supervision/general/channel.md|.claude/supervision/general|GENERAL CHANNEL CHANGED
+implementer|.claude/supervision/<orch-id>/<member-id>/channel.md|.claude/supervision/<orch-id>|YOUR CHANNEL CHANGED|command
+reviewer|.claude/supervision/<orch-id>/<member-id>/channel.md|.claude/supervision/<orch-id>|YOUR CHANNEL CHANGED|command
+solo|.claude/supervision/orch-under-test/owner-channel.md|.claude/supervision/orch-under-test|OWNER WROTE|command
+supervisor|.claude/supervision/orch-under-test/imp-1/channel.md|.claude/supervision/orch-under-test|CHANNELS CHANGED|per-file
+general-supervisor|.claude/supervision/general/channel.md|.claude/supervision/general|GENERAL CHANNEL CHANGED|command
 "
 
 # Pulls the fenced bash block that defines read_fp out of a role command.
@@ -83,7 +98,7 @@ extract_block() {
 }
 
 run_role() {
-  local role="$1" channel_rel="$2" orch_rel="$3" phrase="$4"
+  local role="$1" channel_rel="$2" orch_rel="$3" phrase="$4" fp_scope="$5"
   # The watcher loop lives in the role's reference file since the protocols were split; the
   # SKILL.md that owns it only carries the imperative pointer to read it.
   local src="$SKILLS_DIR/$role/reference/watcher.md"
@@ -113,6 +128,18 @@ run_role() {
   local orch="$home/$orch_rel"
   mkdir -p "$(dirname "$channel")" "$orch"
   printf '## [1] FROM supervisor — subject\n' > "$channel"
+
+  # What line 3 of the marker must say, for THIS role. `$channel` is the file the shimmed md5sum is
+  # made to fail on, and for a multi-file watcher it is also the first entry of the globbed set, so
+  # the expectation is exact rather than a pattern. An unrecognised scope DIES rather than defaulting:
+  # a default here would silently assert the wrong contract for a role added later, which is this
+  # harness's own founding failure — nothing-is-ALLOW.
+  local expected_reason
+  case "$fp_scope" in
+    command)  expected_reason="md5sum failed" ;;
+    per-file) expected_reason="md5sum on $channel failed" ;;
+    *) die "$role: unknown fingerprint scope '$fp_scope' in the ROLES table — the marker contract for this role is undeclared, and guessing it would certify whatever the loop happens to write" ;;
+  esac
 
   # The supervisor watches a set, so give it the rest of the set to glob.
   if [ "$role" = "supervisor" ]; then
@@ -182,7 +209,7 @@ PREAMBLE
 
   if [ -f "$orch/.guard-not-in-force" ]; then
     marker_reason="$(sed -n '3p' "$orch/.guard-not-in-force")"
-    check "$role: the marker names the command that failed" "md5sum failed" "$marker_reason"
+    check "$role: the marker names the command that failed" "$expected_reason" "$marker_reason"
     check "$role: the marker names the watcher" "watcher" "$(sed -n '1p' "$orch/.guard-not-in-force")"
     # Line 6 is the consequence. Without it the app renders every marker as "ALLOWED the call", which
     # is the hooks' contract and false of a watcher — there is no call.
@@ -199,9 +226,9 @@ printf 'watcher behaviour — running the loop shipped in %s\n\n' "$SKILLS_DIR"
 
 # A herestring, never a pipe: a piped `while` runs in a subshell and its FAILURES count would be
 # discarded, which is this harness certifying itself green by losing the evidence.
-while IFS='|' read -r role channel orch phrase; do
+while IFS='|' read -r role channel orch phrase fp_scope; do
   [ -n "$role" ] || continue
-  run_role "$role" "$channel" "$orch" "$phrase"
+  run_role "$role" "$channel" "$orch" "$phrase" "$fp_scope"
 done <<< "$(printf '%s\n' "$ROLES")"
 
 # =================================================================================================
