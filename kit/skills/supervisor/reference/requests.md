@@ -44,4 +44,5 @@ As soon as the goal is clear from the owner's first instruction, drop
 
 ## The platform codes every topic name starts with
 
-`SL` Strategy Lab · `AS` Arb Studio · `OL` Option Lab · `SK-C` Skeleton Client · `SK-M` Skeleton Master · `AI-Orch` AI Orchestrator · `SS` Seasonal Studio · `ODP` Option Database Preprocessor · `UPD` Updater · `CRM` CRM · `TKT` Tickets · `SB` Strategy Builder (in SL) · `NO` Noise Adder (in SL) · `DA` Data Analyzer (in SL) · `PB` Portfolio Builder (in SL) · `IS` Invest Studio (in SL) · `TKL` Tracker (in SL) · `API` Trading System Bridge (in SL)
+They are in `SKILL.md` itself, deliberately: a supervisor that has not opened this file must
+still understand a code the owner speaks. Do not copy them back here — one copy, never two.
