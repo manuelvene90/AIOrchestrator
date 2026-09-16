@@ -51,7 +51,53 @@ public static class StatePackInputs_Reader
             StatePack_Locator.Get_ConclusionsFile_OrNull(paths, state.Role, state.OrchId, state.MemberId),
             StatePack_Locator.CONCLUSIONS_FILE_NAME, unavailable);
 
-        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, progressNote, conclusions);
+        var standingNotes = Select_StandingNotes(
+            Channels.StatusLog.StatusLog_Store.Get_File(paths, state.Role, state.OrchId, state.MemberId),
+            DateTime.Now);
+
+        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, progressNote, conclusions, standingNotes);
+    }
+
+    /// <summary>
+    /// WHAT THE APP HAS TOLD THIS SESSION THAT IS STILL STANDING, out of a log that holds the whole
+    /// chronicle. Three screens, and each of them keeps a different kind of history out:
+    ///
+    /// <para>
+    /// (1) NOT A TURN RECORD. <c>turn_ended</c> is the largest family in the log — one per turn of
+    /// every session — and it tells a session what it did itself.
+    /// (2) NOT OLDER THAN <see cref="PrintTurn_Trigger.AGENT_NOTE_WINDOW"/>. This is the one that
+    /// matters, because nothing in this system writes a RETRACTION: the ledger advisory is appended
+    /// once per spell (<c>_ledgerBehindReportedOrchIds</c> in the engine) and when the supervisor
+    /// updates PLAN.md the advisory simply stops being repeated. Without the window, an advisory
+    /// answered three days ago would stay the newest of its family for ever and be handed to every
+    /// fresh session after it — which is worse than saying nothing, because a session cannot tell a
+    /// stale instruction from a live one.
+    /// (3) AT MOST THE NEWEST <see cref="PrintTurn_Trigger.MAXIMUM_AGENT_NOTES"/>, the same ceiling the
+    /// riding notes use: a section that grows with the traffic is the growing boot this series exists
+    /// to shrink.
+    /// </para>
+    /// <para>
+    /// ALL THREE ARE <see cref="PrintTurn_Trigger.Select_AgentNotes"/>'s, called with a cursor that has
+    /// delivered nothing. One rule, two readers (decision 12) — and the empty cursor is the difference
+    /// between the two: the riding notes skip what the session was already shown, while the pack is
+    /// read by a session that HAS no memory of having been shown anything, so a note delivered to its
+    /// predecessor is new to it. That is the whole reason this section exists beside the riding notes.
+    /// </para>
+    /// <para>
+    /// A FAILURE TO READ THE LOG IS NOT A SECTION IN <see cref="StatePackInputs.Unavailable"/>. An
+    /// absent log means a session that has been told nothing, which is the ordinary case on every
+    /// machine that has never set the <c>bookkeeping</c> key, and
+    /// <see cref="Channels.StatusLog.StatusLog_Store.Read_Entries"/> already answers <c>[]</c> for an
+    /// absent log and an unreadable one alike.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<IChannelEntry> Select_StandingNotes(string statusLogFile, DateTime nowLocal)
+    {
+        var nothingDelivered = TurnCursor.TurnCursor_Factory.Create(
+            Channels.StatusLog.StatusLog_Store.CURSOR_KEY, statusLogFile, 0, new HashSet<string>());
+
+        return PrintTurn_Trigger.Select_AgentNotes(
+            Channels.StatusLog.StatusLog_Store.Read_Entries(statusLogFile), nothingDelivered, nowLocal);
     }
 
     /// <summary>

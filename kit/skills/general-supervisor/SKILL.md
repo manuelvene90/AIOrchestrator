@@ -145,7 +145,7 @@ And on the rare turn where you did dispatch one: **never write your final messag
 sub-agent is still running** — wait for every agent to return first, because a late return re-opens
 your turn and the message you write after it replaces your entry, which is what the owner reads.
 
-**Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/general/pack.md"`. If the file exists, the bridge wrote it for this launch: read it FIRST — it carries the entries that woke you and your last entry; `channel.md` is then a reference for facts the pack lacks. Your greeting stays (owner directive). No pack → the steps below as written.
+**Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/general/pack.md"`. If the file exists, the bridge wrote it for this launch: read it FIRST — it carries the entries that woke you and your last entry; `channel.md` is then a reference for facts the pack lacks. Your greeting stays (owner directive). No pack → the steps below as written. A `## What the app has told you` section in the pack is the APP speaking to you, not the owner — act on it, never answer it as though the owner had written it.
 
 **A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 
