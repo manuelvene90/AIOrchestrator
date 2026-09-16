@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.TurnResult;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
@@ -72,16 +71,12 @@ public static class TurnLog_Store
     public const string REQUEST_ID_KEY = "aiorch_request_id";
     public const string AT_KEY = "aiorch_at";
 
+    // The supervisor's and communicator's state files share the orchestration folder under a role
+    // prefix, so their logs must too, or two roles would write one file — see
+    // <see cref="SessionFiles.SessionFile_Locator"/>, the one place that derives the prefix.
     public static string Get_File(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
     {
-        var stateFile = PrintSessionState_Store.Get_StateFile(paths, role, orchId, memberId);
-        var folder = Path.GetDirectoryName(stateFile) ?? paths.Root;
-
-        // The supervisor's and communicator's state files share the orchestration folder under a
-        // role prefix, so their logs must too, or two roles would write one file.
-        var prefix = Path.GetFileName(stateFile).Replace(PrintSessionState_Store.STATE_FILE_NAME, string.Empty);
-
-        return Path.Combine(folder, prefix + FILE_NAME);
+        return SessionFiles.SessionFile_Locator.Get_File(paths, role, orchId, memberId, FILE_NAME);
     }
 
     /// <summary>One line of the raw stream, with the request it belongs to stamped on it.</summary>
