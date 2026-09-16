@@ -62,6 +62,42 @@ public static class StatePack_Locator
         }
     }
 
+    /// <summary>The name the C1.2 block is stored under for a member — 2026-09-08 token-efficiency spec, §C1.2.</summary>
+    public const string CONCLUSIONS_FILE_NAME = "state.md";
+
+    /// <summary>
+    /// The supervisor's, beside its pack in the orchestration folder, because the supervisor has no
+    /// member folder to put one in.
+    /// </summary>
+    public const string SUPERVISOR_CONCLUSIONS_FILE_NAME = ".supervisor.state.md";
+
+    /// <summary>
+    /// WHERE A SESSION'S CONCLUSIONS LIVE — the one part of a turn a fresh session cannot re-derive.
+    /// The brief is a channel entry, the ledger is PLAN.md, the code state is git: throw the
+    /// transcript away and every one of them is still on disk and still true. *"We already tried this
+    /// and it failed"* is on disk nowhere, and re-proposing a dead end costs a day and reports
+    /// nothing — which is worse than a crash, because a crash is reported.
+    ///
+    /// <para>
+    /// ONE ACCESSOR FOR BOTH HALVES. Members and the solo get <see cref="CONCLUSIONS_FILE_NAME"/> at
+    /// the path C1.2 names, so when that plan ships the two meet at one path and one reader instead
+    /// of growing a second convention for the same thing (CLAUDE.md decision 12).
+    /// </para>
+    /// <para>
+    /// Null for the general supervisor, which is stateless across launches by owner directive
+    /// (decision 8) and keeps its memory in its own CLAUDE.md.
+    /// </para>
+    /// </summary>
+    public static string? Get_ConclusionsFile_OrNull(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
+    {
+        return role switch
+        {
+            SessionRoles.General => null,
+            SessionRoles.Supervisor => Path.Combine(paths.Get_OrchestrationFolder(orchId), SUPERVISOR_CONCLUSIONS_FILE_NAME),
+            _ => Path.Combine(paths.Get_OrchestrationFolder(orchId), memberId, CONCLUSIONS_FILE_NAME),
+        };
+    }
+
     public static string Get_File(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
     {
         return role switch

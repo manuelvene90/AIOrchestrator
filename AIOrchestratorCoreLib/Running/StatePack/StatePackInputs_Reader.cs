@@ -43,30 +43,43 @@ public static class StatePackInputs_Reader
         var gitLines = state.Role == SessionRoles.General ? [] : Read_Git(state.WorkingDirectory, unavailable);
         var ownerTail = ownsTheEndeavour ? Read_OwnerTail(paths, state, unavailable) : [];
 
-        var progressNote = Read_ProgressNote_OrNull(StatePack_Locator.Get_ProgressFile_OrNull(paths, state.Role, state.OrchId, state.MemberId), unavailable);
+        var progressNote = Read_Note_OrNull(
+            StatePack_Locator.Get_ProgressFile_OrNull(paths, state.Role, state.OrchId, state.MemberId),
+            StatePack_Locator.PROGRESS_FILE_NAME, unavailable);
 
-        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, progressNote);
+        var conclusions = Read_Note_OrNull(
+            StatePack_Locator.Get_ConclusionsFile_OrNull(paths, state.Role, state.OrchId, state.MemberId),
+            StatePack_Locator.CONCLUSIONS_FILE_NAME, unavailable);
+
+        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, progressNote, conclusions);
     }
 
     /// <summary>
-    /// The note as the member left it; null when there is none, which is the ordinary case for a
-    /// member that has not started one. An unreadable note is named in the pack's unavailable list
-    /// rather than dropped silently — a member told nothing would re-explore what it had saved.
+    /// A side note the session keeps for itself — its progress note while it works, or its
+    /// conclusions. Null when there is none, which is the ordinary case for a session that has not
+    /// started one, and NOT named unavailable: absence here is a state, not a failure. An UNREADABLE
+    /// one is named, rather than dropped silently — a session told nothing would re-explore what it
+    /// had already saved, or re-propose what it had already ruled out.
+    ///
+    /// <para>
+    /// ONE READER FOR BOTH, called twice with different labels. They differ only in where they live
+    /// and how they truncate; a second copy of this method would be the thing decision 12 forbids.
+    /// </para>
     /// </summary>
-    static string? Read_ProgressNote_OrNull(string? progressFile, List<string> unavailable)
+    static string? Read_Note_OrNull(string? file, string label, List<string> unavailable)
     {
-        if (progressFile == null || !File.Exists(progressFile))
+        if (file == null || !File.Exists(file))
             return null;
 
         try
         {
-            var text = File.ReadAllText(progressFile).Trim();
+            var text = File.ReadAllText(file).Trim();
 
             return text.Length == 0 ? null : text;
         }
         catch (Exception ex)
         {
-            unavailable.Add($"{StatePack_Locator.PROGRESS_FILE_NAME}: {ex.Message}");
+            unavailable.Add($"{label}: {ex.Message}");
             return null;
         }
     }
