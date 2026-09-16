@@ -60,7 +60,7 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         if (resumeTranscript)
             prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
         else if (fresh && pending.Count > 0)
-            Write_StatePack(state, requestId, pending, sources);
+            TurnStatePack_Writer.Write_OrNull(_paths, state, requestId, pending, sources);
 
         // THE WORK TURN IS BRAKED, the closing turn below is not: that one has its own short timeout
         // and a spend cap, and a brake on the turn that exists to salvage a killed one would only
@@ -98,24 +98,6 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         TurnLog_Store.Append_ClosingTurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), closingRequestId, result);
 
         return result;
-    }
-
-    /// <summary>
-    /// Reads what the bridge holds and writes the pack. Guarded as a whole on top of the reader's own
-    /// per-section guards: a pack that cannot be written must not stop the turn — the session then
-    /// finds no pack and falls back to its boot sequence, which is today's behaviour, not a failure.
-    /// </summary>
-    void Write_StatePack(IPrintSessionState state, string requestId, IReadOnlyList<PendingEntry> pending, IReadOnlyList<TurnSource.ITurnSource> sources)
-    {
-        try
-        {
-            var inputs = StatePackInputs_Reader.Read(_paths, state, requestId, pending, sources);
-            StatePack_Writer.Write(StatePack_Locator.Get_File(_paths, state.Role, state.OrchId, state.MemberId), StatePack_Builder.Build(inputs));
-        }
-        catch
-        {
-            // Swallowed by design — see the summary. The session's boot sequence covers the gap.
-        }
     }
 
     public void Release(string orchId, string memberId)
