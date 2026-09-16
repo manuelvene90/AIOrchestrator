@@ -83,6 +83,12 @@ rather than glossed.
 
 ## Known gaps, stated
 
+> **UPDATED 2026-09-16 by `fix/one-wake-model-loose-ends`.** Gaps 1, 5 and 6 below are CLOSED, and
+> gap 6's stated cause was WRONG — read the four notes under the list before acting on any row. Gap 3
+> is now formally PARKED with the owner's ruling. The rows are left as written, because a reader of
+> the commits between the two dates needs to see what the series actually believed at the time.
+
+
 1. **The watchdog half of Task 5's fix has no end-to-end test.** `SessionWatchdogModel.Is_PrintRun` now asks whether a session drives turns rather than whether its file exists; the `BridgeEngineModel` half is proved by `EffortDialOnABridgeDrivenSupervisorTests`, which failed on Task 5 alone and passes now. Three constructions of the watchdog equivalent were defeated by the harness's 90 s spawn grace and were removed rather than committed red or deleted to force green.
 2. **`WakeDecision_Resolver.Resolve_OrNull` has no production caller.** The sweep enters at `Read_Pending` + `Decide_OrNull` because `Resolve_OrNull` persists nothing, and ask-and-discard re-baselines a terminal session's cursor — making it permanently deaf. Kept for callers that read without needing to record.
 3. **`.usage.json`'s path is rebuilt by hand in ~19 places**; Task 10 added the nineteenth. A `UsageFile_Locator` is the right home. Parked (decision 22).
@@ -90,6 +96,48 @@ rather than glossed.
 5. **`PrintSessionState_Store.Delete_IfExists` is dead code** since Task 5, and its docstring now describes behaviour that no longer exists.
 6. **77 entries on the VPS carry the author `sup`** instead of `supervisor` — hand-written headers bypassing `channel-append.sh` (decision 12's hazard, live). The baseline counts them as `unrecognised` rather than dropping them.
 7. **Three tests flake under parallel load**, each green 3/3 in isolation: `ClosingTurnReviewFixTests.AClosingTurnThatSaysNothing…`, `TolerantFileReaderTests.AFileLockedExclusivelyForAMoment…`, `EffortDialOnABridgeDrivenSupervisorTests…`. Not caused by this series; seen once each across ~12 full runs.
+
+### What the loose-ends branch settled (2026-09-16)
+
+**Gap 1 — CLOSED.** `WatchdogPrintSessionTests.ADemotedMember_WhoseRoleIsStillConfiguredPrint_IsRespawned_…`
+is the end-to-end case. The three earlier constructions were beaten by the 90 s grace and the
+app-start pass because they varied more than one thing; this one holds the config, the registration,
+the grace and the pass equal across two members of one orchestration, so `DrivesTurns` is the only
+variable that can produce the difference. Mutating `Is_PrintRun` back to `Exists(...)` fails it.
+
+**Gap 3 — PARKED, by the owner, 2026-09-16.** `UsageFile_Locator` is not being built.
+
+Recounted on this branch, and the row above is imprecise in both directions. Production references
+that locate a usage file — the two constants (`UsageTotals_Reader.SESSION_USAGE_FILE`,
+`COMMUNICATOR_USAGE_FILE`), the bare literals, and the `.pid` → `.usage.json` string surgery —
+number **38 across 5 files**: 23 in `BridgeEngineModel.cs`, 6 in `UsageTotals_Reader.cs`, 4 in
+`SessionRows_Builder.cs`, 3 in `OwnerFacingSession_Locator.cs`, 2 in `ResumableSession_Resolver.cs`
+(61 with the tests). But only **7** of the 38 write the name out as a literal; the rest already go
+through a named constant, so "rebuilt by hand in ~19 places" overstates the duplication and
+understates the spread. The real shape is one string-surgery site and a constant imported widely.
+
+The ruling is decision 22 as written: no owner request traces to it, and the cost of a discovery is
+not its fix but the horizon it opens. 23 of the 38 are in the file that is being rewritten right
+now, which is a second reason not to move them today. It stays here as a line, outside anyone's
+denominator, until an owner request needs it.
+
+**Gap 5 — CLOSED.** `Delete_IfExists` is deleted. Its docstring, and the class docstring's claim that
+"the file's presence is what tells the watchdog 'this slot has no pid file BY DESIGN'", both described
+the pre-Task-5 mechanism. NOTICED, not fixed: `PrintSessionState_Store.Exists` now has no production
+callers either — only tests assert with it, which is a legitimate use, so it stays.
+
+**Gap 6 — CLOSED, and its stated cause was wrong.** The entries were **not** hand-written headers
+bypassing `channel-append.sh`, and this is not decision 12's hazard. Between `7d6949f` (2026-09-10
+18:56) and `2848172` (2026-09-14 15:04) the tool's own `derive_author` preferred `AIORCH_MEMBER` over
+`AIORCH_ROLE`, and the supervisor's member id is `sup` — so `channel-append.sh` signed them itself.
+The evidence is on the VPS: `fincanva-12` carries both `owner-channel.md.self-write.sup` and
+`owner-channel.md.self-write.supervisor`, and only that script writes those records. The count is
+**93**, not 77 (77 was this series' app-write-site census, conflated with it). Measured 2026-09-15:
+last `sup` entry 14:12, installed script now byte-identical to branch source (md5 `ea65b01f…`),
+first `supervisor` entry after it 17:42 — the writer was already fixed; only the residue remained.
+`ChannelEntry_Parser` now reads `sup` as the supervisor, strictly and datedly, because an `Unknown`
+author is invisible to `Brief_Finder` and those orchestrations were therefore getting a state pack
+with no brief in it. The channel files are not rewritten.
 
 ## What the series did NOT change
 
