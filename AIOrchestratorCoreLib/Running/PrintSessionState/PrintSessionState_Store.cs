@@ -99,7 +99,11 @@ public static class PrintSessionState_Store
             root["next_turn_number"]?.GetValue<int>() ?? Math.Max(1, executed.Count + 1),
             root["failed_attempts"]?.GetValue<int>() ?? 0,
             executed,
-            Parse_RetryNotBefore_OrNull(root));
+            Parse_RetryNotBefore_OrNull(root),
+            // ABSENT MEANS TRUE. A file written before this field existed had one meaning — "the
+            // dispatcher runs my turns" — and losing that reading on the first re-read after a deploy
+            // would silently stop every bridge-driven session on the VPS (one-wake-model, 2026-09-15).
+            root["drives_turns"]?.GetValue<bool>() ?? true);
     }
 
     public static void Write(string stateFile, IPrintSessionState state)
@@ -157,6 +161,7 @@ public static class PrintSessionState_Store
             ["failed_attempts"] = state.FailedAttempts,
             ["retry_not_before_utc"] = state.RetryNotBeforeUtc?.ToString("o"),
             ["executed_turns"] = turns,
+            ["drives_turns"] = state.DrivesTurns,
         };
 
         Atomic_FileWriter.Write_AllText(stateFile, root.ToJsonString(JsonWriting.INDENTED));

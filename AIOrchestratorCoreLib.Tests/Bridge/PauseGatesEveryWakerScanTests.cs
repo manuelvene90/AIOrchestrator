@@ -48,6 +48,13 @@ public class PauseGatesEveryWakerScanTests
         { "void Flag_IdleMembers", "IdleMember" },
         { "async Task Resume_AllSessions_Async", "GO AHEAD — resume" },
         { "async Task Push_AwayDigests_Async", "AwayDigest_Decider.Should_Send" },
+
+        // THE WAKE-TICKET SWEEP (one-wake-model, 2026-09-15). It writes no channel entry at all — it
+        // writes the file a terminal session's monitor polls — which makes it the LOUDEST waker in the
+        // list rather than an exception to it: in ticket mode this is the whole of what starts that
+        // session's turn, so a paused orchestration whose supervisor still gets tickets is not asleep
+        // in any sense the owner would recognise.
+        { "async Task Sweep_WakeTickets_Async", "Write_WakeTicket(registered.StateFile" },
     };
 
     [Theory]
@@ -64,6 +71,30 @@ public class PauseGatesEveryWakerScanTests
             "session.Paused",
             body,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// AND THE LIVENESS ALARM INSIDE THAT SWEEP IS BELOW THE PAUSE SCREEN. It is the one thing in the
+    /// sweep that writes to a channel, and it is precisely the sort of alarm a pause must not produce:
+    /// a paused orchestration's session is asleep BECAUSE THE OWNER SAID SO, and every ticket-mode
+    /// session in one would otherwise be reported as having stopped waking, one window after the
+    /// pause. The choke point below would refuse the append anyway, which is the belt; this is the
+    /// braces, and it is the stronger half — a paused session is not examined at all.
+    /// </summary>
+    [Fact]
+    public void TheWakeTicketStallAlarm_SitsBelowThePauseScreenOfItsSweep()
+    {
+        var body = Extract_Method("async Task Sweep_WakeTickets_Async");
+
+        var paused = body.IndexOf("session.Paused", StringComparison.Ordinal);
+        var alarm = body.IndexOf("Raise_WakeStall_IfTicketWentUnanswered", StringComparison.Ordinal);
+
+        Assert.True(alarm >= 0, "the sweep no longer asserts that a ticket was acted on — the one failure this series introduces is silent again");
+        Assert.True(paused >= 0, "the sweep no longer asks whether the orchestration is paused — this scan is reading a method it does not understand");
+
+        Assert.True(
+            paused < alarm,
+            "the liveness alarm is raised above the pause screen: an orchestration the owner put to sleep would be reported as having stopped waking");
     }
 
     /// <summary>

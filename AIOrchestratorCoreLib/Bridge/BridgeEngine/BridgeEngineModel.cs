@@ -22,6 +22,7 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Mirroring;
 using AIOrchestratorCoreLib.Planning;
 using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
+using AIOrchestratorCoreLib.Running.RegisteredSessions;
 using AIOrchestratorCoreLib.Planning.PlanBackend;
 using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Sessions;
@@ -904,6 +905,49 @@ internal sealed class BridgeEngineModel(
     /// <summary>Per-orchestration cooldown so the brevity feedback never becomes noise itself.</summary>
     readonly Dictionary<string, DateTime> _lastVerbosityNudgeUtc = [];
 
+    /// <summary>
+    /// THE ONE FAILURE THE WAKE TICKET INTRODUCES, WATCHED PER SESSION. Under the bash watcher a
+    /// session whose monitor had died still fingerprinted its channels the moment a fresh one was
+    /// armed, and caught up on the next change; under a ticket nothing catches up — a dead monitor,
+    /// or a ticket file nobody is polling, looks EXACTLY like a quiet orchestration. That is the
+    /// shape of a silent failure, and this is what makes it loud (2026-09-15 one-wake-model).
+    ///
+    /// <para>
+    /// KEYED ON THE STATE FILE, which is already unique per role, orchestration and member and is
+    /// what the sweep has in its hand. Written and read on the mirror loop only, so unlike the maps
+    /// the inbound loop also touches it needs no lock.
+    /// </para>
+    /// </summary>
+    readonly Dictionary<string, WakeTicketWatch> _wakeTicketWatchByStateFile = [];
+
+    /// <summary>
+    /// What is known about the ticket a session was last handed: its number, when THIS PROCESS first
+    /// saw that number, how many entries of its own each of its channels carried at that moment, and
+    /// whether the watch is finished with.
+    ///
+    /// <para>
+    /// THE WINDOW STARTS WHEN THE APP FIRST SEES THE NUMBER, not at the ticket's own stamp, and the
+    /// difference is a RESTART. The counts below live in memory and die with the process, so a ticket
+    /// answered before a restart would be met afterwards with a baseline that already contains the
+    /// answer and a stamp long past due — a stall alert for a session that did its work. Re-arming on
+    /// first sight costs one window of lateness after a restart and cannot invent a stall.
+    /// </para>
+    /// <para>
+    /// PER CHANNEL, NOT ONE TOTAL. A member closing between the two readings takes its spoke out of
+    /// the source list (<c>TurnSources_Resolver</c>: closed members are not sources), so a total could
+    /// FALL and "has it written anything since" would be answered off a smaller set of files. Any one
+    /// channel carrying more of this session's entries than it did — or a channel that did not exist
+    /// then — is the session acting.
+    /// </para>
+    /// <para>
+    /// CLOSED COVERS BOTH ENDINGS, the session having answered and the alert having been raised,
+    /// because the only thing that re-opens a watch is a NEW ticket number. Clearing the watch instead
+    /// would re-arm it from the same ticket on the next tick, and a session that answered once and
+    /// then went legitimately idle would be alerted on a window later.
+    /// </para>
+    /// </summary>
+    sealed record WakeTicketWatch(int TicketNumber, DateTime ArmedUtc, IReadOnlyDictionary<string, int> OwnEntriesWhenArmed, bool Closed);
+
     sealed class HoldReceipt
     {
         public long? MessageId;
@@ -1603,6 +1647,18 @@ internal sealed class BridgeEngineModel(
         // it only starts turns, on background tasks, and only where none is in flight.
         _printTurns.Tick(DateTime.Now);
 
+        // THE SAME PASS FOR A SESSION IN A TERMINAL: the app decides whether it takes a turn and says
+        // so by writing it a wake ticket, instead of its bash monitor deciding for itself by
+        // fingerprinting its channels (2026-09-15 one-wake-model spec). Dark until a role's
+        // `runners.<role>.wake` says `ticket`.
+        //
+        // BESIDE _printTurns.Tick AND THEREFORE ABOVE THE DND GATE, deliberately, and NOT after the
+        // mirror sweep where the plan first put it: 🌙 pauses OUTBOUND TELEGRAM, and a session's work
+        // is not that. Below the gate, muting the phone would stop every terminal session in ticket
+        // mode from ever being told to work — which is the same reason the print dispatcher's tick
+        // sits here. It writes no Telegram and no channel entry; it writes two local files.
+        await Sweep_WakeTickets_Async(cancellationToken);
+
         // Before anything that could write to a channel: the flag is what keeps a supervisor's
         // watcher silent, and a tick that appends before reconciling it would litter the meeting.
         Sync_MeetingFlags();
@@ -1818,6 +1874,318 @@ internal sealed class BridgeEngineModel(
 
         Compact_LongChannels();
         Persist_BridgeState();
+    }
+
+    /// <summary>
+    /// THE APP TELLS A TERMINAL SESSION WHEN TO TAKE A TURN, with the same policy that opens a
+    /// bridge-driven one (<see cref="Running.WakeDecision.WakeDecision_Resolver"/>). Before this, that
+    /// session's bash monitor decided for itself by fingerprinting its channels — a second
+    /// implementation of the wake policy, with no cursor, no digest and no way to tell an app note
+    /// from a member's report, on the runner that is the DEFAULT (2026-09-15 one-wake-model spec).
+    ///
+    /// <para>
+    /// THE CURSOR ADVANCES HERE, and that is safe because in this shape the ticket means only "go and
+    /// read". The session still reads its own channels, so a ticket it misses while mid-turn costs it
+    /// nothing: the entries are still there when it looks.
+    /// </para>
+    /// <para>
+    /// IT ENTERS THE RESOLVER AT <c>Read_Pending</c> + <c>Decide_OrNull</c> AND NOT AT
+    /// <c>Resolve_OrNull</c>, for two reasons that are the same two the dispatcher has. The read must
+    /// PERSIST a cursor it had to invent (<see cref="Running.SessionCursors.SessionCursors_Bookkeeper"/>
+    /// — <c>Resolve_OrNull</c> writes nothing, so a session with no cursors would be re-baselined every
+    /// tick and absorb as history the very entry it should wake on); and the digest's hold stamp cannot
+    /// be computed until the traffic has been read, so it has to be resolved between the two halves.
+    /// <c>Decide_OrNull</c> is also where the empty-set guard lives, which is what stops
+    /// <c>WakeUp_Policy</c> answering "boot turn" to every idle session on every tick.
+    /// </para>
+    /// </summary>
+    async Task Sweep_WakeTickets_Async(CancellationToken cancellationToken)
+    {
+        var configs = _configProvider.Get_Current().Runners;
+        var nowLocal = DateTime.Now;
+
+        foreach (var registered in RegisteredSessions_Reader.Find_All(_paths, _store))
+        {
+            var role = configs.Get_ForRole(registered.Role);
+
+            if (role.Runner != Running.SessionRunners.Terminal || role.Wake != Running.WakeModes.Ticket)
+                continue;
+
+            // A PAUSED ORCHESTRATION IS DORMANT, and a ticket is a WAKER — the loudest one here, since
+            // it is the whole of what starts a turn in ticket mode. CLAUDE.md's PAUSE decision: each
+            // waker is gated for itself because no delivery mode has ever governed what the app writes
+            // OUTSIDE Telegram, and "miss one and dormancy is a word". The general supervisor resolves
+            // to no session at all and is never paused.
+            var session = _store.Get_Session_OrNull(registered.OrchId);
+
+            if (session != null && session.Paused)
+                continue;
+
+            var state = Running.PrintSessionState.PrintSessionState_Store.Read_OrNull(registered.StateFile);
+
+            // DrivesTurns IS THE INTERLOCK, not the config word. A member whose role still reads
+            // `print` in config.json but whose own file says the dispatcher runs its turns must NOT
+            // also be handed tickets: it would answer the same brief twice.
+            if (state is not { DrivesTurns: false })
+                continue;
+
+            var sources = Running.TurnSource.TurnSources_Resolver.Resolve(_paths, _store, state.Role, state.OrchId, state.MemberId);
+
+            // ABOVE THE PENDING READ, because a stalled session's pending set is EMPTY: the ticket it
+            // never acted on took its cursor past the traffic that produced it, so the `reads.Count == 0`
+            // return below — the ordinary shape of a quiet session — is exactly the shape of this
+            // failure too. Below that line the assertion would never run on the sessions it is for.
+            // BELOW the pause screen, deliberately: a paused orchestration is dormant and is not
+            // examined at all, which is stronger than relying on the append being refused later.
+            Raise_WakeStall_IfTicketWentUnanswered(registered.StateFile, state, sources, configs.MemberDigestWindow);
+
+            var reads = Running.SessionCursors.SessionCursors_Bookkeeper.Read_AndPersist(registered.StateFile, ref state, state.Role, sources);
+
+            if (reads.Count == 0)
+                continue;
+
+            var ordered = Running.PendingTraffic.PendingTraffic_Orderer.Order([.. reads.Select(read => (read.Source, read.Pending))]);
+            var firstContactSources = Running.WakeDecision.WakeDecision_Resolver.Describe_FirstContactSources(reads);
+
+            var digestHeldSince = _printTurns.Resolve_DigestHold(
+                state.OrchId,
+                state.MemberId,
+                nowLocal,
+                Running.PendingTraffic.WakeUp_Policy.Contains_DigestableTraffic(ordered, firstContactSources));
+
+            var decision = Running.WakeDecision.WakeDecision_Resolver.Decide_OrNull(
+                state, sources, ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
+
+            if (decision == null)
+                continue;
+
+            Write_WakeTicket(registered.StateFile, state, sources, decision);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// A TICKET NOBODY ACTS ON IS A STALL, AND IT SAYS SO — once. This is the one failure mode the
+    /// one-wake-model change introduces: the bash watcher a ticket-mode session no longer runs took
+    /// the channels' fingerprint on every pass, so a session that stopped waking recovered by itself
+    /// at the next change; a session that is not polling its ticket recovers never, and from outside
+    /// it is indistinguishable from an orchestration with nothing to do.
+    ///
+    /// <para>
+    /// THE RULE: a ticket was written, <c>MemberDigestWindow × 2</c> has passed, and the session has
+    /// filed no entry of its own. One window is how long the app itself may legitimately hold a
+    /// member's report before handing it over, so two is a whole window past anything the app's own
+    /// policy can explain.
+    /// </para>
+    /// <para>
+    /// AN ENTRY OF ITS OWN IS THE ONLY EVIDENCE THERE IS. The ticket carries no acknowledgement back
+    /// — the monitor only reads it — and a session's own entry is not inbound traffic for it
+    /// (<c>PrintTurn_Trigger.Is_Inbound</c>), so nothing else on this path can see that a turn
+    /// happened. Counted through <see cref="ChannelHistory_Counter.Count_Entries_ByAuthor"/>, which
+    /// spans the live file AND the archive: a count that a compaction can lower is not a count
+    /// anything may compare against a later one (CLAUDE.md decision 13).
+    /// </para>
+    /// <para>
+    /// THE EXISTING STALL PATH, NOT A SECOND ALARM CHANNEL: it goes out through
+    /// <see cref="Append_SupervisorAttention_UnlessMeeting"/>, which is where the pause and the
+    /// meeting are already answered for every piece of attention traffic. UNDER THE OWNER AUDIENCE,
+    /// which is decision 15's test rather than a preference — the agent this would ordinarily be
+    /// addressed to is the one that has stopped reading, and the only person who can arm a fresh
+    /// monitor or respawn the session is the owner.
+    /// </para>
+    /// <para>
+    /// THE TOKEN IS SPENT ON AN ALERT THAT WAS WRITTEN, never on one that was merely decided — the
+    /// lesson <see cref="BudgetAlert_Planner"/> was written to carry. That one-shot was taken before
+    /// the delivery mode was consulted, so the first alert to come due during a meeting was marked
+    /// sent and dropped, with no release anywhere for the rest of the process. Here the append is
+    /// attempted FIRST and the watch is closed only on a true return, so an alert refused by a
+    /// meeting comes back on the tick after it ends.
+    /// </para>
+    /// </summary>
+    void Raise_WakeStall_IfTicketWentUnanswered(
+        string stateFile,
+        Running.PrintSessionState.IPrintSessionState state,
+        IReadOnlyList<Running.TurnSource.ITurnSource> sources,
+        TimeSpan memberDigestWindow)
+    {
+        var ticket = Running.WakeTicket.WakeTicket_Store.Read_OrNull(
+            Running.WakeTicket.WakeTicket_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId));
+
+        // Nothing has ever been handed to this session, so its silence is silence and not a stall.
+        if (ticket == null)
+            return;
+
+        if (!_wakeTicketWatchByStateFile.TryGetValue(stateFile, out var watch) || watch.TicketNumber != ticket.Number)
+        {
+            _wakeTicketWatchByStateFile[stateFile] = new WakeTicketWatch(
+                ticket.Number, _clock.UtcNow, Count_OwnEntries_PerChannel(state.Role, sources), Closed: false);
+
+            return;
+        }
+
+        if (watch.Closed)
+            return;
+
+        if (_clock.UtcNow - watch.ArmedUtc <= Resolve_WakeStallWindow(memberDigestWindow))
+            return;
+
+        if (Has_WrittenSomethingOfItsOwn(state.Role, sources, watch.OwnEntriesWhenArmed))
+        {
+            _wakeTicketWatchByStateFile[stateFile] = watch with { Closed = true };
+            return;
+        }
+
+        // EVIDENCE OF LIFE OUTRANKS THE SILENCE, the same judgement Has_AnySessionWorkedWithin makes
+        // for the orchestration-wide stall alert: a session mid-turn is writing its transcript right
+        // now, and a turn that takes longer than two digest windows is an ordinary long turn, not a
+        // monitor that died. DEFERRED AND NOT CLOSED, also as there: the watch stays open, so a
+        // session that worked and then went silent without ever filing anything is still alerted on
+        // — we hold evidence that it was alive, not that it acted.
+        var lastWorkedUtc = Status.SessionActivity_Probe.Get_LastActivityUtc_OrNull(Resolve_UsageFile(state.Role, state.OrchId, state.MemberId));
+
+        if (lastWorkedUtc != null && lastWorkedUtc.Value > watch.ArmedUtc)
+            return;
+
+        var subject = $"'{state.MemberId}' has not taken a turn since wake ticket {ticket.Number}";
+
+        var body =
+            $"The app handed this session a wake ticket {SessionDuration_Formatter.Describe(_clock.UtcNow - watch.ArmedUtc)} ago " +
+            $"({ticket.Reason}) and it has written nothing of its own since, in any of its channels.\n\n" +
+            "In ticket mode that ticket is the WHOLE of what starts its turn: if its monitor died, or was never armed, " +
+            "nothing will wake it again and the orchestration goes quiet without anything failing. " +
+            "Look at the session's terminal — arm a fresh monitor if it is gone, respawn the session if the session is.";
+
+        if (!Append_SupervisorAttention_UnlessMeeting(state.OrchId, subject, body, Resolve_Presence(state.OrchId), Channels.AppEntryAudiences.Owner))
+            return;
+
+        _wakeTicketWatchByStateFile[stateFile] = watch with { Closed = true };
+
+        // WARNING, and the distinction the nudge sites draw is why: those are coaching aimed at a
+        // session that is reading them, while this is a component that has stopped answering.
+        _log.Log_Warning(state.OrchId, $"'{state.MemberId}' was handed wake ticket {ticket.Number} and has filed no entry of its own since — its monitor may be dead");
+    }
+
+    /// <summary>
+    /// How long a ticket may go unanswered: <c>MemberDigestWindow × 2</c> — with the SHIPPED window
+    /// standing in when the owner has configured no hold at all. A zero digest window means "hand a
+    /// member's report over at once"; it says nothing about how long a session may take to act, and
+    /// read literally it would make every ticket overdue on the tick after it was written.
+    /// </summary>
+    static TimeSpan Resolve_WakeStallWindow(TimeSpan memberDigestWindow)
+    {
+        var window = memberDigestWindow > TimeSpan.Zero
+            ? memberDigestWindow
+            : Running.RunnerConfigs.RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW;
+
+        return window + window;
+    }
+
+    /// <summary>
+    /// How many entries of this session's OWN authorship each of its channels carries. Per channel
+    /// rather than one total — see <see cref="WakeTicketWatch"/> for the member-closing case that
+    /// makes a total unsafe to compare.
+    /// </summary>
+    static IReadOnlyDictionary<string, int> Count_OwnEntries_PerChannel(Running.SessionRoles role, IReadOnlyList<Running.TurnSource.ITurnSource> sources)
+    {
+        var author = Running.SessionRole_Names.Get_Author(role);
+        Dictionary<string, int> counts = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var source in sources)
+            counts[source.ChannelFilePath] = ChannelHistory_Counter.Count_Entries_ByAuthor(source.ChannelFilePath, author);
+
+        return counts;
+    }
+
+    /// <summary>
+    /// Whether any channel of this session carries more of its own entries than it did when the watch
+    /// was armed. A channel that has appeared since counts from zero; one that has GONE is ignored
+    /// rather than read as a drop, which is the direction that cannot invent an answer.
+    /// </summary>
+    static bool Has_WrittenSomethingOfItsOwn(Running.SessionRoles role, IReadOnlyList<Running.TurnSource.ITurnSource> sources, IReadOnlyDictionary<string, int> whenArmed)
+    {
+        var author = Running.SessionRole_Names.Get_Author(role);
+
+        foreach (var source in sources)
+        {
+            var armed = whenArmed.TryGetValue(source.ChannelFilePath, out var counted) ? counted : 0;
+
+            if (ChannelHistory_Counter.Count_Entries_ByAuthor(source.ChannelFilePath, author) > armed)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The probe file a session of this role writes its status line into — the same four shapes
+    /// <see cref="Running.WakeTicket.WakeTicket_Store.Get_File"/> and
+    /// <c>PrintSessionState_Store.Get_StateFile</c> use, because the three files describe one session.
+    /// </summary>
+    string Resolve_UsageFile(Running.SessionRoles role, string orchId, string memberId)
+    {
+        return role switch
+        {
+            Running.SessionRoles.Implementer or Running.SessionRoles.Reviewer or Running.SessionRoles.Solo =>
+                Path.Combine(_paths.Get_ImplementerFolder(orchId, memberId), UsageTotals_Reader.SESSION_USAGE_FILE),
+            Running.SessionRoles.General => Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE),
+            Running.SessionRoles.Communicator => Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.COMMUNICATOR_USAGE_FILE),
+            _ => Path.Combine(_paths.Get_OrchestrationFolder(orchId), UsageTotals_Reader.SESSION_USAGE_FILE),
+        };
+    }
+
+    /// <summary>
+    /// The pack, then the ticket, then the cursor advance that says these entries have been handed
+    /// over — and the order is the whole of the safety here. THE PACK IS WRITTEN FIRST because the
+    /// ticket NAMES it: a ticket on disk ahead of its pack is a window in which the session wakes,
+    /// reads the path it was given and finds nothing there. The cursor advance is LAST for the mirror
+    /// reason Task 8 gave: a ticket written and not recorded is re-written next tick (noisy,
+    /// recoverable), while a cursor advanced for a ticket that never landed is an entry nobody is
+    /// ever told about.
+    ///
+    /// <para>
+    /// THE PACK IS THE PAYOFF OF THIS SERIES (2026-09-15 one-wake-model, spec step 2). Until here it
+    /// was written only by <c>PrintTurnExecutorModel</c>, so a terminal session — the DEFAULT runner —
+    /// had to go and rebuild its own state from channels that may since have been compacted. It is
+    /// built by <c>StatePack_Writer.Write_ForSession_OrNull</c>, the same call the print executor
+    /// makes; a null answer means the pack could not be written and the ticket says so by naming
+    /// none, which lands the session on its ordinary boot sequence rather than on a missing file.
+    /// </para>
+    /// <para>
+    /// THE NUMBER IS READ BACK FROM THE FILE rather than counted in memory, so it survives an app
+    /// restart: the monitor compares the ticket it last carried against the one on disk, and a
+    /// restarted app that began again at 1 would either repeat a wake or lose one.
+    /// </para>
+    /// </summary>
+    void Write_WakeTicket(string stateFile, Running.PrintSessionState.IPrintSessionState state, IReadOnlyList<Running.TurnSource.ITurnSource> sources, Running.WakeDecision.IWakeDecision decision)
+    {
+        var ticketFile = Running.WakeTicket.WakeTicket_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId);
+        var number = (Running.WakeTicket.WakeTicket_Store.Read_OrNull(ticketFile)?.Number ?? 0) + 1;
+
+        // A NEW BRIEF RETIRES THE OLD PROGRESS NOTE, exactly as it does on the print path: without it
+        // the pack would tell a member starting a new task to resume the previous one's next steps.
+        Running.StatePack.StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, state.Role, state.OrchId, state.MemberId, [.. decision.Pending.Select(item => item.Entry)]);
+
+        var statePackFile = Running.StatePack.StatePack_Writer.Write_ForSession_OrNull(
+            _paths, state, $"{state.OrchId}/{state.MemberId}/wake-{number}", decision.Pending, sources);
+
+        Running.WakeTicket.WakeTicket_Store.Write(
+            ticketFile,
+            Running.WakeTicket.WakeTicket_Factory.Create(number, decision.Reason, statePackFile, stampedUtc: _clock.UtcNow));
+
+        // CreateFrom_Existing_Cursors, and the DrivesTurns it carries over is load-bearing: a
+        // transition that defaulted the flag back to true would put the session under the dispatcher
+        // again on its first ticket, which is the one thing the flag exists to prevent.
+        Running.PrintSessionState.PrintSessionState_Store.Write(
+            stateFile,
+            Running.PrintSessionState.PrintSessionState_Factory.CreateFrom_Existing_Cursors(state, Running.SessionCursors.SessionCursors_Bookkeeper.Advance(state, sources, decision.Pending)));
+
+        // SPENT WHERE THE CURSORS ADVANCE, exactly as the dispatcher spends it: this is the moment the
+        // entries were handed over, so the next held report starts a fresh window and a wake that did
+        // not happen leaves the old one running.
+        _printTurns.Note_TrafficDelivered(state.OrchId, state.MemberId);
+
+        _log.Log_Info(state.OrchId, $"'{state.MemberId}': wake ticket {number} — {decision.Reason}");
     }
 
     /// <summary>
@@ -12809,7 +13177,13 @@ internal sealed class BridgeEngineModel(
 
         return Running.Runner_Support.Is_BridgeDriven(runner)
             && Running.Runner_Support.Supports(runner, role)
-            && Running.PrintSessionState.PrintSessionState_Store.Exists(_paths, role, orchId, memberId);
+            // DRIVING, NOT MERELY PRESENT (one-wake-model, 2026-09-15, Task 5). A terminal spawn now
+            // WRITES this file with DrivesTurns=false instead of deleting it, so its existence no
+            // longer answers "is the dispatcher running this session's turns". Asking Exists here
+            // would make a window look bridge-driven for the whole flip window — exactly the
+            // backwards answer the paragraph above exists to prevent.
+            && Running.PrintSessionState.PrintSessionState_Store.Read_OrNull(
+                Running.PrintSessionState.PrintSessionState_Store.Get_StateFile(_paths, role, orchId, memberId))?.DrivesTurns == true;
     }
 
     /// <summary>

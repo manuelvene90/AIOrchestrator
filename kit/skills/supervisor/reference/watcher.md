@@ -1,4 +1,6 @@
-## The watcher — ONE persistent Monitor, armed at boot (definition of done)
+Arm the one your `runners.supervisor.wake` names; if you do not know, arm the watcher-mode script.
+
+## Watcher mode — when you decide
 
 Arm it ONCE, at the end of your boot sequence, with the **Monitor** tool and `persistent: true`:
 
@@ -203,5 +205,53 @@ Finish the step, or hand it to an implementer, or say in your entry that you are
 **On resume you may see notifications about orphaned/stopped background tasks from a previous
 session** — those died with that session. Expected; ignore them and arm your monitor as part of
 the boot.
+
+## Ticket mode — when the app decides
+
+Arm it the SAME way — ONE persistent Monitor, `persistent: true` — only the command changes:
+
+```
+Monitor(
+  description: "wake ticket on orchestration $ARGUMENTS",
+  persistent: true,
+  command: <the script below>
+)
+```
+
+```bash
+# TICKET MODE. The app decides whether you take a turn, with the same policy it uses for a headless
+# session, and says so by writing this file. You carry the message; you do not decide.
+#
+# Everything the watcher-mode script above does — fingerprinting every channel, proving a change was
+# not your own write, the blind-alarm strike counter — is GONE here, because none of it was ever your
+# question. It was a second implementation of a decision the app already makes, with no cursor, no
+# digest, and no way to tell the app's own bookkeeping from a member's report.
+#
+# The ticket is read as RAW TEXT, never parsed as JSON — no jq, not guaranteed on every machine. Any
+# change in its bytes is a new ticket; a missing file is silence, not an error.
+sup="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/${AIORCH_ID:-}"
+ticket="$sup/.wake-supervisor"
+last=""
+while true; do
+  sleep 2
+  # MEETING: the same rule as watcher mode — say nothing, and do NOT advance `last`, so the first
+  # tick after the flag is gone delivers the ticket you were holding exactly once.
+  [ -f "$sup/.meeting" ] && continue
+  now="$(cat "$ticket" 2>/dev/null)" || continue
+  [ -z "$now" ] && continue
+  [ "$now" = "$last" ] && continue
+  last="$now"
+  echo "WAKE — $now. Read the state pack this ticket names in statePackFile FIRST (when it names one): it holds your last entry, the ledger, the last owner-channel entries and your repo state, assembled by the app. Then read your channels only for what the pack lacks, act, and append your entries."
+done
+```
+
+**Adapted from `$ARGUMENTS` to `$AIORCH_ID`.** `$ARGUMENTS` does carry the orchestration id for a
+supervisor, so the literal plan text would have worked here — this uses `$AIORCH_ID` instead only so
+one script shape serves all six role commands: `$ARGUMENTS` is not `<orch-id>` for solo, the general
+supervisor or the communicator (see their own ticket-mode sections), and `AIORCH_ID`/`AIORCH_MEMBER`
+are set for every spawned session regardless.
+
+When it wakes you: read ALL channels, act, write your entries, end your turn — exactly as in watcher
+mode. Nothing about the turn changes; only who decided you should take one.
 
 Now execute the boot sequence.

@@ -7,6 +7,13 @@ public interface IRoleRunnerConfig
     ResumeModes Resume { get; }
 
     /// <summary>
+    /// How this role's sessions learn a turn is due — <see cref="WakeModes.Watcher"/> (today's bash
+    /// monitor) unless config.json says otherwise. Read only where <see cref="Runner"/> is
+    /// <see cref="SessionRunners.Terminal"/>; a bridge-driven session needs no ticket at all.
+    /// </summary>
+    WakeModes Wake { get; }
+
+    /// <summary>
     /// Passed as <c>--permission-mode</c> to a bridge-driven session. Null keeps today's behaviour,
     /// <c>--dangerously-skip-permissions</c> (owner directive: an unattended session must never
     /// hang on a prompt). The terminal runner does not read it.

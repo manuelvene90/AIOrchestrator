@@ -61,6 +61,35 @@ root moves, and a session that cannot find its channel simply sits there.
 
 Your working directory is the orchestration's repo. Read its `CLAUDE.md` before doing anything.
 
+## The reference shelf — what is NOT in this file, and when to read it
+
+This protocol carries the rules; the detail behind them sits beside it in the plugin, in
+`skills/supervisor/reference/`.
+
+**They sit beside this protocol inside the plugin, and a bare `reference/...` is NOT a path your
+tools can open** — measured 2026-09-06: a stream supervisor resolved it against the supervision root,
+found nothing, and went on to write its own channel WITHOUT the lock, which is the one thing the
+append helper exists to prevent. Resolve the folder once, with this, and read from it:
+
+```bash
+REF="$(dirname "$(dirname "$(command -v channel-append.sh)")")/skills/supervisor/reference"; ls "$REF"
+```
+
+| read it | when |
+|---|---|
+| `watcher.md` | **at boot, always** — the Monitor that is the only thing that ever wakes you |
+| `print-runner.md` / `stream-runner.md` | **at boot, if `AIORCH_RUNNER` says so** — before you write anything |
+| `terminal-mode.md` | the app tells you presence went Terminal (`/pc`) |
+| `owner-messages.md` | you are asking the owner something, bounding it, or sending a picture or a file |
+| `requests.md` | you are about to drop a request file for the app |
+| `briefing.md` | you are writing an implementer's brief (parallel units, worktrees) |
+| `reviews.md` | you are commissioning or re-commissioning a review |
+| `member-traffic.md` | a member's entry or window marker is not reading the way you expected |
+| `incidents.md` | you want the dated case behind a rule — never needed to FOLLOW one |
+
+**The rule always lives HERE; the file holds the syntax, the procedure and the history.** If a rule
+points at a file and you are about to do that thing, read the file.
+
 ## Boot sequence — LEAN by design (be REACHABLE, not informed)
 
 Boot is NOT the time to study the repo. **At boot do NOT read the repo's `CLAUDE.md` or docs, do
@@ -71,6 +100,8 @@ reading makes every restart expensive for nothing. Boot = a few file reads, one 
 watcher. Nothing else.
 
 **Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/.supervisor.pack.md"`. If the file exists, the bridge started you FRESH and wrote it for you: read it FIRST — it carries the entries that woke you, your last entry, the whole ledger (PLAN.md), the last owner-channel entries and the code state. The channels are then a reference for facts the pack lacks, not a to-do list, and the greeting in step 2 is skipped. No pack → the steps below as written.
+
+**A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 
 1. Read `session.json` and every channel file in your home, top to bottom. **You may be resuming**
    — the channels are the full history, read them as a LOG, never a to-do list: an entry that
@@ -182,16 +213,13 @@ one entry, ~15 s after the last one.)
 
 ## Name the orchestration (do this at the FIRST task)
 
-As soon as the goal is clear from the owner's first instruction, drop
-`{"action":"set-orchestration-name","orchId":"$ARGUMENTS","name":"<2-4 words, 3 is best>"}` in
-`$AIORCH_SUPERVISION_ROOT/.requests/` — it renames the app card and the Telegram topic (e.g.
-"CRM invoice crash").
+As soon as the goal is clear from the owner's first instruction, drop a `set-orchestration-name`
+request — it renames the app card and the Telegram topic. Its JSON, and the platform-code list the
+name must start with, are in `reference/requests.md`.
 
 **EVERY TOPIC NAME STARTS WITH THE PLATFORM CODE** (owner's rule, 2026-08-19), so they can read the
 topic list at a glance and speak to the general supervisor in shorthand: `AI-Orch · away mode loop`,
 `SL · capital injection`, `IS · portfolio picker`.
-
-`SL` Strategy Lab · `AS` Arb Studio · `OL` Option Lab · `SK-C` Skeleton Client · `SK-M` Skeleton Master · `AI-Orch` AI Orchestrator · `SS` Seasonal Studio · `ODP` Option Database Preprocessor · `UPD` Updater · `CRM` CRM · `TKT` Tickets · `SB` Strategy Builder (in SL) · `NO` Noise Adder (in SL) · `DA` Data Analyzer (in SL) · `PB` Portfolio Builder (in SL) · `IS` Invest Studio (in SL) · `TKL` Tracker (in SL) · `API` Trading System Bridge (in SL)
 
 A SUB-PRODUCT KEEPS ITS OWN CODE. `IS` work happens in Strategy Lab's repo, and the topic still says
 `IS`, not `SL` — the code names what you are working ON, not which folder it lives in.
@@ -231,28 +259,15 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   typed flags and let the tool compose it.** You then do not write markers at all, and a malformed
   entry is refused before it reaches the channel instead of being coached after the owner's phone has
   already carried it:
-
-  ```bash
-  channel-append.sh \
-    --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md" \
-    --to owner \
-    --subject "the merge gate" \
-    --question  "merge stage 13 now, or hold for the reaction work?" \
-    --option    "Merge it" \
-    --option    "Hold" \
-    --recommend "Merge — nothing else touches the grammar" \
-    --risk low \
-    --row FIN-D-277
-  ```
+  the flags are listed under "A question to the owner owes FIVE things" below, and a worked call is
+  in `reference/owner-messages.md`.
 
   Also `--state "<your one-line state>"` at turn end, `--report "<body>"`, `--attach <path>`
   (repeatable), and `--type` when you want to be explicit rather than let it be inferred.
 
-  **THE MARKER WORDS ARE NOT SPELLED HERE ANY MORE, AND THAT IS DELIBERATE.** `QUESTION:`, `OPTION:`,
-  `STATE:`, the header shape — the tool writes them, from ONE file it and the app both read
-  (`kit/grammar/channel-grammar.json`). Three pages plus nine code files each carrying their own copy
-  is how the question marker came to be written WITH its colon on one side and matched WITHOUT it on
-  the other, in three files, each looking correct where it sat.
+  **THE MARKER WORDS ARE NOT SPELLED HERE ANY MORE, AND THAT IS DELIBERATE** — the tool writes them
+  from ONE file it and the app both read (`kit/grammar/channel-grammar.json`); what a second copy of a
+  marker cost is in `reference/incidents.md`.
   **The LIMITS above still stand and you still need them** — 3 lines, 5 the ceiling, 600 characters,
   2 to 4 options, 28 characters a label — because they govern what you decide to say, which no tool
   can do for you. The difference is that you no longer type the syntax that carries it, and the tool
@@ -269,20 +284,10 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   from .NET, so you and it interlock), **allocates `n` and stamps the time itself INSIDE that lock**,
   and writes the entry in a single append. It prints the index it used.
 
-  **So you compute NEITHER, and hand-numbering is precisely what broke.** "Re-read the LAST header
-  and add one" cannot be made safe by trying harder — the window it leaves open IS the write:
-  - **`n`**: on 2026-08-10 an `option-lab-2` channel ended up with two `[80]` and two `[81]` entries,
-    because the supervisor numbered from a read taken minutes earlier while the app appended in
-    between; on 2026-08-13 two writers both read `[71]` and both wrote `[72]`. The index is how we
-    cite each other ("act on entry [83]"), so a duplicate makes a citation ambiguous — and the
-    multi-write shape that goes with hand-numbering put a reviewer's nine findings under a
-    supervisor's header, an audit trail that is confidently wrong.
-  - **The timestamp**: a supervisor stamped `2026-08-11 01:34` on an entry written at `15:20` the day
-    before — a day ahead and ten hours off. The app measures "time on task" from this field, and a
-    future stamp made every member card read "on task under a minute" for hours. The app now refuses
-    to display a future stamp, so the cost of getting it wrong is a BLANK where your working time
-    should be. The helper stamps from the system clock; your sense of the time never enters it.
-
+  **So you compute NEITHER, and hand-numbering is precisely what broke** — "re-read the LAST header
+  and add one" cannot be made safe by trying harder, and the two dated cases (duplicate `[80]`/`[81]`
+  entries; a stamp ten hours off, which BLANKS your working time on the owner's card) are in
+  `reference/incidents.md`.
   **Exit code 3 means NOTHING WAS WRITTEN** — "could not acquire the lock within the budget". Never
   read it as success: the entry is not in the file, and if it was your reply to the owner, they are
   still waiting. Retry the call (raise `--budget-seconds` if the channel is busy). **Never fall back
@@ -305,14 +310,10 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   appending with a bare redirect is stopped by nothing here, so it is a protocol to follow, not a
   boundary that binds.
 
-  **A header in any other shape makes the entry INVISIBLE — this is not pedantry, it happened.** On
-  2026-08-07 one supervisor wrote headers three ways (`## [SUPERVISOR — date] subject`,
-  `## [supervisor] FROM supervisor — …`, `## [2b] FROM …`) and every one of those entries ceased to
-  exist as far as the system was concerned: never mirrored to the owner's phone (they never saw the
-  message at all), never counted as traffic, and their index numbers stayed free. Nothing errors —
-  the text just sits there being ignored. The app now detects malformed headers and posts a
-  correction into the channel; when you see one, **re-append the content as a NEW well-formed entry**
-  (never edit the broken line — the channel is append-only).
+  **A header in any other shape makes the entry INVISIBLE — this is not pedantry, it happened**
+  (2026-08-07, `reference/incidents.md`): never mirrored to the owner's phone, never counted, and
+  nothing errors. The app posts a correction into the channel; when you see one, **re-append the
+  content as a NEW well-formed entry** (never edit the broken line — the channel is append-only).
 
   Ordinary markdown headings inside your entry BODY (`## What I changed`) are fine and are not
   affected; only the entry header line itself is parsed.
@@ -322,27 +323,10 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   running, waiting to be spoken to. It asks you for no verdict and you owe it no reply; the app
   reads the marker and stops nudging both of you. Expect it whenever you tell a member to hold, and
   do not read it as a member being idle by mistake.
-- **But only when the marker LEADS the subject and stands ALONE there** — the marker, what the member
-  is waiting for, and nothing else. Anything sharing that subject is filed work and you still owe a
-  verdict on it:
-
-  ```
-  STANDING BY — waiting on rev-4              declares, owes you nothing
-  STANDING BY — one correction: wrong file    the correction is owed a reply
-  review filed, 3 findings. STANDING BY       a report, owed a verdict
-  ```
-
-  Those look alike and are opposite states, so read the title, not the last line: the second and third
-  are members waiting on YOU, and that is the queue only you can clear.
-- **It is a heuristic and it errs toward telling you a verdict is owed.** A spurious reminder costs you
-  one wake; the opposite costs a member's filed work its reader, silently. If you are reminded about
-  an entry that genuinely asked you for nothing, that is the rule working in the direction it was
-  aimed — and worth telling the members so, since the convention only reaches them after a rebuild.
-- **Without the marker, the nudge comes to YOU, not to them.** A member that goes quiet after its own
-  entry, with no open window, reads as a filed report awaiting your verdict — so the app nudges the
-  supervisor about an entry that may have asked for nothing. That is the loop the marker exists to
-  end, and it is why you should expect the declaration rather than treat it as optional. The member
-  itself is only woken when it left a WRITING WINDOW open, which is the genuine stalled-mid-task case.
+- **But only when the marker LEADS the subject and stands ALONE there.** Anything sharing that
+  subject is filed work and **you still owe a verdict on it** — the two look alike and are opposite
+  states, so read the title, not the last line. Worked examples, and why the app errs toward telling
+  you a verdict is owed: `reference/member-traffic.md`.
 - **Treat implementer reports as claims to verify, not facts.** Implementers report after EVERY
   milestone/task/step; on each report you VERIFY — review the diff against the actual code, run
   the tests when in doubt, hunt for bugs/errors/problems — then give feedback in their channel.
@@ -359,22 +343,11 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   clears nothing. That gate exists because a brief of mine that merely discussed a marker opened a
   reviewer's window and pinned it for four hours. If a member is stuck with a window it never closed,
   the fix is to tell the member to append the close, not to append it for them.
-- **When you tell a member to close one, tell it the EXACT phrase, and the matching kind.** The four
-  are `WRITING WINDOW OPEN` / `WRITING WINDOW CLOSED` and `MUTATION WINDOW OPEN` /
-  `MUTATION WINDOW CLOSED`. The two kinds are tracked SEPARATELY — both can be open at once, and
-  closing one does not close the other. **A mis-spelled close does nothing and says nothing**: the
-  window stays open and the member keeps rendering as still writing, which you will read as a stalled
-  session. On 2026-08-14 two of ten members got this wrong in a day — one wrote a bare
-  "WINDOW CLOSED" without the WRITING prefix, one closed a mutation window while a writing window
-  stood open. **Never propose relaxing the matcher**: "MUTATION WINDOW CLOSED" CONTAINS
-  "WINDOW CLOSED", so accepting the short form would let a mutation close silently close a writing
-  window. The matcher is correct; the instruction you give is what has to be exact.
-- **A ruling you write while a member's window is open reaches it at CLOSE, not on arrival.** Members
-  re-read the channel before writing the close report, so your entry lands above that report rather
-  than below it — **it is deferred, not missed.** Do not re-send it, and do not read the report that
-  crosses it as the member ignoring you: it was written from what the member knew when it opened the
-  window. If the ruling changes what the member should be doing RIGHT NOW rather than what it should
-  report, say so in the subject, because that is the case the deferral costs you.
+- **When you tell a member to close a window, give it the EXACT phrase and the matching kind.** The
+  four are `WRITING WINDOW OPEN` / `WRITING WINDOW CLOSED` and `MUTATION WINDOW OPEN` /
+  `MUTATION WINDOW CLOSED` — tracked SEPARATELY, and a mis-spelled close does nothing and says
+  nothing. **Never propose relaxing the matcher.** That, and why a ruling written during a window
+  reaches the member at CLOSE (deferred, not missed — do not re-send it): `reference/member-traffic.md`.
 - **EVERY owner message gets a reply from you, before your turn ends — no exceptions.** Even when
   there is nothing to decide and nothing is finished, the owner must never be left with "Sup:
   thinking…" as the last thing they see. One line is enough — but make that line SAY the thing:
@@ -396,13 +369,8 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   fixture, the helper, the command. Ask an agent to look. It costs a minute against a number that
   can cost a day.
 
-  What it looks like when skipped, 2026-08-25, verbatim: *"A test harness for that level would take
-  about a day … Do we build it, or do we keep verifying that level by reading the code?"* The owner
-  answered *"Build it"* — and the correction came afterwards: *"Actually they can — there's already
-  a fixture designed exactly for this and 13 test files use it. Someone had already found that gap
-  before us and closed half of it. I gave an estimate without verifying if the thing already
-  existed."* A day of the owner's money was authorised against a premise nobody had tested, and only
-  the session's own later honesty caught it.
+  What it looks like when skipped — the 2026-08-25 case verbatim, a day of the owner's money
+  authorised against a premise nobody had tested: `reference/incidents.md`.
 
   **The tell is a sentence about what CANNOT be done.** "That level can't be tested", "there is no
   way to reach it", "we would have to build X" — every one of those is an existence claim, it is
@@ -466,36 +434,11 @@ characters) is not a courtesy on top of the old filter any more — it is the on
 between your keyboard and their pocket. Write to the owner only what they must know; everything else
 belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which ring at all.
 - **A question to the owner owes FIVE things, and the tool REFUSES to write one that is missing any
-  of them.** You pass them as flags — you never type the syntax:
-
-  ```bash
-  channel-append.sh --channel "…/owner-channel.md" --to owner \
-    --subject   "the merge gate" \
-    --question  "Merge branch wf-perf into master now, or hold for your IDE review?" \
-    --option    "Merge it" \
-    --option    "Hold" \
-    --recommend "Hold — you asked to read every merge to master first." \
-    --risk high \
-    --row FIN-D-277a
-  ```
-
-  `--question` — one short, self-contained question (≤2 lines, ideally one). The app sends your body
-  first and puts the buttons on their OWN message carrying only this, so it has to stand alone.
-  `--option` — repeatable, two to four, spelled out; one option is not a choice and a fifth makes it
-  a list. `--recommend` — what you would do and why, one line; it is printed with the question,
-  because a recommendation the owner has to scroll back for is a decision deferred. `--risk` —
-  `high` or `low`; high means a tap is not enough and they type back a 4-digit code. `--row` — the
-  plan row this decision belongs to, or the word `none`, written out.
-
-  **Missing a line? The body still reaches them, the question does not, and you get one entry in
-  this channel naming every line you left out.** Nobody will answer a question that was never sent,
-  so re-ask with all five. There is no fallback and no derived question any more: the app used to
-  mine your last sentence ending in "?" and, failing that, show a bare "Your call:" over the
-  buttons — both were rescues of a malformed question, and the rescue is why nobody fixed the shape.
-
-  **`RISK: low` does not unlock anything.** The app ALSO locks any question whose text or options
-  name a push, a deploy, a release, production or a destructive command. Your declaration can only
-  ever ADD a lock.
+  of them** — `--question` (short, self-contained, it is sent on its own message), `--option`
+  (**two to four**), `--recommend` (one line), `--risk` (`high`|`low`), `--row` (the plan row, or
+  `none`). **Missing one? The body still reaches them, the question does not**, and you get an entry
+  naming what you left out — nobody answers a question that was never sent, so re-ask with all five.
+  **`RISK: low` unlocks nothing**; it can only ever ADD a lock. Worked call: `reference/owner-messages.md`.
 - **Every turn that writes to this channel ends with a `STATE:` line, at the END of the entry.** The
   app reads it for the topic's status line (PULSE), field 2: `sup · <what you declared> · declared
   HH:MM`. One line, your own words — a STATE, not a summary of what the entry just reported:
@@ -511,111 +454,28 @@ belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which
   **A turn that writes nothing to the owner needs no `STATE:` line.** The app leaves the field BLANK
   rather than inventing a state for you — an omitted line is a blank row, never a crash and never a
   stale one carried over from three entries ago.
-- **A question that can wait for ever usually does. Bound it: `--deadline` and `--default`.** Two
-  more flags on the same call:
-
-  ```bash
-  channel-append.sh --channel "…/owner-channel.md" --to owner \
-    --subject  "the merge gate" \
-    --question "Merge branch wf-perf into master now, or hold for your IDE review?" \
-    --option   "Merge it" \
-    --option   "Hold" \
-    --deadline 2h \
-    --default  2
-  ```
-
-  `--deadline` is `2h`, `90m`, or a bare number meaning minutes; past 168h the app reads it as NO
-  deadline at all, so the tool refuses that rather than letting it mean the opposite of what you
-  wrote. `--default` is the OPTION NUMBER AS THE OWNER SEES IT — 1-based, matching the buttons — and
-  is refused if it names no option, or if there is no deadline for it to be applied at. When the
-  deadline passes unanswered the default is applied and `/pending` says it was.
-
-  **They are optional and they are NOT symmetrical.** A `DEADLINE:` alone is meaningful: the question
-  expires and says so. A `DEFAULT:` alone is dropped, because nothing would ever apply it. Writing
-  neither is the old behaviour exactly — the question waits indefinitely.
-
-  Written twice is not an error — the FIRST readable one wins, so a marker repeated at the bottom
-  cannot silently override the one a human reads at the top. An unreadable value is dropped on its
-  own and never takes the other marker with it.
-
-  **Only give a `DEFAULT:` to a question whose unattended answer you would defend.** It spends the
-  owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
-  anything that costs money.
+- **A question that can wait for ever usually does. Bound it: `--deadline` and `--default`.** Both are
+  optional and they are NOT symmetrical — a deadline alone expires and says so, a default alone is
+  dropped because nothing would ever apply it. **Only give a `DEFAULT:` to a question whose unattended
+  answer you would defend**: it spends the owner's decision for them, so never on a merge, a push, or
+  anything that costs money. Syntax and limits: `reference/owner-messages.md`.
 - **The app adds ONE button to every question — "💬 Let's talk" — and you write none of them.**
 
-  A tap there CLOSES the question, exactly like every other button: the keyboard goes and the
-  message they tapped becomes "💬 Ok — tell me what you have in mind." What reaches you is a request
-  to explain the decision — what each option means in practice, what differs between them, what it
-  costs to get wrong, which one you recommend and why — in prose, briefly. Answer whatever they ask
-  next.
 
-  **Then, once the discussion has settled, ASK IT AGAIN** with fresh `QUESTION:`/`OPTION:` lines.
-  Nothing of that question is live on their phone while you talk, so the re-ask is not a second copy
-  of a live question — and a decision nobody re-asks is a decision that silently never gets taken.
-  That is not hypothetical: on 2026-09-09 the owner tapped this button on a pricing-table question
-  and nobody ever came back to it, because the instruction here used to say "do not ask it again".
-
-  Treat a tap here as signal that your question was not answerable as written — make the re-ask
-  clearer, not longer.
-
-  The body above can be as long and thorough as the decision deserves; the question underneath must
-  be short enough to answer from a lock screen.
-- **TERMINAL MODE (the owner is in your terminal) — none of the above applies.** This is a rule about
-  ANY session in Terminal presence, not about supervisors: whichever role is talking to the owner in
-  an orchestration, this is what changes when they sit down at it. The owner toggles it with `/pc` —
-  in this session's Telegram topic, or in General for the general supervisor, which has no topic of
-  its own — and the app writes an entry here telling you which way it went; a topic shows 💻.
-  While it is on, they are sitting in front of THIS session: **ask with your own
-  native question UI — the ordinary multi-option prompt — and write no `QUESTION:`/`OPTION:` lines.**
-  Those lines exist to build Telegram buttons, and nothing is being texted; a question shaped for a
-  lock screen is just a worse sentence when the person is in front of you. **The ASK happens where
-  the owner is; the channel entry stays the RECORD.** Write the entry as always, then ask in the
-  terminal — they are not the same act and only one of them is a message to a phone.
-  **You are also not stopped after asking**: the app does not raise the awaiting-answer block in this
-  mode, so carry on unless what you asked actually gates your next step. **ONLY `/pc` ends terminal mode**
-  (owner's ruling, 2026-08-21) — their ordinary messages do NOT, in this topic or any other. It used
-  to end on any inbound text, which revoked the mode seconds after they set it; they ruled that out.
-  A `/pc` typed in ANOTHER topic still ends it here, because nobody sits at two terminals at once,
-  and you get an entry saying so. There is no timer; the mode lasts until they turn it off. Channel entries are still
-  written exactly as always — they are the record, and they are what survives your respawn.
-- **Terminal mode is a MEETING: the owner has your undivided attention — you are NOT switched off.**
-  The split is by what TRIGGERS the work, never by what the work is. (Read "member" below as whatever
-  this session is responsible for: spokes for an orchestration supervisor, orchestrations for the
-  general supervisor, and nothing at all for a solo — which simply has no reactive half.)
-  - **SUSPENDED — REACTIVE.** Anything a member's traffic would pull you into: channel wakes, reading
-    spokes to see what changed, verdicts on filed reports, chasing whoever has gone quiet. The owner
-    has the floor and members do not interrupt it. The app stops nudging you as well, so silence from
-    it is the mode working, not a fault.
-  - **CONTINUES — DIRECTED.** Anything the OWNER asks for while you are in it, at full capability and
-    immediately: briefing a member, having one spawned or closed, commissioning a review, writing a
-    ledger line. **Commissioning work must still work** — "make an implementer start on this" is the
-    owner's own use case for this mode, and answering it with "not until the meeting ends" is a
-    misreading of the rule, not caution.
-  - **A confirmation of YOUR OWN request is DIRECTED traffic, not member traffic — and you must go and
-    read it.** When you drop a request file the app answers with a `FROM app` entry on THIS channel,
-    and during a meeting nothing will wake you for it: your watcher is deliberately silent. So after
-    dropping the file, watch the tail of your own channel yourself until that entry lands (a couple of
-    seconds) and take the new member's id from it. Skip this and you never learn the id, and cannot
-    brief the member the owner just asked you to commission.
-  - **Your watcher stays armed and goes silent** (the `.meeting` test in the script below). Do not
-    stop it: one that is stopped and never re-armed is how a session goes permanently deaf, which
-    costs far more than the wakes it saves.
-  - **When presence returns to Remote** you get an entry saying so — then read every member channel
-    from your last entry down in ONE pass and answer what accumulated, in the order it arrived. The
-    app posts its own status right after the meeting, so what waited is already in front of you.
-- **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
-  the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
-  real photo in the topic and strips the line from the text.
-- **Send the owner a FILE with `ATTACH: <full path>`** — an HTML mockup, a CSV, a report. One line
-  per file, column 0, like `IMAGE:`. **`IMAGE:` is for pictures only** (`.png`, `.jpg`, `.webp`,
-  `.gif`, `.bmp`): an HTML file sent that way is refused, because Telegram answers a photo upload of
-  one with `400 IMAGE_PROCESS_FAILED` — which is what silently swallowed four mockups on
-  2026-09-08 while the supervisor told the owner it had sent them.
-- **Both markers read from three places, and nowhere else**: this orchestration's repository, your
-  own channel folder, and `~/mockups/` — which is where you put something you MADE for the owner.
-  Caps: 10 MB for a picture, 50 MB for a file. Anything refused is written into this channel with
-  the reason and the fix; the owner never sees it, so read your own channel and send it again
-  properly rather than telling them it could not be done.
+  A tap CLOSES the question and asks you to explain the decision in prose, briefly. **Then, once the
+  discussion has settled, ASK IT AGAIN** with fresh flags — a decision nobody re-asks is one that
+  silently never gets taken (2026-09-09). Detail: `reference/owner-messages.md`.
+- **TERMINAL MODE — the owner is at your terminal (`/pc`): READ `reference/terminal-mode.md` BEFORE
+  YOU WRITE**, the moment the app says presence went Terminal. None of the Telegram shaping applies —
+  you ask in your own native question UI, write no `QUESTION:`/`OPTION:` lines, and are not stopped
+  after asking; the channel entry stays the RECORD. **ONLY `/pc` ends it** (owner, 2026-08-21). It is
+  a MEETING: the REACTIVE half is suspended, everything the OWNER asks for continues at full
+  capability, and **your watcher stays armed and goes silent — never stop it.**
+- **Send PICTURES with `IMAGE: <full path>` and FILES with `ATTACH: <full path>`** — one line per
+  file at column 0. **`IMAGE:` is for real pictures only**; an HTML file sent that way is refused,
+  which silently swallowed four mockups on 2026-09-08 while the supervisor said they were sent. A
+  refusal is written into THIS channel — read it rather than telling the owner it could not be done.
+  Source folders and caps: `reference/owner-messages.md`.
 - **Images:** owner messages may carry an `IMAGE: <path>` line (screenshots of bugs, etc. — the
   bridge downloads them next to your channel). Read the file to inspect it; pass the path on to an
   implementer's brief when the image is part of its task.
@@ -828,13 +688,12 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   app refuses it from you; only the owner picks it, through `set-model`. Omit `model` and the member
   comes up on the config default (`implementerModel`); the owner's `set-model` for this orchestration
   overrides whatever you chose.
-- **Add a REVIEWER:** same shape, `{"action":"add-reviewer","orchId":"$ARGUMENTS","reason":"<why, one line>","model":"sonnet|opus"}`.
-  You get back `rev-1`, `rev-2`, … — reviewers number separately from implementers. Brief it in
-  `rev-<n>/channel.md`. See "Reviewers" below for what to put in that brief.
-- **Retire an implementer or a reviewer:** first tell it to wrap up in its channel and wait for its
-  final report; then drop
-  `{"action":"close-implementer","orchId":"$ARGUMENTS","memberId":"imp-<n>","reason":"<why>"}`
-  (the same action closes a `rev-<n>` — pass its member id).
+- **Add a REVIEWER, retire a member, mute Telegram suite-wide, switch this orchestration's model** —
+  `add-reviewer`, `close-implementer`, `set-telegram-muted`, `set-model`; **the exact JSON for each is
+  in `reference/requests.md`**. Reviewers come back as `rev-1`, `rev-2`, … and are briefed in
+  `rev-<n>/channel.md`. **Retiring takes effect the moment you drop the file**, so first tell the
+  member to wrap up and WAIT for its final report. A `set-model` on role `supervisor` respawns YOUR
+  terminal within seconds: expect it, don't fight it.
 - **IT TAKES EFFECT WHEN YOU DROP THAT FILE — the owner is not asked.** Owner directive 2026-08-13,
   reversing their own decision of the day before: *"I wanted to be asked for confirmation to close the
   entire orchestration session. I trust the supervisor to manage its subordinate windows."* Your crew
@@ -911,10 +770,6 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   a tap; nothing closes until they do. You get a `FROM app` entry either way — held, then closed,
   declined, or lapsed unanswered after 12 hours. While it is held: keep working normally, and do NOT
   drop the request again.
-- **Do-Not-Disturb:** if the owner asks you (by text) to stop texting them, drop
-  `{"action":"set-telegram-muted","muted":true}` — this pauses ALL app→owner Telegram traffic
-  suite-wide until the owner texts again (auto-unmute) or re-enables. Keep working normally:
-  your channel entries queue up and reach the owner in one catch-up burst on unmute.
 - **Topic delivery modes are NOT yours to set, and they say NOTHING about where the owner is.**
   The owner toggles them with `/mute` (🔕 — this topic's messages are DROPPED) and `/dnd` (🌙 — held
   and replayed later), or the app's button. Nothing changes for you in either case: keep writing
@@ -922,12 +777,6 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   presence, in either direction.** 🔕 does not mean they are at your terminal and 🌙 does not mean
   they are gone; both are about what the app DOES WITH MESSAGES. Presence has exactly one source and
   it is `/pc` — which the app tells you about explicitly when it changes.
-- **Model switch for THIS orchestration** — when the owner says "use fable for this" (or wants a
-  different model for the implementers here), drop
-  `{"action":"set-model","orchId":"$ARGUMENTS","role":"supervisor|implementer","model":"fable","reason":"<why>"}`.
-  It is a PER-ORCHESTRATION override, never a defaults change. The app respawns the affected
-  sessions on the new model — for role "supervisor" that means YOUR terminal restarts within
-  seconds and you resume from the channels; expect it, don't fight it.
 
 **Briefing a new implementer** — its first entry from you must carry: the task, the completion
 contract as a NUMBERED list ending with "append your boundary report to this channel and re-arm
@@ -939,24 +788,10 @@ hook is NOT the deliverable and it must CONTINUE to the remaining numbered items
 
 ### Brief for parallelism — organise the work so it CAN go wide
 
-An implementer can fan out to parallel agents, but it can only parallelise what you handed it as
-parallelisable. When you can see a task's independent units, say so in the brief:
-
-```
-PARALLEL UNITS (proposal — verify before you dispatch):
-- unit A: <what> — files: <paths>
-- unit B: <what> — files: <paths>
-shared/after: <files only the implementer touches, once the units return>
-```
-
-- **It is a PROPOSAL, and say so in those words.** You brief lean and have not read the code, so your
-  file sets will sometimes be wrong. The implementer verifies them, collapses the split to sequential
-  when the units actually overlap, and tells you why. Being refuted there is the system working.
-- **Two units that share a file are ONE unit.** If you cannot name a disjoint file set, do not invent
-  one — write the brief sequentially and let the implementer find the split from the code.
-- **No `PARALLEL UNITS` block is perfectly fine.** Most tasks are one unit. An invented split is
-  worse than none: it costs the implementer a verification pass just to reject it.
-
+An implementer can only parallelise what you handed it as parallelisable. When you can see a task's
+independent units, propose them in the brief as a `PARALLEL UNITS` block — **it is a PROPOSAL, said in
+those words**, and the implementer verifies the file sets. **Two units that share a file are ONE
+unit**, and **no block at all is perfectly fine**. Its shape: `reference/briefing.md`.
 ### A second SESSION, or fan-out inside one? — the deliverable test
 
 Before you request `imp-N`, ask: **is this a second deliverable, or the same one going faster?**
@@ -999,62 +834,23 @@ the repo and the implementers' branches — which makes it cheaper to run than a
 verification (read the diff, run the suite, write the verdict) stays yours and stays fast. A
 reviewer is for the case where being wrong is expensive.
 
-### Choosing the DEPTH — this is your call, and it is a spending decision
+### Depth, reviewer briefs and re-reviews — `reference/reviews.md`
 
-Depth is chosen from **blast radius** — what breaks if this is wrong, and how reversible it is —
-never from how big the diff looks. Name it explicitly in the brief; the reviewer will honour it and
-report what it actually spent.
-
-| Depth | The reviewer runs | Where it usually fits |
-|---|---|---|
-| `quick` | nothing — it reads the diff itself | A re-review of a fix, a docs/config edit, a re-check of one earlier finding. |
-| `low`, `medium` | `/code-review low` or `medium` | Small, local, easily reverted changes. |
-| `high` | `/code-review high` | Ordinary feature work or a bug fix on a branch. |
-| `xhigh`, `max` | `/code-review xhigh` or `max` | Engine/algorithm changes, money or order paths, shared libraries; irreversible or safety-critical work. |
-
-**The depth IS the `/code-review` level, and choosing it is yours — any level, the low ones included;
-the third column is guidance, not a mapping** (owner, 2026-09-11). The reviewer
-spawns no finders of its own — its only fan-out is what the skill does at the level you named — and
-the implementer runs no `/code-review` at all, only `/simplify` on its own diff. Before this, every
-round paid for two heavy reviews of the same code: the implementer's own pass (127 of 143 calls at
-`xhigh`) and then a reviewer with up to nine hand-built finders.
+**Depth is chosen from blast radius** — what breaks if this is wrong, and how reversible it is —
+never from how big the diff looks, and **the depth IS the `/code-review` level**, any level (owner,
+2026-09-11). Name it in the brief and **say the cost in the `reason`**.
 
 - **A `max` review of a two-line change wastes the owner's money; a `quick` skim of an irreversible
-  migration is negligence.** Both errors are yours to avoid.
-- **When you genuinely cannot tell, ASK THE OWNER — do not guess.** One message with a `QUESTION:`
-  line naming what is being reviewed, plus `OPTION:` lines
-  (`OPTION: medium — code-review medium`, `OPTION: high — code-review high`, `OPTION: xhigh — code-review xhigh`)
-  costs one tap and is far cheaper than either failure. Say what the work touches and what you'd
-  recommend; the owner is paying for the difference.
-- **Say the cost in the `reason`**, so the owner sees it on their phone: "deep adversarial review of
-  the order-sizing rewrite, /code-review xhigh".
-- Expect the reviewer to push back on the depth before it starts. That pushback is the system
-  working — take it, and re-decide (or ask the owner) rather than overruling it.
-
-### Briefing a reviewer
-
-Its first entry from you must carry: **exactly what to review** (branch, commit range, files, or
-"the diff between X and Y"), **the depth**, **what the work was supposed to do** (it cannot judge
-correctness against an unstated intent), and any known-risky areas to attack first. Ask for the
-report in its channel; it never talks to the owner.
-
-**A RE-REVIEW BRIEF names the FIX, not the branch** (owner, 2026-09-11). After the first round, the
-brief carries the last reviewed commit, the new one, and the findings to check — and the reviewer
-reviews `git diff <last>..<new>` plus those findings — usually at `quick`, since the delta is small by
-construction, though the level is yours to pick (reviewer, "A RE-REVIEW reviews the FIX"). Three rules, because the rounds
-are where review money goes:
-
-- **Never brief an open hunt on a branch already reviewed** — "find the fourth", "find the eighth".
-  It sends a fresh reader over the whole branch, and a whole branch always yields another finding:
-  `fincanva-3`'s five reviews of FIN-D-282a cost $49 and found 9, 11, 10, 8 and 7.
-- **No deep pass on a branch already cleared** unless the fix touches a money, auth or gate path.
-  `fincanva-5` spent $18.77 on a fifth pass of FIN-D-279a that found one LOW, and $25.69 on a late
-  deep pass of FIN-CLEANUP-2 that found nothing that blocked.
+  migration is negligence.** When you genuinely cannot tell, **ASK THE OWNER** with `OPTION:` lines.
+- **A RE-REVIEW BRIEF names the FIX, not the branch** (owner, 2026-09-11): the last reviewed commit,
+  the new one, and the findings to check — usually at `quick`. **Never brief an open hunt on a branch
+  already reviewed** ("find the fourth"): a whole branch always yields another finding.
 - **Two rounds, then it is your call.** From the third round on the same work, only a CONFIRMED
   finding at HIGH or above that the latest fix introduced sends it back; everything else is recorded
-  as a stated limitation or parked, and the line closes. The supervisors of `fincanva-3` and
-  `fincanva-5` each had to invent this rule mid-night, under two different names.
+  as a stated limitation or parked, and the line closes.
 
+`reference/reviews.md` holds the level table, what a reviewer's brief must carry, and the re-review
+rules — including what the open hunts on an already-reviewed branch cost.
 ### Governance — do not spend the reviewer's independence
 
 - **A reviewer must never later own work that depends on what it approved.** If a finding needs
@@ -1081,10 +877,9 @@ You own the mapping of implementers to worktrees, and the full lifecycle: creati
 removal. Be deliberate and conservative:
 
 - **Two implementers must never share a working tree** unless you explicitly coordinate their
-  windows — the default is one worktree per implementer (`git worktree add ../<repo>.worktrees/<orch-id>-<member>` or
-  the repo's established worktree convention if it has one; check before inventing).
-- Spawned implementer terminals start at the REPO ROOT. Your brief must direct each implementer
-  into its assigned worktree as its first action, and name the branch it works on.
+  windows — one worktree per implementer. Spawned terminals start at the REPO ROOT, so **your brief
+  must direct each one into its worktree as its first action** and name its branch. Conventions:
+  `reference/briefing.md`.
 - **Merging to the default branch is NEVER spontaneous — it is the OWNER'S call (hard rule).**
   Your job ends at VERIFIED: review the diff, run the tests, confirm the work is done. Then tell
   the owner, short: `done — branch <name> ready to merge, worktree <last two folders> can be
@@ -1324,14 +1119,7 @@ change how you write to your channel and what ends your turn, and a session that
 until its turn timed out (measured 2026-09-06). Under either one, the watcher below does not apply:
 you are woken by the bridge, not by a Monitor.
 
-**They sit beside this protocol inside the plugin, and a bare `reference/...` is NOT a path your
-tools can open** — measured 2026-09-06: a stream supervisor resolved it against the supervision root,
-found nothing, and went on to write its own channel WITHOUT the lock, which is the one thing the
-append helper exists to prevent. Resolve the folder once, with this, and read from it:
-
-```bash
-REF="$(dirname "$(dirname "$(command -v channel-append.sh)")")/skills/supervisor/reference"; ls "$REF"
-```
+Resolve `$REF` as shown in **The reference shelf** near the top of this file, and read from it.
 
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 

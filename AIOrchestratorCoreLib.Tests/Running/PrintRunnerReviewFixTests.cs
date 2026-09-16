@@ -352,12 +352,20 @@ public class PrintRunnerReviewFixTests
     }
 
     /// <summary>
-    /// ...and the watchdog respawns it, which is what clears the registration. Answered from the
+    /// ...and the watchdog respawns it, which is what demotes the registration. Answered from the
     /// filesystem alone, the watchdog skipped that slot for ever: the member's window was never
     /// respawned after it died, and nothing said why.
+    ///
+    /// <para>
+    /// "CLEARED" USED TO MEAN DELETED; it no longer does (one-wake-model, 2026-09-15, Task 5). A
+    /// terminal spawn now WRITES the state file with <c>DrivesTurns = false</c> instead of removing
+    /// it — the file's existence stopped meaning "the dispatcher runs my turns" once
+    /// <see cref="IPrintSessionState.DrivesTurns"/> said so explicitly, so there is no longer anything
+    /// to gain by deleting it, and every cursor it carried would otherwise be lost.
+    /// </para>
     /// </summary>
     [Fact]
-    public void ARoleFlippedBackToTerminal_IsRespawnedAndItsRegistrationCleared()
+    public void ARoleFlippedBackToTerminal_IsRespawnedAndStopsDrivingTurns()
     {
         using var harness = new PrintRunnerTestHarness("implementer");
         var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
@@ -371,7 +379,10 @@ public class PrintRunnerReviewFixTests
         watchdog.Check_AndRestart_DeadSessions();
 
         Assert.Contains(spawner.Commands, command => SpawnCommand_Builder_Decoded(command).Contains($"/implementer {orchId}/{memberId}"));
-        Assert.False(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Implementer, orchId, memberId));
+
+        var state = PrintSessionState_Store.Read_OrNull(PrintSessionState_Store.Get_StateFile(harness.Paths, SessionRoles.Implementer, orchId, memberId));
+        Assert.NotNull(state);
+        Assert.False(state!.DrivesTurns);
     }
 
     /// <summary>While it IS configured print, the watchdog still leaves it alone — no pid file by design.</summary>

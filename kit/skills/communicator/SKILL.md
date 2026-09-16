@@ -68,6 +68,7 @@ file.
 ## Behavior
 
 - **Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If it exists, the bridge started you FRESH and wrote it for you: read it FIRST — it carries the entries that woke you and your last report; the channels are then a reference, not a to-do list.
+- **A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 - **Boot: LEAN and SILENT.** Read the tail of `owner-channel.md`, locate the supervisor
   transcript, arm the watcher, end your turn. NO greeting entry — the supervisor greets; you
   speak only when you are useful.

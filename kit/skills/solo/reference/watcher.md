@@ -1,4 +1,6 @@
-## The monitor — ONE persistent Monitor, armed at boot
+Arm the one your `runners.solo.wake` names; if you do not know, arm the watcher-mode script.
+
+## Watcher mode — when you decide
 
 ```
 Monitor(
@@ -100,5 +102,56 @@ explicitly what you are waiting for.
 **`GO AHEAD — resume`** entries mean the owner sent `/resume` (usually a usage-limit reset): pick up
 exactly where you left off, redo the step the limit cut short, and if you were genuinely finished
 say so in one line rather than inventing work.
+
+## Ticket mode — when the app decides
+
+Arm it the SAME way — ONE persistent Monitor, `persistent: true` — only the command changes:
+
+```
+Monitor(
+  description: "wake ticket on $ARGUMENTS",
+  persistent: true,
+  command: <the script below>
+)
+```
+
+```bash
+# TICKET MODE. The app decides whether you should take a turn, with the same policy it uses for a
+# headless session, and says so by writing this file. You carry the message; you do not decide.
+#
+# Everything the watcher-mode script above does — fingerprinting the owner channel, proving a change
+# was not your own write, the blind-alarm strike counter — is GONE here, because none of it was ever
+# your question. It was a second implementation of a decision the app already makes, with no cursor,
+# no digest, and no way to tell your own append from the owner's message.
+#
+# The ticket is read as RAW TEXT, never parsed as JSON — no jq, not guaranteed on every machine. Any
+# change in its bytes is a new ticket; a missing file is silence, not an error.
+sup="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/${AIORCH_ID:-}"
+ticket="$sup/${AIORCH_MEMBER:-}/.wake"
+last=""
+while true; do
+  sleep 2
+  now="$(cat "$ticket" 2>/dev/null)" || continue
+  [ -z "$now" ] && continue
+  [ "$now" = "$last" ] && continue
+  last="$now"
+  echo "WAKE — $now. Read the state pack this ticket names in statePackFile FIRST (when it names one): it holds your last report, the ledger, the last owner-channel entries and your repo state, assembled by the app. Then read owner-channel.md only for what the pack lacks, act, and reply."
+done
+```
+
+**No `.meeting` check here, on purpose.** Watcher mode never had one for this role — checked
+2026-09-15, only the supervisor's watcher.md carries the `.meeting` rule today. Ticket mode conserves
+what the file it is added to already did; it invents nothing. If a solo session should also go quiet
+during `/pc`, that starts in watcher mode, not here.
+
+**Adapted from `$ARGUMENTS` to `$AIORCH_ID`/`$AIORCH_MEMBER`, and the path is NOT what you'd guess.**
+Solo's own `$ARGUMENTS` is `<orch-id>` only (`/solo $ARGUMENTS`), with no member id in it anywhere you
+can see — yet the app's ticket store groups `Solo` with `Implementer`/`Reviewer` and writes your
+ticket into YOUR OWN MEMBER FOLDER (`<orch-id>/<member-id>/.wake`), not beside `owner-channel.md`
+where you actually read. `AIORCH_ID` and `AIORCH_MEMBER` are exported into every spawned session's
+environment regardless of what its slash command was given (verified 2026-09-15 against
+`SpawnCommand_Builder`), which is the only reason this path is constructible here at all. **Noted, not
+fixed:** the ticket living somewhere other than the channel it announces is easy to misread when
+debugging by hand — worth a second look if `WakeTicket_Store`'s per-role mapping ever changes.
 
 Now execute the boot sequence.

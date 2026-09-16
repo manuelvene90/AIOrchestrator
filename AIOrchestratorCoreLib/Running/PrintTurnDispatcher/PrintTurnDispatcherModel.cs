@@ -6,11 +6,14 @@ using AIOrchestratorCoreLib.Running.ClosingTurn;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.RegisteredSessions;
+using AIOrchestratorCoreLib.Running.SessionCursors;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.Running.TurnCursor;
 using AIOrchestratorCoreLib.Running.TurnExecutor;
 using AIOrchestratorCoreLib.Running.TurnResult;
 using AIOrchestratorCoreLib.Running.TurnSource;
+using AIOrchestratorCoreLib.Running.WakeDecision;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -335,24 +338,6 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         public bool FirstTurnSinceStart = true;
     }
 
-    /// <summary>
-    /// One source and what of it is waiting, as of this tick. It carries the PENDING ENTRIES AND NOTHING
-    /// ELSE on purpose: an earlier shape also held the file's whole contents and the cursor it was read
-    /// against, and neither had a reader — a snapshot nobody consumes is how the next person reasons
-    /// from a stale copy of a file that has since been appended to. <see cref="Advance_Cursors"/> re-reads
-    /// deliberately, and this leaves it nothing to re-read from.
-    /// </summary>
-    /// <param name="NothingEverDelivered">
-    /// Whether this session has never been handed anything from the source — so everything pending on
-    /// it is the first thing that channel has ever said. It is the digest's first-entry rule
-    /// (<see cref="WakeUp_Policy.Contains_DigestableTraffic"/>): a spoke appears when a member is
-    /// created, its first entry is that member's boot greeting, and holding a greeting costs a whole
-    /// window before the new member can be briefed. Answered by
-    /// <see cref="Nothing_EverDelivered"/> — read from the CURSOR and never from the entry's
-    /// <c>[n]</c>, which is agent-written (CLAUDE.md decision 12).
-    /// </param>
-    readonly record struct SourceRead(ITurnSource Source, IReadOnlyList<IChannelEntry> Pending, bool NothingEverDelivered);
-
     public ReplyLinks.IReplyLinks ReplyLinks { get; } = Running.ReplyLinks.ReplyLinks_Factory.Create_InMemory();
 
     public int InFlightCount
@@ -669,41 +654,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     IReadOnlyList<(string StateFile, SessionRoles Role, string OrchId, string MemberId)> Discover_RegisteredSessions()
     {
-        List<(string, SessionRoles, string, string)> found = [];
-
-        var generalFile = PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch.SessionLaunch_Factory.GENERAL_MEMBER_ID);
-
-        if (File.Exists(generalFile))
-            found.Add((generalFile, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch.SessionLaunch_Factory.GENERAL_MEMBER_ID));
-
-        foreach (var session in _store.Load_All())
-        {
-            if (session.ClosedUtc != null)
-                continue;
-
-            // THE SUPERVISOR IS NOT IN THE MEMBER ROSTER — it is the orchestration itself — so a
-            // loop over Members alone finds every implementer and never the one role the stream
-            // runner exists for. Its registration lives under a role-prefixed name beside
-            // session.json (PrintSessionState_Store knows where); found here or found nowhere.
-            var supervisorFile = PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.Supervisor, session.OrchId, SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID);
-
-            if (File.Exists(supervisorFile))
-                found.Add((supervisorFile, SessionRoles.Supervisor, session.OrchId, SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID));
-
-            foreach (var member in session.Members)
-            {
-                if (member.ClosedUtc != null)
-                    continue;
-
-                var role = SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(member.MemberId));
-                var stateFile = PrintSessionState_Store.Get_StateFile(_paths, role, session.OrchId, member.MemberId);
-
-                if (File.Exists(stateFile))
-                    found.Add((stateFile, role, session.OrchId, member.MemberId));
-            }
-        }
-
-        return found;
+        // THE WALK IS SHARED WITH THE WAKE-TICKET SWEEP (RegisteredSessions_Reader): it answers
+        // "which sessions have a state file", and the SCREEN below — Is_StillBridgeDriven — is the
+        // half that is this dispatcher's. Two walks would have drifted on the day a role stops being
+        // in the member roster, which the supervisor already is not.
+        return RegisteredSessions_Reader.Find_All(_paths, _store);
     }
 
     /// <summary>
@@ -736,6 +691,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (state == null)
             return;
 
+        // THE ONE-WAKE-MODEL INTERLOCK (2026-09-15). DrivesTurns is a per-SESSION flag on the state
+        // file itself, independent of config.json's runner word for the role — Is_StillBridgeDriven
+        // above screens on the role's CONFIGURED runner, which a terminal-demoted session (Task 5,
+        // OrchestrationLauncherModel.Demote_ToTerminal) does not by itself change: the role can still
+        // read "print" in config while THIS member's own file says its turns are no longer the
+        // dispatcher's to run. Without this check that member would have both an open terminal window
+        // AND headless turns answering the same brief — the exact failure the launcher's old delete
+        // existed to prevent.
+        if (!state.DrivesTurns)
+            return;
+
         var sources = TurnSources_Resolver.Resolve(_paths, _store, role, orchId, memberId);
         var reads = Read_Sources(stateFile, ref state, role, sources);
 
@@ -745,9 +711,9 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         var ordered = PendingTraffic_Orderer.Order([.. reads.Select(read => (read.Source, read.Pending))]);
 
         // THE CHANNELS THIS SESSION HAS NEVER BEEN HANDED ANYTHING FROM — the digest's first-entry rule
-        // (SourceRead.NothingEverDelivered). Built with the cursor set's own comparer, because a source
-        // key is a word an agent typed and the two sets have to agree on what "the same channel" means.
-        HashSet<string> firstContactSources = new(reads.Where(read => read.NothingEverDelivered).Select(read => read.Source.Key), SOURCE_KEYS);
+        // (SourceRead.NothingEverDelivered), built by the resolver so the answer is the same one a
+        // session this dispatcher will never run gets.
+        var firstContactSources = WakeDecision_Resolver.Describe_FirstContactSources(reads);
 
         // THE BOOT TURN — the one turn that runs with NOTHING pending, and the only exception to
         // "an entry starts a turn".
@@ -762,7 +728,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // Under the terminal runner the supervisor was spawned WITH its role command and greeted at
         // once; the deadlock arrived with the bridge-driven runners, so it is closed where they made
         // it rather than papered over in the kit.
-        if (ordered.Count == 0 && !Needs_BootTurn(state))
+        if (ordered.Count == 0 && !WakeDecision_Resolver.Needs_BootTurn(state))
             return;
 
         var tracker = Get_Tracker(key);
@@ -815,89 +781,32 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (tracker.LastFailureAt != null && nowLocal - tracker.LastFailureAt.Value < _retryBackoff)
             return;
 
-        // THE SUPERVISOR IS WOKEN TO DECIDE, NOT TO TAKE NOTE (spec §C4, measured 6–9 Sep 2026: 247 of
-        // its ~400 wake-ups were member traffic, at ~1 M input tokens each). The owner and a member
-        // that says it is blocked start a turn now, exactly as before; a member's ordinary report is
-        // held for MemberDigestWindow so several of them ride ONE turn. Nothing is lost by being held
-        // — a turn takes every pending entry, so held reports ride whatever starts the next one,
-        // including the owner's own next message.
-        //
         // LAST OF THE GATES, deliberately: every rule above it — the coalesce window, the stall, the
         // usage-limit appointment and its notice, the retry backoff — behaves exactly as it did, and
         // this only ever decides whether the turn STARTS. Four stages landed in this method today and
         // that is worth more than saving a tick's work.
         //
-        // A SESSION THAT HAS NEVER TAKEN A TURN IS NEVER HELD. The boot turn reaches the policy as an
-        // empty pending set and is released by it — but only while the set IS empty, and a supervisor
-        // whose very first traffic is a member's report has a non-empty one. Its greeting is what
-        // creates the orchestration's Telegram topic (Needs_BootTurn above), so holding that report for
-        // the digest would hold the owner's own way in behind it.
-        var wakeReason = Needs_BootTurn(state)
-            ? "the session has not taken a turn yet"
-            : WakeUp_Policy.Resolve_WakeReason_OrNull(ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
+        // AND IT IS THE ONLY GATE THAT IS NOT THIS PROCESS'S TO KEEP: every rule left in it reads the
+        // channels and the state file, which a terminal session's monitor can read too, so it lives in
+        // WakeDecision_Resolver where both can ask it. Everything above reads the in-memory tracker —
+        // what THIS process has already done — and stays here.
+        var decision = WakeDecision_Resolver.Decide_OrNull(state, sources, ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
 
-        if (wakeReason == null)
+        if (decision == null)
             return;
 
         // SAID ONCE PER TURN, not once per tick: a supervisor turn that did NOT happen leaves no
         // trace anywhere, so the line that says which rule released the traffic is the only way to
         // audit the digest from the log. Only when something was actually being held — an owner
         // message on a quiet channel is not news.
+        //
+        // THE TRAFFIC, NOT THE DECISION'S PENDING SET: what is logged here is what the WAKE-UP RULES
+        // were applied to. The decision's set has the app's riding notes in front of it, and they
+        // decided nothing (WakeDecision_Resolver.With_AgentNotes).
         if (digestHeldSince != null)
-            _log.Log_Info(orchId, $"'{memberId}': {Describe_Traffic(ordered)} — {wakeReason}");
+            _log.Log_Info(orchId, $"'{memberId}': {Describe_Traffic(ordered)} — {decision.Reason}");
 
-        Start_Turn(key, stateFile, state, With_AgentNotes(state, sources, ordered, nowLocal), sources, tracker, configs);
-    }
-
-    /// <summary>
-    /// THE APP'S NOTES TO THIS SESSION RIDE THE TURN THAT IS STARTING — first, as context, before the
-    /// traffic that started it — and never start one (see <see cref="PrintTurn_Trigger.Select_AgentNotes"/>
-    /// for what they are and why nothing carried them before). Added AFTER every wake-up rule has
-    /// decided, so a note can neither start a turn nor change which rule released one. A boot turn
-    /// carries none: its empty pending set is what tells the executor it is a boot.
-    /// </summary>
-    IReadOnlyList<PendingEntry> With_AgentNotes(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> ordered, DateTime nowLocal)
-    {
-        if (ordered.Count == 0)
-            return ordered;
-
-        var own = sources.FirstOrDefault(source => string.Equals(source.ChannelFilePath, state.ChannelFilePath, StringComparison.OrdinalIgnoreCase));
-        var cursor = own == null ? null : state.Cursors.FirstOrDefault(candidate => SOURCE_KEYS.Equals(candidate.SourceKey, own.Key));
-
-        if (own == null || cursor == null)
-            return ordered;
-
-        var notes = PrintTurn_Trigger.Select_AgentNotes(ChannelHistory_Cache.Read_Entries(own.ChannelFilePath), cursor, nowLocal);
-
-        if (notes.Count == 0)
-            return ordered;
-
-        return [.. notes.Select(note => new PendingEntry(own, note)), .. ordered];
-    }
-
-    /// <summary>
-    /// Whether this session still owes the owner the greeting nothing else can produce.
-    ///
-    /// <para>
-    /// TWO ROLES, because exactly two write an orchestration's owner channel: the SUPERVISOR of a crew
-    /// and the SOLO of a basic orchestration (<see cref="TurnSource.TurnSources_Resolver.Resolve_Own"/>
-    /// maps both onto <c>owner-channel.md</c>). A member's greeting reaches nobody but its supervisor,
-    /// and booting every member on registration would buy two model turns each — one to greet, one for
-    /// the supervisor woken by the greeting — for something no owner is waiting on. The GENERAL
-    /// supervisor is excluded for a different reason: its topic is the supergroup's General, pinned by
-    /// the owner, so it is reachable before it has ever run.
-    /// </para>
-    /// <para>
-    /// ONCE, and "never completed a turn" is the whole test. An app restart re-registers every session
-    /// and finds <see cref="IPrintSessionState.ExecutedTurns"/> non-empty, so nothing is dispatched and
-    /// no second greeting is filed. A boot turn that FAILED leaves the list empty and is retried — under
-    /// <see cref="MAX_ATTEMPTS"/> and the retry backoff like any other turn, because a supervisor whose
-    /// one and only turn died is exactly the case where giving up is silent.
-    /// </para>
-    /// </summary>
-    static bool Needs_BootTurn(IPrintSessionState state)
-    {
-        return state.ExecutedTurns.Count == 0 && state.Role is SessionRoles.Supervisor or SessionRoles.Solo;
+        Start_Turn(key, stateFile, state, decision.Pending, decision.Sources, tracker, configs);
     }
 
     /// <summary>
@@ -950,107 +859,40 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     }
 
     /// <summary>
-    /// Reads every source, baselining the ones this session has never seen and dropping the cursors of
-    /// sources it no longer has. A change to the cursor set is PERSISTED HERE, before any turn: a
+    /// Reads every source through <see cref="WakeDecision_Resolver.Read_Pending"/> — the READ ITSELF,
+    /// baselining included, belongs to the resolver, so what this dispatcher is handed and what a
+    /// session it will never run is asked about are the same answer — and keeps the half only a
+    /// dispatcher can do: a change to the cursor set is PERSISTED HERE, before any turn, because a
     /// baseline taken on a tick that starts no turn must survive a restart, or the same history is
     /// absorbed and announced again on every tick for ever.
+    ///
+    /// <para>
+    /// THE OBSERVER IS HOW THE CURSOR AND THE FILE REACH THIS METHOD, and it is not a shortcut around
+    /// <see cref="SourceRead"/>'s refusal to carry them: they are handed over DURING the read, while
+    /// they are still the pair the pending set was selected against, and nothing keeps them afterwards.
+    /// </para>
     /// </summary>
     IReadOnlyList<SourceRead> Read_Sources(string stateFile, ref IPrintSessionState state, SessionRoles role, IReadOnlyList<ITurnSource> sources)
     {
-        var known = state.Cursors.ToDictionary(cursor => cursor.SourceKey, SOURCE_KEYS);
+        // A `ref` parameter cannot be captured by the observer below, and nothing in it wants the new
+        // value anyway: the state is not replaced until every source has been read.
+        var current = state;
 
-        // NO CURSORS AT ALL means this session has never been through here — a state file written before
-        // sources existed, or one whose `sources` array could not be read. Its channel holds a whole life
-        // of traffic and none of it has been handed over by anything that recorded the fact, so it is
-        // HISTORY, absorbed exactly as registration absorbs it. Treating it as "nothing delivered" would
-        // replay up to a full live channel into one turn, which is the very thing the store's own note
-        // says must not happen. A session that HAS cursors and meets a NEW key is the opposite case, and
-        // is handled below.
-        var firstSightOfThisSession = state.Cursors.Count == 0;
-
-        List<SourceRead> reads = [];
-        List<ITurnCursor> cursors = [];
-        var changed = false;
-
-        foreach (var source in sources)
+        // THE COLLECTING AND THE WRITE ARE SessionCursors_Bookkeeper's, shared with the wake-ticket
+        // sweep (CLAUDE.md decision 12). What is left here is what is this dispatcher's alone: the
+        // two log lines and the archive-gap warning.
+        return SessionCursors_Bookkeeper.Read_AndPersist(stateFile, ref state, role, sources, (source, cursor, entries, cursorIsNew) =>
         {
-            var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
-
-            if (!known.TryGetValue(source.Key, out var cursor))
+            if (cursorIsNew)
             {
-                // A SOURCE THAT APPEARS WHILE THE SESSION IS RUNNING STARTS EMPTY, so everything in it
-                // is traffic and none of it is absorbed. A channel that turns up now belongs to a member
-                // that was created now, and its very first entry — the member's boot greeting, landing
-                // between its spawn and the next tick — is exactly what a supervisor is here to answer.
-                // Absorbing it would swallow the one entry this rule can ever see.
-                cursor = firstSightOfThisSession
-                    ? TurnCursor_Factory.Create_Baseline(source, role, entries)
-                    : TurnCursor_Factory.Create_Empty(source);
-
-                changed = true;
-
                 if (cursor.Delivered.Count > 0)
-                    _log.Log_Warning(state.OrchId, $"'{state.MemberId}' had no cursors at all, so channel '{source.Key}' was baselined on sight: the {cursor.Delivered.Count} inbound entr{(cursor.Delivered.Count == 1 ? "y" : "ies")} already in it are HISTORY and will not start a turn");
+                    _log.Log_Warning(current.OrchId, $"'{current.MemberId}' had no cursors at all, so channel '{source.Key}' was baselined on sight: the {cursor.Delivered.Count} inbound entr{(cursor.Delivered.Count == 1 ? "y" : "ies")} already in it are HISTORY and will not start a turn");
                 else
-                    _log.Log_Info(state.OrchId, $"'{state.MemberId}' is now also woken by channel '{source.Key}'");
+                    _log.Log_Info(current.OrchId, $"'{current.MemberId}' is now also woken by channel '{source.Key}'");
             }
 
-            cursors.Add(cursor);
-            Warn_IfEntriesWereArchivedUndelivered(state, source, cursor, entries);
-
-            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, entries, cursor), Nothing_EverDelivered(cursor)));
-        }
-
-        // A CURSOR IS NEVER DROPPED FOR A SOURCE THAT MERELY DID NOT RESOLVE THIS TICK. It used to be,
-        // to keep the file tidy — and the roster read that decides is best-effort: an absent session.json
-        // resolves to the owner channel alone, and rewriting the durable record from that transient
-        // answer loses every spoke cursor irreversibly. The next successful read then meets them all as
-        // unknown keys and re-delivers whole channels. Keeping a stale key costs one line in a JSON file
-        // nobody counts; dropping it costs a supervisor re-answering every member it has.
-        foreach (var cursor in state.Cursors)
-        {
-            if (!sources.Any(source => SOURCE_KEYS.Equals(source.Key, cursor.SourceKey)))
-                cursors.Add(cursor);
-        }
-
-        if (changed)
-        {
-            state = PrintSessionState_Factory.CreateFrom_Existing_Cursors(state, cursors);
-            PrintSessionState_Store.Write(stateFile, state);
-        }
-
-        return reads;
-    }
-
-    /// <summary>
-    /// HAS THIS SESSION EVER BEEN HANDED ANYTHING FROM THIS CHANNEL — asked of the cursor, and asked
-    /// in a way that CANNOT COME BACK TRUE. Two readers depend on it: the digest's first-entry
-    /// exemption (<see cref="SourceRead.NothingEverDelivered"/>) and the archive-gap warning
-    /// (<see cref="Warn_IfEntriesWereArchivedUndelivered"/>), and one implementation is the whole
-    /// point — they were two copies of the same wrong test.
-    ///
-    /// <para>
-    /// REVIEW FINDING, 2026-09-10, and it is CLAUDE.md decision 13's exact shape: a stored count
-    /// re-derived from a live read. <see cref="TurnCursor_Factory.CreateFrom_Delivered"/> prunes
-    /// <see cref="ITurnCursor.Delivered"/> to the identities still in the LIVE file, so after
-    /// compaction, on a turn where that source had nothing pending, the set EMPTIES — and
-    /// <c>Delivered.Count == 0</c> then said "first contact" about a member of many hours' standing.
-    /// Its every report was exempt from the digest from then on, and the archive-gap warning returned
-    /// early on exactly the channels compaction had touched, which are the only ones it exists for.
-    /// </para>
-    /// <para>
-    /// <see cref="ITurnCursor.HighWaterIndex"/> is what makes the answer stick: it is only ever raised
-    /// (<c>Math.Max</c>), it survives the prune, and zero is not an index a channel hands out — they
-    /// are numbered from one. The delivered set stays in the test as the second half, so a channel
-    /// whose only delivered entry carried an agent-typed <c>[0]</c> is still not called first contact.
-    /// This is not the index deciding DELIVERY, which that field forbids and which
-    /// <see cref="PrintTurn_Trigger.Select_Pending"/> still answers from identities alone; it is one
-    /// boolean about whether anything ever happened here.
-    /// </para>
-    /// </summary>
-    static bool Nothing_EverDelivered(ITurnCursor cursor)
-    {
-        return cursor.HighWaterIndex == 0 && cursor.Delivered.Count == 0;
+            Warn_IfEntriesWereArchivedUndelivered(current, source, cursor, entries);
+        });
     }
 
     /// <summary>
@@ -1064,7 +906,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     void Warn_IfEntriesWereArchivedUndelivered(IPrintSessionState state, ITurnSource source, ITurnCursor cursor, IReadOnlyList<IChannelEntry> entries)
     {
-        if (Nothing_EverDelivered(cursor) || entries.Count == 0)
+        if (WakeDecision_Resolver.Nothing_EverDelivered(cursor) || entries.Count == 0)
             return;
 
         var lowestLive = entries.Min(entry => entry.Index);
@@ -1165,6 +1007,22 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             return tracker.DigestHeldSince;
         }
+    }
+
+    /// <summary>
+    /// <see cref="IPrintTurnDispatcher.Resolve_DigestHold"/> — the same clock the dispatcher's own
+    /// tick reads, addressed by session key so the wake-ticket sweep can borrow it for a session this
+    /// dispatcher does not run.
+    /// </summary>
+    public DateTime? Resolve_DigestHold(string orchId, string memberId, DateTime nowLocal, bool digestableTrafficPending)
+    {
+        return Resolve_DigestHold(Get_Tracker(Describe_SessionKey(orchId, memberId)), nowLocal, digestableTrafficPending);
+    }
+
+    /// <summary><see cref="IPrintTurnDispatcher.Note_TrafficDelivered"/>.</summary>
+    public void Note_TrafficDelivered(string orchId, string memberId)
+    {
+        Note_TrafficDelivered(Get_Tracker(Describe_SessionKey(orchId, memberId)));
     }
 
     SessionTracker Get_Tracker(string key)
@@ -1802,33 +1660,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return refreshed;
     }
 
-    IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending, IReadOnlySet<string>? answeredSourceKeys = null)
+    /// <summary>
+    /// SessionCursors_Bookkeeper's, shared with the wake-ticket sweep — the same set of entries has
+    /// to mean "handed over" whichever of the two recorded it (CLAUDE.md decision 12).
+    /// </summary>
+    static IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending, IReadOnlySet<string>? answeredSourceKeys = null)
     {
-        var byKey = state.Cursors.ToDictionary(cursor => cursor.SourceKey, SOURCE_KEYS);
-
-        List<ITurnCursor> advanced = [];
-
-        foreach (var source in sources)
-        {
-            if (!byKey.TryGetValue(source.Key, out var cursor))
-                continue;
-
-            // THE CLOSING TURN'S EXCEPTION, and only its (see Close_Down_KilledTurn_Async). Nothing is
-            // dropped here: the cursor is carried over untouched, so the source keeps its history and
-            // its entries are pending again on the next tick.
-            if (answeredSourceKeys != null && !answeredSourceKeys.Contains(source.Key))
-            {
-                advanced.Add(cursor);
-                continue;
-            }
-
-            var delivered = pending.Where(item => SOURCE_KEYS.Equals(item.Source.Key, source.Key)).Select(item => item.Entry).ToList();
-            var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
-
-            advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
-        }
-
-        return advanced;
+        return SessionCursors_Bookkeeper.Advance(state, sources, pending, answeredSourceKeys);
     }
 
     // ----- the reply -----

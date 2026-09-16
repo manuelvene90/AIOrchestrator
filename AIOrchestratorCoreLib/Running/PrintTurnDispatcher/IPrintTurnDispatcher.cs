@@ -111,6 +111,35 @@ public interface IPrintTurnDispatcher
     /// <returns>The number of sessions whose appointment was dropped.</returns>
     int Clear_LimitDeferrals();
 
+    /// <summary>
+    /// THE DIGEST'S HOLD CLOCK, for a session whose turns this dispatcher does NOT run.
+    ///
+    /// <para>
+    /// The 2026-09-15 one-wake-model spec moved the wake DECISION into
+    /// <c>WakeDecision.WakeDecision_Resolver</c> so the bridge's wake-ticket sweep can ask it about a
+    /// terminal session — but deliberately left the per-PROCESS gates here, because they are about
+    /// what this process has already done rather than about what the channels say, and the hold stamp
+    /// "arrives as digestHeldSince". This is how it arrives. The stamp lives in this dispatcher's
+    /// per-session tracker, which is the ONE place it has ever lived (see
+    /// <c>SessionTracker.DigestHeldSince</c> for the two regressions that came of moving it), so the
+    /// sweep borrows that clock instead of starting a second one that could hold the same crew's
+    /// reports to a different deadline.
+    /// </para>
+    /// <para>
+    /// Starts the clock on the first call that sees holdable traffic, and only once this process has
+    /// handed that session something — traffic already pending before then has waited an unknown time
+    /// and a null answer is what makes <c>WakeUp_Policy</c> deliver it at once.
+    /// </para>
+    /// </summary>
+    DateTime? Resolve_DigestHold(string orchId, string memberId, DateTime nowLocal, bool digestableTrafficPending);
+
+    /// <summary>
+    /// SPENDS THE HOLD: these entries have now been handed over. Called where the cursors advance and
+    /// nowhere else — a wake that did NOT consume its entries must leave the stamp alone, or the
+    /// retry starts a fresh window on traffic that already waited its whole one.
+    /// </summary>
+    void Note_TrafficDelivered(string orchId, string memberId);
+
     /// <summary>Cancels every in-flight turn (process trees killed) and waits for them to settle.</summary>
     Task Stop_Async();
 }
