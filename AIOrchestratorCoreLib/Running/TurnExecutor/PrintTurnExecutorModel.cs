@@ -60,7 +60,7 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         if (resumeTranscript)
             prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
         else if (fresh && pending.Count > 0)
-            Write_StatePack(state, requestId, pending, sources);
+            TurnStatePack_Writer.Write_OrNull(_paths, state, requestId, pending, sources);
 
         // THE WORK TURN IS BRAKED, the closing turn below is not: that one has its own short timeout
         // and a spend cap, and a brake on the turn that exists to salvage a killed one would only
@@ -98,17 +98,6 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         TurnLog_Store.Append_ClosingTurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), closingRequestId, result);
 
         return result;
-    }
-
-    /// <summary>
-    /// Reads what the bridge holds and writes the pack — through the shared writer, which is also what
-    /// the wake-ticket sweep calls for a TERMINAL session (2026-09-15 one-wake-model, Task 11), so the
-    /// two runners cannot drift on where the pack goes or on what happens when it cannot be written.
-    /// Its answer is ignored here: this turn is opened by the app itself and has nothing to tell.
-    /// </summary>
-    void Write_StatePack(IPrintSessionState state, string requestId, IReadOnlyList<PendingEntry> pending, IReadOnlyList<TurnSource.ITurnSource> sources)
-    {
-        StatePack_Writer.Write_ForSession_OrNull(_paths, state, requestId, pending, sources);
     }
 
     public void Release(string orchId, string memberId)

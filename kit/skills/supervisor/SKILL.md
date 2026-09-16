@@ -103,6 +103,21 @@ watcher. Nothing else.
 
 **A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 
+**Your conclusions do not survive your turn — WRITE THEM DOWN.** Keep
+`${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/.supervisor.state.md`, append-only,
+and add a dated line whenever you conclude something the channel does not already say:
+
+- a **dead end** — a route tried and ruled out, with the date and the reason it cannot work;
+- a **ruling** you made that you do not want re-litigated (a finding rejected, a scope call);
+- something the **owner decided** that is not in PLAN.md.
+
+Not status, not what you are doing now, not what is already in the ledger — the bridge reads all of
+those itself and hands them back to you in the pack. This file is only for what it cannot read: your
+judgements. Your next turn may be a session with no memory of this one, and this file is the only
+thing it will have that git, PLAN.md and the channels cannot reconstruct. Keep it short enough to
+stay useful; if the pack tells you it was truncated, compact it yourself — you are the only one who
+knows which dead end is still live.
+
 1. Read `session.json` and every channel file in your home, top to bottom. **You may be resuming**
    — the channels are the full history, read them as a LOG, never a to-do list: an entry that
    already has a later reply is CLOSED; only unanswered trailing traffic is yours to act on.

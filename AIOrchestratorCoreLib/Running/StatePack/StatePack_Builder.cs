@@ -31,7 +31,17 @@ public static class StatePack_Builder
     public const int OWNER_TAIL_CAP = 8_000;
     public const int PROGRESS_CAP = 6_000;
 
+    /// <summary>
+    /// The conclusions section's budget. Generous next to C1.2's ≤ 2 KB because that cap is on the
+    /// BLOCK a single turn writes, while this file ACCUMULATES: a dead end ruled out in week one is
+    /// still true in week four, and is by then the thing nothing else on disk remembers.
+    /// </summary>
+    public const int CONCLUSIONS_CAP = 8_000;
+
     public const string PROGRESS_HEADING = "## Your progress note — progress.md, what you saved while working (resume from here)";
+
+    public const string CONCLUSIONS_HEADING =
+        "## What you concluded earlier — state.md, YOUR OWN judgements (not facts the bridge read)";
 
     public const string TITLE_PREFIX = "# State pack — ";
     public const string OPENING =
@@ -59,6 +69,15 @@ public static class StatePack_Builder
 
         if (inputs.ProgressNote != null)
             Append_Block(text, PROGRESS_HEADING, inputs.ProgressNote, PROGRESS_CAP, StatePack_Locator.PROGRESS_FILE_NAME, keepTail: true);
+
+        // NOT keepTail, and that is the opposite of the progress note on purpose. A dead end is
+        // written once and stays true for ever, so recency does not make it more relevant — and the
+        // OLDEST conclusions are the ones nothing else on disk still remembers, while the newest are
+        // still half-visible in the last few channel entries. The truncation marker points at the
+        // file, so the supervisor can see it has outgrown its budget and compact it: it is the only
+        // reader who can judge which dead end is still live, and the app must not choose for it.
+        if (inputs.Conclusions != null)
+            Append_Block(text, CONCLUSIONS_HEADING, inputs.Conclusions, CONCLUSIONS_CAP, StatePack_Locator.CONCLUSIONS_FILE_NAME);
 
         if (inputs.PlanText != null)
             Append_Block(text, "## The ledger — PLAN.md", inputs.PlanText, PLAN_CAP, "PLAN.md");

@@ -25,7 +25,8 @@ public sealed class StatePackInputs(
     IReadOnlyList<string> gitLines,
     IReadOnlyList<IChannelEntry> ownerTail,
     IReadOnlyList<string> unavailable,
-    string? progressNote = null)
+    string? progressNote = null,
+    string? conclusions = null)
 {
     public string OrchId { get; } = orchId;
     public string MemberId { get; } = memberId;
@@ -57,4 +58,11 @@ public sealed class StatePackInputs(
 
     /// <summary>The member's own progress note (<see cref="StatePack_Locator.PROGRESS_FILE_NAME"/>), null when it kept none.</summary>
     public string? ProgressNote { get; } = progressNote;
+
+    /// <summary>
+    /// What this session CONCLUDED and wrote down — <see cref="StatePack_Locator.Get_ConclusionsFile_OrNull"/>.
+    /// The only section of this pack that is not re-derivable from the channel, the ledger or git,
+    /// and therefore the only one whose absence is a loss rather than an inconvenience.
+    /// </summary>
+    public string? Conclusions { get; } = conclusions;
 }

@@ -2147,7 +2147,7 @@ internal sealed class BridgeEngineModel(
     /// THE PACK IS THE PAYOFF OF THIS SERIES (2026-09-15 one-wake-model, spec step 2). Until here it
     /// was written only by <c>PrintTurnExecutorModel</c>, so a terminal session — the DEFAULT runner —
     /// had to go and rebuild its own state from channels that may since have been compacted. It is
-    /// built by <c>StatePack_Writer.Write_ForSession_OrNull</c>, the same call the print executor
+    /// built by <c>TurnStatePack_Writer.Write_OrNull</c>, the same call BOTH executors make
     /// makes; a null answer means the pack could not be written and the ticket says so by naming
     /// none, which lands the session on its ordinary boot sequence rather than on a missing file.
     /// </para>
@@ -2166,7 +2166,7 @@ internal sealed class BridgeEngineModel(
         // the pack would tell a member starting a new task to resume the previous one's next steps.
         Running.StatePack.StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, state.Role, state.OrchId, state.MemberId, [.. decision.Pending.Select(item => item.Entry)]);
 
-        var statePackFile = Running.StatePack.StatePack_Writer.Write_ForSession_OrNull(
+        var statePackFile = Running.StatePack.TurnStatePack_Writer.Write_OrNull(
             _paths, state, $"{state.OrchId}/{state.MemberId}/wake-{number}", decision.Pending, sources);
 
         Running.WakeTicket.WakeTicket_Store.Write(

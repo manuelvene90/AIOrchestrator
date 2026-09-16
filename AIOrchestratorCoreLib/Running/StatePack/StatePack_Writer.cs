@@ -13,44 +13,6 @@ namespace AIOrchestratorCoreLib.Running.StatePack;
 /// </summary>
 public static class StatePack_Writer
 {
-    /// <summary>
-    /// THE WHOLE PACK FOR ONE SESSION, in the one place both runners ask for it — read the inputs,
-    /// render, write — answering with the file it wrote, or null when it could not write one.
-    ///
-    /// <para>
-    /// GUARDED AS A WHOLE, on top of the reader's own per-section guards: a pack that cannot be
-    /// written must never be the reason a turn does not start. The session then finds no pack and
-    /// falls back to its boot sequence, which is the behaviour it had before packs existed — and a
-    /// wake ticket whose <c>statePackFile</c> is null says exactly that to a terminal session.
-    /// </para>
-    /// <para>
-    /// ONE IMPLEMENTATION, TWO CALLERS: <c>PrintTurnExecutorModel</c> writes it for a bridge-driven
-    /// turn it is about to open, and <c>BridgeEngineModel.Sweep_WakeTickets_Async</c> writes it for a
-    /// TERMINAL session it is about to ticket (2026-09-15 one-wake-model, Task 11). A second copy of
-    /// this three-line body is a second place for the swallow rule and the locator to drift.
-    /// </para>
-    /// </summary>
-    public static string? Write_ForSession_OrNull(
-        ISupervisionPaths paths,
-        IPrintSessionState state,
-        string requestId,
-        IReadOnlyList<PendingEntry> pending,
-        IReadOnlyList<ITurnSource> sources)
-    {
-        try
-        {
-            var packFilePath = StatePack_Locator.Get_File(paths, state.Role, state.OrchId, state.MemberId);
-
-            Write(packFilePath, StatePack_Builder.Build(StatePackInputs_Reader.Read(paths, state, requestId, pending, sources)));
-
-            return packFilePath;
-        }
-        catch
-        {
-            // Swallowed by design — see the summary. The session's boot sequence covers the gap.
-            return null;
-        }
-    }
 
     public static void Write(string packFilePath, string text)
     {

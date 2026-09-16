@@ -28,7 +28,19 @@ public class AppAuthoredWritesCensusTests
     /// (Append_GeneralAppEntry, Append_OrchestrationAppEntry, Append_AppEntry_Safe, the
     /// Append_SupervisorAttention_UnlessMeeting choke point, Drain_PendingAnnouncements).
     /// </summary>
-    const int EXPECTED_EVENT_SITES = 77;
+    /// <summary>
+    /// 77 when this census was written (2026-09-15). 78 since 2026-09-16, when
+    /// <c>FreshSupervisor_Gate</c> arrived on a branch this census could not see and filed a notice of
+    /// its own — the refusal to make a supervisor fresh while its conclusions file is empty.
+    ///
+    /// <para>
+    /// THAT IS THIS TEST WORKING, not a number in the way. A write site added by another agent, on
+    /// another branch, was caught by a merge instead of discovered in production. **The new site is
+    /// NOT YET CLASSIFIED into a bucket** — plan 02 task 4 routes it, and raising this number without
+    /// saying so would be exactly the silence the census exists to prevent.
+    /// </para>
+    /// </summary>
+    const int EXPECTED_EVENT_SITES = 78;
 
     const int HELPER_BODIES = 5;
 

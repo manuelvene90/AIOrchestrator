@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running.ClaudeInvocation;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.SessionSandbox;
+using AIOrchestratorCoreLib.Running.StatePack;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 using AIOrchestratorCoreLib.Running.StreamTurn;
 using AIOrchestratorCoreLib.Running.TurnLog;
@@ -85,6 +86,24 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
     {
         var key = Build_Key(state.OrchId, state.MemberId);
 
+        // A NEW TASK RETIRES THE OLD NOTE IN EVERY RESUME MODE, not only where a pack is written —
+        // the same call the print transport makes, for the same 2026-09-11 review finding: a member
+        // in transcript mode keeps appending to its note too, and a later switch to fresh would hand
+        // it steps from tasks long finished. This transport never made it.
+        StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, state.Role, state.OrchId, state.MemberId, pending.Select(item => item.Entry).ToList());
+
+        // THE PACK IS THIS TRANSPORT'S TOO, as of 2026-09-15. A fresh stream turn mints a new session
+        // id every turn (see Ensure_Process), so every turn is a new process with no memory — exactly
+        // the print transport's situation, and until now the only one of the two that wrote it down.
+        // A supervisor on `resume: fresh` here was handed its role command and its entries and
+        // nothing else: no brief, no ledger, no git state, no owner tail (one-wake-model spec, step 6).
+        // GATED ON THE MODE, not on `resumeTranscript`. The two differ on the FIRST turn of a
+        // transcript-mode session, which has no transcript to resume yet and would otherwise be handed
+        // a pack it never asked for — the same gate the print transport uses, for the same reason.
+        var packFile = roleConfig.Resume == ResumeModes.Fresh
+            ? TurnStatePack_Writer.Write_OrNull(_paths, state, requestId, pending, sources, _log)
+            : null;
+
         if (Has_FallenBack(key))
             return await Run_OnFallback_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecutedTurns, environment, timeout, memberSilenceLimit, cancellationToken);
 
@@ -135,7 +154,13 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
             return bootResult;
         }
 
-        var prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
+        // POINTED AT THE PACK, OR SENT THE ENTRIES — never both. `packFile` is null for a resumed
+        // turn AND for a fresh turn whose pack could not be written, and in both of those the session
+        // must still be told what woke it. That is the fallback working, not a gap: a failed pack
+        // costs context, never the turn.
+        var prompt = packFile != null
+            ? PrintTurnPrompt_Builder.Build_FreshTurnPointer(requestId, packFile)
+            : PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
         var outcome = await process.Send_AndAwaitResult_Async(prompt, deadline, SilenceLimit, cancellationToken);
 
         Record_RateLimit_IfNew(state, outcome);
