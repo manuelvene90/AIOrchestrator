@@ -80,4 +80,33 @@ public class WatchdogPrintSessionTests
 
         Assert.Contains($"sup:{orchId}", launcher.Calls);
     }
+
+    [Fact]
+    public void ADemotedMember_WhoseRoleIsStillConfiguredPrint_IsRespawned_BecauseItNoLongerDrivesItsTurns()
+    {
+        // THE WATCHDOG HALF OF THE ONE-WAKE-MODEL INTERLOCK. Since Task 5 a terminal spawn WRITES the
+        // state file with DrivesTurns=false instead of deleting it, so the file's existence stopped
+        // answering "is the dispatcher running this session's turns". A watchdog still asking Exists
+        // would read a demoted member as bridge-driven, skip it for ever, and leave a dead window
+        // with nothing to respawn it — the exact failure the file-existence question used to cause
+        // for a role flipped back to terminal in config.json.
+        //
+        // The BridgeEngine half of the same question is pinned by EffortDialOnABridgeDrivenSupervisorTests;
+        // this is the watchdog half, which had no end-to-end case.
+        using var harness = new PrintRunnerTestHarness("implementer");
+        var (orchId, driving) = harness.Register_Member(MemberKinds.Implementer);
+        var (_, demoted) = harness.Register_Member(MemberKinds.Implementer, drivesTurns: false);
+
+        var launcher = new RecordingLauncher();
+        var watchdog = SessionWatchdog_Factory.Create(harness.Paths, harness.ConfigProvider, harness.Store, launcher, harness.Log);
+
+        watchdog.Check_AndRestart_DeadSessions();
+
+        // ONE VARIABLE SEPARATES THE TWO, and that is the whole design of this case. Both members are
+        // in the same orchestration, both have their role configured print, both have a registration
+        // file, neither has a pid file or a spawn stamp — so neither the config, the file's presence,
+        // the 90 s grace nor the app-start pass can account for a difference. Only DrivesTurns can.
+        Assert.Contains($"imp:{orchId}/{demoted}", launcher.Calls);
+        Assert.DoesNotContain($"imp:{orchId}/{driving}", launcher.Calls);
+    }
 }
