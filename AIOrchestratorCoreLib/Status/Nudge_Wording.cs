@@ -41,10 +41,19 @@ public static class Nudge_Wording
     }
 
     /// <summary>
-    /// The subject of the entry the app appends when it respawns an orphaned member. It lives here,
-    /// beside the nudge subjects, because <see cref="Is_WakeSubject"/> has to recognise it and a
-    /// predicate that RE-TYPES the text it recognises is a drift waiting to happen — the writer moves,
-    /// the recogniser does not, and nothing says so.
+    /// The subject of the entry the app USED TO append when it respawned an orphaned member.
+    /// <c>Recover_OrphanedImplementer_Async</c> is gone (see the note where it lived in
+    /// <c>BridgeEngineModel</c>) and NOTHING WRITES THIS ANY MORE — searched repo-wide on 2026-09-16
+    /// for the 2026-09-15 one-wake-model plan 02, which went looking for a respawn note to move and
+    /// found there was none to move.
+    ///
+    /// <para>
+    /// It stays because <see cref="Is_WakeSubject"/> has to keep recognising the entries already
+    /// sitting in members' channels from before that change — a recogniser without a writer is correct
+    /// here, and a recogniser that RE-TYPES the text it recognises would not be (CLAUDE.md decision
+    /// 12). <c>NothingWritesARespawnNote</c> is what keeps the tense of this paragraph honest: if a
+    /// writer ever comes back, it fails and this docstring has to be rewritten with it.
+    /// </para>
     /// </summary>
     public const string RESPAWN_SUBJECT = "session was orphaned and has been respawned";
 

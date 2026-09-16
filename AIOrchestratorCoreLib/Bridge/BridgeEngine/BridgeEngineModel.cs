@@ -3005,7 +3005,16 @@ internal sealed class BridgeEngineModel(
                 // OrphanEscalation_Decider.Describe_Report, which says why it must never advise one.
                 var report = OrphanEscalation_Decider.Describe_Report(member.MemberId, ORPHAN_CONFIRM_MINUTES);
 
-                Append_SupervisorAttention_UnlessMeeting(session.OrchId, report.Subject, report.Body, Resolve_Presence(session.OrchId));
+                // THE REPORT IS ROUTED AND THE NUDGE THAT PRODUCES ONE IS NOT. Nudge_Decider counts the
+                // app's own agent-tagged nudge as inbound, because the orphan escalation is the only
+                // proof a member's monitor is dead and can only run on a member that has already been
+                // nudged — see Nudge_Implementer_Async, which keeps ChannelAppender deliberately.
+                Append_SupervisorAttention_UnlessMeeting(
+                    session.OrchId,
+                    report.Subject,
+                    report.Body,
+                    Resolve_Presence(session.OrchId),
+                    routedKind: Channels.StatusLog.AppNoteKinds.OrphanReport);
             }
 
             Publish_AwaitingVerdict(session.OrchId, awaitingVerdict);
@@ -3549,7 +3558,8 @@ internal sealed class BridgeEngineModel(
                     session.OrchId,
                     "PLAN.md is behind your verdicts",
                     "You accepted implementer work without updating the task ledger, so the owner's progress bar is now wrong. Update PLAN.md before your next turn ends — the turn-end hook will block until you do.",
-                    presence))
+                    presence,
+                    routedKind: Channels.StatusLog.AppNoteKinds.LedgerAdvisory))
             {
                 _ledgerBehindReportedOrchIds.Add(session.OrchId);
                 // Info, not Warning: the flag IS the action and the turn-end hook enforces it. See the
@@ -3629,7 +3639,8 @@ internal sealed class BridgeEngineModel(
             session.OrchId,
             "PLAN.md has lines that cannot show progress",
             $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
-            presence))
+            presence,
+            routedKind: Channels.StatusLog.AppNoteKinds.LedgerAdvisory))
             return;
 
         _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
@@ -3716,7 +3727,8 @@ internal sealed class BridgeEngineModel(
                 session.OrchId,
                 "PLAN.md claims work that nobody is doing",
                 describe,
-                presence))
+                presence,
+                routedKind: Channels.StatusLog.AppNoteKinds.LedgerAdvisory))
             return;
 
         _reportedStaleInProgress[session.OrchId] = signature;
@@ -12852,7 +12864,25 @@ internal sealed class BridgeEngineModel(
     /// (rev-7 P5, 2026-08-13). Passing it also keeps this the single choke point: a new site must
     /// supply the input, and cannot quietly skip the check.
     /// </param>
-    bool Append_SupervisorAttention_UnlessMeeting(string orchId, string subject, string body, OwnerPresenceModes presence, Channels.AppEntryAudiences audience = Channels.AppEntryAudiences.Agent)
+    /// <param name="routedKind">
+    /// Non-null for the sites the 2026-09-15 one-wake-model plan 02 classified as BOOKKEEPING — the
+    /// three PLAN.md advisories and the orphan report. They go through
+    /// <see cref="Channels.StatusLog.AppNote_Writer"/>, which decides channel or status log; everything
+    /// else that comes through here is the conversation and keeps the channel unconditionally.
+    /// <para>
+    /// THE ROUTING SITS BELOW THE TWO SCREENS, not around them. A routed advisory that reached the
+    /// status log while the owner was at the terminal, or while the orchestration was paused, would be
+    /// exactly the waker CLAUDE.md's PAUSE decision means by *"miss one and dormancy is a word"*: the
+    /// note is still there at the session's next turn and the pause meant nothing.
+    /// </para>
+    /// </param>
+    bool Append_SupervisorAttention_UnlessMeeting(
+        string orchId,
+        string subject,
+        string body,
+        OwnerPresenceModes presence,
+        Channels.AppEntryAudiences audience = Channels.AppEntryAudiences.Agent,
+        Channels.StatusLog.AppNoteKinds? routedKind = null)
     {
         if (OwnerPresence_Policy.Suppresses_SupervisorAttention(presence))
             return false;
@@ -12867,12 +12897,114 @@ internal sealed class BridgeEngineModel(
         // The return value means "an entry is on disk", so a failed append must answer FALSE. It
         // used to be an unconditional true because the append could only throw; now that a throw is
         // caught, saying true would be the same defect this file spent the evening fixing — a
-        // caller logging a success for something that never landed.
-        if (!Append_AppEntry_Safe(_paths.Get_OwnerChannelFile(orchId), audience, subject, body, DateTime.Now))
+        // caller logging a success for something that never landed. The router keeps that contract
+        // exactly, which is why the three ledger sites and the orphan report need no other change.
+        var landed = routedKind == null
+            ? Append_AppEntry_Safe(_paths.Get_OwnerChannelFile(orchId), audience, subject, body, DateTime.Now)
+            : Route_SupervisorNote(orchId, routedKind.Value, audience, subject, body);
+
+        if (!landed)
             return false;
 
         Raise_OrchestrationActivity(orchId);
         return true;
+    }
+
+    /// <summary>
+    /// A supervisor-facing bookkeeping note through <see cref="Channels.StatusLog.AppNote_Writer"/>.
+    /// The channel is the orchestration's owner channel, exactly as the unrouted branch above uses,
+    /// and the log is the one beside the SUPERVISOR's state file — the role is named here rather than
+    /// inferred because a member's advisory never comes through this choke point.
+    ///
+    /// <para>
+    /// THE SINK IS ASKED OF THE SESSION, not of the role: the state file is read and handed to the
+    /// router, which refuses the log for a session nobody writes a state pack for (see
+    /// <see cref="Channels.StatusLog.BookkeepingSink_Policy"/>). A basic orchestration, where a SOLO
+    /// shares the owner channel and there is no supervisor state file at all, therefore keeps the
+    /// channel — the conservative answer, and the one that cannot make that session deaf.
+    /// </para>
+    /// </summary>
+    bool Route_SupervisorNote(string orchId, Channels.StatusLog.AppNoteKinds kind, Channels.AppEntryAudiences audience, string subject, string body)
+    {
+        try
+        {
+            var memberId = Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID;
+
+            return Channels.StatusLog.AppNote_Writer.Write(
+                _paths.Get_OwnerChannelFile(orchId),
+                Channels.StatusLog.StatusLog_Store.Get_File(_paths, Running.SessionRoles.Supervisor, orchId, memberId),
+                _configProvider.Get_Current().Runners.Get_ForRole(Running.SessionRoles.Supervisor),
+                Running.PrintSessionState.PrintSessionState_Store.Read_OrNull(
+                    Running.PrintSessionState.PrintSessionState_Store.Get_StateFile(_paths, Running.SessionRoles.Supervisor, orchId, memberId)),
+                kind,
+                audience,
+                subject,
+                body,
+                DateTime.Now);
+        }
+        catch (Exception exception)
+        {
+            // Decision 21: name WHICH operation failed. This is the same contract Append_AppEntry_Safe
+            // states — a throw here would take down the whole mirror tick, not one advisory.
+            _log.Log_Warning(orchId, $"Routing the '{subject}' note FAILED and it is lost — {exception.GetType().Name}: {exception.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// A bookkeeping note on a channel the mirror DISCOVERED, rather than on a channel resolved from a
+    /// role — the message-contract and question-dedup coaching, which is written back onto whichever
+    /// file the offending entry arrived on. The role and the member whose log it belongs to come from
+    /// the CHANNEL, because the note has to land in the log the session that reads THIS channel will
+    /// be handed.
+    ///
+    /// <para>
+    /// THREE SHAPES OF CHANNEL, and the general one is why this is not a two-branch expression. The
+    /// general supervisor's channel is discovered as an owner channel under the reserved orch id
+    /// <c>general</c> (<see cref="Channels.ChannelDiscovery.GENERAL_ORCH_ID"/>), and asking for a
+    /// SUPERVISOR state file there would build a path under an orchestration folder that does not
+    /// exist — a log beside nothing, for a session whose files live in the general folder.
+    /// </para>
+    /// <para>
+    /// A SOLO SHARES THE OWNER CHANNEL (<see cref="Channels.MemberChannel_Locator"/>), so on a basic
+    /// orchestration this resolves to the SUPERVISOR's log, and there is no supervisor state file —
+    /// the router is handed null and keeps the channel. That is the conservative answer and the
+    /// correct one: a note in a log that session is never handed would be a note nobody reads.
+    /// </para>
+    /// </summary>
+    bool Route_ChannelNote(Channels.DiscoveredChannel.IDiscoveredChannel channel, Channels.StatusLog.AppNoteKinds kind, string subject, string body)
+    {
+        try
+        {
+            var general = channel.OrchId == Channels.ChannelDiscovery.GENERAL_ORCH_ID;
+
+            var role = general
+                ? Running.SessionRoles.General
+                : channel.IsOwnerChannel
+                    ? Running.SessionRoles.Supervisor
+                    : Running.SessionRole_Names.From_MemberKind(Sessions.MemberKind_Ids.Resolve_Kind(channel.SpokeName));
+
+            var memberId = channel.IsOwnerChannel
+                ? Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID
+                : channel.SpokeName;
+
+            return Channels.StatusLog.AppNote_Writer.Write(
+                channel.FilePath,
+                Channels.StatusLog.StatusLog_Store.Get_File(_paths, role, channel.OrchId, memberId),
+                _configProvider.Get_Current().Runners.Get_ForRole(role),
+                Running.PrintSessionState.PrintSessionState_Store.Read_OrNull(
+                    Running.PrintSessionState.PrintSessionState_Store.Get_StateFile(_paths, role, channel.OrchId, memberId)),
+                kind,
+                Channels.AppEntryAudiences.Agent,
+                subject,
+                body,
+                DateTime.Now);
+        }
+        catch (Exception exception)
+        {
+            _log.Log_Warning(channel.OrchId, $"Routing the '{subject}' note FAILED and it is lost — {exception.GetType().Name}: {exception.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -13118,13 +13250,12 @@ internal sealed class BridgeEngineModel(
         foreach (var fault in faults)
             lines.Add($"- {OwnerMessage_Contract.Describe(fault)}");
 
-        ChannelAppender.Append_AppEntry(
-            channel.FilePath,
-            AppEntryAudiences.Agent,
+        Route_ChannelNote(
+            channel,
+            Channels.StatusLog.AppNoteKinds.ContractCoaching,
             "the entry you just sent the owner breaks the message contract",
             "It reached them anyway — this is not a rejection. Fix the shape on the next one:\n"
-            + string.Join("\n", lines),
-            DateTime.Now);
+            + string.Join("\n", lines));
     }
 
     /// <summary>
@@ -13146,14 +13277,17 @@ internal sealed class BridgeEngineModel(
         foreach (var fault in faults)
             lines.Add($"- {OwnerQuestion_Contract.Describe(fault)}");
 
-        ChannelAppender.Append_AppEntry(
-            channel.FilePath,
-            AppEntryAudiences.Agent,
+        // THE ONLY TRACE THAT A QUESTION DIED. The owner never saw it, the log line is the operator's
+        // and not the agent's, and the session is standing there waiting for an answer nobody will
+        // give — so wherever this is written, the session must be shown it (plan 02 task 11 carries it
+        // in the state pack).
+        Route_ChannelNote(
+            channel,
+            Channels.StatusLog.AppNoteKinds.ContractCoaching,
             "your question was NOT sent to the owner — it is incomplete",
             "The body reached them; the question and its buttons did not, so nobody is going to answer it. "
             + "Ask again with every line present:\n"
-            + string.Join("\n", lines),
-            DateTime.Now);
+            + string.Join("\n", lines));
     }
 
     /// <summary>
@@ -13318,14 +13452,13 @@ internal sealed class BridgeEngineModel(
             channel.OrchId,
             $"{superseded.Count} older open question(s) superseded — the owner had replied in words and a newer question followed");
 
-        ChannelAppender.Append_AppEntry(
-            channel.FilePath,
-            AppEntryAudiences.Agent,
+        Route_ChannelNote(
+            channel,
+            Channels.StatusLog.AppNoteKinds.ContractCoaching,
             "your earlier open question was superseded by this one",
             $"The owner had replied in words while {(superseded.Count == 1 ? "an earlier question of yours was" : $"{superseded.Count} earlier questions of yours were")} still open, "
             + "and you have now asked a new one — so the earlier one(s) are closed as superseded and say so on the phone. "
-            + "If one of them still needs a decision, ask it again.",
-            DateTime.Now);
+            + "If one of them still needs a decision, ask it again.");
 
         foreach (var question in superseded)
         {
@@ -13373,15 +13506,14 @@ internal sealed class BridgeEngineModel(
             channel.OrchId,
             $"a question repeating one already decided at {decided.ClosedUtc:HH:mm} UTC ({decided.Closure}) was not sent again — the session was told what the owner decided");
 
-        ChannelAppender.Append_AppEntry(
-            channel.FilePath,
-            AppEntryAudiences.Agent,
+        Route_ChannelNote(
+            channel,
+            Channels.StatusLog.AppNoteKinds.ContractCoaching,
             "you already asked this and the owner dealt with it — not sent again",
             $"This question repeats, word for word, one the owner resolved at {decided.ClosedUtc.ToLocalTime():HH:mm}: {whatTheyDid}. "
             + "A second identical copy reads on their phone as being asked twice, so nothing went out. "
             + "If the discussion since then changed what you need to know, ASK THAT — a question that is "
-            + "not the same sentence goes through immediately, and so does this one if you send it again.",
-            DateTime.Now);
+            + "not the same sentence goes through immediately, and so does this one if you send it again.");
     }
 
     void Handle_RepeatedQuestion(Channels.DiscoveredChannel.IDiscoveredChannel channel, OpenQuestionRecord repeated)
@@ -13397,13 +13529,12 @@ internal sealed class BridgeEngineModel(
 
         _log.Log_Info(channel.OrchId, $"a question repeating one still open (asked {repeated.AskedUtc:HH:mm} UTC) was not sent again — {(awaitingReadBack ? "tapped, awaiting its read-back code" : "still unanswered")}");
 
-        ChannelAppender.Append_AppEntry(
-            channel.FilePath,
-            AppEntryAudiences.Agent,
+        Route_ChannelNote(
+            channel,
+            Channels.StatusLog.AppNoteKinds.ContractCoaching,
             "this question is already open — not sent again",
             $"You asked a question the owner already has open, word for word (asked {repeated.AskedUtc.ToLocalTime():HH:mm}), and {state}. "
-            + "A second copy would read on the phone as being asked twice, so nothing new went out. Do not ask it again.",
-            DateTime.Now);
+            + "A second copy would read on the phone as being asked twice, so nothing new went out. Do not ask it again.");
 
         if (channel.IsOwnerChannel && OwnerPresence_Policy.Should_RaiseAwaitingAnswer(Resolve_Presence(channel.OrchId)))
             Raise_AwaitingAnswerFlag(channel.OrchId);
