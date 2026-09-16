@@ -44,7 +44,10 @@ public class NoProtocolFileIsOrphanedTests
 
         // Asserted so that a refactor which deletes every reference file cannot make this pass by
         // leaving nothing to check. Two per role, plus the supervisor's stream-runner.md.
-        Assert.Equal(13, checkedFiles);
+        // 13 until 2026-09-15, when the supervisor's skill moved seven blocks of reference material off
+        // its boot path. The number is a FLOOR so a refactor that deletes every reference file cannot
+        // make this pass by checking nothing — it rises when real files are added, never to silence it.
+        Assert.Equal(20, checkedFiles);
     }
 
     /// <summary>

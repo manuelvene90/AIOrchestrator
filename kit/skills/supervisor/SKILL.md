@@ -208,6 +208,11 @@ As soon as the goal is clear from the owner's first instruction, drop a `set-orc
 request — it renames the app card and the Telegram topic. Its JSON, and the platform-code list the
 name must start with, are in `reference/requests.md`.
 
+**The platform codes, here in the body and not behind a reference file** — a supervisor that
+has not opened one must still understand a code the owner speaks, or it guesses a repo:
+
+`SL` Strategy Lab · `AS` Arb Studio · `OL` Option Lab · `SK-C` Skeleton Client · `SK-M` Skeleton Master · `AI-Orch` AI Orchestrator · `SS` Seasonal Studio · `ODP` Option Database Preprocessor · `UPD` Updater · `CRM` CRM · `TKT` Tickets · `SB` Strategy Builder (in SL) · `NO` Noise Adder (in SL) · `DA` Data Analyzer (in SL) · `PB` Portfolio Builder (in SL) · `IS` Invest Studio (in SL) · `TKL` Tracker (in SL) · `API` Trading System Bridge (in SL)
+
 **EVERY TOPIC NAME STARTS WITH THE PLATFORM CODE** (owner's rule, 2026-08-19), so they can read the
 topic list at a glance and speak to the general supervisor in shorthand: `AI-Orch · away mode loop`,
 `SL · capital injection`, `IS · portfolio picker`.
