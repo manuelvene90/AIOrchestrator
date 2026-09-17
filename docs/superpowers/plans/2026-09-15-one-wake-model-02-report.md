@@ -260,6 +260,80 @@ machine that actually runs orchestrations, real traffic, about two days, and the
 python3 tools/wake-baseline/baseline.py --root ~/.claude/supervision
 ```
 
+## The boot read — plan 02's own figure: the instrument exists, the number does not yet
+
+**This is what gap 3 used to be.** Plan 01's saving is *wakes*; this plan's is the *boot read* — a
+session starts by reading *"`session.json` and every channel file in your home, top to bottom"*
+(`kit/skills/supervisor/SKILL.md:131`), and this plan moves 17 kinds of app bookkeeping out of that
+read. Nothing measured it. It does now.
+
+**What was written** (branch `fix/close-measure`, worktree `AIOrchestrator-measure`, 2026-09-17 —
+branch source, decision 18): `tools/wake-baseline/baseline.py` gained three sections and one scalar,
+and `test_baseline.py` nine cases (2 → 11, all green).
+
+| key | kind | what it holds |
+|---|---|---|
+| `boot_read_bytes_measured` | **measured** | live channel bytes, the app's share, bytes outside any entry, and the archived bytes that are NOT in a boot read |
+| `boot_read_bookkeeping_MODELLED` | **modelled** | the 17 routed kinds by entry and by byte, and their share of the live bytes |
+| `boot_read_tokens_ESTIMATE_at_3_87_bytes_per_token` | **estimate** | those bytes ÷ 3.87 |
+| `bookkeeping_out_of_the_boot_read_MODELLED` | **modelled** | the plan's own scalar — *renamed from the plan's `bookkeeping_out_of_the_boot_read`*, because a classification made by a heuristic must say so in its key. That naming rule is this tool's, learned the hard way, and it is the rule this same report states two sections above |
+
+**Three things the number is made of, and each is labelled rather than blended:**
+
+1. **The bytes are measured** — read off the disk, on BYTES not characters (this prose is em dashes
+   and accented words; a character count understates a UTF-8 channel by a few percent).
+2. **The classification is MODELLED.** Which app entries get routed is decided in C# at the call site
+   by `AppNoteKinds`, and nothing in a channel file records which site wrote an entry. The script
+   matches author `app` + the `[agent]` prefix + one of 16 subject family words, each read off the
+   constant that produces it. **The plan's own marker list was wrong on one:** it listed
+   `"has gone deaf"` for the orphan report, which writes
+   `OrphanEscalation_Decider.Describe_Report`'s `"<member> may be deaf to wakes"` — a marker that
+   matched nothing, and a figure quietly too small. Corrected, and a test fails if it is put back.
+3. **The token conversion is an `[estimate]`**: 3.87 bytes/token, measured on this repo's channel
+   prose with real `-p` turns, replacing the 2.8–3.2 an earlier document guessed (which overstated
+   derived token figures by 20–38 %). One constant, `BYTES_PER_TOKEN`, and every figure through it
+   carries `ESTIMATE` in its key.
+
+**One parser, and it is now fence-aware — which changes the wake columns too.** `read_entries` is the
+only channel reader in the file, shared by the wake counts and the boot read, and it screens fenced
+blocks the way `ChannelFence_Screen` does (only a CLOSED fence suppresses). For bytes this is
+load-bearing: a fence-blind reader hands the tail of a supervisor's brief to `app` and inflates the
+very share being measured. **Consequence to state plainly:** plan 01's 6 868 was taken with a
+fence-blind reader, so a re-run may land below it — in the direction of removing phantom entries.
+
+**The archive is deliberately on the other side of this reading.** The wake counts span live +
+archive (decision 13). The boot read is LIVE ONLY, because a booting session reads the live file and
+the archive is what the compactor took out of its way. Counting archived bytes into it would inflate
+every long-running orchestration. Both readings are in the output, each naming which it is.
+
+**Why the number is still not taken.** There are **no channel files on this machine**:
+`~/.claude/supervision/` here holds `config.json`, `secrets.json` and `statusline.sh` and nothing else
+(`find … -name 'channel*.md'` → 0). Run there, the script **exits 2 rather than reporting zero**
+(decision 20) — the guard was added with this work, because a moved supervision home reads exactly
+like a quiet machine.
+
+**What it takes to make it real, and it needs no config change at all** — unlike the *after* above,
+this is a BEFORE figure over traffic that already exists:
+
+```
+python3 tools/wake-baseline/baseline.py --root ~/.claude/supervision
+```
+
+on the VPS that produced plan 01's figures (9 days, 20 orchestrations, 119 channels). It is read-only
+and aggregates-only. Read off it:
+
+- `boot_read_tokens_ESTIMATE_…["median_per_orchestration"]` — what a supervisor's boot read costs;
+- `boot_read_bookkeeping_MODELLED["share_of_live_bytes"]` — **the headline this plan lacks**: the
+  fraction of that read this plan takes out of the channel;
+- `boot_read_bytes_measured["archived_bytes_outside_the_boot_read"]` beside `live_bytes` — how much
+  the compactor is already keeping out, which is the other half of the same story.
+
+**And the honest caveat to carry with it:** the routed entries do not leave the *history*, they leave
+the *channel* — under `bookkeeping = log` they land in `status.jsonl`, and task 10's merged read plus
+task 11's pack hand the still-standing ones back to the session. So the share above is the gross
+figure, and the net saving is it minus whatever the pack carries (capped at the newest five notes).
+Nothing measures the pack's own size yet; gap 5 is about that.
+
 ## Gaps, stated
 
 1. **A BASIC (solo) orchestration will never move its owner-channel bookkeeping**, and the gain does
@@ -273,14 +347,12 @@ python3 tools/wake-baseline/baseline.py --root ~/.claude/supervision
 2. **Acceptance criterion 6 is asserted where the plan asked for it to be measured.** No test compares a
    channel byte-for-byte across the change, and none can without a live turn; the construction argument
    and the unit case are what stands.
-3. **Task 12 step 3 was NOT done, on any branch.** `bookkeeping_out_of_the_boot_read` — the figure that
-   would say how many of those 4 955 app entries are the 17 routed kinds — does not exist in
-   `tools/wake-baseline/baseline.py` on `ours/integration` (`5b1c479`) and `test_baseline.py` has two
-   tests where the plan expected three. Deliberately not written HERE: this branch is off `a3cc8c5` and
-   carries the pre-`5b1c479` baseline, so adding it would land a conflicting third version of a file
-   another branch has already rewritten. It is one function and one test on top of `ours/integration`.
-   **Plan 02 therefore has no headline figure of its own** — only plan 01's total, of which this plan's
-   share is unquantified.
+3. **Task 12 step 3 is DONE as of 2026-09-17** — the measuring function exists; **the figure itself is
+   still not taken, because it needs live channels.** See *The boot read* above. Written on
+   `fix/close-measure` (worktree `AIOrchestrator-measure`, head `f3f1dfe`), which HAS `5b1c479` as an
+   ancestor — so it extends the `_MODELLED`-named copy this gap pointed at, and lands no conflicting
+   third version. What the gap said until then, kept because it dates the hole: the function did not
+   exist on any branch, and plan 02 had no headline figure of its own.
 4. **The `.usage.json` locator stays parked** (decision 22, the owner's ruling of 2026-09-16, recorded in
    plan 01's report). Roughly 19 hand-built copies of the same path; not this plan's endeavour.
 5. **The state pack has no global token budget.** The spec's ≤ 6 k is enforced nowhere as a TOTAL.
@@ -308,3 +380,38 @@ audience, for all 78 sites at once, and `AnOwnerFacingNoteNeverLeavesTheChannel_
 is the oracle. The member nudge is not routed, because orphan escalation counts it.
 `runners.<role>.bookkeeping` defaults to `channel`, so **no live session behaves differently until
 somebody sets it.**
+
+## The figure — taken 2026-09-17 on the VPS, read-only
+
+`python3 tools/wake-baseline/baseline.py --root ~/.claude/supervision`, over 22 orchestrations,
+124 live channel files and 24 archives.
+
+| | |
+|---|---|
+| live boot read, all orchestrations | **6 318 979 bytes** ≈ 1 632 811 tokens `[estimate]` |
+| of that, authored by the app | 746 541 bytes |
+| **of that, the bookkeeping this plan moves** | **508 017 bytes · 1 469 entries** |
+| **share of the live boot read** | **8.0 %** |
+| **share of what the app writes** | **68 %** |
+| in tokens `[estimate]` | ≈ **131 271** |
+| median per orchestration | 32 930 bytes ≈ 8 509 tokens |
+
+**Eight per cent, and that is the honest size of it.** Two thirds of what the app writes into the
+channels does leave them; but the app is only twelve per cent of what a session reads at boot. The
+rest is the conversation, which is what the channel is for.
+
+**Measured, modelled and estimated, kept apart.** The bytes are measured off the disk. WHICH app
+entry is bookkeeping is MODELLED — the decision is made in C# at the call site and nothing in a
+channel file records which site wrote a line — so the classification is a 16-marker heuristic read
+off the constants that emit the strings. Tokens are `[estimate]` at 3.87 bytes/token.
+
+**And the share is GROSS, not net.** A routed entry leaves the channel, not the history: under
+`bookkeeping = log` it lands in `status.jsonl` and the state pack hands back up to five of them. The
+net is this figure minus what the pack returns, and nobody has measured the pack's own size yet
+(gap 5 below).
+
+**One reading that moved, and it is worth recording.** The same run reports 5 272 app-authored
+entries against plan 01's 4 955 — but the window is two days longer and carries 22 orchestrations
+against 20, while this reader is fence-aware where plan 01's was not. The two effects pull opposite
+ways and the window dominates; neither number is directly comparable to the other, and a like-for-
+like re-run has not been done.
