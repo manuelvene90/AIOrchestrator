@@ -88,9 +88,9 @@ public static class RerouteContract_Policy
     /// no disk.
     ///
     /// <para>
-    /// NOT YET CALLED FROM <c>BridgeEngineModel</c> — that call site reads the field directly today and
-    /// is out of this change's file set. This method is the resolution the owner asked for; wiring the
-    /// one remaining read is a separate, reviewable step.
+    /// ITS READER IS <c>ReviewingSettings_Json.Parse</c>, which the config loader calls, so the engine's
+    /// hold sweep reads the owner's number off <c>IOrchestratorConfig.Reviewing</c> rather than calling
+    /// here itself. One resolution, at load, on the rung the models and the effort dial already use.
     /// </para>
     /// </summary>
     public static TimeSpan Resolve_ReviewCap(JsonObject? presetTree, JsonObject? configTree)
@@ -106,9 +106,11 @@ public static class RerouteContract_Policy
 
     /// <summary>
     /// <see cref="RerouteContract_Store.HANDLED_MEMORY"/>'s resolved value, kept here rather than on
-    /// the store so all three dials resolve through the one method below. NOT YET CALLED from
-    /// <c>RerouteContract_Store.Write_Set</c>, which is outside this change's file set and still reads
-    /// the compiled constant directly — the same open wiring step <see cref="Resolve_ReviewCap"/> notes.
+    /// the store so all three dials resolve through the one method below. The store does NOT call it:
+    /// <c>Write_Set</c> takes the number as a parameter and the engine — the caller that holds a config
+    /// provider — passes <c>IOrchestratorConfig.Reviewing.HandledMemory</c> in. A static store reaching
+    /// for configuration of its own would be a second way to answer a question the loader has already
+    /// answered.
     /// </summary>
     public static int Resolve_HandledMemory(JsonObject? presetTree, JsonObject? configTree)
     {

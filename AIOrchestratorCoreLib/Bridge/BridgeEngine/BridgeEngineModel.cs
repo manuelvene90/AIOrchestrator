@@ -2162,7 +2162,7 @@ internal sealed class BridgeEngineModel(
             // here, and a working set rewritten every two seconds is a file the compactor, the
             // watchdog and every backup would see churning for no reason.
             if (changed)
-                Reviewing.RerouteContract_Store.Write_Set(_paths, session.OrchId, open, handled);
+                Reviewing.RerouteContract_Store.Write_Set(_paths, session.OrchId, open, handled, _configProvider.Get_Current().Reviewing.HandledMemory);
         }
 
         await Task.CompletedTask;
@@ -2401,10 +2401,16 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
-            // (3) THE CAP.
+            // (3) THE CAP — the OWNER'S, read live, not the compiled constant it used to be
+            // (2026-09-17). `reviewing.reviewCapMinutes` and `reviewing.holdCeilingMinutes` resolve
+            // config.json -> preset -> shipped default, and the shipped default IS
+            // RerouteContract_Policy's two fields, so a machine that states nothing is held for
+            // exactly as long as before.
+            var reviewing = _configProvider.Get_Current().Reviewing;
+
             var waited = _clock.UtcNow - contract.RoutedUtc.Value;
 
-            if (waited <= Reviewing.RerouteContract_Policy.REVIEW_CAP)
+            if (waited <= reviewing.ReviewCap)
                 continue;
 
             var told = Append_SupervisorAttention_UnlessMeeting(
@@ -2415,7 +2421,7 @@ internal sealed class BridgeEngineModel(
                 Resolve_Presence(session.OrchId),
                 AppEntryAudiences.Agent);
 
-            if (!told && waited <= Reviewing.RerouteContract_Policy.HOLD_CEILING)
+            if (!told && waited <= reviewing.HoldCeiling)
                 continue;
 
             if (!told)

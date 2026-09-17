@@ -153,5 +153,12 @@ public interface IOrchestratorConfig
     /// </summary>
     string? Get_EffortForRole_OrNull(SessionRoles role);
 
+    /// <summary>
+    /// The routed re-review sweep's three dials, resolved config.json -> preset -> shipped default.
+    /// Read by the engine's own hold sweep, which is the only reader with both a config provider and
+    /// the clock the cap is measured against.
+    /// </summary>
+    ReviewingSettings.IReviewingSettings Reviewing { get; }
+
     bool Is_TelegramConfigured();
 }

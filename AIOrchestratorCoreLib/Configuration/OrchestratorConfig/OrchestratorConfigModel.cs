@@ -2,6 +2,7 @@ using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Configuration.ReviewingSettings;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
@@ -28,7 +29,8 @@ internal sealed class OrchestratorConfigModel(
     IDefaultsSettings defaults,
     ITelegramProseSettings telegramProse,
     Telegram.TelegramInboundModes telegramInbound,
-    IEffortSettings effort) : IOrchestratorConfig
+    IEffortSettings effort,
+    IReviewingSettings reviewing) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -50,6 +52,7 @@ internal sealed class OrchestratorConfigModel(
     public ITelegramProseSettings TelegramProse { get; } = telegramProse;
     public Telegram.TelegramInboundModes TelegramInbound { get; } = telegramInbound;
     public IEffortSettings Effort { get; } = effort;
+    public IReviewingSettings Reviewing { get; } = reviewing;
 
     /// <summary>
     /// A SWITCH RATHER THAN A DICTIONARY, so the compiler is the thing that notices a new role: an

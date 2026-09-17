@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
+using AIOrchestratorCoreLib.Configuration.ReviewingSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
@@ -102,7 +103,13 @@ public static class OrchestratorConfig_Loader
             // owner's xhigh for supervisor and solo lives now, so a machine that states nothing must
             // still resolve through it. Unlike the models it needs no "absence" dance — there is no
             // compat ladder between effort roles, so the resolved answer IS the answer, null included.
-            EffortSettings_Json.Parse(configRoot, preset));
+            EffortSettings_Json.Parse(configRoot, preset),
+
+            // AND THE `reviewing` BLOCK RIDES THE SAME RUNG (2026-09-17), for the same reason: an
+            // owner who states reviewCapMinutes in config.json, or a preset that states it for them,
+            // must be the thing the engine's hold sweep actually reads — a registered row nobody
+            // consults accepts a value and changes nothing.
+            ReviewingSettings_Json.Parse(configRoot, preset));
     }
 
     /// <summary>

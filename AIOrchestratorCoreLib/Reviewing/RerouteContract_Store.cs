@@ -141,25 +141,39 @@ public static class RerouteContract_Store
     /// rename — because the engine tick and a restarting app can both be at this file, and a
     /// half-written working set is a hold in an unknown state.
     /// </summary>
-    public static void Write_Open(ISupervisionPaths paths, string orchId, IReadOnlyList<IRerouteContract> contracts)
+    public static void Write_Open(
+        ISupervisionPaths paths,
+        string orchId,
+        IReadOnlyList<IRerouteContract> contracts,
+        int? handledMemory = null)
     {
         // THE HANDLED LIST IS READ BACK AND RE-WRITTEN rather than dropped. This overload states only
         // the open set, and a writer that silently emptied the other half would un-finish every round
         // this orchestration has ever closed — the whole file is written whole, so leaving a key out
         // deletes it.
-        Write_Set(paths, orchId, contracts, Read_Handled(paths, orchId));
+        Write_Set(paths, orchId, contracts, Read_Handled(paths, orchId), handledMemory);
     }
 
     /// <summary>
-    /// Replaces BOTH halves. The handled list is kept to the most recent
-    /// <see cref="HANDLED_MEMORY"/> ids, in the order given — oldest first, so the trim drops the
-    /// oldest rounds, which are the ones the channel no longer carries either.
+    /// Replaces BOTH halves. The handled list is kept to the most recent <paramref name="handledMemory"/>
+    /// ids, in the order given — oldest first, so the trim drops the oldest rounds, which are the ones
+    /// the channel no longer carries either.
+    ///
+    /// <para>
+    /// <paramref name="handledMemory"/> IS THE OWNER'S <c>reviewing.handledMemory</c>, passed in by the
+    /// engine, which is the caller holding a config provider (2026-09-17). Null falls to
+    /// <see cref="HANDLED_MEMORY"/> — the SHIPPED DEFAULT, the same field the catalogue row reads its
+    /// own default from, so "nothing configured" is stated once and not twice. It is not a convenience
+    /// for production: the engine always passes a value, and the callers that leave it null are tests
+    /// and the Write_Open path, neither of which has a config in reach.
+    /// </para>
     /// </summary>
     public static void Write_Set(
         ISupervisionPaths paths,
         string orchId,
         IReadOnlyList<IRerouteContract> contracts,
-        IReadOnlyList<string> handled)
+        IReadOnlyList<string> handled,
+        int? handledMemory = null)
     {
         JsonArray rows = [];
 
@@ -168,7 +182,9 @@ public static class RerouteContract_Store
 
         JsonArray handledRows = [];
 
-        foreach (var id in handled.Skip(Math.Max(0, handled.Count - HANDLED_MEMORY)))
+        var keep = handledMemory ?? HANDLED_MEMORY;
+
+        foreach (var id in handled.Skip(Math.Max(0, handled.Count - keep)))
             handledRows.Add(JsonValue.Create(id));
 
         Atomic_FileWriter.Write_AllText(

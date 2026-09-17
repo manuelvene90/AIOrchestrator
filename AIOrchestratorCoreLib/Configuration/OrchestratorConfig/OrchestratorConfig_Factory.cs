@@ -2,6 +2,7 @@ using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Configuration.ReviewingSettings;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
@@ -104,13 +105,17 @@ public static class OrchestratorConfig_Factory
 
         // AND A SIXTH, the `effort` block (added 2026-09-12, plan 02 task 7). Same three rules again:
         // hand-edited, no window field, never serialised — EffortSettings_Json has no Write at all.
-        IEffortSettings? effort = null)
+        IEffortSettings? effort = null,
+
+        // AND A SEVENTH, the `reviewing` block (added 2026-09-17). Same three rules yet again:
+        // hand-edited, no window field, never serialised — ReviewingSettings_Json has no Write.
+        IReviewingSettings? reviewing = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, reviewerModel, soloModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
-            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound, effort);
+            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound, effort, reviewing);
     }
 
     /// <summary>
@@ -143,7 +148,8 @@ public static class OrchestratorConfig_Factory
         IDefaultsSettings? defaults = null,
         ITelegramProseSettings? telegramProse = null,
         Telegram.TelegramInboundModes? telegramInbound = null,
-        IEffortSettings? effort = null)
+        IEffortSettings? effort = null,
+        IReviewingSettings? reviewing = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -199,7 +205,14 @@ public static class OrchestratorConfig_Factory
             // own answer, read by Create_Default). The PRESET rung — classic's xhigh for supervisor
             // and solo — is applied by OrchestratorConfig_Loader, which is the only reader that has a
             // `preset` key to consult, exactly as for the six model keys.
-            effort ?? EffortSettings_Factory.Create_Default());
+            effort ?? EffortSettings_Factory.Create_Default(),
+
+            // DEFAULTED, NEVER NULL — the same rule once more, and here it is load-bearing rather
+            // than tidy: these three dials decide how long a supervisor is held out of its own
+            // round, and a null would have to be tested for at the one site in the engine that asks.
+            // Create_Default reads the three constants that already governed an unconfigured
+            // machine, so every caller predating this parameter keeps the behaviour it had.
+            reviewing ?? ReviewingSettings_Factory.Create_Default());
     }
 
     /// <summary>
