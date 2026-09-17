@@ -70,6 +70,37 @@ public static class KitRepoFiles
             .OrderBy(entry => entry.Role)];
     }
 
+    /// <summary>
+    /// EVERY FILE OF EVERY ROLE PROTOCOL: each role's `SKILL.md` and every markdown file beside it,
+    /// `reference/` included.
+    ///
+    /// <para>
+    /// A role protocol stopped being ONE FILE when the kit became a plugin — the supervisor's is ten
+    /// — and a guard that reads only the SKILL.md is not answering the same question more narrowly,
+    /// it is answering a different one: "is this taught in the first file of the skill". MEASURED
+    /// 2026-09-17: `DEADLINE:` is taught in `supervisor/reference/owner-messages.md` and in no
+    /// SKILL.md at all, so the narrow reading calls the marker untaught. It also cost a task a near
+    /// miss — a plan that put a rule in a reference and added the marker to the guard's list would
+    /// have gone red for doing both correct things at once.
+    /// </para>
+    /// <para>
+    /// <see cref="Find_AllRoleProtocols"/> stays, and stays the right call for a guard about the
+    /// SKILL.md itself: its front matter, its hook, the watcher line beside it. This one is for the
+    /// guards that ask what a role is TAUGHT.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<(string Role, string Path)> Find_AllRoleProtocolDocs()
+    {
+        return
+        [
+            .. Find_AllRoleProtocols()
+                .SelectMany(entry => Directory
+                    .GetFiles(System.IO.Path.GetDirectoryName(entry.Path)!, "*.md", SearchOption.AllDirectories)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .Select(path => (entry.Role, Path: path)))
+        ];
+    }
+
     /// <summary>The house skills beside the roles — every `kit/skills/*/SKILL.md` that is NOT a role.</summary>
     public static IReadOnlyList<(string Skill, string Path)> Find_AllHouseSkills()
     {
