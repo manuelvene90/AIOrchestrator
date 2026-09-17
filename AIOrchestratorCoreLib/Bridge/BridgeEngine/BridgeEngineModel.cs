@@ -2194,6 +2194,18 @@ internal sealed class BridgeEngineModel(
     /// entries than the parser accepts.
     /// </para>
     /// <para>
+    /// AND THE GATE HAD TO BE MADE CHEAP BEFORE THAT SENTENCE WAS TRUE (2026-09-17). This walk reaches
+    /// the end of the file on every tick of every orchestration where no <c>REROUTE:</c> was ever
+    /// written, which is the ordinary case — the break below fires only when a declaration is FOUND.
+    /// So what a no-contract tick costs is exactly what the gate costs per entry, and the gate was
+    /// splitting every supervisor body into lines. It now answers from one substring search
+    /// (<see cref="MemberState_Resolver.Contains_Marker"/>'s own screen) and allocates nothing.
+    /// The MARKER WORD IS READ ONCE, above the loops, for the same reason: <c>ChannelGrammar.REROUTE</c>
+    /// is a property over the embedded grammar JSON, so naming it inside the walk re-read the document
+    /// once per supervisor entry per channel per tick. Neither change can move an answer — the walk
+    /// asks the same question of the same entries in the same order.
+    /// </para>
+    /// <para>
     /// THE STAMP IS THE APP'S CLOCK, NOT THE ENTRY'S DATE. A header date is agent-written and has been
     /// wrong by a day in production (decision 12); <c>DeclaredUtc</c> is only ever compared against
     /// this app's own later readings, so the moment the app SAW it is the honest value.
@@ -2202,6 +2214,10 @@ internal sealed class BridgeEngineModel(
     bool Open_RerouteContracts(IOrchestrationSession session, List<Reviewing.IRerouteContract> open, List<string> handled)
     {
         var changed = false;
+
+        // ONE GRAMMAR READ FOR THE WHOLE SWEEP. The property parses a path out of the embedded JSON
+        // document on every access, and the walk below asks it once per entry.
+        var rerouteMarker = ChannelGrammar.REROUTE;
 
         foreach (var member in session.Members)
         {
@@ -2230,7 +2246,7 @@ internal sealed class BridgeEngineModel(
                 if (entry.Author != ChannelAuthors.Supervisor)
                     continue;
 
-                if (!MemberState_Resolver.Contains_Marker(entry, ChannelGrammar.REROUTE))
+                if (!MemberState_Resolver.Contains_Marker(entry, rerouteMarker))
                     continue;
 
                 var read = Reviewing.RerouteContract_Parser.Read(entry);

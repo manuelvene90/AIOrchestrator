@@ -559,6 +559,22 @@ public static class MemberState_Resolver
         if (Contains_MarkerToken(entry.Subject, marker))
             return true;
 
+        // THE WORD IS NOT ANYWHERE IN THE BODY, SO NO LINE OF IT CAN DECLARE THE MARKER. This is the
+        // one screen that CANNOT change an answer: Declares_Marker below returns true only for a line
+        // that StartsWith the marker under this same OrdinalIgnoreCase comparison, and every line it
+        // is offered is a substring of the body. It restates none of the rules above — it is a
+        // substring search, not a second matcher (CLAUDE.md decision 12).
+        //
+        // WHY HERE AND NOT AT A CALLER. Split('\n') allocates an array plus a string PER LINE of every
+        // entry it is asked about, and this function is asked about WHOLE CHANNEL HISTORIES on a
+        // two-second tick: Open_RerouteContracts walks every entry of every implementer channel for a
+        // REROUTE: that is usually never there, and FixReport_Matcher does the same for FIXED:. That
+        // call site's docstring already calls this function "a cost gate"; until this line it was not
+        // one. One screen here serves every caller; a prefilter copied into each of them would be the
+        // second spelling this file exists to avoid.
+        if (entry.Body.IndexOf(marker, StringComparison.OrdinalIgnoreCase) < 0)
+            return false;
+
         foreach (var rawLine in entry.Body.Split('\n'))
         {
             if (Declares_Marker(rawLine, marker))
