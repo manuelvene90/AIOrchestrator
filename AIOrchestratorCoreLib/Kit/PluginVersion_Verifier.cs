@@ -114,17 +114,20 @@ public static class PluginVersion_Verifier
             // NAMES WHICH QUESTION FAILED, because the two are not equally strong and an operator
             // has to know which one they are being refused over: the files differing is a fact, the
             // commits differing is a suspicion that the file comparison could not confirm.
+            // THE COMMAND FIRST. This is the one message of the family that reaches the owner's phone,
+            // and the only part they act on is the command — which used to be the last words of a
+            // paragraph. The reason follows it, for whoever wants it.
             PluginVerdicts.ContentMismatch when contentMatches == false =>
-                $"The installed {pluginId} kit is version {found} — the right NUMBER over the WRONG TEXT. At {where}, "
-                + $"{KitContent_Digest.Describe_Scope()} DIFFER from the ones this host ships, so its sessions would read "
-                + $"protocols this build was not made against. `{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the "
-                + $"version string and reports success. Reinstall it: {KitPlugin.REINSTALL_COMMAND}",
+                $"Kit NOT up to date — sessions cannot start. Fix: {KitPlugin.REINSTALL_COMMAND}. "
+                + $"Why: the installed {pluginId} is version {found}, the right number over the wrong text — at {where}, "
+                + $"{KitContent_Digest.Describe_Scope()} differ from the ones this host ships. "
+                + $"`{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the version string and reports success.",
 
             PluginVerdicts.ContentMismatch =>
-                $"The installed {pluginId} kit is version {found} — the right NUMBER over a TEXT THIS HOST COULD NOT "
-                + $"COMPARE. It was taken from commit {reading.CommitSha}, and this host was built from "
-                + $"{expectedCommitSha}, at {where}. `{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the "
-                + $"version string and reports success. Reinstall it: {KitPlugin.REINSTALL_COMMAND}",
+                $"Kit MAY NOT BE up to date — sessions cannot start. Fix: {KitPlugin.REINSTALL_COMMAND}. "
+                + $"Why: the installed {pluginId} is version {found} over a text this host could not compare — it was taken "
+                + $"from commit {reading.CommitSha}, this host was built from {expectedCommitSha}, at {where}. "
+                + $"`{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the version string and reports success.",
 
             PluginVerdicts.Disabled =>
                 $"The {pluginId} kit is installed at {found} ({where}) but DISABLED, so sessions would load none of it. "

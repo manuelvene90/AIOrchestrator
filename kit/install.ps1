@@ -150,7 +150,7 @@ if ($null -ne $claudeCmd) {
             if ($null -eq $installedSignature) { 'its install path is missing' }
             elseif ($installedSignature -ne $checkoutSignature) {
                 if ($installedScopeSignature -eq $checkoutScopeSignature) {
-                    "the installed copy differs from this checkout, OUTSIDE the set the host checks ($($hostVerifiedScope -join ' ')) — so the host's own kit check is right to say OK and sessions are not blocked; reinstalling anyway, because the cache should be a faithful copy"
+                    'the installed copy differs from this checkout, OUTSIDE the set the host checks — sessions are NOT blocked; reinstalling anyway, so the cache stays a faithful copy'
                 } else {
                     "the installed copy differs from this checkout, INSIDE the set the host checks ($($hostVerifiedScope -join ' ')) — the host will REFUSE to spawn sessions until this is reinstalled"
                 }

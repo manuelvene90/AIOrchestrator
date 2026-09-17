@@ -170,13 +170,20 @@ public static class KitAssets_Bootstrapper
             // check reads a NARROWER set than the kit on purpose (KitContent_Digest says why), so
             // the claim is now the size of the check. No file this host actually opened went
             // unchecked; it simply no longer speaks for the ones it never opened.
-            var content =
-                contentMatches == true ? $"{KitContent_Digest.Describe_Scope()} match this build. The rest of the kit is not compared here — {KitPlugin.INSTALLER_COMMAND} compares all of it"
-                : buildCommit == null ? "content NOT VERIFIED — this build carries no commit stamp and the installed files could not be compared"
-                : reading.CommitSha == null ? $"content NOT VERIFIED — the install record has no gitCommitSha and the installed files could not be compared (this host is {buildCommit[..7]})"
-                : $"content verified by commit only ({reading.CommitSha[..Math.Min(7, reading.CommitSha.Length)]}) — the files themselves could not be compared";
+            // SHORT WHEN THERE IS NOTHING TO DO, LONG WHEN THERE IS. This line is written once per
+            // host start and the owner never acts on it, so it says the least that is still true:
+            // the SUBJECT is the files a session reads, never "the kit" (2026-09-17). The install
+            // path rides along only on the branches that could NOT compare the files — there the
+            // reader has somewhere to go and look, and on the passing branch they do not.
+            var verified = contentMatches == true;
 
-            var line = $"Kit check OK — {KitPlugin.ID} {reading.Version} at {reading.InstallPath} · {content}";
+            var content =
+                verified ? $"{KitContent_Digest.SCOPE_SUBJECT} match this build"
+                : buildCommit == null ? $"{KitContent_Digest.SCOPE_SUBJECT} were NOT compared — this build carries no commit stamp ({reading.InstallPath})"
+                : reading.CommitSha == null ? $"{KitContent_Digest.SCOPE_SUBJECT} were NOT compared — the install record has no commit, and this host is {buildCommit[..7]} ({reading.InstallPath})"
+                : $"matched by commit only ({reading.CommitSha[..Math.Min(7, reading.CommitSha.Length)]}) — {KitContent_Digest.SCOPE_SUBJECT} were not compared ({reading.InstallPath})";
+
+            var line = $"Kit ok — {KitPlugin.NAME} {reading.Version} · {content}";
 
             log.Log_Info("", line);
 

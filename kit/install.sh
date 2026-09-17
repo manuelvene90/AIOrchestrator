@@ -246,7 +246,7 @@ elif ! cache_matches_checkout "$installed_path"; then
     # leaves a reader unable to predict the host — which is how 2026-09-17's two true-but-opposite
     # verdicts read as a contradiction.
     if cache_matches_checkout_in_host_scope "$installed_path"; then
-        reinstall_reason="the installed copy differs from this checkout, OUTSIDE the set the host checks ($host_verified_scope) — so the host's own kit check is right to say OK and sessions are not blocked; reinstalling anyway, because the cache should be a faithful copy"
+        reinstall_reason='the installed copy differs from this checkout, OUTSIDE the set the host checks — sessions are NOT blocked; reinstalling anyway, so the cache stays a faithful copy'
     else
         reinstall_reason="the installed copy differs from this checkout, INSIDE the set the host checks ($host_verified_scope) — the host will REFUSE to spawn sessions until this is reinstalled"
     fi

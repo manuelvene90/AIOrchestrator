@@ -139,7 +139,7 @@ public class KitCheckProvesContentTests : IDisposable
         // was the older one. This test was green for a sentence that was false. It now pins the
         // narrowed claim — the scope, named — which is the same assertion made honestly.
         // KitVerifierScopeIsStatedInBothPlacesTests holds the rest of it.
-        Assert.Contains(KitContent_Digest.Describe_Scope(), File.ReadAllText(_paths.GlobalLogFile));
+        Assert.Contains($"{KitContent_Digest.SCOPE_SUBJECT} match this build", File.ReadAllText(_paths.GlobalLogFile));
     }
 
     /// <summary>

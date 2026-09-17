@@ -100,13 +100,27 @@ public static class KitContent_Digest
         string.Join(' ', Scope_Paths());
 
     /// <summary>
-    /// THE SCOPE FOR A PERSON — the log line and the refusal are built from this, so "OK" can never
-    /// again read as a claim about files this host never opened. Derived from the same list, never
-    /// typed out a second time (decision 12).
+    /// THE SCOPE IN FOUR WORDS, for the line the owner reads at every host start. It is the whole
+    /// honesty of that line: the subject is the files a session reads, NOT "the kit", so the
+    /// sentence cannot grow back into the claim that was measured false on 2026-09-17.
+    ///
+    /// <para>
+    /// A CONSTANT rather than a literal because the guard test asserts this exact subject, and a
+    /// guard comparing its own copy of a phrase pins nothing.
+    /// </para>
+    /// </summary>
+    public const string SCOPE_SUBJECT = "the files sessions read";
+
+    /// <summary>
+    /// THE SCOPE FOR A PERSON, with the files named — for the REFUSAL, where the reader has to act
+    /// and the list is the first thing they need. The passing line uses
+    /// <see cref="SCOPE_SUBJECT"/> instead: five filenames every host start are noise, and a
+    /// message the owner cannot act on should not be the size of one they can (decision 15's
+    /// instinct, applied to length rather than to routing).
     /// </summary>
     public static string Describe_Scope()
     {
-        return $"the files a session reads ({string.Join(", ", Scope_Paths())})";
+        return $"{SCOPE_SUBJECT} ({string.Join(", ", Scope_Paths())})";
     }
 
     static IEnumerable<string> Scope_Paths()

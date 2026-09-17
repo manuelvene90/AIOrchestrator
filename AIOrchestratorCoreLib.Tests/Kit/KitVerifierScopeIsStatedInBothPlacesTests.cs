@@ -104,15 +104,44 @@ public class KitVerifierScopeIsStatedInBothPlacesTests : IDisposable
 
         var logged = File.ReadAllText(_paths.GlobalLogFile);
 
-        Assert.Contains("Kit check OK", logged);
+        Assert.Contains("Kit ok", logged);
 
         // The exact sentence from the VPS at 20:03:22. It was false about the cache in front of it.
         Assert.DoesNotContain("byte-identical to this build's kit", logged);
 
-        // ...and what replaces it: the scope, and the component that does cover the whole folder, so
-        // an operator who later sees the installer disagree is not left with two contradictions.
-        Assert.Contains(KitContent_Digest.Describe_Scope(), logged);
-        Assert.Contains(KitPlugin.INSTALLER_COMMAND, logged);
+        // ...and what replaces it: a SCOPED subject. The whole honesty of this line is that its
+        // subject is the files a session reads and never "the kit", so the claim cannot grow back.
+        Assert.Contains($"{KitContent_Digest.SCOPE_SUBJECT} match this build", logged);
+
+        // AND IT STAYS SHORT. The owner never acts on this line — it is written once per host start
+        // and it says "nothing to do" — so it must not carry the five filenames the REFUSAL carries.
+        // A heartbeat the size of an alarm is how a log stops being read (decision 14's instinct).
+        Assert.DoesNotContain(KitContent_Digest.Describe_Scope(), logged);
+    }
+
+    /// <summary>
+    /// THE ONE MESSAGE OF THIS FAMILY THAT REACHES THE OWNER'S PHONE, and the only part of it they
+    /// act on is the command — which used to be the last words of a paragraph. The fix comes before
+    /// the explanation, and the explanation still carries the file list, because there the reader
+    /// has something to do with it.
+    /// </summary>
+    [Fact]
+    public void TheRefusal_LeadsWithTheFix_AndTheReasonComesAfter()
+    {
+        var reading = new InstalledPluginReading(KitPlugin.EXPECTED_VERSION, "/cache/aiorch/1.0.0", enabled: true, null, null);
+
+        var refusal = PluginVersion_Verifier.Describe(
+            PluginVerdicts.ContentMismatch, reading, KitPlugin.EXPECTED_VERSION, KitPlugin.ID, null, null, contentMatches: false);
+
+        Assert.NotNull(refusal);
+        Assert.Contains("sessions cannot start", refusal);
+
+        var fix = refusal.IndexOf("Fix:", StringComparison.Ordinal);
+        var why = refusal.IndexOf("Why:", StringComparison.Ordinal);
+
+        Assert.True(fix >= 0 && why > fix, $"the fix must come before the reason, and both must be there: '{refusal}'");
+        Assert.Contains(KitPlugin.INSTALLER_COMMAND, refusal[fix..why]);
+        Assert.Contains(KitContent_Digest.Describe_Scope(), refusal[why..]);
     }
 
     /// <summary>
