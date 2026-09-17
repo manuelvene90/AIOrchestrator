@@ -7,7 +7,7 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Kit;
 
 /// <summary>
-/// Ties the role commands to the matcher, because they live in different files and nothing joined
+/// Ties the role protocols to the matcher, because they live in different files and nothing joined
 /// them. Three findings in one night were the docs drifting from the rule: they taught an entry
 /// "containing exactly WRITING WINDOW OPEN" after the code required position, they reassured a
 /// reviewer about protection that does not exist in a subject, and they told the supervisor to write
@@ -19,19 +19,48 @@ namespace AIOrchestratorCoreLib.Tests.Kit;
 /// matcher acts on must be taught somewhere. It cannot read prose — a true sentence about a false
 /// capability, which is what the supervisor's line was, passes this test untouched. It would have
 /// caught two of the three.
-/// </summary>
+///
+/// THE SENTENCE ABOVE WAS FALSE UNTIL 2026-09-17, in two ways, and both are fixed here rather than
+/// softened, because a guard that states a rule it does not apply is worse than one that states
+/// nothing: a reader stops looking.
+///
+/// <list type="number">
+/// <item>
+/// "EVERY marker the matcher acts on" walked a HAND-WRITTEN list. A marker was guarded only once
+/// somebody remembered to add it, which is the property the rule exists to remove — and the two
+/// newest markers in the system, <c>REROUTE:</c> and <c>FIXED:</c>, were not on it. The set is now
+/// the GRAMMAR (<see cref="ChannelGrammar.All_Markers"/>) plus the two matched outside it, so the
+/// list is a DENY list: a new marker is guarded the moment it is added to the grammar, and leaving
+/// one out is a decision somebody has to make on purpose. That is the same argument
+/// <see cref="NOT_MARKERS"/> already made for the other direction.
+/// </item>
+/// <item>
+/// "somewhere" meant the SKILL.md alone. A role protocol is a folder now, and <c>DEADLINE:</c> is
+/// taught in <c>supervisor/reference/owner-messages.md</c> and in no SKILL.md — so the old reading
+/// called the system's own marker untaught, and a plan that put a rule in a reference file AND
+/// added its marker to the list would have gone red for doing both correct things at once. Every
+/// direction here now reads <see cref="KitRepoFiles.Find_AllRoleProtocolDocs"/>.
+/// </item>
+/// </list>
+///
+/// THE ONE CLAIM DROPPED ON THE WAY, because it was checked and found stale: the old text said
+/// <c>TO:</c> is "a marker the APP writes when it splits a turn's reply, that no role has any
+/// business writing", and that was the entire reason for keeping two sets. It is taught in three
+/// SKILL.md files and in <c>supervisor/reference/stream-runner.md</c>, which tells the supervisor to
+/// write exactly that line. With the exception gone the two sets collapse into one.
 public class RoleCommandMarkerTests
 {
     /// <summary>
-    /// All-caps backticked phrases in the role commands that are deliberately NOT protocol markers.
+    /// All-caps backticked phrases in the role protocols that are deliberately NOT protocol markers.
     /// Listed rather than pattern-matched away, so inventing a new one is a decision somebody makes
     /// on purpose instead of a typo that slips through as vocabulary.
-    /// </summary>
-    /// <summary>
-    /// Backticked capitals that are NOT protocol markers. The PLATFORM CODES join it derived from
-    /// their own table rather than typed out here: they are backticked and capitalised, so this
-    /// guard flags every one of them, and a hand-copied list of eighteen codes would be the second
-    /// copy the whole Platform_Abbreviations class exists to avoid.
+    ///
+    /// <para>
+    /// The PLATFORM CODES join it derived from their own table rather than typed out here: they are
+    /// backticked and capitalised, so this guard flags every one of them, and a hand-copied list of
+    /// eighteen codes would be the second copy the whole <c>Platform_Abbreviations</c> class exists
+    /// to avoid.
+    /// </para>
     /// </summary>
     static readonly IReadOnlyList<string> NOT_MARKERS =
     [
@@ -40,64 +69,41 @@ public class RoleCommandMarkerTests
     ];
 
     /// <summary>
-    /// EVERY protocol marker, which since 2026-08-13 is more than the state resolver's own.
-    ///
-    /// `ALL_MARKERS` means "phrases `MemberState_Resolver` resolves to a member STATE", and that was
-    /// the whole vocabulary while the resolver was the only thing reading markers. It is not any
-    /// more: `HANDOVER` is read by `HandoverEntry_Detector`, through the same matcher, to decide
-    /// whether a solo may ask for a crew — a real marker, acted on by real code, that changes no
-    /// member state.
-    ///
-    /// So the docs guard walks the UNION while the shape guard below keeps walking the resolver's own
-    /// list, because "this phrase declares a state" is only true of the state ones. Adding `HANDOVER`
-    /// to `ALL_MARKERS` instead would have made the shape guard demand that a handover entry change
-    /// a member's state, which it neither does nor should.
-    ///
-    /// The guard CAUGHT this drift the moment solo.md taught the new marker — it did its job, and
-    /// what needed extending was its model of what a marker is for.
-    /// </summary>
-    /// <summary>
-    /// EVERY MARKER THE APP RECOGNISES — the grammar's own list plus the three matched outside it.
-    /// Used by the direction that asks "is this taught phrase real", where the answer must be yes for
-    /// any word the code acts on.
+    /// The markers matched OUTSIDE the grammar file. Everything else a role writes or the app reads
+    /// is a row of <c>kit/grammar/channel-grammar.json</c>, and reaches both directions below
+    /// through <see cref="ChannelGrammar.All_Markers"/> without anyone maintaining a copy.
     ///
     /// <para>
-    /// IT IS NOT <see cref="TAUGHT_MARKERS"/>, and conflating them broke both directions for a minute
-    /// on 2026-09-10. `ALL_MARKERS` is the STATE vocabulary and correctly excludes `QUESTION:`, which
-    /// declares no member state — so the moment this guard learned to see the colon form, it called
-    /// the most-taught marker in the system unknown. Widening the set fixed that and immediately
-    /// broke the OTHER direction, which demanded a role teach `TO:` — a marker the APP writes when it
-    /// splits a turn's reply, that no role has any business writing. Two questions, two sets.
+    /// These two are const strings in their own readers, and each one was caught by this guard
+    /// within a minute of a role protocol teaching it — which is what the union is for.
+    /// <c>HANDOVER</c> is read by <c>HandoverEntry_Detector</c> to decide whether a solo may ask for
+    /// a crew; <c>STATUS</c> is matched by <c>MirrorText_Formatter</c>. Neither declares a member
+    /// state, which is why <c>MemberState_Resolver.ALL_MARKERS</c> is not the set either direction
+    /// walks: that list answers "does this phrase declare a STATE", and only the shape cases below
+    /// ask that question.
     /// </para>
+    /// <para>
+    /// Folding them into the grammar would be the better end state and it is not this guard's to do:
+    /// the grammar is read by <c>channel-append.sh</c> too, and a marker the tool would then offer to
+    /// write is a change to the tool's surface, not to a test.
+    /// </para>
+    /// </summary>
+    static readonly IReadOnlyList<string> MARKERS_MATCHED_OUTSIDE_THE_GRAMMAR =
+    [
+        AIOrchestratorCoreLib.GeneralSupervision.HandoverEntry_Detector.HANDOVER_MARKER,
+        AIOrchestratorCoreLib.Mirroring.MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
+    ];
+
+    /// <summary>
+    /// EVERY MARKER THE APP RECOGNISES — the grammar's own rows plus the two matched outside it.
+    /// ONE set, read by both directions: the phrase a role may teach and the phrase a role must be
+    /// taught are the same vocabulary, and the two-set version of this file spent a long docstring
+    /// explaining an asymmetry that turned out not to exist.
     /// </summary>
     static IReadOnlyList<string> Recognised_Markers()
     {
-        return [.. ChannelGrammar.All_Markers, .. TAUGHT_MARKERS];
+        return [.. ChannelGrammar.All_Markers, .. MARKERS_MATCHED_OUTSIDE_THE_GRAMMAR];
     }
-
-    /// <summary>
-    /// The markers a ROLE is expected to write, and therefore must be taught. Narrower than
-    /// <see cref="RECOGNISED_MARKERS"/> on purpose: vocabulary the app writes for itself is not
-    /// vocabulary a session needs to be told about.
-    /// </summary>
-    static readonly IReadOnlyList<string> TAUGHT_MARKERS =
-    [
-        .. MemberState_Resolver.ALL_MARKERS,
-        AIOrchestratorCoreLib.GeneralSupervision.HandoverEntry_Detector.HANDOVER_MARKER,
-
-        // STATUS, matched by MirrorText_Formatter rather than by the state resolver — the same shape
-        // as HANDOVER above, and found the same way: the guard fired the moment communicator.md
-        // entered the repo on 2026-08-19. That file had taught `STATUS` for as long as it existed,
-        // and this test could not see it, because it was the one role command that was never
-        // version-controlled. The union was not wrong; it was reading five of the six roles.
-        AIOrchestratorCoreLib.Mirroring.MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
-
-        // ANSWERED, matched by OwnerQuestionPending_Decider — the third of this shape, and the guard
-        // fired on it too, within a minute of the role commands teaching it. It clears the ❓ glyph
-        // when the owner answered by a route the channel cannot see: a tapped button, the terminal,
-        // another topic.
-        AIOrchestratorCoreLib.Bridge.OwnerQuestionPending_Decider.ANSWERED_MARKER,
-    ];
 
     /// <summary>
     /// A phrase the docs teach must be one the matcher acts on. Catches a typo, a rename that
@@ -108,8 +114,6 @@ public class RoleCommandMarkerTests
     {
         var files = Find_RoleCommandFiles();
         var recognised = Recognised_Markers();
-
-        Assert.True(files.Count >= 4, $"found {files.Count} role commands — the harness is not reading them");
 
         foreach (var file in files)
         {
@@ -142,23 +146,59 @@ public class RoleCommandMarkerTests
     }
 
     /// <summary>
-    /// And the other direction: a marker the code acts on but no role command teaches is vocabulary
+    /// And the other direction: a marker the code acts on but no role protocol teaches is vocabulary
     /// nobody will ever write. STANDING BY existed in code for exactly that long.
+    ///
+    /// <para>
+    /// IT MUST BE TAUGHT INSIDE A CODE SPAN — backticks or a fenced block — and not merely appear in
+    /// the text. The boot marker is the word <c>online</c>: a plain substring search over the prose
+    /// passes on "tell the owner it's online" with every boot instruction in the kit deleted, which
+    /// is an assertion that holds for a reason that is not the one it claims. Every marker in this
+    /// system is taught in a code span today (measured 2026-09-17, all 24), so the stricter reading
+    /// costs nothing and removes the one marker that was being asserted by accident.
+    /// </para>
     /// </summary>
     [Fact]
     public void EveryMarkerTheMatcherActsOnIsTaughtSomewhere()
     {
-        var taught = string.Concat(Find_RoleCommandFiles().Select(File.ReadAllText));
+        var taught = string.Concat(Find_RoleCommandFiles().Select(file => Taught_Vocabulary(File.ReadAllText(file))));
 
-        // THE UNION, so a marker acted on by something other than the state resolver cannot exist in
-        // code that nobody is ever told to write. That is the failure this direction was built for —
-        // STANDING BY sat unread in the matcher for exactly that long — and it applies to a promotion
-        // marker no less than to a state one.
-        // THE NARROW SET. A marker the APP writes for itself — `TO:` when it splits a turn's reply —
-        // is not vocabulary a session needs to be told about, and demanding a role teach it would
-        // make this guard ask for documentation of the app's own internals.
-        foreach (var marker in TAUGHT_MARKERS)
-            Assert.True(taught.Contains(marker), $"no role command teaches `{marker}`");
+        foreach (var marker in Recognised_Markers())
+        {
+            Assert.True(
+                taught.Contains(marker, StringComparison.Ordinal),
+                $"no role protocol teaches `{marker}` in a code span, so nobody will ever write it");
+        }
+    }
+
+    /// <summary>
+    /// The backticked spans of a protocol file — inline and fenced — which is where this kit teaches
+    /// a phrase a session must write VERBATIM. Prose about a marker is not a teaching of it.
+    /// </summary>
+    static string Taught_Vocabulary(string markdown)
+    {
+        return string.Join('\n', CODE_SPANS.Matches(markdown).Select(match => match.Value));
+    }
+
+    static readonly Regex CODE_SPANS = new("```.*?```|`[^`\n]+`", RegexOptions.Singleline);
+
+    /// <summary>
+    /// AND THE STRICTNESS ITSELF IS PINNED, because it is the one part of the direction above that
+    /// cannot go red on its own: reading the whole file instead of its code spans makes the guard
+    /// WEAKER, and a weaker guard passes. So the reading is asserted here directly — prose that
+    /// mentions a marker is not a teaching of it, a backticked one is, and a fenced block is.
+    ///
+    /// Without this case the boot marker `online` would go back to being satisfied by the sentence
+    /// "so I can't know when it's online", which is a guard held up by an English adjective.
+    /// </summary>
+    [Fact]
+    public void ProseAboutAMarkerIsNotATeachingOfIt()
+    {
+        Assert.DoesNotContain("STANDING BY", Taught_Vocabulary("the member declares STANDING BY when it is idle"));
+
+        Assert.Contains("STANDING BY", Taught_Vocabulary("write `STANDING BY — waiting on rev-4`"));
+
+        Assert.Contains("FIXED:", Taught_Vocabulary("answer it:\n\n```\nFIXED: 9f3c1de\n```\n"));
     }
 
     /// <summary>
@@ -281,17 +321,29 @@ public class RoleCommandMarkerTests
     }
 
     /// <summary>
-    /// Walks up to the repo root. The suite runs from bin/Debug/net10.0 and `kit` is not a project,
-    /// so there is nothing to ask for this path — the same shape as reading App.xaml as text.
-    /// </summary>
-    /// <summary>
-    /// Every role protocol in the kit. They live at kit/skills/&lt;role&gt;/SKILL.md since the kit became
-    /// a plugin, so the ROLE is the folder name and no longer the file name. Returns empty when the
-    /// kit cannot be found, and every caller asserts non-empty before asserting anything else — a
-    /// scan that found nothing is the strongest possible pass and means nothing at all.
+    /// EVERY FILE OF EVERY ROLE PROTOCOL — the SKILL.md and its `reference/` beside it. The suite
+    /// runs from bin/Debug/net10.0 and `kit` is not a project, so there is nothing to ask for this
+    /// path; <see cref="KitRepoFiles"/> walks up to the repo root, the same shape as reading App.xaml
+    /// as text.
+    ///
+    /// <para>
+    /// IT REFUSES RATHER THAN RETURNING WHAT IT FOUND (decision 20). Two ways to read nothing, and
+    /// the second is the one that bit: no files at all, and — the failure this class had until
+    /// 2026-09-17 — only the SKILL.md of each role, which turns "taught in a reference file" into
+    /// "not taught" and makes every direction here quietly answer a different question.
+    /// </para>
     /// </summary>
     static IReadOnlyList<string> Find_RoleCommandFiles()
     {
-        return [.. KitRepoFiles.Find_AllRoleProtocols().Select(entry => entry.Path)];
+        var docs = KitRepoFiles.Find_AllRoleProtocolDocs();
+        var roles = docs.Select(entry => entry.Role).Distinct().Count();
+
+        Assert.True(roles >= 4, $"found {roles} role protocols — the harness is not reading them");
+
+        Assert.Contains(
+            docs,
+            entry => entry.Path.Contains($"{Path.DirectorySeparatorChar}reference{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+        return [.. docs.Select(entry => entry.Path)];
     }
 }
