@@ -6,8 +6,11 @@ a fork checkout: the work developed on `nathanthegrey/AIOrchestrator` was merged
 boundary is marked as retired rather than quietly deleted, so a session reading an old report can
 tell which rules were dropped and why.
 
-- **`master` is the owner's branch.** Work on a topic branch and merge into it; the merge itself is
-  the owner's call, asked for explicitly.
+- **`master` is shared by the owner (`manuelvene90`) and their brother (`nathanthegrey`, a write
+  collaborator) — either of them pushes to it freely** (owner, 2026-09-15). GitHub enforces
+  nothing on it either: no branch protection, no rulesets (checked 2026-09-15). A session still does
+  its own work on a topic branch, and merges or pushes to `master` only when the person it reports to
+  — the owner or the brother — asks for it explicitly. That limit binds sessions, not either of them.
 - **`integration/fork-merge`** carries the merge of the fork's work and is what plan 01 builds on.
 - Work in a worktree per session (`git worktree add ../AIOrchestrator-<name> -b <branch> <base>`);
   never `git checkout` another session's branch; remove a worktree only after its merge is confirmed.
