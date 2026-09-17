@@ -17,6 +17,12 @@ namespace AIOrchestratorCoreLib.Channels;
 /// papered over: the entry is dropped and nothing says so. The owner-delivery path does check it,
 /// because an owner message has already left its buffer by then and is otherwise lost outright.
 /// </para>
+/// <para>
+/// BEING THE ONLY APPEND IS ALSO WHY THE PHANTOM-HEADER SCREEN LIVES HERE
+/// (<see cref="PhantomHeader_Screen"/>): every author reaching this class carries text somebody else
+/// wrote, and a body line shaped like a header used to open an entry of its own. One screen at the
+/// one door, rather than one per caller.
+/// </para>
 /// </summary>
 public static class ChannelAppender
 {
@@ -112,6 +118,17 @@ public static class ChannelAppender
     {
         int? writtenIndex = null;
 
+        // THE ONE PLACE A BODY IS SCREENED, because this is the one place the bridge appends. Every
+        // author arriving here carries text somebody else wrote — the owner's message out of
+        // Telegram, a member's final turn, a member's report copied verbatim into ANOTHER member's
+        // channel by the relay — and a header-shaped line in any of them used to mint a phantom
+        // entry signed by whoever was quoted. See PhantomHeader_Screen; a line inside a closed fence
+        // is left exactly as written, because the reader already suppresses it.
+        //
+        // BEFORE Resolve_Subject, so a subject borrowed from the body is borrowed from the text that
+        // is actually written rather than from a line the screen is about to change.
+        body = PhantomHeader_Screen.Neutralise(body.Trim());
+
         subject = Resolve_Subject(subject, body);
 
         // The index comes from a read, so the read and the append have to be one indivisible step:
@@ -131,7 +148,7 @@ public static class ChannelAppender
             // and disproved by reading the parser.
             var entry =
                 $"\n## [{nextIndex}] FROM {authorWord} — {nowLocal:yyyy-MM-dd HH:mm} — {subject}\n" +
-                $"\n{body.Trim()}\n";
+                $"\n{body}\n";
 
             File.AppendAllText(channelFilePath, entry);
             writtenIndex = nextIndex;
