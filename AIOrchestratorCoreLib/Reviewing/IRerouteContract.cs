@@ -73,4 +73,24 @@ public interface IRerouteContract
     /// <summary>When the relay was written — null while <see cref="RerouteStates.Declared"/>. The
     /// clock the <see cref="RerouteContract_Policy.REVIEW_CAP"/> expiry is measured from.</summary>
     DateTime? RoutedUtc { get; }
+
+    /// <summary>
+    /// The identity of the RELAY ENTRY the app wrote into the reviewer's channel — the anchor for the
+    /// one question the ordinary exit asks: "has the reviewer filed anything of its OWN since?".
+    ///
+    /// <para>
+    /// A DIGEST AND NOT A COUNT, for CLAUDE.md decision 13's reason: <c>Channel_Compactor</c> archives
+    /// from the front, so a stored count of the reviewer's entries compared against a later live count
+    /// answers "it has gone backwards" on a channel that only grew. The anchor is the entry itself,
+    /// and "after it in file order" is the same rule <see cref="FixReport_Matcher"/> already uses for
+    /// the declaration.
+    /// </para>
+    /// <para>
+    /// NULLABLE EVEN WHILE <see cref="RerouteStates.Routed"/>, deliberately. It is read back off the
+    /// channel after the append lands, and a read that finds nothing must not cost the app the
+    /// routing it has just done; a contract that cannot name its relay simply leaves by the cap
+    /// instead of by the reviewer's answer, which is the same fail-open the matcher's refusals are.
+    /// </para>
+    /// </summary>
+    string? RelayIdentity { get; }
 }

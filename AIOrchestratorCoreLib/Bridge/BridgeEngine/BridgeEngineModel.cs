@@ -921,6 +921,15 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, WakeTicketWatch> _wakeTicketWatchByStateFile = [];
 
     /// <summary>
+    /// WHICH RE-REVIEW REFUSALS THIS PROCESS HAS ALREADY WRITTEN DOWN, keyed
+    /// <c>orchestration/contract/predicate</c>. A refused fix report is refused for a STABLE reason —
+    /// the report does not change — so the sweep meets the same failed predicate on every tick, and a
+    /// log line per tick is decision 14's waterfall pointed at the file the app tails. Mirror loop
+    /// only, like the watch map above, so it needs no lock.
+    /// </summary>
+    readonly HashSet<string> _rerouteRefusalsLogged = [];
+
+    /// <summary>
     /// What is known about the ticket a session was last handed: its number, when THIS PROCESS first
     /// saw that number, how many entries of its own each of its channels carried at that moment, and
     /// whether the watch is finished with.
@@ -1668,6 +1677,20 @@ internal sealed class BridgeEngineModel(
         // it here is what stops a flag surviving a crash into an orchestration nobody paused.
         Sync_PausedFlags();
 
+        // THE POSTMAN'S ROUND. It writes a re-review brief into a reviewer's channel and, when a
+        // re-review never comes back, one entry into the supervisor's — so it sits BELOW the two
+        // reconciles above, which is the rule those comments state: nothing may append before the
+        // meeting and pause markers are true, or the entry lands in a meeting the app has not yet
+        // noticed. It is ABOVE the DND gate far below for the reason the wake-ticket sweep is:
+        // 🌙 pauses OUTBOUND TELEGRAM, and a session's work is not that.
+        //
+        // NOT beside Sweep_WakeTickets_Async, where the plan put it. There is a one-tick lag either
+        // way — routing done after the wake decision is read by the NEXT tick's decision — and the
+        // lag costs nothing, because member traffic waits out MemberDigestWindow (minutes) before it
+        // can wake anyone, while this runs two seconds later. Appending above the reconciles to save
+        // that lag would trade a real guarantee for an imaginary one.
+        await Sweep_RoutedReports_Async(cancellationToken);
+
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
@@ -1971,6 +1994,509 @@ internal sealed class BridgeEngineModel(
         }
 
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// THE APP DOES THE POSTMAN'S ROUND SO THE SUPERVISOR DOES NOT HAVE TO. A fix round costs a
+    /// supervisor wake-up to read a fix report and write a re-review brief that its own verdict
+    /// already specified — ~1 M input tokens (measured, VPS 6–9 Sep 2026) to move words between two
+    /// channels. When the round-one verdict carried a contract (<c>REROUTE:</c>), this writes that
+    /// brief instead, and <see cref="Reviewing.RoutedHold_Policy"/> keeps the report from waking the
+    /// supervisor until the re-review is back.
+    ///
+    /// <para>
+    /// MEMBERS STILL NEVER WRITE TO EACH OTHER (CLAUDE.md decision 4). This is the APP appending to
+    /// the reviewer's OWN channel, signed `app`, exactly like every other app entry; the hub gained a
+    /// clerk, not a new edge. And review independence is untouched: the reviewer has no write tools,
+    /// no stake, and its findings remain input to the supervisor's verdict.
+    /// </para>
+    /// <para>
+    /// THE CONTRACT MOVES TO Routed ONLY IF THE APPEND SUCCEEDED. An entry that is not on disk that
+    /// armed a hold would hold the supervisor out of a round nobody had been told about — silently,
+    /// which is the one failure shape this feature can produce.
+    /// </para>
+    /// <para>
+    /// THE APP NEVER JUDGES A FIX. Every predicate here is mechanical — an author, a member kind, a
+    /// marker, a commit-shaped token, a position in file order — and every refusal is a designed
+    /// fail-open: nothing is routed, the fix report stays ordinary traffic, the supervisor wakes on it
+    /// exactly as it does today, and one log line names WHICH predicate failed (decision 21).
+    /// </para>
+    /// <para>
+    /// WHAT IT COSTS A TICK THAT HAS NO CONTRACTS ANYWHERE: one <c>File.Exists</c> per open
+    /// orchestration, plus one cache-validation stat per open implementer channel — the entries come
+    /// from <see cref="ChannelHistory_Cache"/>, which the tick's other readers have usually already
+    /// filled for the same files. The contract file itself is opened only when it is there.
+    /// </para>
+    /// </summary>
+    async Task Sweep_RoutedReports_Async(CancellationToken cancellationToken)
+    {
+        foreach (var session in Sessions_ThisTick())
+        {
+            if (session.ClosedUtc != null)
+                continue;
+
+            // A PAUSED ORCHESTRATION IS DORMANT. This sweep writes a BRIEF into a reviewer's channel,
+            // which is the entry that starts that reviewer's turn — the fullest sense of a waker. The
+            // cap alert below it goes through the choke point, which screens the pause again; this is
+            // the stronger half, because a paused orchestration is not examined at all. CLAUDE.md's
+            // PAUSE decision: each waker is gated for itself, and "miss one and dormancy is a word".
+            if (session.Paused)
+                continue;
+
+            var contractsFile = Reviewing.RerouteContract_Store.Get_File(_paths, session.OrchId);
+            var hasContractsFile = File.Exists(contractsFile);
+
+            // NOTHING CAN EVER BE DECLARED HERE AND NOTHING IS OPEN. A contract names a REVIEWER, and
+            // the declaration is refused below unless that reviewer is an open member of this roster —
+            // so an orchestration with no reviewer at all costs this feature one stat and no reads.
+            // The plan's screen was the contracts file alone, which cannot be right: the file is
+            // WRITTEN by the declaration step, so an orchestration would never reach the step that
+            // creates the thing the screen waits for.
+            if (!hasContractsFile && !Has_OpenReviewer(session))
+                continue;
+
+            var (storedOpen, storedHandled) = hasContractsFile
+                ? Reviewing.RerouteContract_Store.Read_Set(_paths, session.OrchId)
+                : ([], []);
+
+            List<Reviewing.IRerouteContract> open = [.. storedOpen];
+            List<string> handled = [.. storedHandled];
+
+            var changed = Open_RerouteContracts(session, open, handled);
+
+            // ROUTE. One pass over the DECLARED contracts, each asking its implementer's channel
+            // whether the report its supervisor said to wait for has arrived.
+            for (var i = 0; i < open.Count; i++)
+            {
+                var contract = open[i];
+
+                if (contract.State != Reviewing.RerouteStates.Declared)
+                    continue;
+
+                // FILE ORDER, AND THAT IS THE MATCHER'S ONLY WAY OF KNOWING IT. Find() trusts the
+                // name of its parameter: it reads "after the declaration" as "later in this list", so
+                // a caller that sorted, reversed or merged the entries would move the judgement
+                // silently. This is ChannelHistory_Cache's list, handed on untouched — no OrderBy, no
+                // Reverse, no second source spliced in — which is the only guarantee available.
+                var entries = ChannelHistory_Cache.Read_Entries(
+                    MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, contract.ImplementerId));
+
+                // AN EMPTY LIST IS NOT EVIDENCE. A channel that could not be read this tick reads as
+                // empty (Read_Entries answers empty for a file it cannot open), and the matcher would
+                // call that "the declaring entry is not among the entries read" — which below closes
+                // the contract. A transient read failure must not end a live round.
+                if (entries.Count == 0)
+                    continue;
+
+                var match = Reviewing.FixReport_Matcher.Find(contract, entries, contract.Id);
+
+                if (!match.Matched || match.Report == null)
+                {
+                    // THE ONE REFUSAL THAT IS TERMINAL, and the answer to "a Declared contract has no
+                    // expiry": the declaring entry is no longer in the live channel, so nothing in
+                    // this file can ever satisfy it again. Channel_Compactor archived it. The
+                    // alternative — reading live + archive on every tick (decision 13's own remedy) —
+                    // doubles this sweep's I/O for ever to rescue a round the supervisor is already
+                    // handling by hand, because a DECLARED contract holds nothing: the fix report woke
+                    // it exactly as it does today. A clock would be worse still: REVIEW_CAP is sized
+                    // for a re-review, and a fix round routinely takes longer than ninety minutes, so
+                    // a deadline here would kill live contracts to collect nothing.
+                    if (match.Refusal == Reviewing.FixReport_Matcher.DECLARATION_NOT_IN_CHANNEL)
+                    {
+                        _log.Log_Info(session.OrchId, $"Re-review contract for '{contract.ImplementerId}' dropped — {match.Refusal} (the channel has been compacted since it was declared); the round proceeds as it did before this feature existed");
+                        handled.Add(contract.Id);
+                        open.RemoveAt(i--);
+                        changed = true;
+                        continue;
+                    }
+
+                    Log_RerouteRefusal_Once(session.OrchId, contract, match.Refusal);
+                    continue;
+                }
+
+                // COMPOSED FROM THE ROUTED CONTRACT, which is why it is built before the append: the
+                // composer refuses a Declared one outright, because `git diff abc1234..` reads as a
+                // delta and is not one.
+                var routed = Reviewing.RerouteContract_Factory.CreateFrom_Routed(
+                    contract, ChannelEntry_Digest.Compute(match.Report), match.HeadCommit, _clock.UtcNow);
+
+                var (subject, body) = Reviewing.RoutedReport_Composer.Compose(routed, match.Report);
+
+                var reviewerChannel = MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, contract.ReviewerId);
+
+                // AGENT AUDIENCE: the owner cannot act on one session's brief to another, so it is
+                // never mirrored to the phone (decision 15).
+                if (!ChannelAppender.Append_AppEntry(reviewerChannel, AppEntryAudiences.Agent, subject, body, DateTime.Now))
+                {
+                    Log_RerouteRefusal_Once(session.OrchId, contract, ROUTED_RELAY_NOT_WRITTEN);
+                    continue;
+                }
+
+                open[i] = Reviewing.RerouteContract_Factory.CreateFrom_Routed(
+                    contract,
+                    routed.ReportIdentity!,
+                    match.HeadCommit,
+                    routed.RoutedUtc!.Value,
+                    Find_RelayIdentity_OrNull(reviewerChannel));
+
+                changed = true;
+
+                _log.Log_Info(session.OrchId, $"Re-review routed: '{contract.ImplementerId}' declared {ChannelGrammar.FIXED} {match.HeadCommit}, and the delta from {contract.BaseCommit} went to '{contract.ReviewerId}' with its supervisor's own brief — the supervisor is not woken for it");
+            }
+
+            changed |= Close_RerouteContracts(session, open, handled);
+
+            // WRITTEN ONLY WHEN SOMETHING MOVED. The overwhelming majority of ticks change nothing
+            // here, and a working set rewritten every two seconds is a file the compactor, the
+            // watchdog and every backup would see churning for no reason.
+            if (changed)
+                Reviewing.RerouteContract_Store.Write_Set(_paths, session.OrchId, open, handled);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>The refusal words for the one failure the matcher cannot name: the reviewer's channel stayed locked.</summary>
+    const string ROUTED_RELAY_NOT_WRITTEN = "the reviewer's channel stayed locked for the whole budget, so the relay was not written";
+
+    /// <summary>
+    /// Does this roster carry a reviewer that could receive a relay? The cheap screen that keeps the
+    /// sweep out of every orchestration that has never had one — asked of the roster the tick already
+    /// holds, so it costs no file at all.
+    /// </summary>
+    static bool Has_OpenReviewer(IOrchestrationSession session)
+    {
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc == null && MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Reviewer)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// READS THE SUPERVISOR'S OWN VERDICTS FOR A CONTRACT, one implementer channel at a time.
+    ///
+    /// <para>
+    /// THE LAST DIRECTIVE ON THE CHANNEL WINS, which is why the walk is backwards and stops at the
+    /// first one it finds: "a second declaration supersedes the first" and <c>REROUTE: cancel</c>
+    /// retracts, and both of those are the same rule — the supervisor's most recent word about this
+    /// implementer is the standing one. Walking backwards also means a channel with a live contract
+    /// usually stops within a few entries of the end.
+    /// </para>
+    /// <para>
+    /// <see cref="MemberState_Resolver.Contains_Marker"/> IS A COST GATE HERE AND NOTHING ELSE. The
+    /// parser is what decides whether an entry declares anything; this only keeps
+    /// <see cref="Reviewing.MarkerLine_Screen"/> — which builds one small object PER LINE — off every
+    /// entry of every channel on every tick, which that file's own docstring rules out. It cannot
+    /// change an answer: it matches the subject as well as the body, so it admits strictly more
+    /// entries than the parser accepts.
+    /// </para>
+    /// <para>
+    /// THE STAMP IS THE APP'S CLOCK, NOT THE ENTRY'S DATE. A header date is agent-written and has been
+    /// wrong by a day in production (decision 12); <c>DeclaredUtc</c> is only ever compared against
+    /// this app's own later readings, so the moment the app SAW it is the honest value.
+    /// </para>
+    /// </summary>
+    bool Open_RerouteContracts(IOrchestrationSession session, List<Reviewing.IRerouteContract> open, List<string> handled)
+    {
+        var changed = false;
+
+        foreach (var member in session.Members)
+        {
+            // THE DECLARATION LIVES IN THE IMPLEMENTER'S CHANNEL, because it is the tail of the fix
+            // brief. A reviewer's channel carries no fix brief and a solo has no supervisor to write
+            // one — and this is also what makes "the reviewer is not the implementer itself"
+            // unspellable rather than merely checked: the two ids come from different sides of a
+            // kind screen.
+            if (member.ClosedUtc != null || MemberKind_Ids.Resolve_Kind(member.MemberId) != MemberKinds.Implementer)
+                continue;
+
+            var entries = ChannelHistory_Cache.Read_Entries(
+                MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId));
+
+            Channels.ChannelEntry.IChannelEntry? declaring = null;
+            var directive = default(Reviewing.RerouteDeclaration);
+
+            for (var i = entries.Count - 1; i >= 0; i--)
+            {
+                var entry = entries[i];
+
+                // THE AUTHOR SCREEN, and it is the parser's missing half by design: RerouteContract_Parser
+                // reads text and screens nobody, so whether this writer may declare a contract is
+                // asked once, here, where the channel and the role are both known. Without it an
+                // implementer could declare its own re-review by quoting the brief back.
+                if (entry.Author != ChannelAuthors.Supervisor)
+                    continue;
+
+                if (!MemberState_Resolver.Contains_Marker(entry, ChannelGrammar.REROUTE))
+                    continue;
+
+                var read = Reviewing.RerouteContract_Parser.Read(entry);
+
+                if (read.Kind == Reviewing.RerouteDeclarations.None)
+                    continue;
+
+                declaring = entry;
+                directive = read;
+                break;
+            }
+
+            if (declaring == null)
+                continue;
+
+            var id = ChannelEntry_Digest.Compute(declaring);
+            var standing = Find_OpenContract_OrNull(open, member.MemberId);
+
+            if (directive.Kind == Reviewing.RerouteDeclarations.Cancel)
+            {
+                if (standing == null)
+                    continue;
+
+                _log.Log_Info(session.OrchId, $"Re-review contract for '{member.MemberId}' retracted — its supervisor wrote {ChannelGrammar.REROUTE} {Reviewing.RerouteContract_Policy.CANCEL_WORD}");
+                open.Remove(standing);
+                handled.Add(standing.Id);
+                changed = true;
+                continue;
+            }
+
+            // THIS ROUND IS OVER. The declaration stays in the channel for ever and this sweep reads
+            // the channel every tick, so without this the contract closed a moment ago is re-opened,
+            // re-matched against the same fix report and re-relayed — a loop at the tick's rate, with
+            // the reviewer re-reviewing one delta until somebody notices.
+            if (handled.Contains(id))
+                continue;
+
+            if (standing != null && standing.Id == id)
+                continue;
+
+            if (standing != null)
+            {
+                _log.Log_Info(session.OrchId, $"Re-review contract for '{member.MemberId}' superseded by a later {ChannelGrammar.REROUTE} declaration");
+                open.Remove(standing);
+                handled.Add(standing.Id);
+                changed = true;
+            }
+
+            // A REVIEWER, AND ONE THAT IS STILL HERE. Both refusals open nothing and are remembered,
+            // so the log carries the reason ONCE rather than every two seconds for the life of the
+            // channel — and the supervisor picks the round up by hand, as it always did.
+            if (MemberKind_Ids.Resolve_Kind(directive.ReviewerId) != MemberKinds.Reviewer)
+            {
+                _log.Log_Warning(session.OrchId, $"{ChannelGrammar.REROUTE} in '{member.MemberId}' names '{directive.ReviewerId}', which is not a reviewer — nothing is routed and the round proceeds as it did before");
+                handled.Add(id);
+                changed = true;
+                continue;
+            }
+
+            if (!Is_OpenMember(session, directive.ReviewerId))
+            {
+                _log.Log_Warning(session.OrchId, $"{ChannelGrammar.REROUTE} in '{member.MemberId}' names '{directive.ReviewerId}', which is not an open member of this orchestration — nothing is routed and the round proceeds as it did before");
+                handled.Add(id);
+                changed = true;
+                continue;
+            }
+
+            open.Add(Reviewing.RerouteContract_Factory.Create_Declared(
+                id, session.OrchId, member.MemberId, directive.ReviewerId, directive.BaseCommit, directive.Brief, _clock.UtcNow));
+
+            changed = true;
+
+            _log.Log_Info(session.OrchId, $"Re-review contract opened: when '{member.MemberId}' declares {ChannelGrammar.FIXED}, the delta from {directive.BaseCommit} goes to '{directive.ReviewerId}' and the supervisor is not woken for it");
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// THE THREE WAYS OUT, and every one of them RELEASES THE HOLD — which is the property that makes
+    /// this feature safe to ship. A contract that cannot end is a supervisor kept out of a round with
+    /// nothing anywhere saying so.
+    ///
+    /// <para>
+    /// (1) The reviewer has filed something of its own since the relay: the re-review is back, it is
+    /// inbound for the supervisor by the ordinary rules, and the held fix report rides that same turn.
+    /// (2) Nobody is coming — the reviewer's member is closed, or, for a contract still waiting on a
+    /// fix, the implementer's is. Nothing is appended: the supervisor learns it from the report it is
+    /// now handed. (3) The cap: past <see cref="Reviewing.RerouteContract_Policy.REVIEW_CAP"/> the
+    /// hold is released and ONE entry says which reviewer never reported, for how long, and on which
+    /// commits.
+    /// </para>
+    /// <para>
+    /// THE ONE-SHOT IS SPENT ON AN ENTRY THAT WAS WRITTEN, never on one merely decided — the lesson
+    /// <c>BudgetAlert_Planner</c> carries. Removing the contract IS the one-shot, so it waits for the
+    /// append; but only up to <see cref="Reviewing.RerouteContract_Policy.HOLD_CEILING"/>, because the
+    /// choke point refuses for ever while the owner is at the terminal and an unbounded wait would
+    /// trade the alert for the round.
+    /// </para>
+    /// <para>
+    /// BY IDENTITY, NEVER BY COUNT (decision 13). "Has the reviewer answered?" is "an entry of its own
+    /// exists AFTER the relay entry in file order", anchored on the relay's digest — a stored count of
+    /// its entries compared against a later live one would go backwards the moment
+    /// <c>Channel_Compactor</c> archived anything.
+    /// </para>
+    /// </summary>
+    bool Close_RerouteContracts(IOrchestrationSession session, List<Reviewing.IRerouteContract> open, List<string> handled)
+    {
+        var changed = false;
+
+        for (var i = open.Count - 1; i >= 0; i--)
+        {
+            var contract = open[i];
+            var waitingOnTheFix = contract.State == Reviewing.RerouteStates.Declared;
+
+            // (2) NOBODY IS COMING. A closed reviewer ends a contract in either state; a closed
+            // implementer ends only one that is still waiting for its fix report, because once the
+            // report is relayed the round belongs to the reviewer and the implementer's departure
+            // changes nothing about it.
+            if (!Is_OpenMember(session, contract.ReviewerId)
+                || (waitingOnTheFix && !Is_OpenMember(session, contract.ImplementerId)))
+            {
+                _log.Log_Info(session.OrchId, $"Re-review contract for '{contract.ImplementerId}' closed — the member it waits on has been closed; the hold is released and the round goes back to the supervisor");
+                handled.Add(contract.Id);
+                open.RemoveAt(i);
+                changed = true;
+                continue;
+            }
+
+            if (waitingOnTheFix || contract.RoutedUtc == null)
+                continue;
+
+            // (1) THE RE-REVIEW IS BACK.
+            if (Has_ReviewerFiledSinceRelay(session.OrchId, contract))
+            {
+                _log.Log_Info(session.OrchId, $"Re-review contract for '{contract.ImplementerId}' closed — '{contract.ReviewerId}' has reported; the supervisor takes one turn carrying both the findings and the held fix report");
+                handled.Add(contract.Id);
+                open.RemoveAt(i);
+                changed = true;
+                continue;
+            }
+
+            // (3) THE CAP.
+            var waited = _clock.UtcNow - contract.RoutedUtc.Value;
+
+            if (waited <= Reviewing.RerouteContract_Policy.REVIEW_CAP)
+                continue;
+
+            var told = Append_SupervisorAttention_UnlessMeeting(
+                session.OrchId,
+                $"'{contract.ReviewerId}' has not reported on '{contract.ImplementerId}'s fix",
+                $"The app handed '{contract.ReviewerId}' the delta {contract.BaseCommit}..{contract.HeadCommit} {SessionDuration_Formatter.Describe(waited)} ago, with your own re-review brief, and it has filed nothing since.\n\n"
+                + $"'{contract.ImplementerId}'s fix report was held off your turn until that re-review came back. It is released now and reaches you on the ordinary digest, so this round is yours again exactly as it would have been without the contract. Look at '{contract.ReviewerId}' if you still want the re-review.",
+                Resolve_Presence(session.OrchId),
+                AppEntryAudiences.Agent);
+
+            if (!told && waited <= Reviewing.RerouteContract_Policy.HOLD_CEILING)
+                continue;
+
+            if (!told)
+                _log.Log_Warning(session.OrchId, $"Re-review contract for '{contract.ImplementerId}' expired and the alert could NOT be written (a meeting, or the owner is at the terminal) — the hold is released anyway after {SessionDuration_Formatter.Describe(waited)}, because keeping it would cost the supervisor the round to buy an entry nobody can act on");
+
+            handled.Add(contract.Id);
+            open.RemoveAt(i);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// Has the reviewer filed an entry of its OWN after the relay, in file order? Null when the
+    /// relay cannot be found in the live file — a compacted anchor is an unknown, and an unknown here
+    /// must answer "not yet" and leave by the cap rather than guess a round finished.
+    /// </summary>
+    bool Has_ReviewerFiledSinceRelay(string orchId, Reviewing.IRerouteContract contract)
+    {
+        if (contract.RelayIdentity == null)
+            return false;
+
+        var entries = ChannelHistory_Cache.Read_Entries(
+            MemberChannel_Locator.Get_ChannelFile(_paths, orchId, contract.ReviewerId));
+
+        var relayAt = -1;
+
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (ChannelEntry_Digest.Compute(entries[i]) == contract.RelayIdentity)
+            {
+                relayAt = i;
+                break;
+            }
+        }
+
+        if (relayAt < 0)
+            return false;
+
+        for (var i = relayAt + 1; i < entries.Count; i++)
+        {
+            if (ChannelAuthor_Kinds.Is_Member(entries[i].Author))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The digest of the relay just appended, read back off the channel. The append reports only
+    /// WHETHER it landed, so the entry's identity — header, index and stamp included — exists only on
+    /// disk, and the last routed app entry in the file is it.
+    /// </summary>
+    string? Find_RelayIdentity_OrNull(string channelFile)
+    {
+        var entries = ChannelHistory_Cache.Read_Entries(channelFile);
+
+        for (var i = entries.Count - 1; i >= 0; i--)
+        {
+            if (entries[i].Author == ChannelAuthors.App && RoutedReport_Tag.Is_Routed(entries[i].Subject))
+                return ChannelEntry_Digest.Compute(entries[i]);
+        }
+
+        return null;
+    }
+
+    static Reviewing.IRerouteContract? Find_OpenContract_OrNull(List<Reviewing.IRerouteContract> open, string implementerId)
+    {
+        foreach (var contract in open)
+        {
+            if (string.Equals(contract.ImplementerId, implementerId, StringComparison.OrdinalIgnoreCase))
+                return contract;
+        }
+
+        return null;
+    }
+
+    static bool Is_OpenMember(IOrchestrationSession session, string memberId)
+    {
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc == null && string.Equals(member.MemberId, memberId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ONE LINE PER PREDICATE PER CONTRACT, for the life of the process. Every refusal here is
+    /// STABLE — the report does not change, so the same predicate fails on every tick — and a line
+    /// written each time is decision 14's waterfall in the log file the app itself tails.
+    ///
+    /// <para>
+    /// <c>NO_DECLARATION</c> is deliberately not logged at all: "the implementer has not filed its fix
+    /// yet" is the ordinary state of every contract from the moment it opens, and reporting it as a
+    /// failed predicate would put a line that reads like a fault against every healthy round.
+    /// </para>
+    /// </summary>
+    void Log_RerouteRefusal_Once(string orchId, Reviewing.IRerouteContract contract, string refusal)
+    {
+        if (refusal == Reviewing.FixReport_Matcher.NO_DECLARATION)
+            return;
+
+        if (!_rerouteRefusalsLogged.Add($"{orchId}/{contract.Id}/{refusal}"))
+            return;
+
+        _log.Log_Warning(orchId, $"Nothing routed to '{contract.ReviewerId}' for '{contract.ImplementerId}': {refusal}. The contract stays open, the fix report stays ordinary traffic, and the supervisor picks the round up exactly as it did before this feature existed");
     }
 
     /// <summary>

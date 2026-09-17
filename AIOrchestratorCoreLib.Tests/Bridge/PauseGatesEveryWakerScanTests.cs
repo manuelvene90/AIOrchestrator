@@ -80,6 +80,14 @@ public class PauseGatesEveryWakerScanTests
         // session's turn, so a paused orchestration whose supervisor still gets tickets is not asleep
         // in any sense the owner would recognise.
         { "async Task Sweep_WakeTickets_Async", "Write_WakeTicket(registered.StateFile", "session.Paused" },
+
+        // THE ROUTED-REPORT SWEEP (one-wake-model step 4). It writes a BRIEF into a reviewer's
+        // channel — a waker in the fullest sense, since that entry is what starts the reviewer's
+        // turn. A paused orchestration that still hands out re-reviews is not dormant in any sense
+        // the owner would recognise. Its cap alert goes through the choke point below, which screens
+        // the pause a second time; this row is the stronger half, because a paused orchestration is
+        // not examined at all.
+        { "async Task Sweep_RoutedReports_Async", "RoutedReport_Composer.Compose", "session.Paused" },
     };
 
     [Theory]
@@ -141,6 +149,55 @@ public class PauseGatesEveryWakerScanTests
         Assert.True(
             paused < alarm,
             "the liveness alarm is raised above the pause screen: an orchestration the owner put to sleep would be reported as having stopped waking");
+    }
+
+    /// <summary>
+    /// AND THE SAME FOR THE ROUTED-REPORT SWEEP: both of the things it writes sit BELOW its pause
+    /// screen. The relay is the entry that starts a reviewer's turn, and the cap alert is precisely
+    /// the sort of alarm a pause must not produce — a paused orchestration's reviewer has not
+    /// answered BECAUSE THE OWNER SAID SO, so every held round in one would be reported as abandoned
+    /// ninety minutes after the pause. The twin of
+    /// <see cref="TheWakeTicketStallAlarm_SitsBelowThePauseScreenOfItsSweep"/>, and for the same
+    /// reason: the choke point would refuse the append anyway, and this is the braces.
+    /// </summary>
+    [Fact]
+    public void TheRoutedRelayAndItsCapAlarm_SitBelowThePauseScreenOfTheirSweep()
+    {
+        var body = Extract_Method("async Task Sweep_RoutedReports_Async");
+
+        var paused = body.IndexOf("session.Paused", StringComparison.Ordinal);
+        var relay = body.IndexOf("ChannelAppender.Append_AppEntry", StringComparison.Ordinal);
+        var expiry = body.IndexOf("Close_RerouteContracts", StringComparison.Ordinal);
+
+        Assert.True(relay >= 0, "the sweep no longer appends the relay — this scan is reading a method it does not understand");
+        Assert.True(expiry >= 0, "the sweep no longer closes contracts, so a hold on the supervisor has no way out at all");
+        Assert.True(paused >= 0, "the sweep no longer asks whether the orchestration is paused — every reviewer in a sleeping orchestration can still be handed a round");
+
+        Assert.True(
+            paused < relay,
+            "the pause is checked AFTER the relay is appended: the brief is on disk and the reviewer the owner put to sleep is at work");
+
+        Assert.True(
+            paused < expiry,
+            "the cap alert is raised above the pause screen: an orchestration the owner put to sleep would be told its reviewer has abandoned the round");
+    }
+
+    /// <summary>
+    /// AND THE WAY OUT IS BELOW THE PAUSE INSIDE THE CLOSER TOO — not a second pause screen, but the
+    /// proof that the closer is only ever reached through one. It is called from the sweep, which
+    /// screens the pause first, and it is the ONLY caller: a second one would be an ungated route to
+    /// the same append.
+    /// </summary>
+    [Fact]
+    public void TheRerouteCloser_HasExactlyOneCaller_AndItIsThePausedSweep()
+    {
+        var source = Read_Source(ENGINE_FILE);
+
+        var calls = source.Split("Close_RerouteContracts(").Length - 1;
+
+        // One declaration, one call.
+        Assert.Equal(2, calls);
+        Assert.Contains("changed |= Close_RerouteContracts(session, open, handled);", Extract_Method("async Task Sweep_RoutedReports_Async"), StringComparison.Ordinal);
     }
 
     /// <summary>

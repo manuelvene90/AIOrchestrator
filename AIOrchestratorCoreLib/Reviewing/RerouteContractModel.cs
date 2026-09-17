@@ -11,7 +11,8 @@ internal sealed class RerouteContractModel(
     RerouteStates state,
     string? reportIdentity,
     string? headCommit,
-    DateTime? routedUtc) : IRerouteContract
+    DateTime? routedUtc,
+    string? relayIdentity) : IRerouteContract
 {
     public string Id { get; } = id;
     public string OrchId { get; } = orchId;
@@ -24,4 +25,5 @@ internal sealed class RerouteContractModel(
     public string? ReportIdentity { get; } = reportIdentity;
     public string? HeadCommit { get; } = headCommit;
     public DateTime? RoutedUtc { get; } = routedUtc;
+    public string? RelayIdentity { get; } = relayIdentity;
 }

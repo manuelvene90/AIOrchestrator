@@ -68,7 +68,25 @@ public class AppAuthoredWritesCensusTests
     /// report). The other 61 still call an appender directly. 17 + 61 = 78.
     /// </para>
     /// </summary>
-    const int EXPECTED_EVENT_SITES = 78;
+    /// <summary>
+    /// 80 SINCE 2026-09-17 (plan 03 tasks 8 and 9, the routed report). The routed-report sweep added
+    /// exactly two write sites and both are BUCKET G — conversation, and both STAY in the channel.
+    ///
+    /// <para>
+    /// The RELAY (<c>ChannelAppender.Append_AppEntry</c> into a reviewer's own channel) is the entry
+    /// the reviewer is expected to ANSWER: it carries its supervisor's brief and the delta, and a
+    /// re-review is written against it. Routing that to the log would delete the round. It is also the
+    /// one entry in the system whose absence is silent, which is why the contract only moves to
+    /// <c>Routed</c> when this returns true.
+    /// </para>
+    /// <para>
+    /// The CAP ALERT (through <c>Append_SupervisorAttention_UnlessMeeting</c>) tells a supervisor that
+    /// a re-review it was promised never came back and that the round is its own again — an
+    /// instruction about what to do next, not a receipt for something that already happened. At one
+    /// entry per expired contract it adds nothing to the boot-read volume this series exists to cut.
+    /// </para>
+    /// </summary>
+    const int EXPECTED_EVENT_SITES = 80;
 
     /// <summary>
     /// SIX since 2026-09-16: <c>AppNote_Writer.Write</c> (plan 02 task 4) is the sixth pass-through,

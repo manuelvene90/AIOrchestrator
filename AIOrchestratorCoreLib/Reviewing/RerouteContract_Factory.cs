@@ -36,14 +36,21 @@ public static class RerouteContract_Factory
         return new RerouteContractModel(
             id, orchId, implementerId, reviewerId, baseCommit, brief ?? string.Empty,
             declaredUtc.ToUniversalTime(), RerouteStates.Declared,
-            reportIdentity: null, headCommit: null, routedUtc: null);
+            reportIdentity: null, headCommit: null, routedUtc: null, relayIdentity: null);
     }
 
+    /// <param name="relayIdentity">
+    /// the digest of the relay entry, read back off the reviewer's channel AFTER the append landed —
+    /// null when the append has not happened yet, or when the entry could not be found again. It is
+    /// the last argument and optional for exactly that ordering: the relay is composed from a ROUTED
+    /// contract, so the contract has to exist before the entry it names does.
+    /// </param>
     public static IRerouteContract CreateFrom_Routed(
         IRerouteContract declared,
         string reportIdentity,
         string headCommit,
-        DateTime routedUtc)
+        DateTime routedUtc,
+        string? relayIdentity = null)
     {
         Require(reportIdentity, nameof(reportIdentity));
         Require(headCommit, nameof(headCommit));
@@ -59,7 +66,8 @@ public static class RerouteContract_Factory
             RerouteStates.Routed,
             reportIdentity,
             headCommit,
-            routedUtc.ToUniversalTime());
+            routedUtc.ToUniversalTime(),
+            relayIdentity);
     }
 
     static void Require(string value, string name)
