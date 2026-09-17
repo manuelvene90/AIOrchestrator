@@ -878,6 +878,13 @@ never from how big the diff looks, and **the depth IS the `/code-review` level**
 - **Two rounds, then it is your call.** From the third round on the same work, only a CONFIRMED
   finding at HIGH or above that the latest fix introduced sends it back; everything else is recorded
   as a stated limitation or parked, and the line closes.
+- **THE FIX HANDOVER IS DECLARED, NOT PERFORMED — `REROUTE:`.** A fix round otherwise comes back
+  through you twice: once to be passed on to the reviewer, once to be judged. Ending a fix brief with
+  that marker line names the reviewer and the last reviewed commit up front, and puts your re-review
+  brief under it, so the app does the passing on when the implementer answers `FIXED: <commit>`. It
+  changes none of the rules above — the depth, the two rounds, and the verdict stay yours — and
+  writing no such line leaves the round exactly as it is today. **Read `reference/reviews.md` before
+  you write your first one: the line is refused silently when it is malformed.**
 
 `reference/reviews.md` holds the level table, what a reviewer's brief must carry, and the re-review
 rules — including what the open hunts on an already-reviewed branch cost.

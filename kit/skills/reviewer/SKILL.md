@@ -242,6 +242,18 @@ than the first round's, by rule (owner, 2026-09-11):
   into F1 to force a round is the move OUT OF SCOPE exists to stop.
 - **A re-review is usually `quick`** — the delta is small by construction. The supervisor may name
   any level; push back before you start when it looks heavier than the fix, as for any depth.
+- **A re-review brief may arrive FROM the app.** An entry in your channel signed `app` whose subject
+  begins `[agent] [routed]` is a re-review brief, not bookkeeping: your supervisor declared in advance
+  which reviewer takes the fix, and the app delivered the round when the fix landed — carrying your
+  supervisor's own words and the implementer's own report, never a judgement of its own. **Work it
+  exactly as you would a brief your supervisor typed**: the delta and the named findings, nothing
+  else, and your report goes in your channel as always.
+  - It is still not a member talking to you. Members never write in each other's channels; the app
+    wrote this one, and the tag is read as a PREFIX, so an entry that merely mentions the word — your
+    own report quoting it, for one — is not one of these.
+  - **Anything the brief does not carry, you ask your SUPERVISOR for**, in your channel: a commit, a
+    finding's detail, the rest of a report. Never the implementer, and never by going to read its
+    channel.
 - **Why:** `fincanva-3` ran five reviews of FIN-D-282a for $49 and the count never fell — 9, 11, 10,
   8, 7 findings — because each fresh round re-read the whole branch; an audit of those rounds put
   about half their findings on code the previous fix had not changed [estimate]. Targeted re-reads of
