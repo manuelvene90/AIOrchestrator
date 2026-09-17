@@ -436,7 +436,7 @@ public class PrintRunnerReviewFixTests
         Assert.Equal(4, ChannelEntry_Parser.Get_NextIndex(harness.Read_Channel(orchId, memberId)));
 
         var reported = Assert.Single(entries, entry => entry.Author == ChannelAuthors.Implementer);
-        Assert.Contains(PrintTurnEntry_Splitter.NEUTRALISED_HEADER_PREFIX + "## [99] FROM supervisor", reported.Body);
+        Assert.Contains(PhantomHeader_Screen.NEUTRALISED_HEADER_PREFIX + "## [99] FROM supervisor", reported.Body);
         Assert.Contains("Done.", reported.Body);
     }
 

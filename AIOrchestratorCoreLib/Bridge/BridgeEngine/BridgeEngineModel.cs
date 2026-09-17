@@ -917,6 +917,12 @@ internal sealed class BridgeEngineModel(
     /// what the sweep has in its hand. Written and read on the mirror loop only, so unlike the maps
     /// the inbound loop also touches it needs no lock.
     /// </para>
+    /// <para>
+    /// AND REAPED AGAINST THE LIVE SET on every sweep — see <see cref="Reap_WakeTicketWatches"/>. It
+    /// used to be written on first sight and never removed, which is a memo outliving the session it
+    /// describes rather than a leak with a horizon: this file holds some thirty more dictionaries of
+    /// the same shape, and that is the reason to say here which one has an owner.
+    /// </para>
     /// </summary>
     readonly Dictionary<string, WakeTicketWatch> _wakeTicketWatchByStateFile = [];
 
@@ -1927,7 +1933,13 @@ internal sealed class BridgeEngineModel(
         var configs = _configProvider.Get_Current().Runners;
         var nowLocal = DateTime.Now;
 
-        foreach (var registered in RegisteredSessions_Reader.Find_All(_paths, _store))
+        // READ ONCE, because it is both what this sweep walks and what the reap below measures
+        // against. Two calls would be two answers to "which sessions exist" separated by a close.
+        var registrations = RegisteredSessions_Reader.Find_All(_paths, _store);
+
+        Reap_WakeTicketWatches(registrations);
+
+        foreach (var registered in registrations)
         {
             var role = configs.Get_ForRole(registered.Role);
 
@@ -2614,6 +2626,41 @@ internal sealed class BridgeEngineModel(
         // WARNING, and the distinction the nudge sites draw is why: those are coaching aimed at a
         // session that is reading them, while this is a component that has stopped answering.
         _log.Log_Warning(state.OrchId, $"'{state.MemberId}' was handed wake ticket {ticket.Number} and has filed no entry of its own since — its monitor may be dead");
+    }
+
+    /// <summary>
+    /// THE WATCH DIES WITH THE SESSION IT WATCHES. <see cref="_wakeTicketWatchByStateFile"/> was
+    /// written on first sight and never removed, so every closed orchestration and every closed
+    /// member left a record behind for the life of the process. Bounded by the sessions this process
+    /// has seen, so the desktop app never notices it — the daemon, which runs for weeks across many
+    /// closed orchestrations, is the reader that does.
+    ///
+    /// <para>
+    /// AGAINST THE LIVE SET AND NOT AT THE CLOSE DOOR. <see cref="RegisteredSessions_Reader"/> already
+    /// screens out a closed orchestration, a closed member and a state file that is gone, so this one
+    /// comparison covers every way a watch can be orphaned — including a close made by an earlier
+    /// process and read back at startup, which no handler in this one would ever see. The rule itself
+    /// is <see cref="SessionMemo_Reaper"/>'s, because a reap has no observable behaviour to assert on
+    /// from outside and this class is internal with no <c>InternalsVisibleTo</c>.
+    /// </para>
+    /// <para>
+    /// A PAUSE IS NOT A CLOSE: a paused orchestration is still registered, so its watch stays and the
+    /// ticket it was handed is still overdue when the pause lifts. Re-arming would be safe rather than
+    /// wrong — <see cref="WakeTicketWatch"/>'s own rule is that first sight of a NUMBER starts the
+    /// window, so a re-armed watch costs one window of lateness and cannot invent a stall — but
+    /// "dormant" must not quietly mean "forgiven".
+    /// </para>
+    /// </summary>
+    void Reap_WakeTicketWatches(IReadOnlyList<(string StateFile, Running.SessionRoles Role, string OrchId, string MemberId)> registrations)
+    {
+        if (_wakeTicketWatchByStateFile.Count == 0)
+            return;
+
+        foreach (var orphan in SessionMemo_Reaper.Find_Orphans(
+            _wakeTicketWatchByStateFile.Keys, registrations.Select(registered => registered.StateFile)))
+        {
+            _wakeTicketWatchByStateFile.Remove(orphan);
+        }
     }
 
     /// <summary>
