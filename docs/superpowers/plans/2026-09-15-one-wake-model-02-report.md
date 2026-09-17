@@ -380,3 +380,38 @@ audience, for all 78 sites at once, and `AnOwnerFacingNoteNeverLeavesTheChannel_
 is the oracle. The member nudge is not routed, because orphan escalation counts it.
 `runners.<role>.bookkeeping` defaults to `channel`, so **no live session behaves differently until
 somebody sets it.**
+
+## The figure — taken 2026-09-17 on the VPS, read-only
+
+`python3 tools/wake-baseline/baseline.py --root ~/.claude/supervision`, over 22 orchestrations,
+124 live channel files and 24 archives.
+
+| | |
+|---|---|
+| live boot read, all orchestrations | **6 318 979 bytes** ≈ 1 632 811 tokens `[estimate]` |
+| of that, authored by the app | 746 541 bytes |
+| **of that, the bookkeeping this plan moves** | **508 017 bytes · 1 469 entries** |
+| **share of the live boot read** | **8.0 %** |
+| **share of what the app writes** | **68 %** |
+| in tokens `[estimate]` | ≈ **131 271** |
+| median per orchestration | 32 930 bytes ≈ 8 509 tokens |
+
+**Eight per cent, and that is the honest size of it.** Two thirds of what the app writes into the
+channels does leave them; but the app is only twelve per cent of what a session reads at boot. The
+rest is the conversation, which is what the channel is for.
+
+**Measured, modelled and estimated, kept apart.** The bytes are measured off the disk. WHICH app
+entry is bookkeeping is MODELLED — the decision is made in C# at the call site and nothing in a
+channel file records which site wrote a line — so the classification is a 16-marker heuristic read
+off the constants that emit the strings. Tokens are `[estimate]` at 3.87 bytes/token.
+
+**And the share is GROSS, not net.** A routed entry leaves the channel, not the history: under
+`bookkeeping = log` it lands in `status.jsonl` and the state pack hands back up to five of them. The
+net is this figure minus what the pack returns, and nobody has measured the pack's own size yet
+(gap 5 below).
+
+**One reading that moved, and it is worth recording.** The same run reports 5 272 app-authored
+entries against plan 01's 4 955 — but the window is two days longer and carries 22 orchestrations
+against 20, while this reader is fence-aware where plan 01's was not. The two effects pull opposite
+ways and the window dominates; neither number is directly comparable to the other, and a like-for-
+like re-run has not been done.
