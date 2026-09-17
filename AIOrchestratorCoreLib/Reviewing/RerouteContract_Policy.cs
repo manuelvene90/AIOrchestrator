@@ -121,36 +121,27 @@ public static class RerouteContract_Policy
     }
 
     /// <summary>
-    /// <see cref="Settings_Resolver.Resolve"/>, NOT <see cref="Settings_Resolver.Resolve_Long"/> — the
-    /// latter is not usable here. <see cref="SettingDefinition_Factory.Create_Int"/>'s shipped default
-    /// is boxed as <c>int</c> (<c>JsonValue.Create(shippedDefault.Value)</c> with an <c>int?</c>
-    /// parameter), and a value-backed (not JSON-text-backed) <see cref="JsonValue"/> requires an EXACT
-    /// type match on <c>GetValue&lt;T&gt;()</c> — unlike a node parsed from real JSON text, which is
-    /// element-backed and freely converts between numeric types. So resolving the SHIPPED DEFAULT
-    /// layer of any <c>Kind = Int</c> definition through <c>Resolve_Long</c>'s <c>GetValue&lt;long&gt;()</c>
-    /// throws <see cref="InvalidOperationException"/> — found writing this method's own round-trip
-    /// test, which failed on the "nothing configured" case specifically. <c>Resolve_Long</c> itself is
-    /// unfixed: it lives in <c>Settings_Resolver.cs</c>, outside this change's file set, and grep finds
-    /// no other production caller today, so nothing else is silently affected. This accessor is local
-    /// to the three reviewing dials and tolerant of both shapes (a value-backed int from a shipped
-    /// default, an element-backed number from parsed config.json or preset text).
+    /// THROUGH <see cref="Settings_Resolver.Resolve_Long"/>, THE ONE ACCESSOR — not a second copy of
+    /// the same read. Writing this method first exposed a real defect in that accessor: it threw on
+    /// the SHIPPED-DEFAULT layer of any <c>Kind = Int</c> row with a non-null default, which is every
+    /// unconfigured machine's answer for these three dials. It was fixed where it lives rather than
+    /// worked around here (CLAUDE.md decision 12) — this method is the int narrowing and the
+    /// catalogue lookup, nothing else.
+    ///
+    /// <para>
+    /// The fallback is only reached when the row resolves to JSON <c>null</c>, which none of the
+    /// three can: all three are non-nullable with a shipped default. It is kept as the honest answer
+    /// for a caller who adds a nullable reviewing dial later, and never as a way of swallowing a
+    /// malformed value — a value of the wrong SHAPE still throws out of the resolver, loudly.
+    /// </para>
     /// </summary>
     static int Resolve_Int(string key, JsonObject? presetTree, JsonObject? configTree, int fallback)
     {
         var definition = Catalog.Find_OrNull($"{REVIEWING_KEY}.{key}")
             ?? throw new InvalidOperationException($"No settings catalogue row for '{REVIEWING_KEY}.{key}'.");
 
-        var (value, _) = Settings_Resolver.Resolve(definition, presetTree, configTree, session: null);
+        var resolved = Settings_Resolver.Resolve_Long(definition, presetTree, configTree, session: null);
 
-        if (value is not JsonValue jsonValue)
-            return fallback;
-
-        if (jsonValue.TryGetValue<int>(out var asInt))
-            return asInt;
-
-        if (jsonValue.TryGetValue<long>(out var asLong))
-            return checked((int)asLong);
-
-        return fallback;
+        return resolved == null ? fallback : checked((int)resolved.Value);
     }
 }
