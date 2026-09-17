@@ -42,6 +42,8 @@
     "image": "IMAGE:",
     "attach": "ATTACH:",
     "state": "STATE:",
+    "reroute": "REROUTE:",
+    "fixed": "FIXED:",
     "blocked_on_owner": "BLOCKED ON OWNER",
     "answered": "ANSWERED",
     "standing_by": "STANDING BY",

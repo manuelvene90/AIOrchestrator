@@ -1,6 +1,9 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Channels.StatusLog;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
+using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using Xunit;
 using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
 
@@ -94,6 +97,81 @@ public class SettingsCatalogTests
             Assert.NotNull(Catalog.Find_OrNull(Catalog.Get_ModelPath(role)));
             Assert.NotNull(Catalog.Find_OrNull(Catalog.Get_EffortPath(role)));
         }
+    }
+
+    /// <summary>
+    /// THE GAP THIS PLAN CLOSES. `runners.&lt;role&gt;.wake` and `runners.&lt;role&gt;.bookkeeping`
+    /// sit right beside `runner` and `resume` in config.json (RunnerConfigs_Json reads and writes all
+    /// four already) but carried no catalogue row, so they were settable only by hand-editing
+    /// config.json — no preset, no settings surface. Named per role, the way
+    /// <see cref="EveryRole_HasAModelEntryAndAnEffortEntry"/> is, so a missing role names itself.
+    /// </summary>
+    [Fact]
+    public void EveryRole_HasAWakeEntryAndABookkeepingEntry()
+    {
+        foreach (var role in SessionRole_Names.ALL)
+        {
+            var key = SessionRole_Names.Get_ConfigKey(role);
+
+            Assert.NotNull(Catalog.Find_OrNull($"{RunnerConfigs_Json.RUNNERS_KEY}.{key}.{RunnerConfigs_Json.WAKE_KEY}"));
+            Assert.NotNull(Catalog.Find_OrNull($"{RunnerConfigs_Json.RUNNERS_KEY}.{key}.{RunnerConfigs_Json.BOOKKEEPING_KEY}"));
+        }
+    }
+
+    /// <summary>
+    /// THE DEFAULTS MUST NOT MOVE. <see cref="RoleRunnerConfig_Factory.Create_Default"/> is the one
+    /// place that decides what a machine stating nothing actually runs — Watcher, Channel, for every
+    /// role — and the catalogue row's shipped default is read FROM it (the same direction
+    /// <c>runner</c>'s and <c>resume</c>'s rows already take), so this pins that registering the two
+    /// keys here did not silently change behaviour for a machine whose config.json says nothing.
+    /// </summary>
+    [Fact]
+    public void TheWakeAndBookkeepingShippedDefaults_MatchRoleRunnerConfigFactory_ForEveryRole()
+    {
+        foreach (var role in SessionRole_Names.ALL)
+        {
+            var key = SessionRole_Names.Get_ConfigKey(role);
+            var roleDefault = RoleRunnerConfig_Factory.Create_Default(role);
+
+            var wakeDefinition = Catalog.Find_OrNull($"{RunnerConfigs_Json.RUNNERS_KEY}.{key}.{RunnerConfigs_Json.WAKE_KEY}")!;
+            var bookkeepingDefinition = Catalog.Find_OrNull($"{RunnerConfigs_Json.RUNNERS_KEY}.{key}.{RunnerConfigs_Json.BOOKKEEPING_KEY}")!;
+
+            Assert.Equal(WakeMode_Names.WATCHER, wakeDefinition.Default_OrNull!.GetValue<string>());
+            Assert.Equal(WakeModes.Watcher, roleDefault.Wake);
+
+            Assert.Equal(BookkeepingSink_Names.CHANNEL, bookkeepingDefinition.Default_OrNull!.GetValue<string>());
+            Assert.Equal(BookkeepingSinks.Channel, roleDefault.Bookkeeping);
+        }
+    }
+
+    /// <summary>
+    /// THE ROUND TRIP, THROUGH THE ACTUAL READER — not just that the catalogue path string matches
+    /// <see cref="RunnerConfigs_Json"/>'s constants by eye. A value written at the catalogue's own path
+    /// (<see cref="SettingsJson_Path.Write"/>, the same walk the resolver and every renderer use) must
+    /// come back out of <see cref="RunnerConfigs_Json.Parse"/> as the non-default mode — proving a
+    /// settings surface that only knows the catalogue path actually reaches the session's real
+    /// behaviour, for both keys, on a role that is not the first in the list (so a hard-coded
+    /// "supervisor" in either writer could not pass this by accident).
+    /// </summary>
+    [Fact]
+    public void AWakeAndBookkeepingValue_WrittenAtTheCataloguePath_RoundTripsThroughRunnerConfigsJson()
+    {
+        var configRoot = new JsonObject();
+
+        SettingsJson_Path.Write(configRoot, "runners.implementer.wake", JsonValue.Create(WakeMode_Names.TICKET));
+        SettingsJson_Path.Write(configRoot, "runners.implementer.bookkeeping", JsonValue.Create(BookkeepingSink_Names.LOG));
+
+        var parsed = RunnerConfigs_Json.Parse(configRoot);
+        var implementer = parsed.Get_ForRole(SessionRoles.Implementer);
+        var supervisor = parsed.Get_ForRole(SessionRoles.Supervisor);
+
+        Assert.Equal(WakeModes.Ticket, implementer.Wake);
+        Assert.Equal(BookkeepingSinks.Log, implementer.Bookkeeping);
+
+        // AND THE ROLE THAT WAS NOT WRITTEN KEEPS THE DEFAULT — proving the write landed at the
+        // implementer's own node rather than leaking into every role's.
+        Assert.Equal(WakeModes.Watcher, supervisor.Wake);
+        Assert.Equal(BookkeepingSinks.Channel, supervisor.Bookkeeping);
     }
 
     /// <summary>

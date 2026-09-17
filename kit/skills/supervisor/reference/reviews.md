@@ -61,3 +61,50 @@ are where review money goes:
   finding at HIGH or above that the latest fix introduced sends it back; everything else is recorded
   as a stated limitation or parked, and the line closes. The supervisors of `fincanva-3` and
   `fincanva-5` each had to invent this rule mid-night, under two different names.
+
+### Routing a re-review instead of relaying it — `REROUTE:` (2026-09-15, new here)
+
+A fix round comes back to you twice: once when the implementer reports the fix, once when the
+reviewer reports on the fix. The first of those is a HANDOVER, and a handover can be DECLARED when
+you write the fix brief instead of performed after it. The declaration is one marker line, and its
+argument is the two facts a re-review needs that the app cannot know: who reviews, and from which
+commit.
+
+**Write it in the BODY of the fix brief, and write the brief under it:**
+
+```
+REROUTE: rev-1 from abc1234
+Check F1 and F3 only. F2 was accepted as stated.
+The delta is the fix — do not re-read the branch. Depth: quick.
+```
+
+It declares: when that implementer answers with `FIXED: <commit>`, hand that reviewer the delta from
+`abc1234` and everything written under the line. **Everything under the line is the brief, carried
+verbatim** — not parsed, not summarised, not reordered — so what you write there is exactly what the
+reviewer reads. Write what you would have written by hand: what this round covers, which findings, at
+what depth. Nothing composes a brief for you, and nothing ever will: that is the rule the feature is
+built on, not a limitation of it.
+
+The shape, exactly, because every one of these refusals is silent-by-design rather than an error:
+
+- **In the BODY, at the start of a line.** The marker in a SUBJECT declares nothing — there is
+  nothing underneath a subject, so there would be no brief, and a contract with no brief is a round
+  you did not write.
+- **A reviewer that EXISTS** — `rev-1`, `rev-2`, …, named literally. Nothing matches a name to the
+  nearest running member.
+- **The commit that reviewer LAST reviewed**, 7 to 40 hex characters, because the delta is measured
+  from it. HEAD and a branch name are refused: a moving name is not a commit.
+- **The FIRST such line wins.** A second one further down is left in the brief, where you put it.
+- **Do not also brief that reviewer yourself.** It would get the round twice, and the second copy is
+  a whole session's worth of money.
+- **`REROUTE: cancel`** retracts the declaration open on that implementer's channel. One is open
+  per implementer at a time, so declare one round at a time.
+- **Nothing parses, nothing happens.** A line the app cannot read whole is not a declaration: the
+  verdict stays ordinary traffic. Same for the ordinary case — **no `REROUTE:` line means the round
+  works exactly as it always has**, which is what almost every round will keep doing.
+
+**It moves the legwork and never the verdict.** The reviewer's findings remain input to YOUR verdict
+(`SKILL.md`, "Governance — do not spend the reviewer's independence"), the re-review rules above are
+unchanged, and the two-rounds rule still counts these rounds. **The round is yours until you have
+written that re-verdict** — so if a re-review does not come back, pick the fix report up yourself,
+exactly as you did before this line existed.

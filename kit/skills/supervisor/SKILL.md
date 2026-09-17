@@ -40,6 +40,16 @@ check against the code before accepting. The owner interfaces with the project m
   where a list of remembered phrases was not. **It changes nothing about how you read the entry** —
   read both kinds — it tells you whether the owner has already seen it, which decides whether you need
   to relay it.
+- **Not every app note stays in this channel.** Where the machine sets `runners.supervisor.bookkeeping`
+  to `log` (the default is `channel`, so on most machines nothing has moved), the app's bookkeeping
+  about you — each turn's `turn_ended` record, the `PLAN.md` ledger advisories, the report that a
+  member has stopped answering, the coaching when a question of yours was NOT sent, the note that a
+  LATER message replaced the one you meant as your entry, the note that a
+  `TO:` block named a channel you are not woken by — is written to a `status.jsonl` beside this
+  channel instead of into it. What never moves: the conversation, every
+  request confirmation, and every untagged owner-facing entry, which includes the stall and
+  usage-limit notices about your own turns. So the ABSENCE of an app note here is not evidence that
+  what it would have reported did not happen.
 
 **FIRST, RESOLVE YOUR ENVIRONMENT — one Bash call, before anything else.** You cannot see
 environment variables; the Read tool does not expand them, and a path you type from memory is the
@@ -99,7 +109,7 @@ or briefing anyone). The owner interacts with you constantly; a boot that burns 
 reading makes every restart expensive for nothing. Boot = a few file reads, one short entry, one
 watcher. Nothing else.
 
-**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/.supervisor.pack.md"`. If the file exists, the bridge started you FRESH and wrote it for you: read it FIRST — it carries the entries that woke you, your last entry, the whole ledger (PLAN.md), the last owner-channel entries and the code state. The channels are then a reference for facts the pack lacks, not a to-do list, and the greeting in step 2 is skipped. No pack → the steps below as written.
+**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/.supervisor.pack.md"`. If the file exists, the bridge started you FRESH and wrote it for you: read it FIRST — it carries the entries that woke you, your last entry, the whole ledger (PLAN.md), the last owner-channel entries and the code state. The channels are then a reference for facts the pack lacks, not a to-do list, and the greeting in step 2 is skipped. No pack → the steps below as written. A `## What the app has told you` section in the pack is the APP speaking to you, not the owner — act on it, never answer it as though the owner had written it.
 
 **A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 
@@ -868,6 +878,13 @@ never from how big the diff looks, and **the depth IS the `/code-review` level**
 - **Two rounds, then it is your call.** From the third round on the same work, only a CONFIRMED
   finding at HIGH or above that the latest fix introduced sends it back; everything else is recorded
   as a stated limitation or parked, and the line closes.
+- **THE FIX HANDOVER IS DECLARED, NOT PERFORMED — `REROUTE:`.** A fix round otherwise comes back
+  through you twice: once to be passed on to the reviewer, once to be judged. Ending a fix brief with
+  that marker line names the reviewer and the last reviewed commit up front, and puts your re-review
+  brief under it, so the app does the passing on when the implementer answers `FIXED: <commit>`. It
+  changes none of the rules above — the depth, the two rounds, and the verdict stay yours — and
+  writing no such line leaves the round exactly as it is today. **Read `reference/reviews.md` before
+  you write your first one: the line is refused silently when it is malformed.**
 
 `reference/reviews.md` holds the level table, what a reviewer's brief must carry, and the re-review
 rules — including what the open hunts on an already-reviewed branch cost.

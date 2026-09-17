@@ -15,6 +15,17 @@ public class PrintTurnTriggerTests
         "## [4] FROM supervisor — 2026-09-05 10:03 — GO AHEAD\n\ncontinue\n" +
         "## [5] FROM owner — 2026-09-05 10:04 — via Telegram\n\ntyped straight in\n";
 
+    /// <summary>
+    /// A cursor read as the delivered-test Select_AgentNotes now takes. The selector stopped taking a
+    /// cursor on 2026-09-15 because there are TWO of them — the session's channel and the status log
+    /// (StatusLog_Store.CURSOR_KEY) — and an entry is delivered if either says so; see
+    /// NotesRideFromTheStatusLogTests for the pair.
+    /// </summary>
+    static Func<IChannelEntry, bool> Delivered(ITurnCursor cursor)
+    {
+        return entry => cursor.Delivered.Contains(ChannelEntry_Digest.Compute(entry));
+    }
+
     static ITurnCursor Cursor(params IChannelEntry[] delivered)
     {
         return TurnCursor_Factory.Create(
@@ -122,11 +133,11 @@ public class PrintTurnTriggerTests
         var entries = ChannelEntry_Parser.Parse_All(NOTES);
 
         // [6] is past the window; [2] and [3] ride — and none of them would ever START a turn.
-        Assert.Equal([2, 3], PrintTurn_Trigger.Select_AgentNotes(entries, Cursor(), NOW).Select(entry => entry.Index));
+        Assert.Equal([2, 3], PrintTurn_Trigger.Select_AgentNotes(entries, Delivered(Cursor()), NOW).Select(entry => entry.Index));
         Assert.Equal([1], PrintTurn_Trigger.Select_Pending(SessionRoles.Solo, entries, Cursor()).Select(entry => entry.Index));
 
         // Delivered once, never again.
-        Assert.Equal([3], PrintTurn_Trigger.Select_AgentNotes(entries, Cursor(entries[1]), NOW).Select(entry => entry.Index));
+        Assert.Equal([3], PrintTurn_Trigger.Select_AgentNotes(entries, Delivered(Cursor(entries[1])), NOW).Select(entry => entry.Index));
     }
 
     [Fact]
@@ -134,7 +145,7 @@ public class PrintTurnTriggerTests
     {
         var text = string.Concat(Enumerable.Range(1, 8).Select(index => $"## [{index}] FROM app — 2026-09-11 15:{index:00} — [agent] note {index}\n\nbody\n"));
 
-        Assert.Equal([4, 5, 6, 7, 8], PrintTurn_Trigger.Select_AgentNotes(ChannelEntry_Parser.Parse_All(text), Cursor(), NOW).Select(entry => entry.Index));
+        Assert.Equal([4, 5, 6, 7, 8], PrintTurn_Trigger.Select_AgentNotes(ChannelEntry_Parser.Parse_All(text), Delivered(Cursor()), NOW).Select(entry => entry.Index));
     }
 
     [Fact]
@@ -147,7 +158,7 @@ public class PrintTurnTriggerTests
         // it did not recognise as deliverable would be dropped there and ride the turn after.
         cursor = TurnCursor_Factory.CreateFrom_Delivered(cursor, SessionRoles.Solo, entries, []);
 
-        Assert.Equal([2], PrintTurn_Trigger.Select_AgentNotes(entries, cursor, NOW).Select(entry => entry.Index));
+        Assert.Equal([2], PrintTurn_Trigger.Select_AgentNotes(entries, Delivered(cursor), NOW).Select(entry => entry.Index));
 
         // And a note does not move the high-water mark, which is about traffic.
         Assert.Equal(1, cursor.HighWaterIndex);

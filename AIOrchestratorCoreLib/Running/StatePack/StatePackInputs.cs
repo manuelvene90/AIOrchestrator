@@ -26,7 +26,8 @@ public sealed class StatePackInputs(
     IReadOnlyList<IChannelEntry> ownerTail,
     IReadOnlyList<string> unavailable,
     string? progressNote = null,
-    string? conclusions = null)
+    string? conclusions = null,
+    IReadOnlyList<IChannelEntry>? standingNotes = null)
 {
     public string OrchId { get; } = orchId;
     public string MemberId { get; } = memberId;
@@ -65,4 +66,22 @@ public sealed class StatePackInputs(
     /// and therefore the only one whose absence is a loss rather than an inconvenience.
     /// </summary>
     public string? Conclusions { get; } = conclusions;
+
+    /// <summary>
+    /// WHAT THE APP HAS TOLD THIS SESSION AND IS STILL TRUE — the ledger advisory, the orphan report,
+    /// the refused question. Read from <see cref="Channels.StatusLog.StatusLog_Store"/>, which is where
+    /// plan 02 routed the bookkeeping that used to sit in the channel and be re-read at every boot.
+    ///
+    /// <para>
+    /// STANDING, NOT CHRONICLED, and the screen that draws that line is
+    /// <see cref="StatePackInputs_Reader.Select_StandingNotes"/>: the log keeps four hundred records
+    /// and most of them are history by the time a fresh session reads them. The turn RECORDS are
+    /// excluded outright (<c>turn_ended</c>) — they are the largest family in the log and they say what
+    /// the session already knows — and everything older than
+    /// <see cref="PrintTurn_Trigger.AGENT_NOTE_WINDOW"/> is excluded with them, because nothing in this
+    /// system ever writes a retraction: a ledger advisory answered three days ago stays the newest of
+    /// its family in the log for ever and would otherwise be handed to every session after it.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<IChannelEntry> StandingNotes { get; } = standingNotes ?? [];
 }

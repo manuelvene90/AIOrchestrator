@@ -51,7 +51,7 @@ commands, or spawn agents at boot.** Repo study happens when you HAVE a task —
 repo's `CLAUDE.md` and its full mandatory reading list BEFORE writing any code, and fan out to
 parallel agents as "Fan out" below describes. **That ban is about BOOT, not about the job.**
 
-**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If the file exists, the bridge started you FRESH (no memory of earlier turns) and wrote it for you: read it FIRST — it carries the entries that woke you, your brief, your last report, the code state and your ledger lines. Then treat the channel as a reference for facts the pack lacks, not as a to-do list, and skip the `online` greeting in step 2 (the channel already carries your earlier entries). No pack → the steps below as written.
+**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If the file exists, the bridge started you FRESH (no memory of earlier turns) and wrote it for you: read it FIRST — it carries the entries that woke you, your brief, your last report, the code state and your ledger lines. Then treat the channel as a reference for facts the pack lacks, not as a to-do list, and skip the `online` greeting in step 2 (the channel already carries your earlier entries). No pack → the steps below as written. A `## What the app has told you` section in the pack is the APP speaking to you, not the owner — act on it, never answer it as though the owner had written it.
 
 **A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 
@@ -68,13 +68,22 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
 
 - Entries start: `## [n] FROM implementer — YYYY-MM-DD HH:mm — subject`. `n` increments per channel.
   Never edit past entries.
-- **`FROM app` entries are the ORCHESTRATOR APP writing to you**, not your supervisor — the idle nudge,
-  the orphan-respawn notice, and `GO AHEAD — resume` all arrive this way. Treat them as instructions
-  from the system: act on them, and do not reply to them as though a person had written.
+- **`FROM app` entries are the ORCHESTRATOR APP writing to you**, not your supervisor — the idle nudge
+  and `GO AHEAD — resume` arrive this way. Treat them as instructions from the system: act on them,
+  and do not reply to them as though a person had written. (There is no orphan-respawn notice: this
+  line used to promise one, and the app has not respawned an orphaned member since
+  `Recover_OrphanedImplementer_Async` was deleted. What happens instead is that a member who has been
+  nudged and stays silent is REPORTED to the supervisor, in the supervisor's channel, not yours.)
   **A leading `[agent]` in the subject means the entry is addressed to you and was never texted to the
   owner** — `## [12] FROM app — … — [agent] your writing window is still open`. An app entry without it
   is owner-facing and reached their phone too. The tag is set by the app where the entry is written,
   never inferred from its wording. You never need to write it; it is there so you know who else saw it.
+- **Not every app note stays in this channel.** Where the machine sets `runners.implementer.bookkeeping`
+  to `log` (the default is `channel`, so on most machines nothing has moved), the app's bookkeeping
+  about your turns — the `turn_ended` record, the stall, usage-limit and deadline-kill notices, the
+  note that a later message superseded your report — is written to a `status.jsonl` beside this
+  channel instead of into it. The conversation with your supervisor never moves. So the ABSENCE of an
+  app note here is not evidence that what it would have reported did not happen.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
@@ -119,6 +128,32 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   SHAs, test suite counts (exact numbers), anything you disagreed with and why. Your supervisor
   verifies each report and gives feedback before you continue past a milestone. Claims without
   evidence are worthless.
+- **A brief that carries `REROUTE:` is answered with `FIXED: <commit>`.** That marker in your brief
+  means your supervisor has told the app which reviewer re-reviews this fix, and from which commit,
+  so that the round does not have to travel back through your supervisor to be passed on. Your side
+  of it is one line, at the START OF A LINE in the body of the fix report, naming the commit the
+  reviewer should diff to:
+
+  ```
+  FIXED: 9f3c1de
+  ```
+
+  **Nothing is routed without it** — no line, no relay, and your supervisor picks the round up by
+  hand exactly as it always did. Four things the app checks, and refuses rather than guesses:
+
+  - **ONE such line per report.** Two name two heads, the delta is then ambiguous, and an ambiguous
+    delta would send a reviewer a diff nobody asked for.
+  - **A commit and nothing else after the marker** — 7 to 40 hex characters. A branch name, HEAD, or
+    a sentence about the commit is refused: a delta is read between two commits, and a moving name is
+    not one.
+  - **A DIFFERENT commit from the one the brief names as already reviewed.** The same one is no
+    delta.
+  - **A quoted line declares nothing** — one that starts with `>` or a quote mark is quotation, and a
+    mention mid-sentence is discussion. So you can quote the brief back safely; to declare, put the
+    marker first on its own line.
+
+  A refusal is never an error and never blocks your report: it means only that this report did not
+  route, and your supervisor reads it as it reads every other one.
 - **You NEVER address the owner.** No questions, no updates, no messages aimed at them — your
   only interlocutor is your supervisor. A question only the owner can answer goes to the
   supervisor, who asks the owner.
@@ -327,9 +362,15 @@ The owner can send `/resume` to wake every session at once — it exists for the
 where a turn ends without doing its work and nothing would speak to you again on its own.
 
 Pick up exactly where you left off: re-read your channel from your last entry down, and if your last
-turn was cut short by a usage limit, redo that step now. If you were genuinely finished and waiting,
-say so in one line and go back to waiting — do NOT invent work to look busy, and do not re-run
-anything you already completed.
+turn was cut short — by a usage limit, by the deadline, by a failure — redo that step now. If you
+were genuinely finished and waiting, say so in one line and go back to waiting — do NOT invent work
+to look busy, and do not re-run anything you already completed.
+
+**Do not expect the channel to TELL you the turn was cut.** The app's record of your turns is
+addressed to you and not to the owner, so under `runners.<role>.bookkeeping = log` it is in your
+`status.jsonl` and not in this channel at all. What the channel always carries is your own last
+entry: if it is a report you meant to be final, you finished; if it is a closing report, or if
+nothing of yours follows the entry that woke you, you were cut.
 
 
 ## RUN TO THE END — the default is never to stop (owner directive, 2026-08-20)

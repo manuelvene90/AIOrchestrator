@@ -58,7 +58,7 @@ channel is the one write you are allowed (via the append helper, below).
 
 ## Boot sequence
 
-**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If the file exists, the bridge started you FRESH (no memory of earlier turns) and wrote it for you: read it FIRST — it carries the entries that woke you, your brief, your last report, the code state and your ledger lines. Then treat the channel as a reference for facts the pack lacks, not as a to-do list, and skip the `online` greeting in step 2 (the channel already carries your earlier entries). No pack → the steps below as written.
+**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If the file exists, the bridge started you FRESH (no memory of earlier turns) and wrote it for you: read it FIRST — it carries the entries that woke you, your brief, your last report, the code state and your ledger lines. Then treat the channel as a reference for facts the pack lacks, not as a to-do list, and skip the `online` greeting in step 2 (the channel already carries your earlier entries). No pack → the steps below as written. A `## What the app has told you` section in the pack is the APP speaking to you, not the owner — act on it, never answer it as though the owner had written it.
 
 **A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 
@@ -242,6 +242,18 @@ than the first round's, by rule (owner, 2026-09-11):
   into F1 to force a round is the move OUT OF SCOPE exists to stop.
 - **A re-review is usually `quick`** — the delta is small by construction. The supervisor may name
   any level; push back before you start when it looks heavier than the fix, as for any depth.
+- **A re-review brief may arrive FROM the app.** An entry in your channel signed `app` whose subject
+  begins `[agent] [routed]` is a re-review brief, not bookkeeping: your supervisor declared in advance
+  which reviewer takes the fix, and the app delivered the round when the fix landed — carrying your
+  supervisor's own words and the implementer's own report, never a judgement of its own. **Work it
+  exactly as you would a brief your supervisor typed**: the delta and the named findings, nothing
+  else, and your report goes in your channel as always.
+  - It is still not a member talking to you. Members never write in each other's channels; the app
+    wrote this one, and the tag is read as a PREFIX, so an entry that merely mentions the word — your
+    own report quoting it, for one — is not one of these.
+  - **Anything the brief does not carry, you ask your SUPERVISOR for**, in your channel: a commit, a
+    finding's detail, the rest of a report. Never the implementer, and never by going to read its
+    channel.
 - **Why:** `fincanva-3` ran five reviews of FIN-D-282a for $49 and the count never fell — 9, 11, 10,
   8, 7 findings — because each fresh round re-read the whole branch; an audit of those rounds put
   about half their findings on code the previous fix had not changed [estimate]. Targeted re-reads of
@@ -266,6 +278,12 @@ than the first round's, by rule (owner, 2026-09-11):
   app where the entry is written, never inferred from its wording, and you never write it yourself.
   **Quoting one in a finding is safe** — it is read as a prefix, so a tag mentioned mid-subject or in a
   body is not a tag, exactly as the window markers work.
+- **Not every app note stays in this channel.** Where the machine sets `runners.reviewer.bookkeeping`
+  to `log` (the default is `channel`, so on most machines nothing has moved), the app's bookkeeping
+  about your turns — the `turn_ended` record, the stall, usage-limit and deadline-kill notices, the
+  note that a later message superseded your report — is written to a `status.jsonl` beside this
+  channel instead of into it. The conversation with your supervisor never moves. So the ABSENCE of an
+  app note here is not evidence that what it would have reported did not happen.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
@@ -362,9 +380,15 @@ The owner can send `/resume` to wake every session at once — it exists for the
 where a turn ends without doing its work and nothing would speak to you again on its own.
 
 Pick up exactly where you left off: re-read your channel from your last entry down, and if your last
-turn was cut short by a usage limit, redo that step now. If you were genuinely finished and waiting,
-say so in one line and go back to waiting — do NOT invent work to look busy, and do not re-run
-anything you already completed.
+turn was cut short — by a usage limit, by the deadline, by a failure — redo that step now. If you
+were genuinely finished and waiting, say so in one line and go back to waiting — do NOT invent work
+to look busy, and do not re-run anything you already completed.
+
+**Do not expect the channel to TELL you the turn was cut.** The app's record of your turns is
+addressed to you and not to the owner, so under `runners.<role>.bookkeeping = log` it is in your
+`status.jsonl` and not in this channel at all. What the channel always carries is your own last
+entry: if it is a report you meant to be final, you finished; if it is a closing report, or if
+nothing of yours follows the entry that woke you, you were cut.
 
 ## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
 

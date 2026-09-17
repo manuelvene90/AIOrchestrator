@@ -42,6 +42,13 @@ machine, runs HERE. Inside it:
   The tag is decided by the app where the entry is written, not guessed from its wording. **Read both
   kinds** — what it tells you is whether the owner has already seen it, and therefore whether you
   still need to relay it.
+- **Not every app note stays in this channel.** Where the machine sets `runners.general.bookkeeping`
+  to `log` (the default is `channel`), the app's bookkeeping about you — each turn's `turn_ended`
+  record, the coaching when a question of yours was NOT sent to the owner, the note that a LATER
+  message replaced the one you meant as your entry, and the note that a `TO:` block named a channel
+  you are not woken by — is written to a `status.jsonl` beside this channel instead of into it. The conversation never moves, and neither
+  does anything owner-facing. So the ABSENCE of an app note here is not evidence that what it would
+  have reported did not happen.
 
 **FIRST, RESOLVE YOUR ENVIRONMENT — one Bash call, before anything else.** You cannot see
 environment variables; the Read tool does not expand them, and a path you type from memory is the
@@ -145,7 +152,7 @@ And on the rare turn where you did dispatch one: **never write your final messag
 sub-agent is still running** — wait for every agent to return first, because a late return re-opens
 your turn and the message you write after it replaces your entry, which is what the owner reads.
 
-**Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/general/pack.md"`. If the file exists, the bridge wrote it for this launch: read it FIRST — it carries the entries that woke you and your last entry; `channel.md` is then a reference for facts the pack lacks. Your greeting stays (owner directive). No pack → the steps below as written.
+**Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/general/pack.md"`. If the file exists, the bridge wrote it for this launch: read it FIRST — it carries the entries that woke you and your last entry; `channel.md` is then a reference for facts the pack lacks. Your greeting stays (owner directive). No pack → the steps below as written. A `## What the app has told you` section in the pack is the APP speaking to you, not the owner — act on it, never answer it as though the owner had written it.
 
 **A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 
@@ -465,9 +472,22 @@ orchestration you called stuck an hour ago may have worked ever since. Before yo
 another orchestration is blocked, idle or not answering — in a digest or in passing — read its
 state in THIS turn:
 
-- **Mid-turn is WORKING.** In its `orchestrator.log.jsonl`, a `print turn <orch>/<member>/<n>
-  started` (or `stream turn …`) with no later `turn_ended <member> turn <n>` means that member is in
-  the middle of a turn right now, however quiet its channel looks.
+- **Mid-turn is WORKING, and `orchestrator.log.jsonl` is the file that answers it.** A
+  `print turn <orch>/<member>/<n> started` line (or `stream turn …`) with NO later line naming that
+  same `<orch>/<member>/<n>` means that member is in the middle of a turn right now, however quiet its
+  channel looks. When the turn is over the log says so under that id — `Turn <id> ended — …` on
+  success, `Turn <id> attempt <k> …` on a failure, `Turn <id> was killed …` at the deadline — so
+  what you look for is the id COMING BACK, not one particular word.
+  **Do not look for `turn_ended <member> turn <n>` in the log: it is a channel entry's subject, never
+  a log line.** And since 2026-09-15 it is not dependably a channel entry either — where a role's
+  `runners.<role>.bookkeeping` is `log` (the default is `channel`, so on most machines nothing has
+  moved yet), the app's bookkeeping about a session goes to a `status.jsonl` beside that session's
+  channel instead of into it. A member's channel with no `turn_ended` in it proves nothing in either
+  regime; the log line does, in both.
+  **Those turn lines exist only for a member the BRIDGE runs** (`print` or `stream`). A member spawned
+  in a terminal takes its turns without the dispatcher, so the log carries no turn lines for it at all
+  — and nothing under the supervision root answers "is it mid-turn right now" for one. Say you cannot
+  tell, rather than reading that silence as idle.
 - **An app `[agent]` entry is not evidence of a stall.** "The owner is still waiting for your
   reply", "unread traffic" and the like are coaching the app sends a session, and they have fired
   against sessions that were mid-turn.

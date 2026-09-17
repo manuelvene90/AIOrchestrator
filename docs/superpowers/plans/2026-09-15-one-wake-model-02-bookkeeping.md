@@ -49,7 +49,7 @@ grep -rn --include='*.cs' \
   AIOrchestratorCoreLib/ | grep -v '/bin/\|/obj/'
 ```
 
-**77 sites write an app-authored channel entry.** (75 raw hits of the five append names, minus 5 that are the bodies of the pass-through helpers `Append_GeneralAppEntry`, `Append_OrchestrationAppEntry`, `Append_AppEntry_Safe`, the choke point `Append_SupervisorAttention_UnlessMeeting`, and the retry transport `Drain_PendingAnnouncements`; plus the 7 sites that write through the `Announce` queue.)
+**78 sites write an app-authored channel entry** (77 when this table was counted on 2026-09-15; `FreshSupervisor_Gate` arrived from another branch on 2026-09-16 and is classified into bucket G below, by task 4). (75 raw hits of the five append names, minus 5 that are the bodies of the pass-through helpers `Append_GeneralAppEntry`, `Append_OrchestrationAppEntry`, `Append_AppEntry_Safe`, the choke point `Append_SupervisorAttention_UnlessMeeting`, and the retry transport `Drain_PendingAnnouncements`; plus the 7 sites that write through the `Announce` queue.)
 
 | # | bucket | sites | audience | this plan |
 |---|---|---|---|---|
@@ -59,10 +59,10 @@ grep -rn --include='*.cs' \
 | D | **Contract and question coaching** — message contract broken (13084), question incomplete and NOT sent (13112), earlier question superseded (13284), question already decided (13339), question already open (13363). | **5** | `Agent` | **MOVES** (Task 9) |
 | E | **`STATUS`** — `Post_StatusEntry` (15711), whose only caller is `Push_AwayDigests_Async` (14799). | **1** | **`Owner`** | **STAYS.** See "What does not move", below. |
 | F | **Owner-facing app entries** — request confirmations and failures (`start-orchestration`, `add-implementer`, `close-*`, `promote-*`, `set-model`, `/model`, `/effort`), question defaults, topic-delete failures, the wake-ticket stall alarm, the kit refusal. | **22** | `Owner` | **STAYS.** These are the owner's phone. |
-| G | **Agent-facing conversation** — request rejections and holds the requester must act on, nudges (the member nudge whose non-answer starts the orphan clock, the idle-supervisor nudge, the two owner-is-waiting nudges), `/resume`'s GO AHEAD, the DND / AWAY-MODE on-off announcements, the malformed-header report, the merge ritual, the presence entries, the too-long-for-a-phone nudge, the guards-not-in-force marker, the idle-member flag, the kit recovery note. | **37** | `Agent` | **STAYS.** See "What does not move". |
+| G | **Agent-facing conversation** — request rejections and holds the requester must act on, nudges (the member nudge whose non-answer starts the orphan clock, the idle-supervisor nudge, the two owner-is-waiting nudges), `/resume`'s GO AHEAD, the DND / AWAY-MODE on-off announcements, the malformed-header report, the merge ritual, the presence entries, the too-long-for-a-phone nudge, the guards-not-in-force marker, the idle-member flag, the kit recovery note, and `FreshSupervisor_Gate`'s "your conclusions file is empty" notice. | **38** | `Agent` | **STAYS.** See "What does not move". |
 
 **Moved: 17 sites** — 11 unconditionally, 6 only when their audience resolves to `Agent`.
-**Unmoved: 60 sites** — 23 because they are the owner's (F + E), 37 because they are the conversation or a deliberate waker (G).
+**Unmoved: 61 sites** — 23 because they are the owner's (F + E), 38 because they are the conversation or a deliberate waker (G).
 
 ### What does not move, and why
 
@@ -80,6 +80,8 @@ grep -rn --include='*.cs' \
 
 5. **`/resume` and the AWAY/DND announcements stay.** `/resume` exists for the case where nothing else will ever speak to a session again; the away announcements change how a session behaves for hours. Both are the app speaking on the owner's behalf, and the channel is where the owner's words live.
 
+6. **`FreshSupervisor_Gate`'s notice stays — bucket G (classified 2026-09-16 by task 4).** It arrived from another branch after this table was counted, which is why the census read 78 while the table read 77. It is `Agent`-audience coaching: the refusal to make a supervisor or solo fresh while its conclusions file is empty, filed ONCE per orchestration. Two reasons it does not move, and the first is mechanical: the gate answers *"have I already said this"* by **reading the notice back out of the channel** (`Has_AlreadySaidIt`, over live + archive per decision 13), because its in-process set is dropped at every bridge restart. Route the entry and leave the reader, and the notice is re-filed at every boot — a waterfall with a longer period, which the gate's own comment names as the thing it must not become. That is brief constraint 5: the entry **is** the durable trace of the event. Moving it would be a task of the shape of Task 5 (`turn_ended` + `StallAlert_Decider` move together), and there is no such task here. The second reason is what it says: it is not a receipt for work that happened but an instruction to the supervisor to write a file — conversation, in exactly bucket G's sense — and at one entry per orchestration for ever it contributes nothing to the boot-read volume this series exists to cut.
+
 ---
 
 ## File Structure
@@ -95,7 +97,7 @@ grep -rn --include='*.cs' \
 | `AIOrchestratorCoreLib/Channels/StatusLog/BookkeepingSinks.cs` | `Channel` \| `Log`, with the config words |
 | `AIOrchestratorCoreLib/Channels/StatusLog/BookkeepingSink_Policy.cs` | resolves the sink for a role, and REFUSES `Log` where no pack is written |
 | `AIOrchestratorCoreLib/Running/StatusNotes/StatusNotes_Bookkeeper.cs` | reads the log's notes and advances their cursor, through the existing rule |
-| `AIOrchestratorCoreLib.Tests/Channels/AppAuthoredWritesCensusTests.cs` | the register: 77 sites, and a new one fails until it is classified |
+| `AIOrchestratorCoreLib.Tests/Channels/AppAuthoredWritesCensusTests.cs` | the register: 78 sites (77 when this plan was written), and a new one fails until it is classified |
 | `AIOrchestratorCoreLib.Tests/Channels/StatusLogStoreTests.cs` | |
 | `AIOrchestratorCoreLib.Tests/Channels/AppNoteRoutingTests.cs` | including the owner-never-moves oracle |
 | `AIOrchestratorCoreLib.Tests/Running/NotesRideFromTheStatusLogTests.cs` | |
@@ -970,6 +972,14 @@ git commit -F /tmp/cm.txt   # "feat(running): a bookkeeping sink per role, defau
 
 - [ ] **Step 1: Write the failing test**
 
+> **THE SKETCH BELOW PREDATES THE SIGNATURE CORRECTION.** As shipped (2026-09-16) every call passes an
+> `IPrintSessionState?` after the role config, and **every case that means to exercise the `Log` sink
+> must pass a session with `DrivesTurns: true`** — the policy refuses the log for a null state, so a
+> sketch that passes none finds its note in the channel whatever the router did with the audience, and
+> the oracle would pass for the wrong reason. Read
+> `AIOrchestratorCoreLib.Tests/Channels/AppNoteRoutingTests.cs` on this branch for the shipped shape;
+> it also adds the demoted-session case and the agent-audience counterpart of the theory.
+
 ```csharp
 // AIOrchestratorCoreLib.Tests/Channels/AppNoteRoutingTests.cs
 using AIOrchestratorCoreLib.Channels;
@@ -1182,6 +1192,7 @@ public static class AppNote_Writer
         string channelFilePath,
         string statusLogFilePath,
         IRoleRunnerConfig roleConfig,
+        IPrintSessionState? state,       // SIGNATURE AS SHIPPED 2026-09-16 — see the box at the top of this task
         AppNoteKinds kind,
         AppEntryAudiences audience,
         string subject,
@@ -2491,7 +2502,9 @@ Expected: **3 955 + the new cases passed, 10 skipped, 0 failed**, ~3 min 20 s. A
 
 Run: `~/.dotnet/dotnet test AIOrchestratorCoreLib.Tests/AIOrchestratorCoreLib.Tests.csproj --filter "FullyQualifiedName~AppAuthoredWritesCensusTests"`
 
-17 of the 77 sites now call `AppNote_Writer.Write` instead of an appender, so the raw count has changed. **Update the constants and write the new breakdown into the report**: how many sites call the router, how many still call an appender directly, and that the two add to 77 plus the helper bodies. If they do not add up, a site was converted twice or a new one was added; find it before committing.
+17 of the **78** sites now reach `AppNote_Writer` instead of calling an appender directly, so the raw count has changed. **Update the constants and write the new breakdown into the report**: how many sites call the router, how many still call an appender directly, and that the two add to 78 plus the helper bodies. If they do not add up, a site was converted twice or a new one was added; find it before committing.
+
+> **EXECUTED 2026-09-15 AT 78, NOT 77.** The count is 78 and has been since `FreshSupervisor_Gate` arrived on 2026-09-16 (see the classification table's own note). `EXPECTED_EVENT_SITES` was already 78 and needed no change; `HELPER_BODIES` was already 8. What was stale was PROSE: this plan says 77 in the places written before that date, and the census test's own METHOD NAME said `…IsOneOfTheClassifiedSeventySeven`. The method is renamed and the split is written into the file's own docstring. `AppNoteKinds.cs` and `AppNote_Writer.cs` were already correct at 78 — the briefing that sent this task believed otherwise, which is decision 18's lesson arriving from the other side: a finding about one copy is not a finding about another, and a finding also expires.
 
 - [ ] **Step 6: Commit**
 

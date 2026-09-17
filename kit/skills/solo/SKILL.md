@@ -57,7 +57,7 @@ any code.
 
 ## Boot sequence — LEAN
 
-**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If the file exists, the bridge started you FRESH (no memory of earlier turns) and wrote it for you: read it FIRST — it carries the entries that woke you, your last report, the whole ledger (PLAN.md), the last owner-channel entries and the code state. Then treat the channel as a reference for facts the pack lacks, not as a to-do list, and skip the greeting in step 2 (the channel already carries your earlier entries). No pack → the steps below as written.
+**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If the file exists, the bridge started you FRESH (no memory of earlier turns) and wrote it for you: read it FIRST — it carries the entries that woke you, your last report, the whole ledger (PLAN.md), the last owner-channel entries and the code state. Then treat the channel as a reference for facts the pack lacks, not as a to-do list, and skip the greeting in step 2 (the channel already carries your earlier entries). No pack → the steps below as written. A `## What the app has told you` section in the pack is the APP speaking to you, not the owner — act on it, never answer it as though the owner had written it.
 
 **A wake ticket that NAMES a pack settles it.** In ticket mode the ticket file carries a `statePackFile` path: read THAT pack instead of going to look for your brief, your last report or the code state yourself — the app assembled it at the moment it decided you should take this turn, so it cannot be staler than the wake itself. A ticket naming none, or no ticket at all, leaves the rule above as written.
 
@@ -117,6 +117,14 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   matters more to you than to anyone: this is the owner's channel, so an untagged app entry is
   something they have ALREADY seen and you should not repeat it back to them. The tag is set by the
   app where the entry is written, never inferred from wording, and you never write it yourself.
+- **Three app notes do not stay in this channel.** Where the machine sets `runners.solo.bookkeeping`
+  to `log` (the default is `channel`), the app's bookkeeping about your own turns — each turn's
+  `turn_ended` record, the note that a LATER message replaced the one you meant as your entry, and
+  the note that a `TO:` block named a channel you are not woken by — is written to a `status.jsonl`
+  beside this channel instead of into it. Everything else you get here stays here — the
+  conversation, the request confirmations, and the owner-facing notices about your own turns
+  (stall, usage limit), which are untagged because the owner sees them too. So the ABSENCE of an
+  app note here is not evidence that what it would have reported did not happen.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash

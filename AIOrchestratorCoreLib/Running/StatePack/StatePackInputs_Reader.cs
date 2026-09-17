@@ -1,3 +1,4 @@
+using System.Linq;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Git;
@@ -51,7 +52,69 @@ public static class StatePackInputs_Reader
             StatePack_Locator.Get_ConclusionsFile_OrNull(paths, state.Role, state.OrchId, state.MemberId),
             StatePack_Locator.CONCLUSIONS_FILE_NAME, unavailable);
 
-        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, progressNote, conclusions);
+        // NEVER TWICE IN ONE PACK. Task 10 made app notes ride the turn from the log as well as the
+        // channel, so a note that rode is in `pending` — and this reader would find the same record
+        // still standing and render it again under a different heading, one saying "act on these" and
+        // the other "the app has told you". The pending section is the more specific of the two, so
+        // it wins and this one subtracts. A merge-time defect: neither task could see it alone.
+        var ridingIdentities = pending
+            .Select(item => Channels.ChannelEntry_Digest.Compute(item.Entry))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var standingNotes = Select_StandingNotes(
+                Channels.StatusLog.StatusLog_Store.Get_File(paths, state.Role, state.OrchId, state.MemberId),
+                DateTime.Now)
+            .Where(note => !ridingIdentities.Contains(Channels.ChannelEntry_Digest.Compute(note)))
+            .ToList();
+
+        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, progressNote, conclusions, standingNotes);
+    }
+
+    /// <summary>
+    /// WHAT THE APP HAS TOLD THIS SESSION THAT IS STILL STANDING, out of a log that holds the whole
+    /// chronicle. Three screens, and each of them keeps a different kind of history out:
+    ///
+    /// <para>
+    /// (1) NOT A TURN RECORD. <c>turn_ended</c> is the largest family in the log — one per turn of
+    /// every session — and it tells a session what it did itself.
+    /// (2) NOT OLDER THAN <see cref="PrintTurn_Trigger.AGENT_NOTE_WINDOW"/>. This is the one that
+    /// matters, because nothing in this system writes a RETRACTION: the ledger advisory is appended
+    /// once per spell (<c>_ledgerBehindReportedOrchIds</c> in the engine) and when the supervisor
+    /// updates PLAN.md the advisory simply stops being repeated. Without the window, an advisory
+    /// answered three days ago would stay the newest of its family for ever and be handed to every
+    /// fresh session after it — which is worse than saying nothing, because a session cannot tell a
+    /// stale instruction from a live one.
+    /// (3) AT MOST THE NEWEST <see cref="PrintTurn_Trigger.MAXIMUM_AGENT_NOTES"/>, the same ceiling the
+    /// riding notes use: a section that grows with the traffic is the growing boot this series exists
+    /// to shrink.
+    /// </para>
+    /// <para>
+    /// ALL THREE ARE <see cref="PrintTurn_Trigger.Select_AgentNotes"/>'s, called with a cursor that has
+    /// delivered nothing. One rule, two readers (decision 12) — and the empty cursor is the difference
+    /// between the two: the riding notes skip what the session was already shown, while the pack is
+    /// read by a session that HAS no memory of having been shown anything, so a note delivered to its
+    /// predecessor is new to it. That is the whole reason this section exists beside the riding notes.
+    /// </para>
+    /// <para>
+    /// A FAILURE TO READ THE LOG IS NOT A SECTION IN <see cref="StatePackInputs.Unavailable"/>. An
+    /// absent log means a session that has been told nothing, which is the ordinary case on every
+    /// machine that has never set the <c>bookkeeping</c> key, and
+    /// <see cref="Channels.StatusLog.StatusLog_Store.Read_Entries"/> already answers <c>[]</c> for an
+    /// absent log and an unreadable one alike.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<IChannelEntry> Select_StandingNotes(string statusLogFile, DateTime nowLocal)
+    {
+        // NOTHING HAS BEEN DELIVERED, and that is the whole difference between this reader and the
+        // riding-notes one. A note rides ONCE — the cursor is how the dispatcher remembers it did —
+        // while the pack describes the state a session is handed, so it carries every note still
+        // standing whether or not that session has seen it before. A fresh session has no memory of
+        // having been shown anything, and this predicate says exactly that.
+        //
+        // It was an empty cursor until task 10 changed the parameter to a predicate (one selector,
+        // two readers, no second copy of the window rule) — same meaning, said directly.
+        return PrintTurn_Trigger.Select_AgentNotes(
+            Channels.StatusLog.StatusLog_Store.Read_Entries(statusLogFile), _ => false, nowLocal);
     }
 
     /// <summary>

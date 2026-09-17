@@ -1,9 +1,12 @@
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Channels.StatusLog;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.TurnCursor;
+using AIOrchestratorCoreLib.Running.StatusNotes;
 using AIOrchestratorCoreLib.Running.TurnSource;
 using AIOrchestratorCoreLib.Running.WakeDecision;
+using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Running.SessionCursors;
 
@@ -69,9 +72,26 @@ public static class SessionCursors_Bookkeeper
         // nobody counts; dropping it costs a supervisor re-answering every member it has.
         foreach (var cursor in state.Cursors)
         {
+            // THE STATUS LOG'S CURSOR IS NOT A STALE SOURCE KEY, it is a key that is not a source at
+            // all and never will be (StatusNotes_Bookkeeper's header says why it must not become one).
+            // Falling through the test above would be harmless today and would become a DUPLICATE the
+            // moment Advance re-adds it — two `.status` rows in the cursors array, one of them frozen
+            // at whatever it said when the session last had a source-less read, and the resolver's
+            // FirstOrDefault picking whichever the writer happened to put first. Kept once, below.
+            if (SOURCE_KEYS.Equals(cursor.SourceKey, StatusLog_Store.CURSOR_KEY))
+                continue;
+
             if (!sources.Any(source => SOURCE_KEYS.Equals(source.Key, cursor.SourceKey)))
                 cursors.Add(cursor);
         }
+
+        // AND THEN RE-ADDED UNCHANGED, because this read is what PERSISTS the cursor set: skipping it
+        // above and not putting it back would drop the log's delivery record on the first read that
+        // meets a new source, and every note the session had already been shown would ride again.
+        var statusCursor = StatusNotes_Bookkeeper.Find_Cursor_OrNull(state);
+
+        if (statusCursor != null)
+            cursors.Add(statusCursor);
 
         if (changed)
         {
@@ -88,6 +108,7 @@ public static class SessionCursors_Bookkeeper
     /// sweep writes it beside the ticket.
     /// </summary>
     public static IReadOnlyList<ITurnCursor> Advance(
+        ISupervisionPaths paths,
         IPrintSessionState state,
         IReadOnlyList<ITurnSource> sources,
         IReadOnlyList<PendingEntry> pending,
@@ -117,6 +138,29 @@ public static class SessionCursors_Bookkeeper
 
             advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
         }
+
+        // THE LOG'S CURSOR, ADVANCED WITH THE SAME SET AND IN THE SAME WRITE. A note that rode this
+        // turn is delivered exactly as a channel entry is; recorded in a second write it could survive
+        // a crash that lost the turn, or the reverse.
+        //
+        // WHICH OF THE PENDING ENTRIES CAME FROM THE LOG IS ASKED OF THE LOG, not remembered: the
+        // notes are labelled under the session's own source (WakeDecision_Resolver.With_AgentNotes) so
+        // that the prompt reads right, and re-deriving here is one read of a small file against
+        // carrying a flag through five signatures.
+        //
+        // ONCE THERE IS SOMETHING TO REMEMBER, AND THEN FOR EVER AFTER. Advance's answer REPLACES the
+        // session's cursor set, so a tick that omitted an EXISTING `.status` cursor would erase the
+        // record of every note already delivered and hand them all over again on the next turn — hence
+        // the `!= null` half. The other half is why this is not simply unconditional, which is what the
+        // plan asked for: a session whose role has never had its bookkeeping routed (the default, and
+        // every session on both of the owner's machines until somebody sets the key) would otherwise
+        // grow an EMPTY `.status` row in its state file that records nothing, carries nothing and
+        // changes what every cursor-counting reader sees. The row appears when the first note rides.
+        var logDigests = StatusNotes_Bookkeeper.Read_Entries(paths, state).Select(ChannelEntry_Digest.Compute).ToHashSet();
+        var handedFromLog = pending.Where(item => logDigests.Contains(ChannelEntry_Digest.Compute(item.Entry))).Select(item => item.Entry).ToList();
+
+        if (handedFromLog.Count > 0 || StatusNotes_Bookkeeper.Find_Cursor_OrNull(state) != null)
+            advanced.Add(StatusNotes_Bookkeeper.Advance(paths, state, handedFromLog));
 
         return advanced;
     }
