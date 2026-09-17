@@ -100,6 +100,25 @@ public static class Settings_Resolver
     /// <c>-1001234567890</c>, which does not fit <see cref="int"/>. An accessor that called
     /// <c>GetValue&lt;int&gt;()</c> would throw on exactly the values the catalogue was widened to
     /// accept.
+    ///
+    /// <para>
+    /// AND IT READS ITS OWN SHIPPED DEFAULT (fixed 2026-09-17). Until this fix the accessor threw
+    /// <see cref="InvalidOperationException"/> on the DEFAULT layer of every <c>Kind = Int</c> row
+    /// carrying a non-null shipped default — that is, on an unconfigured machine, which is the
+    /// ordinary case. <see cref="SettingDefinition_Factory.Create_Int"/> boxes the default with
+    /// <c>JsonValue.Create(int)</c>, and a VALUE-backed <see cref="JsonValue"/> demands an exact type
+    /// match from <c>GetValue&lt;T&gt;()</c>, unlike a node parsed from real JSON text, which is
+    /// element-backed and converts freely between numeric types. So the layer the accessor exists to
+    /// fall back to was the one layer it could not read. It went unseen because the three Kind=Int
+    /// rows that existed were all NULLABLE with a null default, where <c>value?.</c> short-circuits
+    /// before the cast — and because this accessor had no production caller at all until the
+    /// <c>reviewing.*</c> dials, whose defaults are not null. Found by that block's round-trip test.
+    /// </para>
+    /// <para>
+    /// BOTH SHAPES, AND STILL LOUD ON A WRONG ONE: an int and a long are both read, anything else
+    /// still throws out of <c>GetValue&lt;long&gt;()</c> rather than becoming a quiet fallback — a
+    /// setting whose value is a string is a fault to report, not a default to substitute.
+    /// </para>
     /// </summary>
     public static long? Resolve_Long(
         ISettingDefinition definition,
@@ -110,7 +129,14 @@ public static class Settings_Resolver
         Require_Kind(definition, SettingKinds.Int);
 
         var (value, _) = Resolve(definition, presetTree, configTree, session);
-        return value?.GetValue<long>();
+
+        if (value == null)
+            return null;
+
+        if (value is JsonValue jsonValue && jsonValue.TryGetValue<int>(out var asInt))
+            return asInt;
+
+        return value.GetValue<long>();
     }
 
     static void Require_Kind(ISettingDefinition definition, params SettingKinds[] accepted)

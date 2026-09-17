@@ -272,6 +272,58 @@ public class SettingsResolverTests
     }
 
     /// <summary>
+    /// RESOLVE_LONG READS ITS OWN SHIPPED DEFAULT (defect fixed 2026-09-17). It used to throw
+    /// <see cref="InvalidOperationException"/> on exactly that layer for any <c>Kind = Int</c> row
+    /// carrying a non-null default: <c>SettingDefinition_Factory.Create_Int</c> boxes the default with
+    /// <c>JsonValue.Create(int)</c>, and a VALUE-backed JsonValue demands an exact type match from
+    /// <c>GetValue&lt;T&gt;()</c>, unlike a node parsed from JSON TEXT, which converts freely. So the
+    /// accessor could read a configured value and not the default it exists to fall back to — on an
+    /// unconfigured machine, the ordinary case.
+    ///
+    /// <para>
+    /// It survived because the only Kind=Int rows were nullable with a NULL default, where
+    /// <c>value?.</c> short-circuits ahead of the cast, and because the accessor had no production
+    /// caller at all until <c>reviewing.*</c>. Both shapes are asserted here, since the bug is
+    /// precisely that the two layers are backed differently: the default comes from a value-backed
+    /// node and the configured value from parsed text.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ResolveLong_ReadsAnIntBackedShippedDefault_AndAParsedConfiguredValue()
+    {
+        var definition = Catalog.Find_OrNull("reviewing.reviewCapMinutes")!;
+
+        Assert.Equal(90L, Settings_Resolver.Resolve_Long(definition, presetTree: null, configTree: null, session: null));
+
+        var configured = Tree("""{"reviewing":{"reviewCapMinutes":45}}""");
+
+        Assert.Equal(45L, Settings_Resolver.Resolve_Long(definition, presetTree: null, configTree: configured, session: null));
+    }
+
+    /// <summary>
+    /// AND IT IS STILL LOUD ON A WRONG SHAPE. The tolerance added above is for the numeric BACKING of
+    /// a node, never for its type: a setting whose value is a string is a fault to report, not a
+    /// default to substitute quietly — the same reason <c>Require_Kind</c> throws rather than coercing.
+    /// </summary>
+    [Fact]
+    public void ResolveLong_StillThrows_OnAValueThatIsNotANumber()
+    {
+        var definition = Catalog.Find_OrNull("reviewing.reviewCapMinutes")!;
+
+        // Past the definition's own validator, which would refuse it in the config layer: the flat
+        // whole-path key is read first, and this asserts the ACCESSOR's behaviour on a node it is
+        // handed, not the validator's.
+        var configured = Tree("""{"reviewing.reviewCapMinutes":"ninety"}""");
+
+        var resolved = Settings_Resolver.Resolve(definition, presetTree: null, configTree: configured, session: null);
+
+        // The validator refuses the string, so the resolver falls THROUGH to the shipped default —
+        // which is the behaviour that matters, and it must be the number, not an exception.
+        Assert.Equal(SettingOrigins.ShippedDefault, resolved.Origin);
+        Assert.Equal(90L, Settings_Resolver.Resolve_Long(definition, presetTree: null, configTree: configured, session: null));
+    }
+
+    /// <summary>
     /// A hand-rolled stub, not a mock: every member IOrchestrationSession declares throws
     /// NotSupportedException except the seven <see cref="SessionScoped_Reader"/> actually touches, so
     /// a resolver call that strays onto an unrelated member fails loudly rather than returning a

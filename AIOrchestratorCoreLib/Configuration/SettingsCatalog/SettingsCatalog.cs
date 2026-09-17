@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingDefinition;
 using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Mirroring;
+using AIOrchestratorCoreLib.Reviewing;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
@@ -581,9 +582,65 @@ public static class SettingsCatalog
                 "named parser is the authority, and a mistyped kind stays LOUD there rather than quietly becoming a default.",
             restart: RestartKinds.Host));
 
+        kernel.AddRange(Build_Reviewing());
         kernel.AddRange(Build_SessionState());
 
         return kernel;
+    }
+
+    /// <summary>
+    /// THE RE-REVIEW SWEEP'S THREE DIALS, PARKED UNDER DECISION 22 UNTIL NOW: <see cref="RerouteContract_Policy.REVIEW_CAP"/>,
+    /// <see cref="RerouteContract_Policy.HOLD_CEILING"/> and <see cref="RerouteContract_Store.HANDLED_MEMORY"/> were
+    /// compiled constants with no config.json, preset or settings-surface path — exactly the gap the
+    /// <c>wake</c> and <c>bookkeeping</c> rows above close for the runner block. Every shipped default
+    /// is READ from the constant that already governs an unconfigured machine, never retyped as a
+    /// literal, so registering these rows changes nothing for a machine whose config.json says nothing.
+    /// </summary>
+    static IReadOnlyList<ISettingDefinition> Build_Reviewing()
+    {
+        return
+        [
+            SettingDefinition_Factory.Create_Int(
+                path: $"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.REVIEW_CAP_MINUTES_KEY}",
+                shippedDefault: (int)RerouteContract_Policy.REVIEW_CAP.TotalMinutes,
+                minimum: 1,
+                maximum: 1440,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Kernel,
+                label: "Re-review cap (minutes)",
+                description:
+                    "How long a routed re-review contract holds the supervisor out of the loop. Past it the hold is " +
+                    "released, the fix report reaches the supervisor on the ordinary digest instead, and one entry says " +
+                    "the re-review never came back.",
+                restart: RestartKinds.Host),
+
+            SettingDefinition_Factory.Create_Int(
+                path: $"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.HOLD_CEILING_MINUTES_KEY}",
+                shippedDefault: (int)RerouteContract_Policy.HOLD_CEILING.TotalMinutes,
+                minimum: 1,
+                maximum: 2880,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Kernel,
+                label: "Re-review hold ceiling (minutes)",
+                description:
+                    "The absolute ceiling on a re-review hold. Past it the hold is released with a log line and no " +
+                    "owner-facing entry, even when the release itself keeps being refused (for example while the owner " +
+                    "is at the terminal) — the backstop against a supervisor held out of a round for ever.",
+                restart: RestartKinds.Host),
+
+            SettingDefinition_Factory.Create_Int(
+                path: $"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.HANDLED_MEMORY_KEY}",
+                shippedDefault: RerouteContract_Store.HANDLED_MEMORY,
+                minimum: 1,
+                maximum: 5000,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Kernel,
+                label: "Re-review handled memory",
+                description:
+                    "How many finished re-review declarations an orchestration remembers, so a stale REROUTE: directive " +
+                    "still sitting in an implementer's channel cannot re-open a round that has already closed.",
+                restart: RestartKinds.Host),
+        ];
     }
 
     /// <summary>

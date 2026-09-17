@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Channels.StatusLog;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
+using AIOrchestratorCoreLib.Reviewing;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
@@ -259,5 +260,100 @@ public class SettingsCatalogTests
 
         Assert.Equal(SettingKinds.Enum, ownerPresence.Kind);
         Assert.Equal(SettingRenderers.ReadOnly, ownerPresence.Renderer);
+    }
+
+    /// <summary>
+    /// THE GAP THIS TASK CLOSES. <see cref="RerouteContract_Policy.REVIEW_CAP"/>,
+    /// <see cref="RerouteContract_Policy.HOLD_CEILING"/> and <see cref="RerouteContract_Store.HANDLED_MEMORY"/>
+    /// were compiled constants with no catalogue row — settable only by editing the .cs file and
+    /// rebuilding, unlike <c>wake</c> and <c>bookkeeping</c> beside them in the runner block. Named
+    /// individually rather than in a loop: there is no role dimension here, only the three dials.
+    /// </summary>
+    [Fact]
+    public void AllThreeReviewingDials_HaveACatalogueRow()
+    {
+        Assert.NotNull(Catalog.Find_OrNull($"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.REVIEW_CAP_MINUTES_KEY}"));
+        Assert.NotNull(Catalog.Find_OrNull($"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.HOLD_CEILING_MINUTES_KEY}"));
+        Assert.NotNull(Catalog.Find_OrNull($"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.HANDLED_MEMORY_KEY}"));
+    }
+
+    /// <summary>
+    /// THE DEFAULTS MUST NOT MOVE, for all three. <see cref="RerouteContract_Policy.REVIEW_CAP"/> and
+    /// <see cref="RerouteContract_Policy.HOLD_CEILING"/> are TimeSpans and the catalogue row is an Int
+    /// of minutes, so this also pins the unit conversion — a machine that states nothing must resolve
+    /// to exactly 90 and 180 minutes, not a rounding artifact of the TimeSpan-to-int cast.
+    /// </summary>
+    [Fact]
+    public void TheReviewingShippedDefaults_MatchTheCompiledConstants()
+    {
+        var reviewCap = Catalog.Find_OrNull($"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.REVIEW_CAP_MINUTES_KEY}")!;
+        var holdCeiling = Catalog.Find_OrNull($"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.HOLD_CEILING_MINUTES_KEY}")!;
+        var handledMemory = Catalog.Find_OrNull($"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.HANDLED_MEMORY_KEY}")!;
+
+        Assert.Equal(90, reviewCap.Default_OrNull!.GetValue<int>());
+        Assert.Equal((int)RerouteContract_Policy.REVIEW_CAP.TotalMinutes, reviewCap.Default_OrNull!.GetValue<int>());
+
+        Assert.Equal(180, holdCeiling.Default_OrNull!.GetValue<int>());
+        Assert.Equal((int)RerouteContract_Policy.HOLD_CEILING.TotalMinutes, holdCeiling.Default_OrNull!.GetValue<int>());
+
+        Assert.Equal(200, handledMemory.Default_OrNull!.GetValue<int>());
+        Assert.Equal(RerouteContract_Store.HANDLED_MEMORY, handledMemory.Default_OrNull!.GetValue<int>());
+    }
+
+    /// <summary>
+    /// AND UNCONFIGURED MEANS UNCHANGED THROUGH THE ACTUAL READER, not just at the catalogue row: the
+    /// three resolvers must hand back exactly the pre-existing compiled constants when both trees are
+    /// null, which is the ordinary case for every machine today.
+    /// </summary>
+    [Fact]
+    public void TheReviewingResolvers_ReturnTheCompiledDefaults_WhenNothingIsConfigured()
+    {
+        Assert.Equal(RerouteContract_Policy.REVIEW_CAP, RerouteContract_Policy.Resolve_ReviewCap(null, null));
+        Assert.Equal(RerouteContract_Policy.HOLD_CEILING, RerouteContract_Policy.Resolve_HoldCeiling(null, null));
+        Assert.Equal(RerouteContract_Store.HANDLED_MEMORY, RerouteContract_Policy.Resolve_HandledMemory(null, null));
+    }
+
+    /// <summary>
+    /// THE ROUND TRIP, THROUGH THE ACTUAL READER — the same proof
+    /// <see cref="AWakeAndBookkeepingValue_WrittenAtTheCataloguePath_RoundTripsThroughRunnerConfigsJson"/>
+    /// gives the runner block. A value written at the catalogue's own path
+    /// (<see cref="SettingsJson_Path.Write"/>) must come back out of
+    /// <see cref="RerouteContract_Policy.Resolve_ReviewCap"/> / <see cref="RerouteContract_Policy.Resolve_HoldCeiling"/>
+    /// / <see cref="RerouteContract_Policy.Resolve_HandledMemory"/> as the configured value, and a
+    /// dial that was NOT written must still answer its own default — proving the write landed at its
+    /// own key rather than at the wrong one of the three, or leaking a stale value into a sibling.
+    /// </summary>
+    [Fact]
+    public void AReviewingValue_WrittenAtTheCataloguePath_RoundTripsThroughTheResolvers()
+    {
+        var configRoot = new JsonObject();
+
+        SettingsJson_Path.Write(
+            configRoot,
+            $"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.REVIEW_CAP_MINUTES_KEY}",
+            JsonValue.Create(45));
+
+        Assert.Equal(TimeSpan.FromMinutes(45), RerouteContract_Policy.Resolve_ReviewCap(null, configRoot));
+
+        // THE OTHER TWO WERE NOT WRITTEN — they must still answer their own defaults, not 45 and not
+        // each other's, proving the write landed only at reviewCapMinutes.
+        Assert.Equal(RerouteContract_Policy.HOLD_CEILING, RerouteContract_Policy.Resolve_HoldCeiling(null, configRoot));
+        Assert.Equal(RerouteContract_Store.HANDLED_MEMORY, RerouteContract_Policy.Resolve_HandledMemory(null, configRoot));
+
+        var secondRoot = new JsonObject();
+
+        SettingsJson_Path.Write(
+            secondRoot,
+            $"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.HOLD_CEILING_MINUTES_KEY}",
+            JsonValue.Create(240));
+
+        SettingsJson_Path.Write(
+            secondRoot,
+            $"{RerouteContract_Policy.REVIEWING_KEY}.{RerouteContract_Policy.HANDLED_MEMORY_KEY}",
+            JsonValue.Create(500));
+
+        Assert.Equal(TimeSpan.FromMinutes(240), RerouteContract_Policy.Resolve_HoldCeiling(null, secondRoot));
+        Assert.Equal(500, RerouteContract_Policy.Resolve_HandledMemory(null, secondRoot));
+        Assert.Equal(RerouteContract_Policy.REVIEW_CAP, RerouteContract_Policy.Resolve_ReviewCap(null, secondRoot));
     }
 }

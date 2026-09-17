@@ -1,3 +1,4 @@
+using System.Reflection;
 using AIOrchestratorCoreLib.Bridge;
 using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Telegram;
@@ -96,6 +97,60 @@ public class ChannelGrammarTests
 
         // And they are DISTINCT, or two recognisers would fire on one line.
         Assert.Equal(markers.Length, markers.Distinct().Count());
+    }
+
+    /// <summary>
+    /// EACH MARKER IS A CACHED FIELD, NOT A RECOMPUTED PROPERTY (defect found 2026-09-16). Until this
+    /// fix every one of these 22 names was `public static string X => Marker("x");`, so every single
+    /// READ walked the embedded JSON document from ROOT down through "markers" — allocating the path
+    /// array and calling <c>GetValue&lt;string&gt;()</c> — instead of the value being resolved once at
+    /// type load, the way <see cref="ChannelGrammar.All_Markers"/> already was.
+    ///
+    /// <para>
+    /// THIS IS A REFLECTION CHECK ON PURPOSE. A value-equality assertion (the marker still reads
+    /// "QUESTION:", say) stays GREEN whether the member is a cached field or a property recomputed on
+    /// every access — the two are indistinguishable by their output, only by their shape. So this asks
+    /// the type directly: is `X` a `static readonly` FIELD, and is the same-named PROPERTY gone. A
+    /// revert to `=>` would fail this test and pass every other one in this file.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("QUESTION")]
+    [InlineData("OPTION")]
+    [InlineData("RECOMMEND")]
+    [InlineData("RISK")]
+    [InlineData("ROW")]
+    [InlineData("DEADLINE")]
+    [InlineData("DEFAULT")]
+    [InlineData("IMAGE")]
+    [InlineData("ATTACH")]
+    [InlineData("STATE")]
+    [InlineData("REROUTE")]
+    [InlineData("FIXED")]
+    [InlineData("BLOCKED_ON_OWNER")]
+    [InlineData("ANSWERED")]
+    [InlineData("STANDING_BY")]
+    [InlineData("WRITING_WINDOW_OPEN")]
+    [InlineData("WRITING_WINDOW_CLOSED")]
+    [InlineData("MUTATION_WINDOW_OPEN")]
+    [InlineData("MUTATION_WINDOW_CLOSED")]
+    [InlineData("BOOT_ANNOUNCEMENT_WORD")]
+    [InlineData("TO")]
+    [InlineData("WORKTREE")]
+    public void EveryMarkerWord_IsAStaticReadonlyField_NotARecomputedProperty(string memberName)
+    {
+        var field = typeof(ChannelGrammar).GetField(memberName, BindingFlags.Public | BindingFlags.Static);
+
+        Assert.False(
+            field == null,
+            $"ChannelGrammar.{memberName} is not a `static readonly` field — it must not go back to a property " +
+            "computed with Marker(key), which re-parses the embedded JSON document on every single read.");
+
+        Assert.True(field!.IsInitOnly, $"ChannelGrammar.{memberName} must be declared `readonly`.");
+
+        // AND THE PROPERTY IS GONE — pins the actual regression (a stray `=>` re-appearing) rather
+        // than trusting that a field existing means the property does not.
+        Assert.Null(typeof(ChannelGrammar).GetProperty(memberName, BindingFlags.Public | BindingFlags.Static));
     }
 
     /// <summary>
