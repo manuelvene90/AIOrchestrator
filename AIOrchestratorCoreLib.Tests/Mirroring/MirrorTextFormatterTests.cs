@@ -121,7 +121,50 @@ public class MirrorTextFormatterTests
         var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("general", "unused");
         var entry = Build_Entry(ChannelAuthors.App, "orchestration 'crm-2' closed", "Sessions ended; folder kept as audit trail; Telegram topic deleted.");
 
-        Assert.Equal("⚙ App: orchestration 'crm-2' closed", MirrorText_Formatter.Format(ownerChannel, entry));
+        Assert.Equal($"⚙ {AppSource_Label.Describe()}: orchestration 'crm-2' closed", MirrorText_Formatter.Format(ownerChannel, entry));
+    }
+
+    /// <summary>
+    /// THE APP INTRODUCES ITSELF: the system AND the machine (owner request 2026-09-17). The message
+    /// that prompted it came from another system entirely — Coolify's *"Server 'localhost' high disk
+    /// usage detected"* — and was unreadable for one reason: nothing in it said which machine. The
+    /// owner's notices arrive from several hosts, and "⚙ App: kit check FAILED" had the same hole.
+    /// </summary>
+    [Fact]
+    public void Format_App_NamesTheSystemAndTheMachine_SoTheOwnerKnowsWhoIsTexting()
+    {
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("general", "unused");
+        var entry = Build_Entry(ChannelAuthors.App, "kit not up to date", "detail");
+
+        var (speaker, _) = MirrorText_Formatter.Format_Parts(ownerChannel, entry);
+
+        Assert.Contains(AppSource_Label.SYSTEM, speaker);
+        Assert.Contains(Environment.MachineName, speaker);
+
+        // "App" alone was the whole defect: it names the speaker's ROLE and not its address.
+        Assert.DoesNotContain("App:", speaker);
+    }
+
+    /// <summary>
+    /// ...AND THE AGENTS DO NOT, which is the owner's choice between the three options offered
+    /// (2026-09-17): an agent's message already arrives inside its orchestration's own Telegram
+    /// topic, so the topic answers "whose is this" and a prefix on every line would be exactly the
+    /// repetition decision 14 exists to prevent. The app is the only speaker with no topic of its
+    /// own. Pinned so that widening it later is a decision somebody makes on purpose.
+    /// </summary>
+    [Theory]
+    [InlineData(ChannelAuthors.Supervisor)]
+    [InlineData(ChannelAuthors.Solo)]
+    [InlineData(ChannelAuthors.Communicator)]
+    public void Format_AnAgentsVoice_CarriesNoSourceLabel(ChannelAuthors author)
+    {
+        var ownerChannel = DiscoveredChannel_Factory.Create_ForOwner("crm-2", "unused");
+        var entry = Build_Entry(author, "online", "the body");
+
+        var (speaker, _) = MirrorText_Formatter.Format_Parts(ownerChannel, entry);
+
+        Assert.DoesNotContain(AppSource_Label.SYSTEM, speaker);
+        Assert.DoesNotContain(Environment.MachineName, speaker);
     }
 
     [Fact]

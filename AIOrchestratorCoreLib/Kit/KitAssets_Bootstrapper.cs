@@ -31,8 +31,16 @@ public static class KitAssets_Bootstrapper
     public const string WINDOWS_STATUSLINE_SCRIPT = "statusline.ps1";
     public const string POSIX_STATUSLINE_SCRIPT = "statusline.sh";
 
-    /// <summary>The subject of the one owner-facing entry a bad kit produces.</summary>
-    public const string REFUSAL_SUBJECT = "kit check FAILED — no session will start";
+    /// <summary>
+    /// The subject of the one owner-facing entry a bad kit produces — AND IT CARRIES THE FIX,
+    /// because for an app entry the SUBJECT IS THE WHOLE PHONE MESSAGE: the mirror sends
+    /// <c>entry.Subject</c> and drops the body as agent-facing detail
+    /// (<c>MirrorText_Formatter.Format_Parts</c>). Measured by reading that formatter on
+    /// 2026-09-17: the careful refusal <see cref="PluginVersion_Verifier.Describe"/> builds, command
+    /// first, reaches the log and the channel and NEVER the owner's phone, which got only
+    /// "kit check FAILED — no session will start" — true, urgent, and with nothing to do about it.
+    /// </summary>
+    public const string REFUSAL_SUBJECT = $"kit not up to date — no session will start. Fix: {KitPlugin.INSTALLER_COMMAND}";
 
     /// <summary>
     /// The subject of the entry written when a check that had FAILED passes again. Agent-facing:

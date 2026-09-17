@@ -77,7 +77,11 @@ public static class MirrorText_Formatter
             // is agent-facing detail the owner explicitly does not want texted. The ONE exception
             // is the periodic STATUS, whose body is the report — it rides the channel precisely so
             // that Do-Not-Disturb queues it (and collapses it to the newest) instead of dropping it.
-            ChannelAuthors.App => Is_StatusEntry(entry) ? (string.Empty, Pick_Content(entry)) : ("⚙ App: ", entry.Subject),
+            // NAMES THE SYSTEM AND THE MACHINE, not just "App" (owner request 2026-09-17, prompted by
+            // a Coolify alert about a server called 'localhost'). The app is the one speaker with no
+            // topic of its own, so it is the one that has to introduce itself; see
+            // <see cref="AppSource_Label"/> for why the agents' voices do not.
+            ChannelAuthors.App => Is_StatusEntry(entry) ? (string.Empty, Pick_Content(entry)) : ($"⚙ {AppSource_Label.Describe()}: ", entry.Subject),
 
             // Supervisor entries: the body is the message; the subject is channel metadata.
             // The GENERAL supervisor speaks with its own color so the owner never confuses

@@ -163,6 +163,23 @@ public class KitVerifierScopeIsStatedInBothPlacesTests : IDisposable
         Assert.DoesNotContain("byte-identical to this build's kit", channel);
     }
 
+    /// <summary>
+    /// THE SUBJECT IS THE WHOLE PHONE MESSAGE for an app entry — the mirror sends entry.Subject and
+    /// drops the body as agent-facing detail (MirrorText_Formatter.Format_Parts). So the careful
+    /// refusal built above, command first, reached the log and the channel and NEVER the owner: what
+    /// their phone got was "kit check FAILED — no session will start", which is true, urgent, and
+    /// gives them nothing to do. Found by reading the formatter on 2026-09-17, after the owner asked
+    /// what the notifications they receive are actually for.
+    /// </summary>
+    [Fact]
+    public void ThePhoneFacingSubject_CarriesTheFix_BecauseTheBodyNeverLeavesTheChannel()
+    {
+        Assert.Contains(KitPlugin.INSTALLER_COMMAND, KitAssets_Bootstrapper.REFUSAL_SUBJECT);
+
+        // One line: a subject spanning lines would break the channel header it is written into.
+        Assert.DoesNotContain('\n', KitAssets_Bootstrapper.REFUSAL_SUBJECT);
+    }
+
     // ── The one genuine hole in the check ────────────────────────────────────────────────────
 
     /// <summary>
