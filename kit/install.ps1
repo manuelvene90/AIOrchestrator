@@ -80,7 +80,22 @@ if ($null -ne $claudeCmd) {
     # STRING, so a commit that changes a role protocol without bumping plugin.json leaves the cached
     # copy untouched and reports "already at the latest version". Only uninstall-then-install refreshes
     # it. Compared by file hash rather than by commit, so UNCOMMITTED edits are caught too.
-    function Get-KitContentSignature([string] $folder) {
+    # WHAT THE HOST'S STARTUP CHECK COMPARES, which is NARROWER than what this script compares. The
+    # host (AIOrchestratorCoreLib/Kit/KitContent_Digest.cs, `SCOPE_DECLARATION`) digests only the
+    # files a SESSION reads out of the cache; this script compares the whole folder, because its job
+    # is that the cache be a faithful copy and its remedy — reinstall — is cheap and stops nobody.
+    #
+    # MEASURED ON THE VPS, 2026-09-17: the daemon logged "content verified — the installed files are
+    # byte-identical to this build's kit" and, minutes later, install.sh said "the installed copy
+    # differs from this checkout" about the same cache. Both were right about their own scope (the
+    # one stale file was `install.sh`, which IS in the cache and which the host does not digest) and
+    # the daemon's SENTENCE was false. The sentence is fixed at the host; the scopes stay different
+    # on purpose, because the host's verdict REFUSES TO SPAWN and a stale README must not stop work.
+    # The difference is written here too, so a reader who sees the two disagree can tell why from
+    # either one. `KitVerifierScopeIsStatedInBothPlacesTests` compares this list to the C# one.
+    $hostVerifiedScope = @('skills', 'hooks', 'bin', 'grammar', '.claude-plugin/plugin.json')
+
+    function Get-KitContentSignature([string] $folder, [string[]] $only) {
         if ([string]::IsNullOrWhiteSpace($folder) -or -not (Test-Path -LiteralPath $folder)) { return $null }
 
         $root = (Resolve-Path -LiteralPath $folder).Path
@@ -90,6 +105,11 @@ if ($null -ne $claudeCmd) {
         # would call that identical.
         $lines = Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
             $relative = $_.FullName.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+
+            # $only restricts the walk to the host's scope, for the second question below. `return`
+            # inside ForEach-Object skips this item, it does not leave the function.
+            if ($null -ne $only -and -not ($only | Where-Object { $relative -eq $_ -or $relative.StartsWith("$_/") })) { return }
+
             "$relative $((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
         } | Sort-Object
 
@@ -98,6 +118,12 @@ if ($null -ne $claudeCmd) {
 
     $checkoutSignature = Get-KitContentSignature $kitFolder
     $installedSignature = Get-KitContentSignature $installed.installPath
+
+    # THE SAME QUESTION ASKED THE HOST'S WAY, so the message below can name WHICH component will
+    # complain: a difference inside this set is a spawn refusal at the next host start, one outside
+    # it is this script's business alone.
+    $checkoutScopeSignature = Get-KitContentSignature $kitFolder $hostVerifiedScope
+    $installedScopeSignature = Get-KitContentSignature $installed.installPath $hostVerifiedScope
 
     # THE HOST'S OWN VERIFIER READS gitCommitSha TOO (PluginVersion_Verifier), NOT ONLY THIS
     # SCRIPT'S file-hash compare — the twin of the block below and of install.sh. On the VPS on
@@ -122,7 +148,13 @@ if ($null -ne $claudeCmd) {
     if ($null -eq $installedSignature -or $installedSignature -ne $checkoutSignature -or $shaMismatch) {
         $why =
             if ($null -eq $installedSignature) { 'its install path is missing' }
-            elseif ($installedSignature -ne $checkoutSignature) { 'the installed copy differs from this checkout' }
+            elseif ($installedSignature -ne $checkoutSignature) {
+                if ($installedScopeSignature -eq $checkoutScopeSignature) {
+                    "the installed copy differs from this checkout, OUTSIDE the set the host checks ($($hostVerifiedScope -join ' ')) — so the host's own kit check is right to say OK and sessions are not blocked; reinstalling anyway, because the cache should be a faithful copy"
+                } else {
+                    "the installed copy differs from this checkout, INSIDE the set the host checks ($($hostVerifiedScope -join ' ')) — the host will REFUSE to spawn sessions until this is reinstalled"
+                }
+            }
             else { "the installed record's commit ($installedSha) differs from this checkout's HEAD ($checkoutSha) — the host's verifier reads this field even when the text compares identical" }
         Write-Host "aiorch: $why — REINSTALLING (an update would report success and change nothing)." -ForegroundColor Yellow
 

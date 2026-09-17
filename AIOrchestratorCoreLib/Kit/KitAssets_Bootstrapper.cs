@@ -162,11 +162,19 @@ public static class KitAssets_Bootstrapper
             // THE OK LINE NAMES WHAT WAS COMPARED, or names what it could not compare. "Kit check OK"
             // over a cache holding a different commit is the exact sentence that cost the 2026-09-07
             // evening on the VPS, and it was true of the only thing it had checked: the number.
+            //
+            // AND IT NAMES THE SCOPE, because the sentence it used to carry — "the installed files
+            // are byte-identical to this build's kit" — was FALSE and was measured false on the VPS
+            // on 2026-09-17: it said that at 20:03:22 over a cache whose `install.sh` was the older
+            // one, which `bash kit/install.sh` then reported and reinstalled minutes later. The
+            // check reads a NARROWER set than the kit on purpose (KitContent_Digest says why), so
+            // the claim is now the size of the check. No file this host actually opened went
+            // unchecked; it simply no longer speaks for the ones it never opened.
             var content =
-                contentMatches == true ? "content verified — the installed files are byte-identical to this build's kit"
+                contentMatches == true ? $"{KitContent_Digest.Describe_Scope()} match this build. The rest of the kit is not compared here — {KitPlugin.INSTALLER_COMMAND} compares all of it"
                 : buildCommit == null ? "content NOT VERIFIED — this build carries no commit stamp and the installed files could not be compared"
                 : reading.CommitSha == null ? $"content NOT VERIFIED — the install record has no gitCommitSha and the installed files could not be compared (this host is {buildCommit[..7]})"
-                : $"content verified — commit {reading.CommitSha[..Math.Min(7, reading.CommitSha.Length)]}";
+                : $"content verified by commit only ({reading.CommitSha[..Math.Min(7, reading.CommitSha.Length)]}) — the files themselves could not be compared";
 
             var line = $"Kit check OK — {KitPlugin.ID} {reading.Version} at {reading.InstallPath} · {content}";
 
@@ -212,7 +220,7 @@ public static class KitAssets_Bootstrapper
             return;
 
         var evidence =
-            contentMatches == true ? "the installed files are byte-identical to this build's kit"
+            contentMatches == true ? $"{KitContent_Digest.Describe_Scope()} match this build"
             : reading.CommitSha != null ? $"commit {Short(reading.CommitSha)}"
             : buildCommit != null ? $"this host was built from {Short(buildCommit)}"
             : "the version matches";

@@ -134,7 +134,12 @@ public class KitCheckProvesContentTests : IDisposable
 
         Assert.Equal(PluginVerdicts.Ok, gate.Verdict);
         Assert.True(gate.Spawning_Allowed);
-        Assert.Contains("byte-identical", File.ReadAllText(_paths.GlobalLogFile));
+        // THE ORACLE MOVED, 2026-09-17, and what it used to be is the reason: it pinned the words
+        // "byte-identical", which the daemon then printed on the VPS over a cache whose `install.sh`
+        // was the older one. This test was green for a sentence that was false. It now pins the
+        // narrowed claim — the scope, named — which is the same assertion made honestly.
+        // KitVerifierScopeIsStatedInBothPlacesTests holds the rest of it.
+        Assert.Contains(KitContent_Digest.Describe_Scope(), File.ReadAllText(_paths.GlobalLogFile));
     }
 
     /// <summary>

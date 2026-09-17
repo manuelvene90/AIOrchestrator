@@ -50,4 +50,12 @@ public static class KitPlugin
 
     /// <summary>What to tell a human to run when it is not installed at all.</summary>
     public const string INSTALL_COMMAND = "bash kit/install.sh   (Windows: pwsh kit/install.ps1)";
+
+    /// <summary>
+    /// The installer, BARE — for a line that only needs to name the thing that compares the WHOLE
+    /// kit folder, not to tell anyone to run it. The startup check compares a narrower set on
+    /// purpose (<see cref="KitContent_Digest"/>), and a line that says so has to be able to point at
+    /// the component that does the rest without reading as a refusal.
+    /// </summary>
+    public const string INSTALLER_COMMAND = "bash kit/install.sh";
 }

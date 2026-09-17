@@ -22,9 +22,10 @@ public static class PluginVersion_Verifier
     /// instead; see <c>KitAssets_Bootstrapper</c>.
     /// </param>
     /// <param name="contentMatches">
-    /// WHAT THE FILES SAY, when they could be read: true when the installed tree is byte-identical
-    /// to the one this host ships (<see cref="KitContent_Digest"/>), false when it is not, null when
-    /// one of the two trees could not be digested.
+    /// WHAT THE FILES SAY, when they could be read: true when the files a session reads are
+    /// identical to the ones this host ships, false when they are not, null when one of the two
+    /// trees could not be digested. WHICH files that is — a narrower set than the whole kit, and
+    /// why — is <see cref="KitContent_Digest"/>'s, stated once there and repeated in no message.
     ///
     /// IT OUTRANKS THE COMMIT, in both directions, and that is the 2026-09-07 correction. The commit
     /// is a proxy for the content: on the VPS a stage that touched no file under <c>kit/</c> still
@@ -114,10 +115,10 @@ public static class PluginVersion_Verifier
             // has to know which one they are being refused over: the files differing is a fact, the
             // commits differing is a suspicion that the file comparison could not confirm.
             PluginVerdicts.ContentMismatch when contentMatches == false =>
-                $"The installed {pluginId} kit is version {found} — the right NUMBER over the WRONG TEXT. Its files at "
-                + $"{where} DIFFER from the ones this host ships, so its sessions would read protocols this build was "
-                + $"not made against. `{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the version string and "
-                + $"reports success. Reinstall it: {KitPlugin.REINSTALL_COMMAND}",
+                $"The installed {pluginId} kit is version {found} — the right NUMBER over the WRONG TEXT. At {where}, "
+                + $"{KitContent_Digest.Describe_Scope()} DIFFER from the ones this host ships, so its sessions would read "
+                + $"protocols this build was not made against. `{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the "
+                + $"version string and reports success. Reinstall it: {KitPlugin.REINSTALL_COMMAND}",
 
             PluginVerdicts.ContentMismatch =>
                 $"The installed {pluginId} kit is version {found} — the right NUMBER over a TEXT THIS HOST COULD NOT "

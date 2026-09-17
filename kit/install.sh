@@ -152,6 +152,22 @@ plugin_field() {
         || true
 }
 
+# WHAT THE HOST'S STARTUP CHECK COMPARES, which is NARROWER than what this script compares. The
+# host (AIOrchestratorCoreLib/Kit/KitContent_Digest.cs, `SCOPE_DECLARATION`) digests only the files a
+# SESSION reads out of the cache; this script compares the whole folder, because its job is that the
+# cache be a faithful copy and its remedy — reinstall — is cheap and stops nobody.
+#
+# MEASURED ON THE VPS, 2026-09-17, and the reason this line exists: at 20:03:22 the daemon logged
+# "content verified — the installed files are byte-identical to this build's kit", and minutes later
+# this script, against the same cache, said "the installed copy differs from this checkout". BOTH
+# WERE RIGHT ABOUT THEIR OWN SCOPE — the one stale file was `install.sh` itself, which IS in the
+# cache and which the host does not digest — and the daemon's SENTENCE was false. The sentence is
+# fixed at the host; the scopes stay different on purpose (the host's verdict REFUSES TO SPAWN, so
+# widening it would let a stale README stop all work), and the difference is written HERE as well as
+# there so that a reader who sees the two disagree can tell why from either one.
+# `KitVerifierScopeIsStatedInBothPlacesTests` compares this list to the C# one: they cannot drift.
+host_verified_scope='skills hooks bin grammar .claude-plugin/plugin.json'
+
 # WHETHER THE INSTALLED CACHE IS THIS CHECKOUT. One function, two callers — the reason to reinstall
 # and the verdict after reinstalling — because those two asked the same question in two copies and a
 # fix to one of them would have left the other answering the old way (decision 12: never a second
@@ -159,6 +175,25 @@ plugin_field() {
 cache_matches_checkout() {
     [ -n "$1" ] && [ -d "$1" ] \
         && diff -rq -x "$cache_runtime_marker" -x "$cache_finder_artefact" "$1" "$kit_folder" >/dev/null 2>&1
+}
+
+# THE SAME QUESTION ASKED THE HOST'S WAY — over $host_verified_scope only. Called only when the
+# whole-folder compare has already answered "differs", to say WHICH of the two components the reader
+# should expect to complain: a difference inside this set is a spawn refusal at the next host start,
+# a difference outside it is this script's business alone.
+cache_matches_checkout_in_host_scope() {
+    [ -n "$1" ] && [ -d "$1" ] || return 1
+
+    local relative
+    for relative in $host_verified_scope; do
+        # Absent from both sides is not a difference; absent from one is, and `diff` says so.
+        [ -e "$kit_folder/$relative" ] || [ -e "$1/$relative" ] || continue
+
+        diff -rq -x "$cache_runtime_marker" -x "$cache_finder_artefact" \
+            "$1/$relative" "$kit_folder/$relative" >/dev/null 2>&1 || return 1
+    done
+
+    return 0
 }
 
 # DRIFT FIXED IN PASSING, same family as the defect above: this block used to print "Installed the
@@ -207,7 +242,14 @@ if [ -z "$installed_path" ]; then
 elif [ ! -d "$installed_path" ]; then
     reinstall_reason="its recorded install path is gone ($installed_path)"
 elif ! cache_matches_checkout "$installed_path"; then
-    reinstall_reason='the installed copy differs from this checkout'
+    # NAMES WHICH COMPONENT WILL COMPLAIN. The two scopes differ on purpose, so "differs" on its own
+    # leaves a reader unable to predict the host — which is how 2026-09-17's two true-but-opposite
+    # verdicts read as a contradiction.
+    if cache_matches_checkout_in_host_scope "$installed_path"; then
+        reinstall_reason="the installed copy differs from this checkout, OUTSIDE the set the host checks ($host_verified_scope) — so the host's own kit check is right to say OK and sessions are not blocked; reinstalling anyway, because the cache should be a faithful copy"
+    else
+        reinstall_reason="the installed copy differs from this checkout, INSIDE the set the host checks ($host_verified_scope) — the host will REFUSE to spawn sessions until this is reinstalled"
+    fi
 fi
 
 # THE HOST'S OWN VERIFIER READS gitCommitSha TOO (PluginVersion_Verifier), NOT ONLY THIS
