@@ -45,8 +45,11 @@ public class NoProtocolFileIsOrphanedTests
         // Asserted so that a refactor which deletes every reference file cannot make this pass by
         // leaving nothing to check. Two per role, plus the supervisor's stream-runner.md.
         // 13 until 2026-09-15, when the supervisor's skill moved seven blocks of reference material off
-        // its boot path. The number is a FLOOR so a refactor that deletes every reference file cannot
-        // make this pass by checking nothing — it rises when real files are added, never to silence it.
+        // its boot path. IT IS AN EQUALITY, NOT A FLOOR — the comment here said "floor" until
+        // 2026-09-17 and was wrong about the line beneath it. A floor would let a reference file be
+        // added without anyone noticing; the equality makes adding one a conscious act, which is the
+        // same discipline the app-write census keeps. It still does the job a floor was wanted for: a
+        // refactor that deletes every reference file cannot pass by checking nothing.
         Assert.Equal(20, checkedFiles);
     }
 

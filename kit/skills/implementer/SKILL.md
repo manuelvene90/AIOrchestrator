@@ -128,6 +128,32 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   SHAs, test suite counts (exact numbers), anything you disagreed with and why. Your supervisor
   verifies each report and gives feedback before you continue past a milestone. Claims without
   evidence are worthless.
+- **A brief that carries `REROUTE:` is answered with `FIXED: <commit>`.** That marker in your brief
+  means your supervisor has told the app which reviewer re-reviews this fix, and from which commit,
+  so that the round does not have to travel back through your supervisor to be passed on. Your side
+  of it is one line, at the START OF A LINE in the body of the fix report, naming the commit the
+  reviewer should diff to:
+
+  ```
+  FIXED: 9f3c1de
+  ```
+
+  **Nothing is routed without it** — no line, no relay, and your supervisor picks the round up by
+  hand exactly as it always did. Four things the app checks, and refuses rather than guesses:
+
+  - **ONE such line per report.** Two name two heads, the delta is then ambiguous, and an ambiguous
+    delta would send a reviewer a diff nobody asked for.
+  - **A commit and nothing else after the marker** — 7 to 40 hex characters. A branch name, HEAD, or
+    a sentence about the commit is refused: a delta is read between two commits, and a moving name is
+    not one.
+  - **A DIFFERENT commit from the one the brief names as already reviewed.** The same one is no
+    delta.
+  - **A quoted line declares nothing** — one that starts with `>` or a quote mark is quotation, and a
+    mention mid-sentence is discussion. So you can quote the brief back safely; to declare, put the
+    marker first on its own line.
+
+  A refusal is never an error and never blocks your report: it means only that this report did not
+  route, and your supervisor reads it as it reads every other one.
 - **You NEVER address the owner.** No questions, no updates, no messages aimed at them — your
   only interlocutor is your supervisor. A question only the owner can answer goes to the
   supervisor, who asks the owner.
