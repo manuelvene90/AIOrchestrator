@@ -85,25 +85,33 @@ public static class ChannelGrammar
         return Read_String(["markers", key]);
     }
 
-    public static string QUESTION => Marker("question");
+    // CACHED, `static readonly` AND NOT A COMPUTED PROPERTY (defect found 2026-09-16): each of these
+    // used to be `public static string X => Marker("x");`, so every single read walked the embedded
+    // JSON document from ROOT down through "markers" (allocating the path array and calling
+    // GetValue<string>() on the way) rather than the value that was resolved once, correctly, at
+    // type load. `static readonly` and not `const` for the same reason as `QuestionDirectives_Parser`'s
+    // fields: the grammar arrives at runtime from an embedded resource, not a compile-time literal.
+    // Safe to initialize this way because ROOT (above) is a plain resource parse with no dependency on
+    // any of these fields — nothing here can be read before the document is available.
+    public static readonly string QUESTION = Marker("question");
 
-    public static string OPTION => Marker("option");
+    public static readonly string OPTION = Marker("option");
 
-    public static string RECOMMEND => Marker("recommend");
+    public static readonly string RECOMMEND = Marker("recommend");
 
-    public static string RISK => Marker("risk");
+    public static readonly string RISK = Marker("risk");
 
-    public static string ROW => Marker("row");
+    public static readonly string ROW = Marker("row");
 
-    public static string DEADLINE => Marker("deadline");
+    public static readonly string DEADLINE = Marker("deadline");
 
-    public static string DEFAULT => Marker("default");
+    public static readonly string DEFAULT = Marker("default");
 
-    public static string IMAGE => Marker("image");
+    public static readonly string IMAGE = Marker("image");
 
-    public static string ATTACH => Marker("attach");
+    public static readonly string ATTACH = Marker("attach");
 
-    public static string STATE => Marker("state");
+    public static readonly string STATE = Marker("state");
 
     /// <summary>
     /// THE SUPERVISOR'S RE-REVIEW CONTRACT: `REROUTE: &lt;reviewer&gt; from &lt;commit&gt;`, written at the end
@@ -111,34 +119,34 @@ public static class ChannelGrammar
     /// I wrote below this line to that reviewer, and do not wake me for it". Read by
     /// <c>Reviewing.RerouteContract_Parser</c>.
     /// </summary>
-    public static string REROUTE => Marker("reroute");
+    public static readonly string REROUTE = Marker("reroute");
 
     /// <summary>
     /// THE IMPLEMENTER'S ANSWER TO ONE: `FIXED: &lt;commit&gt;`, the head of the delta a re-review reads.
     /// It is what makes "does this report satisfy the contract" a mechanical question rather than a
     /// reading of prose — see <c>Reviewing.FixReport_Matcher</c>.
     /// </summary>
-    public static string FIXED => Marker("fixed");
+    public static readonly string FIXED = Marker("fixed");
 
-    public static string BLOCKED_ON_OWNER => Marker("blocked_on_owner");
+    public static readonly string BLOCKED_ON_OWNER = Marker("blocked_on_owner");
 
-    public static string ANSWERED => Marker("answered");
+    public static readonly string ANSWERED = Marker("answered");
 
-    public static string STANDING_BY => Marker("standing_by");
+    public static readonly string STANDING_BY = Marker("standing_by");
 
-    public static string WRITING_WINDOW_OPEN => Marker("writing_window_open");
+    public static readonly string WRITING_WINDOW_OPEN = Marker("writing_window_open");
 
-    public static string WRITING_WINDOW_CLOSED => Marker("writing_window_closed");
+    public static readonly string WRITING_WINDOW_CLOSED = Marker("writing_window_closed");
 
-    public static string MUTATION_WINDOW_OPEN => Marker("mutation_window_open");
+    public static readonly string MUTATION_WINDOW_OPEN = Marker("mutation_window_open");
 
-    public static string MUTATION_WINDOW_CLOSED => Marker("mutation_window_closed");
+    public static readonly string MUTATION_WINDOW_CLOSED = Marker("mutation_window_closed");
 
-    public static string BOOT_ANNOUNCEMENT_WORD => Marker("boot_announcement_word");
+    public static readonly string BOOT_ANNOUNCEMENT_WORD = Marker("boot_announcement_word");
 
-    public static string TO => Marker("to");
+    public static readonly string TO = Marker("to");
 
-    public static string WORKTREE => Marker("worktree");
+    public static readonly string WORKTREE = Marker("worktree");
 
     /// <summary>
     /// EVERY marker word in the grammar, for a caller that must recognise a marker LINE without
