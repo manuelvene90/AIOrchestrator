@@ -1954,7 +1954,15 @@ internal sealed class BridgeEngineModel(
                 Running.PendingTraffic.WakeUp_Policy.Contains_DigestableTraffic(ordered, firstContactSources));
 
             var decision = Running.WakeDecision.WakeDecision_Resolver.Decide_OrNull(
-                _paths, state, sources, ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
+                _paths,
+                state,
+                sources,
+                ordered,
+                firstContactSources,
+                Reviewing.RoutedHold_Policy.Resolve_RidingOnly(_paths, state),
+                digestHeldSince,
+                nowLocal,
+                configs.MemberDigestWindow);
 
             if (decision == null)
                 continue;
