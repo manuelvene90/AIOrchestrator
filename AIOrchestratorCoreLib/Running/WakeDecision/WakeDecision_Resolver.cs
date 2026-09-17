@@ -73,7 +73,16 @@ public static class WakeDecision_Resolver
 
         var ordered = PendingTraffic_Orderer.Order([.. reads.Select(read => (read.Source, read.Pending))]);
 
-        return Decide_OrNull(paths, state, sources, ordered, Describe_FirstContactSources(reads), digestHeldSince, nowLocal, configs.MemberDigestWindow);
+        return Decide_OrNull(
+            paths,
+            state,
+            sources,
+            ordered,
+            Describe_FirstContactSources(reads),
+            Reviewing.RoutedHold_Policy.Resolve_RidingOnly(paths, state),
+            digestHeldSince,
+            nowLocal,
+            configs.MemberDigestWindow);
     }
 
     /// <summary>
@@ -141,12 +150,26 @@ public static class WakeDecision_Resolver
     /// because its own gates need the ordered set before it can ask;
     /// <see cref="Resolve_OrNull"/> enters here after reading for itself. One body either way.
     /// </summary>
+    /// <param name="ridingOnlyIdentities">
+    /// The pending entries that must be HANDED to a turn without being allowed to START one —
+    /// <see cref="Reviewing.RoutedHold_Policy.Resolve_RidingOnly"/>, which today means a fix report the
+    /// app has already relayed to a reviewer. Empty for every orchestration that has declared no
+    /// contract, which is almost all of them, and the set is then not even walked.
+    ///
+    /// <para>
+    /// IT HAS NO DEFAULT VALUE ON PURPOSE. Three callers decide whether a session takes a turn, and a
+    /// default is how one of them silently skips a rule the other two apply — the lesson plan 01 took
+    /// from <c>CreateFrom_Existing_*</c>. A caller that has nothing to hold passes an empty set and
+    /// says so.
+    /// </para>
+    /// </param>
     public static IWakeDecision? Decide_OrNull(
         ISupervisionPaths paths,
         IPrintSessionState state,
         IReadOnlyList<ITurnSource> sources,
         IReadOnlyList<PendingEntry> ordered,
         IReadOnlyCollection<string> firstContactSources,
+        IReadOnlyCollection<string> ridingOnlyIdentities,
         DateTime? digestHeldSince,
         DateTime nowLocal,
         TimeSpan memberDigestWindow)
@@ -156,6 +179,21 @@ public static class WakeDecision_Resolver
         // "boot turn" unconditionally — it was written when only the boot turn could reach it with
         // one, and a caller that skipped this test would be told every idle session is booting.
         if (ordered.Count == 0 && !Needs_BootTurn(state))
+            return null;
+
+        // THE ENTRIES THAT RIDE RATHER THAN WAKE (Reviewing.RoutedHold_Policy). The wake-up rules are
+        // asked about everything EXCEPT them; the turn, if one starts, is still handed the WHOLE set a
+        // few lines below. That asymmetry is the feature and not an oversight: a fix report the app has
+        // already relayed to a reviewer is something the supervisor should READ on its next turn and
+        // never a reason to buy one, exactly as the app's own notes are (With_AgentNotes).
+        var wakers = ridingOnlyIdentities.Count == 0
+            ? ordered
+            : (IReadOnlyList<PendingEntry>)[.. ordered.Where(item => !ridingOnlyIdentities.Contains(ChannelEntry_Digest.Compute(item.Entry)))];
+
+        // AND AN EMPTY WAKER SET IS "NOT YET", NEVER A BOOT TURN. WakeUp_Policy answers an empty
+        // pending set with "boot turn" unconditionally — the trap the guard above already documents —
+        // so a set whose every entry is riding must return here rather than be handed to it.
+        if (wakers.Count == 0 && !Needs_BootTurn(state))
             return null;
 
         // THE SUPERVISOR IS WOKEN TO DECIDE, NOT TO TAKE NOTE (spec §C4, measured 6–9 Sep 2026: 247 of
@@ -172,11 +210,14 @@ public static class WakeDecision_Resolver
         // the digest would hold the owner's own way in behind it.
         var wakeReason = Needs_BootTurn(state)
             ? BOOT_TURN_REASON
-            : WakeUp_Policy.Resolve_WakeReason_OrNull(ordered, firstContactSources, digestHeldSince, nowLocal, memberDigestWindow);
+            : WakeUp_Policy.Resolve_WakeReason_OrNull(wakers, firstContactSources, digestHeldSince, nowLocal, memberDigestWindow);
 
         if (wakeReason == null)
             return null;
 
+        // `ordered` AND NOT `wakers`: the riding entries were withheld from the RULES and are handed
+        // over here with everything else. Nothing was consumed by being held — no cursor moved — so the
+        // turn this creates carries the relayed fix report beside the re-review that released it.
         return WakeDecision_Factory.Create(wakeReason, With_AgentNotes(paths, state, sources, ordered, nowLocal), sources);
     }
 

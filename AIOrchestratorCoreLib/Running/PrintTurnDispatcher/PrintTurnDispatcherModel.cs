@@ -792,7 +792,16 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // channels and the state file, which a terminal session's monitor can read too, so it lives in
         // WakeDecision_Resolver where both can ask it. Everything above reads the in-memory tracker —
         // what THIS process has already done — and stays here.
-        var decision = WakeDecision_Resolver.Decide_OrNull(_paths, state, sources, ordered, firstContactSources, digestHeldSince, nowLocal, configs.MemberDigestWindow);
+        var decision = WakeDecision_Resolver.Decide_OrNull(
+            _paths,
+            state,
+            sources,
+            ordered,
+            firstContactSources,
+            Reviewing.RoutedHold_Policy.Resolve_RidingOnly(_paths, state),
+            digestHeldSince,
+            nowLocal,
+            configs.MemberDigestWindow);
 
         if (decision == null)
             return;
