@@ -141,4 +141,101 @@ public class DispatchPauseGateTests
         Assert.False(string.IsNullOrWhiteSpace(text));
         Assert.Contains("the 5-hour window reset", text);
     }
+    // ── reconsidering a pause that holds — the brake that could not be lifted (2026-09-11, 2026-09-18)
+
+    /// <summary>
+    /// THE INCIDENT, twice: paused for days on a reading from an account that was then swapped; the
+    /// live probes read far under the threshold; the pause held anyway because nothing looked again.
+    /// A fresh decision of "no pause" while one holds means LIFT.
+    /// </summary>
+    [Fact]
+    public void WhilePaused_ALiveReadingUnderTheThreshold_LiftsThePause()
+    {
+        var stored = Now.AddDays(4);
+
+        var result = DispatchPause_Gate.Reconsider_WhilePaused(stored, anyReading: true, freshUntilUtc: null);
+
+        Assert.Null(result);
+    }
+
+    /// <summary>
+    /// The defect the old "never look again" guard was built for, kept by construction: a still-high
+    /// reading proposing a LATER instant is discarded, so a pause can never grow past the reset it
+    /// was decided on.
+    /// </summary>
+    [Fact]
+    public void WhilePaused_AFreshDecisionThatWouldResolveLater_IsDiscarded()
+    {
+        var stored = Now.AddMinutes(30);
+
+        var result = DispatchPause_Gate.Reconsider_WhilePaused(stored, anyReading: true, freshUntilUtc: Now.AddHours(5));
+
+        Assert.Equal(stored, result);
+    }
+
+    [Fact]
+    public void WhilePaused_AFreshDecisionThatWouldResolveEarlier_ShortensThePause()
+    {
+        var stored = Now.AddDays(4);
+        var earlier = Now.AddMinutes(20);
+
+        var result = DispatchPause_Gate.Reconsider_WhilePaused(stored, anyReading: true, freshUntilUtc: earlier);
+
+        Assert.Equal(earlier, result);
+    }
+
+    [Fact]
+    public void WhilePaused_TheSameInstant_LeavesThePauseUntouched()
+    {
+        var stored = Now.AddHours(3);
+
+        var result = DispatchPause_Gate.Reconsider_WhilePaused(stored, anyReading: true, freshUntilUtc: stored);
+
+        Assert.Equal(stored, result);
+    }
+
+    /// <summary>
+    /// Silence is not a low number. No probe at all says nothing about the account, and lifting on it
+    /// would turn "the status line stopped writing" into "the account is fine".
+    /// </summary>
+    [Fact]
+    public void WhilePaused_NoReadingAtAll_LeavesThePauseStanding()
+    {
+        var stored = Now.AddDays(4);
+
+        var result = DispatchPause_Gate.Reconsider_WhilePaused(stored, anyReading: false, freshUntilUtc: null);
+
+        Assert.Equal(stored, result);
+    }
+
+    /// <summary>The binding window is the one that comes back LAST, whatever the enumeration order.</summary>
+    [Fact]
+    public void AcrossWindows_TheBindingPauseIsTheOneThatComesBackLast()
+    {
+        var windows = new Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)>
+        {
+            ["rate_limits.five_hour.used_percentage"] = (96, Now.AddMinutes(20)),
+            ["rate_limits.seven_day.used_percentage"] = (99, Now.AddDays(3)),
+            ["rate_limits.other.used_percentage"] = (10, Now.AddDays(6)),
+        };
+
+        var binding = DispatchPause_Gate.Decide_BindingPause_OrNull(windows, thresholdPercent: 95, nowUtc: Now);
+
+        Assert.NotNull(binding);
+        Assert.Equal(Now.AddDays(3), binding.Value.Until);
+        Assert.Equal("rate_limits.seven_day.used_percentage", binding.Value.Window);
+        Assert.Equal(99, binding.Value.Percent);
+    }
+
+    [Fact]
+    public void AcrossWindows_NoneOverTheThreshold_DecidesNoPause()
+    {
+        var windows = new Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)>
+        {
+            ["rate_limits.five_hour.used_percentage"] = (91, null),
+            ["rate_limits.seven_day.used_percentage"] = (12, Now.AddDays(5)),
+        };
+
+        Assert.Null(DispatchPause_Gate.Decide_BindingPause_OrNull(windows, thresholdPercent: 95, nowUtc: Now));
+    }
 }

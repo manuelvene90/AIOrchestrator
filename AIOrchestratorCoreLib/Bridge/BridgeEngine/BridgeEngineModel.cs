@@ -13124,11 +13124,16 @@ internal sealed class BridgeEngineModel(
             previousReason = _dispatchPauseReason;
         }
 
-        // Still inside the window: nothing to decide. Re-reading the probes here would let a
-        // still-high percentage extend the pause indefinitely past the reset it was measured
-        // against, which is how a five-hour pause becomes a permanent one.
+        // Still inside the window: the pause may only get SHORTER or LIFT, never longer. The old
+        // guard returned here without looking, to stop a still-high percentage extending the pause
+        // past the reset it was measured against — which was right about extending and wrong about
+        // lifting, and cost 4 d 14 h on 2026-09-11 and a morning on 2026-09-18 when the account had
+        // been swapped under a persisted pause. See DispatchPause_Gate.Reconsider_WhilePaused.
         if (Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, nowUtc))
+        {
+            await Reconsider_DispatchPause_Async(pausedUntilUtc!.Value, previousReason, nowUtc, cancellationToken);
             return;
+        }
 
         var wasPaused = pausedUntilUtc != null;
 
@@ -13143,30 +13148,12 @@ internal sealed class BridgeEngineModel(
 
         var thresholdPercent = _configProvider.Get_Current().Guardrails.DispatchPauseThresholdPercent;
 
-        DateTime? pauseUntilUtc = null;
-        string? bindingWindow = null;
-        var bindingPercent = 0d;
+        // The binding-window rule lives in the gate, because it now runs from two places.
+        var binding = Limits.DispatchPause_Gate.Decide_BindingPause_OrNull(Read_CurrentLimitWindows(), thresholdPercent, nowUtc);
 
-        // THE BINDING WINDOW IS THE ONE THAT COMES BACK LAST, not the first one enumerated. Probe
-        // files are globbed, so dictionary order is arbitrary — and picking the first over-threshold
-        // window meant a weekly at 99% resetting in three days could lose to a five-hour at 96%
-        // resetting in twenty minutes. Dispatch would resume on the five-hour's clock, launch
-        // sessions into a weekly allowance that is still spent, and pause again.
-        foreach (var pair in Read_CurrentLimitWindows())
+        if (binding != null)
         {
-            var candidate = Limits.DispatchPause_Gate.Decide_PauseUntil_OrNull(
-                pair.Value.Percent, pair.Value.WindowResetsAtUtc, thresholdPercent, nowUtc);
-
-            if (candidate == null || (pauseUntilUtc != null && candidate.Value <= pauseUntilUtc.Value))
-                continue;
-
-            pauseUntilUtc = candidate;
-            bindingWindow = pair.Key;
-            bindingPercent = pair.Value.Percent;
-        }
-
-        if (pauseUntilUtc != null)
-        {
+            var (pauseUntilUtc, bindingWindow, bindingPercent) = binding.Value;
             var reason = $"the {bindingWindow} window was at {bindingPercent:0.#}%";
 
             lock (_ownerStateLock)
@@ -13182,7 +13169,7 @@ internal sealed class BridgeEngineModel(
             // pause message every thirty minutes for ever — a stacking waterfall, which is the one
             // thing owner-facing repeats must never become. The state changes; the owner is told once
             // per episode, and /limits still answers whenever they ask.
-            var alert = Limits.DispatchPause_Gate.Describe_Pause(bindingWindow ?? "usage", bindingPercent, pauseUntilUtc.Value);
+            var alert = Limits.DispatchPause_Gate.Describe_Pause(bindingWindow, bindingPercent, pauseUntilUtc);
 
             _log.Log_Warning(GLOBAL_ORCH_ID, wasPaused ? $"Dispatch pause EXTENDED — {alert}" : alert);
 
@@ -13207,6 +13194,61 @@ internal sealed class BridgeEngineModel(
 
         _log.Log_Info(GLOBAL_ORCH_ID, resume);
         await Send_GeneralNotice_BestEffort_Async(resume, cancellationToken);
+    }
+
+    /// <summary>
+    /// Asks the probes again while a pause holds, and applies the answer in ONE direction: an earlier
+    /// resume replaces the stored instant, a later one is discarded, no reading leaves it standing.
+    /// So the persisted instant is a ceiling — an account swap, a quota increase or a misread probe
+    /// is answered within one <see cref="LIMIT_CHECK_INTERVAL_SECONDS"/> instead of at the instant
+    /// the OLD account's window would have reset. Throttled like every other probe read.
+    /// </summary>
+    async Task Reconsider_DispatchPause_Async(DateTime storedUntilUtc, string? storedReason, DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        if ((nowUtc - _lastDispatchPauseCheckUtc).TotalSeconds < LIMIT_CHECK_INTERVAL_SECONDS)
+            return;
+
+        _lastDispatchPauseCheckUtc = nowUtc;
+
+        var windows = Read_CurrentLimitWindows();
+        var thresholdPercent = _configProvider.Get_Current().Guardrails.DispatchPauseThresholdPercent;
+        var fresh = Limits.DispatchPause_Gate.Decide_BindingPause_OrNull(windows, thresholdPercent, nowUtc);
+        var reconsidered = Limits.DispatchPause_Gate.Reconsider_WhilePaused(storedUntilUtc, windows.Count > 0, fresh?.Until);
+
+        if (reconsidered == storedUntilUtc)
+            return;
+
+        if (reconsidered == null)
+        {
+            lock (_ownerStateLock)
+            {
+                _dispatchPausedUntilUtc = null;
+                _dispatchPauseReason = null;
+            }
+
+            Persist_EngineState();
+
+            var resume = Limits.DispatchPause_Gate.Describe_Resume(
+                $"the live reading is under the threshold, so the pause ({storedReason ?? "no reason recorded"}) is lifted early");
+
+            _log.Log_Info(GLOBAL_ORCH_ID, resume);
+            await Send_GeneralNotice_BestEffort_Async(resume, cancellationToken);
+            return;
+        }
+
+        // SHORTENED, not lifted: the account is still over, on a window that comes back sooner than
+        // the one the pause was decided on. State only — the resume message goes out at the new
+        // instant, and a notice per adjustment would be the waterfall owner-facing repeats must not be.
+        var reason = $"the {fresh!.Value.Window} window was at {fresh.Value.Percent:0.#}%";
+
+        lock (_ownerStateLock)
+        {
+            _dispatchPausedUntilUtc = reconsidered;
+            _dispatchPauseReason = reason;
+        }
+
+        Persist_EngineState();
+        _log.Log_Info(GLOBAL_ORCH_ID, $"Dispatch pause SHORTENED to {reconsidered.Value:yyyy-MM-dd HH:mm} UTC — {reason} (was until {storedUntilUtc:yyyy-MM-dd HH:mm} UTC)");
     }
 
     /// <summary>

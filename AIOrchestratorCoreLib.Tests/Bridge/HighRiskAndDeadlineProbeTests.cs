@@ -288,11 +288,17 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
         // satisfied by two routes: the 60-second interval alone kept the count at one, so deleting
         // the already-paused guard it is meant to pin left the test green. Moved forward — but not
         // past the resume time — only the guard can hold the count.
+        var storedUntilUtc = _engineState.Load_OrEmpty().DispatchPausedUntilUtc;
+
         _clock.Advance(TimeSpan.FromMinutes(2));
 
         await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(10));
 
         Assert.Equal(alertsAfterTheFirst, _telegram.Count_Sent_Containing("Dispatch PAUSED"));
+
+        // AND THE INSTANT DID NOT MOVE: the probe still reads 97%, and now the pause is reconsidered
+        // while it holds, so a still-high reading must be discarded — never an extension.
+        Assert.Equal(storedUntilUtc, _engineState.Load_OrEmpty().DispatchPausedUntilUtc);
 
         // ── the window returns ───────────────────────────────────────────────────────────────
         _clock.Advance(TimeSpan.FromMinutes(21));
@@ -307,6 +313,77 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
         Assert.True(
             await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc == null, 10_000),
             "the resume alert went out but the pause was still recorded in the persisted state");
+    }
+
+    /// <summary>
+    /// THE BRAKE THAT COULD NOT BE LIFTED, replayed. 2026-09-17 21:22 the dispatcher paused on a
+    /// weekly reading of 98% until 2026-09-21 03:00 UTC; the account was swapped and by 21:57 the
+    /// same probe read 12%; a start-orchestration filed the next morning sat untouched for hours and
+    /// through a restart, because the instant is persisted and the old guard never asked the probes
+    /// again while it held. Same shape on 2026-09-11, for 4 d 14 h.
+    ///
+    /// <para>
+    /// The pause must lift within one probe-read interval of the live reading falling under the
+    /// threshold — not at the old account's reset.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task PausedOnAReadingThatNoLongerHolds_TheDispatcherLiftsEarly_WhenTheLiveProbeReadsUnderTheThreshold()
+    {
+        var resetsAtUtc = _clock.UtcNow.AddDays(4);
+        var oldAccountsProbe = Write_UsageProbe("seven_day", 98, resetsAtUtc);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing("Dispatch PAUSED"), 20_000),
+            $"the 98% reading never paused the dispatcher.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.NotNull(_engineState.Load_OrEmpty().DispatchPausedUntilUtc);
+
+        // The account is swapped: the same window, now written by an account that is nowhere near.
+        File.Delete(oldAccountsProbe);
+        Write_UsageProbe("seven_day", 12, resetsAtUtc);
+
+        // Past the probe-read throttle, nowhere near the stored instant four days out.
+        _clock.Advance(TimeSpan.FromMinutes(2));
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing("Dispatch resumed"), 20_000),
+            "THE DEFECT: the live probe reads 12% and dispatch is still paused on a number that belongs "
+            + "to an account that no longer exists — every start-orchestration request sits on disk "
+            + "until the old window's reset, restart or no restart."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc == null, 10_000),
+            "the resume went out but the pause is still in the persisted state, so a restart brings it back");
+    }
+
+    /// <summary>
+    /// SILENCE IS NOT A LOW NUMBER. Paused, and then every probe is gone — a status line that stopped
+    /// writing, a folder wiped, a fresh install. Nothing has said the account is fine, so the pause
+    /// stands until its instant. The opposite rule would turn a missing file into a lifted guardrail.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task PausedAndThenEveryProbeIsGone_TheDispatcherStaysPaused()
+    {
+        var resetsAtUtc = _clock.UtcNow.AddDays(4);
+        var onlyProbe = Write_UsageProbe("seven_day", 98, resetsAtUtc);
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc != null, 20_000),
+            $"the 98% reading never paused the dispatcher.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        var storedUntilUtc = _engineState.Load_OrEmpty().DispatchPausedUntilUtc;
+
+        File.Delete(onlyProbe);
+        _clock.Advance(TimeSpan.FromMinutes(2));
+
+        await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(10));
+
+        Assert.Equal(storedUntilUtc, _engineState.Load_OrEmpty().DispatchPausedUntilUtc);
+        Assert.False(_telegram.Has_Sent_Containing("Dispatch resumed"), _telegram.Dump_Sent());
     }
 
     /// <summary>
@@ -461,13 +538,17 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
         return session;
     }
 
-    void Write_UsageProbe(string windowKey, double percent, DateTime resetsAtUtc)
+    /// <summary>Returns the probe's path, so a test can replace the reading the way an account swap does.</summary>
+    string Write_UsageProbe(string windowKey, double percent, DateTime resetsAtUtc)
     {
         var unixSeconds = new DateTimeOffset(DateTime.SpecifyKind(resetsAtUtc, DateTimeKind.Utc), TimeSpan.Zero).ToUnixTimeSeconds();
+        var probeFile = Path.Combine(_paths.Root, $"{Guid.NewGuid():N}.usage.json");
 
         File.WriteAllText(
-            Path.Combine(_paths.Root, $"{Guid.NewGuid():N}.usage.json"),
+            probeFile,
             $"{{\"rate_limits\":{{\"{windowKey}\":{{\"used_percentage\":{percent},\"resets_at\":{unixSeconds}}}}}}}");
+
+        return probeFile;
     }
 
     string Read_OwnerChannel(string orchId) => File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));
