@@ -1,0 +1,36 @@
+<Project>
+
+  <!-- THE ONE LIST OF WHAT THE KIT SHIPS WITH A HOST.
+       Both hosts (AIOrchestrator, the WPF app, and AIOrchestrator.Daemon) import this file, so the
+       kit beside either binary is the same kit by construction. It used to be two copy-pasted lists
+       with a comment claiming they were the same: on 2026-09-18 the daemon's lacked `grammar`, so the
+       production daemon refused every spawn against a CORRECTLY installed plugin, and the fix its own
+       message proposed (`bash kit/install.sh`) could not have helped — the cache was right, the build
+       was wrong. KitShipsEveryDigestedFolderTests pins that every folder KitContent_Digest reads is
+       listed here, and that no host carries a kit list of its own.
+
+       The kit ships as a COMPLETE PLUGIN FOLDER so `claude plugin marketplace add` can point at the
+       running host's own copy and the installed kit is by construction the one this binary was built
+       with (decision 23). KitAssets_Bootstrapper reads kit/ beside the binary to CHECK the installed
+       plugin, not to copy files; only the statusline is installed from here.
+
+       Paths are anchored on this file's folder, not the importing project's: an Include in an imported
+       file resolves relative to the project being built, and this file has two importers. -->
+
+  <ItemGroup>
+    <Content Include="$(MSBuildThisFileDirectory)kit\.claude-plugin\*.json" Link="kit\.claude-plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)kit\skills\**\*.md" Link="kit\skills\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)kit\bin\*.sh" Link="kit\bin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The grammar the tool in kit/bin reads with jq. It travels WITH the tool, so an installed kit
+         is never a tool without its grammar — and KitContent_Digest reads it, so a host without it
+         can never match the cache. -->
+    <Content Include="$(MSBuildThisFileDirectory)kit\grammar\*.json" Link="kit\grammar\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)kit\presets\*.json" Link="kit\presets\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Both statusline scripts ship with both hosts; KitAssets_Bootstrapper picks the one for the
+         OS it runs on. -->
+    <Content Include="$(MSBuildThisFileDirectory)kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)kit\statusline\statusline.sh" Link="kit\statusline\statusline.sh" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

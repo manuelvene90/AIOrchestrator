@@ -26,17 +26,8 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- The kit ships WITH the daemon as a COMPLETE PLUGIN FOLDER, exactly as it ships with the WPF
-         app. Same Link layout as AIOrchestrator.csproj: KitAssets_Bootstrapper reads kit/ beside the
-         binary — now to check a version, not to copy files. -->
-    <Content Include="..\kit\.claude-plugin\*.json" Link="kit\.claude-plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\skills\**\*.md" Link="kit\skills\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\bin\*.sh" Link="kit\bin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\presets\*.json" Link="kit\presets\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\statusline\statusline.sh" Link="kit\statusline\statusline.sh" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
+  <!-- What the kit ships beside the binary is ONE list, shared with the other host — see the
+       header of KitContent.props for why it is not written here. -->
+  <Import Project="..\KitContent.props" />
 
 </Project>
