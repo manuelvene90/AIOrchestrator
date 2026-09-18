@@ -126,11 +126,35 @@ public class DispatchPauseGateTests
     {
         var resumeAt = Now.AddHours(2).AddMinutes(15);
 
-        var text = DispatchPause_Gate.Describe_Pause("5-hour", 97.3, resumeAt);
+        var text = DispatchPause_Gate.Describe_Pause("5-hour", 97.3, resumeAt, Now);
 
         Assert.Contains("5-hour", text);
         Assert.Contains("97.3", text);
-        Assert.Contains(resumeAt.ToString("HH:mm"), text);
+        Assert.Contains(resumeAt.ToString("yyyy-MM-dd HH:mm"), text);
+        Assert.Contains("in 2 h 15 min", text);
+    }
+
+    /// <summary>
+    /// THE DATE IS IN THE MESSAGE. "Resuming at 03:00 UTC" for a pause five days out read as tonight's
+    /// on 2026-09-11 and again on 2026-09-18. The instant carries its day and its distance.
+    /// </summary>
+    [Fact]
+    public void Describe_ResumeInstant_CarriesTheDay_AndTheDistance()
+    {
+        var resumeAt = new DateTime(2026, 9, 21, 3, 0, 0, DateTimeKind.Utc);
+        var now = new DateTime(2026, 9, 18, 10, 0, 0, DateTimeKind.Utc);
+
+        var text = DispatchPause_Gate.Describe_ResumeInstant(resumeAt, now);
+
+        Assert.Equal("2026-09-21 03:00 UTC (in 2 d 17 h)", text);
+    }
+
+    [Fact]
+    public void Describe_ResumeInstant_UnderAnHour_SaysMinutes_AndNeverZero()
+    {
+        Assert.Equal($"{Now.AddMinutes(7):yyyy-MM-dd HH:mm} UTC (in 7 min)", DispatchPause_Gate.Describe_ResumeInstant(Now.AddMinutes(7), Now));
+        Assert.Equal($"{Now.AddSeconds(20):yyyy-MM-dd HH:mm} UTC (in 1 min)", DispatchPause_Gate.Describe_ResumeInstant(Now.AddSeconds(20), Now));
+        Assert.Equal($"{Now.AddMinutes(-5):yyyy-MM-dd HH:mm} UTC (due now)", DispatchPause_Gate.Describe_ResumeInstant(Now.AddMinutes(-5), Now));
     }
 
     [Fact]

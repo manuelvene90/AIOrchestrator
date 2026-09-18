@@ -1271,6 +1271,14 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     DateTime _lastDispatchPauseCheckUtc = DateTime.MinValue;
 
+    /// <summary>
+    /// Request files already told "you are deferred" during the CURRENT pause, by path. Cleared the
+    /// moment dispatch is not paused, so the next pause tells them again — once per file per episode,
+    /// never once per 2 s tick. Measured 2026-09-18: a start-orchestration sat 63 minutes under a
+    /// pause with no line anywhere saying so, and the diagnosis started from "is it lost?".
+    /// </summary>
+    readonly HashSet<string> _deferredRequestsNoticed = new(StringComparer.Ordinal);
+
     /// <summary>App-wide Do-Not-Disturb: everything is kept and replayed when it goes off.</summary>
     volatile bool _telegramMuted;
 
@@ -6117,12 +6125,18 @@ internal sealed class BridgeEngineModel(
             Delete_RequestFile(malformedRequest.FilePath);
         }
 
-        // THE THREE THAT SPAWN. Left on disk while paused, so they run at the resume.
+        // THE THREE THAT SPAWN. Left on disk while paused, so they run at the resume — and SAID,
+        // because a file that sits with no line anywhere is indistinguishable from one that was lost.
         if (!dispatchPaused)
         {
+            _deferredRequestsNoticed.Clear();
             Process_StartRequests(pending);
             Process_AddImplementerRequests(pending);
             Process_PromoteOrchestrationRequests(pending);
+        }
+        else
+        {
+            Notice_DeferredSpawnRequests(pending);
         }
 
         Process_CloseImplementerRequests(pending);
@@ -6130,6 +6144,46 @@ internal sealed class BridgeEngineModel(
         Process_SetTelegramMutedRequests(pending);
         Process_SetOrchestrationNameRequests(pending);
         Process_SetModelRequests(pending);
+    }
+
+    /// <summary>
+    /// Tells each deferred spawning request's own channel that it is parked and until when, once per
+    /// file per pause. The general supervisor asked for the start, an orchestration supervisor for the
+    /// member or the promotion: the entry goes where the asker reads, as an agent note — the owner
+    /// already holds the pause alert with the time on it, and this is not a second alert about the
+    /// same pause. It names the lever, so the asker can do something other than wait.
+    /// </summary>
+    void Notice_DeferredSpawnRequests(IPendingRequests pending)
+    {
+        DateTime? pausedUntilUtc;
+
+        lock (_ownerStateLock)
+            pausedUntilUtc = _dispatchPausedUntilUtc;
+
+        var resumeAt = pausedUntilUtc == null ? "the resume" : Limits.DispatchPause_Gate.Describe_ResumeInstant(pausedUntilUtc.Value, _clock.UtcNow);
+        var body = $"Dispatch is paused (usage limit), so this request is parked on disk and runs by itself at {resumeAt}. If the account has been swapped or the reading is wrong, the owner can lift the pause with /resume-dispatch.";
+
+        foreach (var request in pending.StartRequests)
+            Notice_DeferredRequest(request.SourceFilePath, null, "start-orchestration", body);
+
+        foreach (var request in pending.AddImplementerRequests)
+            Notice_DeferredRequest(request.SourceFilePath, request.OrchId, "add-implementer", body);
+
+        foreach (var request in pending.PromoteOrchestrationRequests)
+            Notice_DeferredRequest(request.SourceFilePath, request.OrchId, "promote-orchestration", body);
+    }
+
+    void Notice_DeferredRequest(string sourceFilePath, string? orchId, string action, string body)
+    {
+        if (!_deferredRequestsNoticed.Add(sourceFilePath))
+            return;
+
+        _log.Log_Warning(orchId ?? GLOBAL_ORCH_ID, $"Request DEFERRED while dispatch is paused — {action}: {Path.GetFileName(sourceFilePath)} ({body})");
+
+        if (orchId == null || _store.Get_Session_OrNull(orchId) == null)
+            Append_GeneralAppEntry(AppEntryAudiences.Agent, $"request DEFERRED: {action}", body);
+        else
+            Append_OrchestrationAppEntry(orchId, AppEntryAudiences.Agent, $"request DEFERRED: {action}", body);
     }
 
     /// <summary>
@@ -10576,7 +10630,7 @@ internal sealed class BridgeEngineModel(
         if (!Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, _clock.UtcNow))
             return null;
 
-        return $"⏸ DISPATCH PAUSED — {reason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {pausedUntilUtc:HH:mm} UTC.";
+        return $"⏸ DISPATCH PAUSED — {reason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {Limits.DispatchPause_Gate.Describe_ResumeInstant(pausedUntilUtc!.Value, _clock.UtcNow)}.";
     }
 
     /// <summary>
@@ -13169,7 +13223,7 @@ internal sealed class BridgeEngineModel(
             // pause message every thirty minutes for ever — a stacking waterfall, which is the one
             // thing owner-facing repeats must never become. The state changes; the owner is told once
             // per episode, and /limits still answers whenever they ask.
-            var alert = Limits.DispatchPause_Gate.Describe_Pause(bindingWindow, bindingPercent, pauseUntilUtc);
+            var alert = Limits.DispatchPause_Gate.Describe_Pause(bindingWindow, bindingPercent, pauseUntilUtc, nowUtc);
 
             _log.Log_Warning(GLOBAL_ORCH_ID, wasPaused ? $"Dispatch pause EXTENDED — {alert}" : alert);
 
@@ -13248,7 +13302,7 @@ internal sealed class BridgeEngineModel(
         }
 
         Persist_EngineState();
-        _log.Log_Info(GLOBAL_ORCH_ID, $"Dispatch pause SHORTENED to {reconsidered.Value:yyyy-MM-dd HH:mm} UTC — {reason} (was until {storedUntilUtc:yyyy-MM-dd HH:mm} UTC)");
+        _log.Log_Info(GLOBAL_ORCH_ID, $"Dispatch pause SHORTENED to {Limits.DispatchPause_Gate.Describe_ResumeInstant(reconsidered.Value, nowUtc)} — {reason} (was until {Limits.DispatchPause_Gate.Describe_ResumeInstant(storedUntilUtc, nowUtc)})");
     }
 
     /// <summary>

@@ -360,6 +360,53 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     }
 
     /// <summary>
+    /// A DEFERRED REQUEST IS SAID. 2026-09-18 10:00 a start-orchestration was filed under a pause; it
+    /// sat 63 minutes and through a restart with no line anywhere, and the diagnosis began at "is it
+    /// lost?". Now the asker's channel carries one entry naming the resume instant and the lever, the
+    /// log one warning — per file per pause, not per tick — and the file still runs at the resume.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ARequestFiledUnderAPause_IsToldItIsDeferred_Once_AndRunsWhenThePauseLifts()
+    {
+        var resetsAtUtc = _clock.UtcNow.AddDays(4);
+        var oldAccountsProbe = Write_UsageProbe("seven_day", 98, resetsAtUtc);
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc != null, 20_000),
+            $"the 98% reading never paused the dispatcher.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Directory.CreateDirectory(_paths.GeneralFolder);
+        File.WriteAllText(_paths.GeneralChannelFile, "# GENERAL\n\n---\n");
+
+        var requestFile = Path.Combine(_paths.RequestsFolder, "start-nowhere-1.json");
+        File.WriteAllText(requestFile, "{\"action\":\"start-orchestration\",\"repo\":\"nowhere\",\"mode\":\"full\",\"task\":\"anything\"}");
+
+        Assert.True(
+            await Run_Until_Async(() => File.ReadAllText(_paths.GeneralChannelFile).Contains("request DEFERRED: start-orchestration", StringComparison.Ordinal), 20_000),
+            "THE DEFECT: the request sits on disk under the pause and nothing anywhere says so."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.True(_log.Has_Line_Containing("Request DEFERRED while dispatch is paused"), _log.Dump());
+        Assert.True(File.Exists(requestFile), "the deferred file must stay on disk, untouched, until the resume");
+
+        // Ticks go by: still ONE entry, not one per tick.
+        await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(6));
+        Assert.Equal(1, Count_Occurrences(File.ReadAllText(_paths.GeneralChannelFile), "request DEFERRED: start-orchestration"));
+        Assert.Contains(resetsAtUtc.ToString("yyyy-MM-dd HH:mm"), File.ReadAllText(_paths.GeneralChannelFile));
+
+        // The account is swapped; the pause lifts; the file is processed (the repo does not resolve
+        // here, and THAT answer proves the file was picked up rather than left behind).
+        File.Delete(oldAccountsProbe);
+        Write_UsageProbe("seven_day", 12, resetsAtUtc);
+        _clock.Advance(TimeSpan.FromMinutes(2));
+
+        Assert.True(
+            await Run_Until_Async(() => File.ReadAllText(_paths.GeneralChannelFile).Contains("start-orchestration FAILED", StringComparison.Ordinal) || !File.Exists(requestFile), 30_000),
+            $"the pause lifted but the deferred request was never picked up.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+    }
+
+    /// <summary>
     /// SILENCE IS NOT A LOW NUMBER. Paused, and then every probe is gone — a status line that stopped
     /// writing, a folder wiped, a fresh install. Nothing has said the account is fine, so the pause
     /// stands until its instant. The opposite rule would turn a missing file into a lifted guardrail.

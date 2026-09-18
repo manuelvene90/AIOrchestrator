@@ -78,9 +78,34 @@ public static class DispatchPause_Gate
     /// What the owner is told, once. It carries the TIME, because "you are over your limit" is not
     /// something they can act on and "back at 19:40" is.
     /// </summary>
-    public static string Describe_Pause(string windowName, double percent, DateTime resumeAtUtc)
+    public static string Describe_Pause(string windowName, double percent, DateTime resumeAtUtc, DateTime nowUtc)
     {
-        return $"⏸ Dispatch PAUSED — the {windowName} window is at {percent:0.#}%. No new sessions are started or respawned; work already running finishes. Resuming automatically at {resumeAtUtc:HH:mm} UTC.";
+        return $"⏸ Dispatch PAUSED — the {windowName} window is at {percent:0.#}%. No new sessions are started or respawned; work already running finishes. Resuming automatically at {Describe_ResumeInstant(resumeAtUtc, nowUtc)}.";
+    }
+
+    /// <summary>
+    /// THE ONE RENDERING OF A RESUME INSTANT — dated, and with the distance. "Resuming at 03:00 UTC"
+    /// with no day is how a pause five days out read as tonight's on 2026-09-11, and nobody moved on
+    /// it for six hours; the same wording sat under the 2026-09-18 block. Two copies of this existed
+    /// (the alert and /limits); decision 12's rule is one formatter, so the second copy calls this.
+    /// </summary>
+    public static string Describe_ResumeInstant(DateTime resumeAtUtc, DateTime nowUtc)
+    {
+        var remaining = resumeAtUtc - nowUtc;
+        var distance = remaining <= TimeSpan.Zero ? "due now" : $"in {Describe_Distance(remaining)}";
+
+        return $"{resumeAtUtc:yyyy-MM-dd HH:mm} UTC ({distance})";
+    }
+
+    static string Describe_Distance(TimeSpan span)
+    {
+        if (span.TotalDays >= 1)
+            return $"{(int)span.TotalDays} d {span.Hours} h";
+
+        if (span.TotalHours >= 1)
+            return $"{(int)span.TotalHours} h {span.Minutes} min";
+
+        return $"{Math.Max(1, (int)Math.Ceiling(span.TotalMinutes))} min";
     }
 
     public static string Describe_Resume(string reason)

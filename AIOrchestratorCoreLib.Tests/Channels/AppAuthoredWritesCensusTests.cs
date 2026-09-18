@@ -86,7 +86,13 @@ public class AppAuthoredWritesCensusTests
     /// entry per expired contract it adds nothing to the boot-read volume this series exists to cut.
     /// </para>
     /// </summary>
-    const int EXPECTED_EVENT_SITES = 80;
+    /// <para>
+    /// EIGHTY-TWO since 2026-09-18: <c>BridgeEngineModel.Notice_DeferredRequest</c> tells a spawning
+    /// request's own channel that it is parked under a dispatch pause — one general site for a
+    /// start-orchestration, one orchestration site for add-implementer / promote — once per file per
+    /// pause. Before it, a request filed under a pause sat with no line anywhere (2026-09-18, 63 min).
+    /// </para>
+    const int EXPECTED_EVENT_SITES = 82;
 
     /// <summary>
     /// SIX since 2026-09-16: <c>AppNote_Writer.Write</c> (plan 02 task 4) is the sixth pass-through,
