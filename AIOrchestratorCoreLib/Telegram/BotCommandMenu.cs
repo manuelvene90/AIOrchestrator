@@ -111,6 +111,7 @@ public static class BotCommandMenu
         ("mute", "Toggle 🔕 this topic — drop its messages (in General: everywhere)"),
         ("summary", "What is going on across all orchestrations"),
         ("resume", "Wake EVERY session — use when the usage limit resets"),
+        ("resume_dispatch", "Lift the usage-limit pause — account changed, older readings are ignored"),
         ("status", "What every session of this orchestration is doing"),
         ("tasks", "The FULL ledger of this orchestration, done lines included"),
         ("tokens", "Token and usage totals"),

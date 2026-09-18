@@ -116,6 +116,7 @@ public class EngineStateSerializerTests
             ],
             ButtonGroupSequence = 1002,
             DispatchPausedUntilUtc = T0.AddMinutes(15),
+            LimitProbeCutoffUtc = T0.AddMinutes(3),
             DispatchPauseReason = "usage limit hit at 97%",
         };
     }
@@ -131,6 +132,7 @@ public class EngineStateSerializerTests
         Assert.Equal(expected.CloseConfirmations, actual.CloseConfirmations);
         Assert.Equal(expected.ButtonGroupSequence, actual.ButtonGroupSequence);
         Assert.Equal(expected.DispatchPausedUntilUtc, actual.DispatchPausedUntilUtc);
+        Assert.Equal(expected.LimitProbeCutoffUtc, actual.LimitProbeCutoffUtc);
         Assert.Equal(expected.DispatchPauseReason, actual.DispatchPauseReason);
     }
 

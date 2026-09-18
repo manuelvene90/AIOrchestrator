@@ -255,12 +255,18 @@ public static class RateLimits_Reader
     /// reading either way. Note this gate is per FILE: a file kept for one live window may still
     /// carry a spent one, so the per-WINDOW check belongs to each consumer.
     /// </summary>
-    public static IReadOnlyList<string> Find_UsageFiles_WithLiveWindow(ISupervisionPaths paths, DateTime nowLocal)
+    public static IReadOnlyList<string> Find_UsageFiles_WithLiveWindow(ISupervisionPaths paths, DateTime nowLocal, DateTime? writtenAfterUtc = null)
     {
         List<string> live = [];
 
         foreach (var usageFile in UsageTotals_Reader.Find_AllUsageFiles(paths))
         {
+            // THE OWNER'S CUTOFF: a probe written before "account changed" describes an account that
+            // is not this one, however live its window looks. Not a staleness heuristic — an old file
+            // carrying a true 100% must still count (see WindowInstance_Order) — a declared instant.
+            if (writtenAfterUtc != null && UsageTotals_Reader.Read_LastWriteUtc_Safe(usageFile) < writtenAfterUtc.Value)
+                continue;
+
             if (Has_LiveWindow(UsageTotals_Reader.Read_Text_Safe(usageFile), nowLocal))
                 live.Add(usageFile);
         }

@@ -245,5 +245,13 @@ public sealed record EngineStateSnapshot
     /// <summary>Why it paused, in the words the owner was told — so the resume can name the same thing.</summary>
     public string? DispatchPauseReason { get; init; }
 
+    /// <summary>
+    /// The owner said "account changed" at this instant (a pause lift, or /resume_dispatch): usage
+    /// probe files written BEFORE it are not evidence for the pause, the alerts or /limits. Null
+    /// means every live probe counts. The statusline payload carries no account identity, so this
+    /// declared cutoff is the only way a reading from a previous account can be set aside.
+    /// </summary>
+    public DateTime? LimitProbeCutoffUtc { get; init; }
+
     public static EngineStateSnapshot Empty => new();
 }

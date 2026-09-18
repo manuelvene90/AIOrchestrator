@@ -407,6 +407,105 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     }
 
     /// <summary>
+    /// THE LEVER. An agent asks (clear-dispatch-pause); the file is archived as asked and the owner
+    /// gets a button — the pause alert itself carries one too. Untapped, nothing moves. The tap lifts
+    /// the pause AND declares the account change: the 98% probe from before the tap is still on disk
+    /// and no longer counts, while a reading written after the tap does — the brake is re-asked, not
+    /// bypassed. Spec: the-brake-that-cannot-be-lifted §3, acceptance 5 and 6.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AnAgentAsksToLiftThePause_TheOwnerGetsAButton_TheTapLiftsIt_AndOnlyReadingsAfterTheTapCount()
+    {
+        var resetsAtUtc = _clock.UtcNow.AddDays(4);
+        var oldAccountsProbe = Write_UsageProbe("seven_day", 98, resetsAtUtc);
+
+        // The test clock is fixed; probe evidence is dated by file write time. Pin the old probe
+        // clearly before the tap's instant so "written before the cutoff" is a fact, not a race.
+        File.SetLastWriteTimeUtc(oldAccountsProbe, _clock.UtcNow.AddMinutes(-10));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc != null, 20_000),
+            $"the 98% reading never paused the dispatcher.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor(AIOrchestratorCoreLib.Limits.DispatchPauseLift_Prompt.LIFT_LABEL) != null, 20_000),
+            $"the pause alert carries no lever.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        Directory.CreateDirectory(_paths.GeneralFolder);
+        File.WriteAllText(_paths.GeneralChannelFile, "# GENERAL\n\n---\n");
+
+        var requestFile = Path.Combine(_paths.RequestsFolder, "clear-pause-1.json");
+        File.WriteAllText(requestFile, "{\"action\":\"clear-dispatch-pause\",\"requester\":\"general-supervisor\",\"reason\":\"the account was swapped\"}");
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing("general-supervisor asks to lift the dispatch pause"), 20_000),
+            $"the agent's request raised no offer.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.False(File.Exists(requestFile), "the request file is resolved as ASKED; the decision lives on the phone, not in the folder");
+        Assert.Single(Directory.GetFiles(Path.Combine(_paths.RequestsFolder, "resolved"), "asked-clear-pause-1.json"));
+        Assert.Contains("request ASKED: clear-dispatch-pause", File.ReadAllText(_paths.GeneralChannelFile));
+
+        // Untapped: nothing changes.
+        await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(6));
+        Assert.NotNull(_engineState.Load_OrEmpty().DispatchPausedUntilUtc);
+        Assert.Null(_engineState.Load_OrEmpty().LimitProbeCutoffUtc);
+
+        var lift = _telegram.Find_ButtonFor(AIOrchestratorCoreLib.Limits.DispatchPauseLift_Prompt.LIFT_LABEL);
+        _telegram.Queue_Updates(Build_CallbackTapJson(lift!, questionMessageId: 1));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc == null, 20_000),
+            $"THE DEFECT: the owner tapped Lift and the pause holds — the only lever is still a shell.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.NotNull(_engineState.Load_OrEmpty().LimitProbeCutoffUtc);
+        Assert.True(_telegram.Has_Sent_Containing("Pause lifted by the owner"), _telegram.Dump_Sent());
+        Assert.Contains("dispatch pause LIFTED by the owner", File.ReadAllText(_paths.GeneralChannelFile));
+
+        // The 98% from before the tap is still on disk, and is no longer evidence.
+        _clock.Advance(TimeSpan.FromMinutes(2));
+        await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(8));
+        Assert.Null(_engineState.Load_OrEmpty().DispatchPausedUntilUtc);
+
+        // A reading written AFTER the tap counts: the account really is over, so it pauses again.
+        var pausedAlertsBefore = _telegram.Count_Sent_Containing("Dispatch PAUSED");
+        var newAccountsProbe = Write_UsageProbe("seven_day", 99, resetsAtUtc);
+        File.SetLastWriteTimeUtc(newAccountsProbe, _clock.UtcNow.AddSeconds(30));
+        _clock.Advance(TimeSpan.FromMinutes(2));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc != null, 20_000),
+            $"a 99% written after the lift did not pause again — the lever bypassed the brake instead of re-asking it.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(pausedAlertsBefore + 1, _telegram.Count_Sent_Containing("Dispatch PAUSED"));
+    }
+
+    /// <summary>The lever without a button: the owner types the command, the pause lifts and the cutoff is set.</summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheOwnerTypesResumeDispatch_ThePauseLifts_AndTheCutoffIsRecorded()
+    {
+        var resetsAtUtc = _clock.UtcNow.AddDays(4);
+        Write_UsageProbe("seven_day", 98, resetsAtUtc);
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc != null, 20_000),
+            $"the 98% reading never paused the dispatcher.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Directory.CreateDirectory(_paths.GeneralFolder);
+        File.WriteAllText(_paths.GeneralChannelFile, "# GENERAL\n\n---\n");
+
+        _telegram.Queue_Updates(Build_OwnerMessageJson("/resume_dispatch", updateId: 4001, messageId: 91));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc == null, 20_000),
+            $"/resume_dispatch did not lift the pause.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.NotNull(_engineState.Load_OrEmpty().LimitProbeCutoffUtc);
+        Assert.True(_telegram.Has_Sent_Containing("Pause lifted by the owner"), _telegram.Dump_Sent());
+    }
+
+    /// <summary>
     /// SILENCE IS NOT A LOW NUMBER. Paused, and then every probe is gone — a status line that stopped
     /// writing, a folder wiped, a fresh install. Nothing has said the account is fine, so the pause
     /// stands until its instant. The opposite rule would turn a missing file into a lifted guardrail.

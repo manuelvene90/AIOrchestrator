@@ -92,7 +92,13 @@ public class AppAuthoredWritesCensusTests
     /// start-orchestration, one orchestration site for add-implementer / promote — once per file per
     /// pause. Before it, a request filed under a pause sat with no line anywhere (2026-09-18, 63 min).
     /// </para>
-    const int EXPECTED_EVENT_SITES = 82;
+    /// <para>
+    /// EIGHTY-SIX since 2026-09-18 (the lever on the dispatch pause): the general channel is told
+    /// when an agent's <c>clear-dispatch-pause</c> request is filed as ASKED or MOOT, when the owner
+    /// LIFTS the pause (or declares an account change with nothing paused), and when the owner KEEPS
+    /// it — four sites, all agent-audience, all in the general channel where the asker reads.
+    /// </para>
+    const int EXPECTED_EVENT_SITES = 86;
 
     /// <summary>
     /// SIX since 2026-09-16: <c>AppNote_Writer.Write</c> (plan 02 task 4) is the sixth pass-through,

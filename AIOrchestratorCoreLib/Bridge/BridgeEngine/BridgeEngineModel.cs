@@ -1263,6 +1263,26 @@ internal sealed class BridgeEngineModel(
     DateTime? _dispatchPausedUntilUtc = restoredState.DispatchPausedUntilUtc;
     string? _dispatchPauseReason = restoredState.DispatchPauseReason;
 
+    /// <summary>See <see cref="EngineStateSnapshot.LimitProbeCutoffUtc"/>. Read and written under <c>_ownerStateLock</c>.</summary>
+    DateTime? _limitProbeCutoffUtc = restoredState.LimitProbeCutoffUtc;
+
+    /// <summary>
+    /// Offers made to the owner to lift the dispatch pause, by button nonce — one-shot, and NOT
+    /// persisted: a restart leaves dead buttons, and a tap on one is answered with the command to
+    /// type instead (the same rule the close confirmations follow: a restart re-asks, deliberately).
+    /// </summary>
+    readonly Dictionary<string, PauseLiftOffer> _pauseLiftOffers = new(StringComparer.Ordinal);
+    readonly object _pauseLiftLock = new();
+
+    /// <summary>Requests read on the sync request pass and sent as offers on the tick right after — the send is async, the pass is not.</summary>
+    readonly Queue<(string Requester, string Reason)> _pauseLiftAsksToSend = new();
+
+    sealed class PauseLiftOffer(DateTime askedUtc, string? requester)
+    {
+        public DateTime AskedUtc { get; } = askedUtc;
+        public string? Requester { get; } = requester;
+    }
+
     /// <summary>
     /// When the pause last read the usage probes. ITS OWN STAMP, not the alert scan's: that one is
     /// only advanced on ticks where the alert scan actually runs, and the alert scan returns early
@@ -1654,6 +1674,7 @@ internal sealed class BridgeEngineModel(
         // owner asked for happens the moment the window resets — the protocol is already re-entrant
         // and that is what makes deferring free here.
         Process_PendingRequests(dispatchPaused);
+        await Send_PendingPauseLiftOffers_Async(cancellationToken);
 
         // After closes are processed, so a freshly-closed session is not immediately revived.
         // A respawn is a LAUNCH: while the account is out of allowance it buys a session that
@@ -4442,7 +4463,7 @@ internal sealed class BridgeEngineModel(
         // alerting entirely.
         // Read_Text_Safe rather than File.ReadAllText: a live session rewriting its probe file
         // used to throw a sharing violation out of this loop and abort the whole check.
-        foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, nowLocal))
+        foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, nowLocal, Read_LimitProbeCutoff_OrNull()))
         {
             var windows = Limits.LimitData_Parser.Extract_LimitWindows(UsageTotals_Reader.Read_Text_Safe(usageFile));
 
@@ -6144,6 +6165,210 @@ internal sealed class BridgeEngineModel(
         Process_SetTelegramMutedRequests(pending);
         Process_SetOrchestrationNameRequests(pending);
         Process_SetModelRequests(pending);
+
+        // NEVER inside the paused block above: deferring a request to lift the pause until the pause
+        // lifts is circular, and "a pause that also removes the ability to stop things is not a
+        // safety measure" holds for the lever most of all.
+        Process_ClearDispatchPauseRequests(pending);
+    }
+
+    /// <summary>
+    /// An agent asked for the pause to be lifted. The FILE is resolved here — archived as <c>asked</c>
+    /// (or <c>moot</c> when nothing is paused) — and the DECISION moves to the owner's phone as a
+    /// button; nothing is lifted from a file. Owner-confirmed, not owner-only.
+    /// </summary>
+    void Process_ClearDispatchPauseRequests(IPendingRequests pending)
+    {
+        foreach (var request in pending.ClearDispatchPauseRequests)
+        {
+            try
+            {
+                bool paused;
+
+                lock (_ownerStateLock)
+                    paused = Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, _clock.UtcNow);
+
+                if (!paused)
+                {
+                    CloseConfirmation_Parking.Archive(_paths, request.SourceFilePath, "moot");
+                    Append_GeneralAppEntry(AppEntryAudiences.Agent, "request MOOT: clear-dispatch-pause", "Dispatch is not paused, so there is nothing to lift. If a request of yours is still waiting, it is not the pause holding it.");
+                    continue;
+                }
+
+                CloseConfirmation_Parking.Archive(_paths, request.SourceFilePath, "asked");
+                _pauseLiftAsksToSend.Enqueue((request.Requester, request.Reason));
+                Append_GeneralAppEntry(AppEntryAudiences.Agent, "request ASKED: clear-dispatch-pause", $"The owner has a button to lift the pause (asked by {request.Requester}: \"{request.Reason}\"). Until they tap it, the pause holds. You will read the outcome here.");
+            }
+            catch (Exception exception)
+            {
+                _log.Log_Error(GLOBAL_ORCH_ID, $"clear-dispatch-pause request could not be filed — {exception.GetType().Name}: {exception.Message}", exception);
+                Delete_RequestFile(request.SourceFilePath);
+            }
+        }
+    }
+
+    /// <summary>Sends the offers the request pass queued. Outbound, so muted means dropped — like the alert; the log says so.</summary>
+    async Task Send_PendingPauseLiftOffers_Async(CancellationToken cancellationToken)
+    {
+        while (_pauseLiftAsksToSend.Count > 0)
+        {
+            var (requester, reason) = _pauseLiftAsksToSend.Dequeue();
+
+            DateTime? pausedUntilUtc;
+
+            lock (_ownerStateLock)
+                pausedUntilUtc = _dispatchPausedUntilUtc;
+
+            var resumeText = pausedUntilUtc == null ? "at an unknown instant" : "at " + Limits.DispatchPause_Gate.Describe_ResumeInstant(pausedUntilUtc.Value, _clock.UtcNow);
+            var text = Limits.DispatchPauseLift_Prompt.Build_RequestOffer(requester, reason, resumeText);
+
+            await Send_PauseLiftOffer_Async(text, requester, cancellationToken);
+        }
+    }
+
+    /// <summary>The message with the two buttons, registered as a one-shot offer. Dropped while muted, with a log line.</summary>
+    async Task Send_PauseLiftOffer_Async(string text, string? requester, CancellationToken cancellationToken)
+    {
+        var client = _telegramClient;
+
+        if (client == null || _telegramMuted)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Pause-lift offer not sent ({(client == null ? "no Telegram client" : "DND")}) — the owner can still type /resume_dispatch");
+            return;
+        }
+
+        var nonce = Guid.NewGuid().ToString("N");
+
+        lock (_pauseLiftLock)
+            _pauseLiftOffers[nonce] = new PauseLiftOffer(_clock.UtcNow, requester);
+
+        try
+        {
+            await client.Send_MessageWithButtons_Async(
+                null,
+                text,
+                [(Telegram.PauseLiftButton_Data.Build_Lift(nonce), Limits.DispatchPauseLift_Prompt.LIFT_LABEL),
+                 (Telegram.PauseLiftButton_Data.Build_Keep(nonce), Limits.DispatchPauseLift_Prompt.KEEP_LABEL)],
+                TelegramSendSounds.Rings,
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            lock (_pauseLiftLock)
+                _pauseLiftOffers.Remove(nonce);
+
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Pause-lift offer send failed — {exception.GetType().Name}: {exception.Message}; the owner can still type /resume_dispatch");
+        }
+    }
+
+    /// <summary>
+    /// The owner's lever, from a tap or from /resume_dispatch: the pause is lifted AND the instant is
+    /// recorded as the probe cutoff — "account changed" — so a reading written before it cannot pause
+    /// dispatch again. The next tick re-decides from live probes; a genuinely spent account is back in
+    /// pause within the minute and says so. Returns the line the owner is shown.
+    /// </summary>
+    async Task<string> Lift_DispatchPause_ByOwner_Async(string source, CancellationToken cancellationToken)
+    {
+        var nowUtc = _clock.UtcNow;
+        bool wasPaused;
+        string? previousReason;
+
+        lock (_ownerStateLock)
+        {
+            wasPaused = Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, nowUtc);
+            previousReason = _dispatchPauseReason;
+            _dispatchPausedUntilUtc = null;
+            _dispatchPauseReason = null;
+            _limitProbeCutoffUtc = nowUtc;
+        }
+
+        // Re-decide on the very next tick, not up to a minute later: the throttle is for probes that
+        // did not change, and the owner just said which ones no longer count.
+        _lastDispatchPauseCheckUtc = DateTime.MinValue;
+        Persist_EngineState();
+
+        var cutoffText = $"{nowUtc:yyyy-MM-dd HH:mm} UTC";
+        var lifted = Limits.DispatchPauseLift_Prompt.Describe_Lifted(cutoffText);
+
+        _log.Log_Info(GLOBAL_ORCH_ID, wasPaused
+            ? $"{Limits.DispatchPause_Gate.Describe_Resume($"lifted by the owner ({source}); the pause was: {previousReason ?? "no reason recorded"}")} — probes written before {cutoffText} are ignored"
+            : $"Dispatch was not paused; the owner declared an account change ({source}) — probes written before {cutoffText} are ignored");
+
+        Append_GeneralAppEntry(AppEntryAudiences.Agent, wasPaused ? "dispatch pause LIFTED by the owner" : "account change declared by the owner",
+            $"{lifted} Spawning requests left on disk run now if the live readings allow it.");
+
+        if (wasPaused)
+            await Send_GeneralNotice_BestEffort_Async(lifted, cancellationToken);
+
+        return wasPaused ? lifted : $"Dispatch was not paused. Noted as an account change: readings written before {cutoffText} are ignored.";
+    }
+
+    /// <summary>The tap on a pause-lift offer. False when the payload is not ours; true once answered, whatever the outcome.</summary>
+    async Task<bool> Try_HandlePauseLiftTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
+    {
+        var parsed = Telegram.PauseLiftButton_Data.Parse_OrNull(tap.Data);
+
+        if (parsed == null)
+            return false;
+
+        var (lifts, nonce) = parsed.Value;
+        PauseLiftOffer? offer;
+
+        // Single use: both buttons of an offer share the nonce, so the first tap retires the pair.
+        lock (_pauseLiftLock)
+        {
+            _pauseLiftOffers.TryGetValue(nonce, out offer);
+            _pauseLiftOffers.Remove(nonce);
+        }
+
+        if (offer == null || Limits.DispatchPauseLift_Prompt.Is_Expired(offer.AskedUtc, _clock.UtcNow))
+        {
+            await Answer_CallbackTap_BestEffort_Async(client, tap.CallbackQueryId, Limits.DispatchPauseLift_Prompt.Describe_ExpiredOrUnknownTap(), cancellationToken);
+            return true;
+        }
+
+        await Answer_CallbackTap_BestEffort_Async(client, tap.CallbackQueryId, "✓", cancellationToken);
+
+        if (Note_OwnerSpoke_AndWasAway())
+            await Exit_AwayMode_Async(cancellationToken);
+
+        string outcome;
+
+        if (lifts)
+        {
+            outcome = await Lift_DispatchPause_ByOwner_Async("tap on the pause offer", cancellationToken);
+        }
+        else
+        {
+            outcome = Limits.DispatchPauseLift_Prompt.Describe_Kept();
+            _log.Log_Info(GLOBAL_ORCH_ID, "Pause-lift offer declined by the owner");
+            Append_GeneralAppEntry(AppEntryAudiences.Agent, "dispatch pause KEPT by the owner", $"The owner declined to lift the pause{(offer.Requester == null ? "" : $" asked for by {offer.Requester}")}. It holds until its instant or until the live readings fall.");
+        }
+
+        try
+        {
+            if (tap.MessageId != null)
+                await client.Edit_MessageText_Async(tap.MessageId.Value, outcome, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Pause-offer message could not be edited after the tap — {exception.GetType().Name}: {exception.Message}");
+        }
+
+        return true;
+    }
+
+    /// <summary>/resume_dispatch — the lever with no button: lift and declare the account change, then say what happened.</summary>
+    async Task Resume_Dispatch_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var outcome = await Lift_DispatchPause_ByOwner_Async("/resume_dispatch", cancellationToken);
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, outcome, cancellationToken);
+    }
+
+    DateTime? Read_LimitProbeCutoff_OrNull()
+    {
+        lock (_ownerStateLock)
+            return _limitProbeCutoffUtc;
     }
 
     /// <summary>
@@ -8437,6 +8662,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_MemberStatusReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "resume_dispatch" || command == "resume-dispatch")
+                    {
+                        await Resume_Dispatch_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "resume")
                     {
                         await Resume_AllSessions_Async(client, message.MessageThreadId, cancellationToken);
@@ -10577,7 +10806,7 @@ internal sealed class BridgeEngineModel(
         // The live-window filter is what keeps the "seen from" model list honest too: a five-day-old
         // closed orchestration was still contributing its model name to a report about right now.
         var now = DateTime.Now;
-        var windows = RateLimits_Reader.Read_WorstAcrossSessions(RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, now), now);
+        var windows = RateLimits_Reader.Read_WorstAcrossSessions(RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, now, Read_LimitProbeCutoff_OrNull()), now);
 
         // FIRST LINE WHEN IT IS ON. The owner asks /limits precisely when things feel stuck, and
         // "the app has stopped starting sessions until 19:40" is the answer to the question they are
@@ -12479,6 +12708,9 @@ internal sealed class BridgeEngineModel(
         // same reason the bar does: the payload names the orchestration, the role and the value, so
         // the tap is applied directly. Through the generic path below it would become a synthetic
         // owner message and land in an agent's channel.
+        if (await Try_HandlePauseLiftTap_Async(client, tap, cancellationToken))
+            return;
+
         if (await Try_HandleModelEffortTap_Async(client, tap, cancellationToken))
             return;
 
@@ -13227,8 +13459,10 @@ internal sealed class BridgeEngineModel(
 
             _log.Log_Warning(GLOBAL_ORCH_ID, wasPaused ? $"Dispatch pause EXTENDED — {alert}" : alert);
 
+            // THE LEVER RIDES ON THE ALERT: the owner reads "paused until Monday" on their phone and
+            // can answer "no — the account changed" right there, without a session asking for them.
             if (!wasPaused)
-                await Send_GeneralNotice_BestEffort_Async(alert, cancellationToken);
+                await Send_PauseLiftOffer_Async($"{alert}\n\n{Limits.DispatchPauseLift_Prompt.Build_AlertOffer()}", null, cancellationToken);
 
             return;
         }
@@ -17806,6 +18040,7 @@ internal sealed class BridgeEngineModel(
                     ButtonGroupSequence = _buttonGroupSequence,
                     DispatchPausedUntilUtc = _dispatchPausedUntilUtc,
                     DispatchPauseReason = _dispatchPauseReason,
+                    LimitProbeCutoffUtc = _limitProbeCutoffUtc,
                 };
             }
         }

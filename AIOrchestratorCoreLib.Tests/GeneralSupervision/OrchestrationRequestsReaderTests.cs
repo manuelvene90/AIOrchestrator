@@ -179,4 +179,43 @@ public class OrchestrationRequestsReaderTests : IDisposable
         Assert.Empty(pending.StartRequests);
         Assert.Empty(pending.MalformedRequests);
     }
+
+    // ── clear-dispatch-pause — the owner-confirmed lever on the dispatch pause (2026-09-18)
+
+    [Fact]
+    public void ClearDispatchPause_WithRequesterAndReason_IsParsed()
+    {
+        Write_Request("lift.json", """{"action":"clear-dispatch-pause","requester":"general-supervisor","reason":"the account was swapped"}""");
+
+        var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
+
+        var request = Assert.Single(pending.ClearDispatchPauseRequests);
+        Assert.Equal("general-supervisor", request.Requester);
+        Assert.Equal("the account was swapped", request.Reason);
+        Assert.EndsWith("lift.json", request.SourceFilePath);
+        Assert.Empty(pending.MalformedRequests);
+    }
+
+    /// <summary>The owner decides on the reason line; a request with none is refused and told why.</summary>
+    [Fact]
+    public void ClearDispatchPause_WithoutAReason_IsMalformed_AndSaysSo()
+    {
+        Write_Request("lift.json", """{"action":"clear-dispatch-pause","requester":"general-supervisor"}""");
+
+        var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
+
+        Assert.Empty(pending.ClearDispatchPauseRequests);
+        var malformed = Assert.Single(pending.MalformedRequests);
+        Assert.Contains("reason", malformed.Reason);
+    }
+
+    /// <summary>The known-actions list IS the switch: a mistyped action must be told the lever exists.</summary>
+    [Fact]
+    public void AnUnknownAction_IsToldClearDispatchPauseIsKnown()
+    {
+        Write_Request("typo.json", """{"action":"clear-dispatch-pauze"}""");
+
+        var malformed = Assert.Single(OrchestrationRequests_Reader.Read_Pending(_paths).MalformedRequests);
+        Assert.Contains("clear-dispatch-pause", malformed.Reason);
+    }
 }

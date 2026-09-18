@@ -26,6 +26,18 @@ and what a reviewer's brief must carry is in `reference/reviews.md`.
   suite-wide until the owner texts again (auto-unmute) or re-enables. Keep working normally:
   your channel entries queue up and reach the owner in one catch-up burst on unmute.
 
+## Lift the dispatch pause — `clear-dispatch-pause`
+
+When the app has PAUSED dispatch on a usage limit (a `request DEFERRED` entry, or `/limits` saying
+"DISPATCH PAUSED") and you have reason to believe the reading is wrong — the owner said the account
+was swapped, or the limit has visibly reset — you may ASK for the pause to be lifted:
+  `{"action":"clear-dispatch-pause","requester":"<your role>","reason":"<why, one line>"}`.
+Owner-confirmed, not owner-only: the app archives your file as `asked`, puts a **Lift the pause**
+button on the owner's phone, and tells you the outcome in your channel (LIFTED or KEPT). A lift also
+declares an account change: probe readings written before the tap stop counting, and the app
+re-decides from the live ones — a genuinely spent account is back in pause within the minute. You
+cannot lift it yourself, and asking twice does not ask louder.
+
 ## Model switch for this orchestration
 
 - **Model switch for THIS orchestration** — when the owner says "use fable for this" (or wants a

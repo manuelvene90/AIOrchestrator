@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.CloseOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.MalformedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PromoteOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
+using AIOrchestratorCoreLib.GeneralSupervision.ClearDispatchPauseRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.StartOrchestrationRequest;
@@ -21,5 +22,6 @@ public interface IPendingRequests
     IReadOnlyList<ISetOrchestrationNameRequest> SetOrchestrationNameRequests { get; }
     IReadOnlyList<IPromoteOrchestrationRequest> PromoteOrchestrationRequests { get; }
     IReadOnlyList<ISetModelRequest> SetModelRequests { get; }
+    IReadOnlyList<IClearDispatchPauseRequest> ClearDispatchPauseRequests { get; }
     IReadOnlyList<IMalformedRequest> MalformedRequests { get; }
 }

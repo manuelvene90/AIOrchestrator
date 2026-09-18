@@ -449,6 +449,16 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
   delivers it in ONE catch-up burst on unmute (pending supervisor questions arrive in their
   topics immediately); the owner can also toggle from the app's UI.
 
+- **The dispatch pause (usage-limit brake).** When the app has paused dispatch, a start you file
+  is NOT lost: it is parked on disk, you get a `request DEFERRED` entry naming the resume instant,
+  and it runs by itself at the resume. If the owner tells you the account was swapped, or the
+  reading is plainly wrong, ask for the pause to be lifted — owner-confirmed, one file:
+  `{"action":"clear-dispatch-pause","requester":"general supervisor","reason":"<why, one line>"}`.
+  The owner gets a **Lift the pause** button (and can type `/resume_dispatch`); you read LIFTED or
+  KEPT in this channel. A lift also declares an account change: readings written before it stop
+  counting. Never tell the owner a deferred request is stuck or lost — say it is waiting for the
+  pause, and offer the lever.
+
 ## The check-in ritual — "make a summary of what is going on"
 
 The owner's core away-from-PC flow: they are out, DND is on; they text you (which auto-unmutes),

@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.MalformedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
 using AIOrchestratorCoreLib.GeneralSupervision.PromoteOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
+using AIOrchestratorCoreLib.GeneralSupervision.ClearDispatchPauseRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.StartOrchestrationRequest;
@@ -43,6 +44,12 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
 ///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
 ///   {"action":"set-model","orchId":"...","role":"supervisor|implementer","model":"..."}  (per-orchestration override)
+///   {"action":"clear-dispatch-pause","requester":"...","reason":"..."}
+///                                       (any supervisor — the dispatch pause is a global usage-limit
+///                                        brake; the file is archived as ASKED and the OWNER gets a
+///                                        button, so only their tap lifts it. Lifting also declares an
+///                                        account change: probe files written before the tap stop
+///                                        counting. MOOT when nothing is paused.)
 /// </summary>
 public static class OrchestrationRequests_Reader
 {
@@ -55,6 +62,12 @@ public static class OrchestrationRequests_Reader
     public const string SET_TELEGRAM_MUTED_ACTION = "set-telegram-muted";
     public const string SET_ORCHESTRATION_NAME_ACTION = "set-orchestration-name";
     public const string SET_MODEL_ACTION = "set-model";
+
+    /// <summary>
+    /// Owner-confirmed: the file is archived as asked, the owner gets a button, and only the tap lifts.
+    /// <c>{"action":"clear-dispatch-pause","requester":"...","reason":"..."}</c>
+    /// </summary>
+    public const string CLEAR_DISPATCH_PAUSE_ACTION = "clear-dispatch-pause";
 
     /// <summary>
     /// Every autonomous action costs the owner tokens, so it must justify itself: the app relays
@@ -91,6 +104,7 @@ public static class OrchestrationRequests_Reader
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
+        List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
         List<IMalformedRequest> malformedRequests = [];
 
         if (Directory.Exists(paths.RequestsFolder))
@@ -98,7 +112,7 @@ public static class OrchestrationRequests_Reader
             foreach (var file in Directory.EnumerateFiles(paths.RequestsFolder, "*.json"))
             {
                 var rejectionReason = Try_ParseInto_OrReason(
-                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests);
+                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, clearDispatchPauseRequests);
 
                 if (rejectionReason != null)
                     malformedRequests.Add(MalformedRequest_Factory.Create(file, rejectionReason, Peek_OrchId_OrNull(file)));
@@ -106,7 +120,7 @@ public static class OrchestrationRequests_Reader
         }
 
         return PendingRequests_Factory.Create(
-            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, malformedRequests);
+            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, clearDispatchPauseRequests, malformedRequests);
     }
 
     /// <summary>
@@ -125,6 +139,7 @@ public static class OrchestrationRequests_Reader
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
+        List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
             filePath,
@@ -135,7 +150,8 @@ public static class OrchestrationRequests_Reader
             setTelegramMutedRequests,
             setOrchestrationNameRequests,
             promoteOrchestrationRequests,
-            setModelRequests);
+            setModelRequests,
+            clearDispatchPauseRequests);
 
         if (rejection != null)
             return null;
@@ -159,6 +175,7 @@ public static class OrchestrationRequests_Reader
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
+        List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
             filePath,
@@ -169,7 +186,8 @@ public static class OrchestrationRequests_Reader
             setTelegramMutedRequests,
             setOrchestrationNameRequests,
             promoteOrchestrationRequests,
-            setModelRequests);
+            setModelRequests,
+            clearDispatchPauseRequests);
 
         if (rejection != null)
             return null;
@@ -192,6 +210,7 @@ public static class OrchestrationRequests_Reader
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
+        List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
             filePath,
@@ -202,7 +221,8 @@ public static class OrchestrationRequests_Reader
             setTelegramMutedRequests,
             setOrchestrationNameRequests,
             promoteOrchestrationRequests,
-            setModelRequests);
+            setModelRequests,
+            clearDispatchPauseRequests);
 
         if (rejection != null)
             return null;
@@ -236,7 +256,8 @@ public static class OrchestrationRequests_Reader
         List<ISetTelegramMutedRequest> setTelegramMutedRequests,
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests,
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests,
-        List<ISetModelRequest> setModelRequests)
+        List<ISetModelRequest> setModelRequests,
+        List<IClearDispatchPauseRequest> clearDispatchPauseRequests)
     {
         JsonObject root;
         try
@@ -372,6 +393,19 @@ public static class OrchestrationRequests_Reader
 
                     return null;
                 }
+                case CLEAR_DISPATCH_PAUSE_ACTION:
+                {
+                    var requester = root["requester"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(requester))
+                        return "missing 'requester' (a role word — the owner's button says who is waiting)";
+
+                    var reason = root["reason"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(reason))
+                        return "missing 'reason' (the owner decides on this line — say why the pause is wrong)";
+
+                    clearDispatchPauseRequests.Add(ClearDispatchPauseRequest_Factory.Create(requester, reason, filePath));
+                    return null;
+                }
                 case SET_TELEGRAM_MUTED_ACTION:
                 {
                     var mutedNode = root["muted"];
@@ -421,6 +455,7 @@ public static class OrchestrationRequests_Reader
                         START_ORCHESTRATION_ACTION, ADD_IMPLEMENTER_ACTION, ADD_REVIEWER_ACTION,
                         CLOSE_IMPLEMENTER_ACTION, PROMOTE_ORCHESTRATION_ACTION, CLOSE_ORCHESTRATION_ACTION,
                         SET_TELEGRAM_MUTED_ACTION, SET_ORCHESTRATION_NAME_ACTION, SET_MODEL_ACTION,
+                        CLEAR_DISPATCH_PAUSE_ACTION,
                     });
 
                     return $"unknown action '{action}' (known: {known}; retries must reuse the SAME action)";

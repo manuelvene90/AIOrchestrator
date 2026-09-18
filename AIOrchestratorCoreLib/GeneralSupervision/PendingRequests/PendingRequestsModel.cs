@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.CloseOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.MalformedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PromoteOrchestrationRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
+using AIOrchestratorCoreLib.GeneralSupervision.ClearDispatchPauseRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.StartOrchestrationRequest;
@@ -19,6 +20,7 @@ internal sealed class PendingRequestsModel(
     IReadOnlyList<ISetOrchestrationNameRequest> setOrchestrationNameRequests,
     IReadOnlyList<IPromoteOrchestrationRequest> promoteOrchestrationRequests,
     IReadOnlyList<ISetModelRequest> setModelRequests,
+    IReadOnlyList<IClearDispatchPauseRequest> clearDispatchPauseRequests,
     IReadOnlyList<IMalformedRequest> malformedRequests) : IPendingRequests
 {
     public IReadOnlyList<IStartOrchestrationRequest> StartRequests { get; } = startRequests;
@@ -29,5 +31,6 @@ internal sealed class PendingRequestsModel(
     public IReadOnlyList<ISetOrchestrationNameRequest> SetOrchestrationNameRequests { get; } = setOrchestrationNameRequests;
     public IReadOnlyList<IPromoteOrchestrationRequest> PromoteOrchestrationRequests { get; } = promoteOrchestrationRequests;
     public IReadOnlyList<ISetModelRequest> SetModelRequests { get; } = setModelRequests;
+    public IReadOnlyList<IClearDispatchPauseRequest> ClearDispatchPauseRequests { get; } = clearDispatchPauseRequests;
     public IReadOnlyList<IMalformedRequest> MalformedRequests { get; } = malformedRequests;
 }

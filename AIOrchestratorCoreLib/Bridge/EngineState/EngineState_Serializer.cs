@@ -33,6 +33,7 @@ public static class EngineState_Serializer
     const string BUTTON_GROUP_SEQUENCE = "buttonGroupSequence";
     const string DISPATCH_PAUSED_UNTIL = "dispatchPausedUntilUtc";
     const string DISPATCH_PAUSE_REASON = "dispatchPauseReason";
+    const string LIMIT_PROBE_CUTOFF = "limitProbeCutoffUtc";
 
     /// <summary>
     /// Reads a snapshot and says how many records it had to drop. Never throws for the CONTENT of
@@ -70,6 +71,7 @@ public static class EngineState_Serializer
             ButtonGroupSequence = Read_Long_OrNull(root[BUTTON_GROUP_SEQUENCE]) ?? 0,
             DispatchPausedUntilUtc = Read_Instant_OrNull(root[DISPATCH_PAUSED_UNTIL]),
             DispatchPauseReason = Read_String_OrNull(root[DISPATCH_PAUSE_REASON]),
+            LimitProbeCutoffUtc = Read_Instant_OrNull(root[LIMIT_PROBE_CUTOFF]),
         };
 
         return (snapshot, dropped);
@@ -173,6 +175,7 @@ public static class EngineState_Serializer
             [BUTTON_GROUP_SEQUENCE] = snapshot.ButtonGroupSequence,
             [DISPATCH_PAUSED_UNTIL] = snapshot.DispatchPausedUntilUtc == null ? null : Write_Instant(snapshot.DispatchPausedUntilUtc.Value),
             [DISPATCH_PAUSE_REASON] = snapshot.DispatchPauseReason,
+            [LIMIT_PROBE_CUTOFF] = snapshot.LimitProbeCutoffUtc == null ? null : Write_Instant(snapshot.LimitProbeCutoffUtc.Value),
         };
 
         return root.ToJsonString(Configuration.JsonWriting.INDENTED);
