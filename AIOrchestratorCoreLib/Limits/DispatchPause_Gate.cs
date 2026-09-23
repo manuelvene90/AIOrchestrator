@@ -124,6 +124,12 @@ public static class DispatchPause_Gate
         return $"▶ Dispatch pause lifted — sessions are started and restored again (it paused because {reason ?? "a usage limit was reached"}). That window will not pause dispatch again before {Describe_ResumeAt(liftedUntilUtc, nowUtc)}; a window that resets later still can.";
     }
 
+    /// <summary>The owner logged in to another Claude account, and the pause belonged to the previous one.</summary>
+    public static string Describe_AccountSwitchLift(string? reason)
+    {
+        return $"▶ Dispatch pause lifted — you are logged in to a different Claude account now, and the pause was the previous account's ({reason ?? "a usage limit was reached"}). Sessions are started and restored again.";
+    }
+
     public static string Describe_Resume(string reason)
     {
         return $"▶ Dispatch resumed — {reason}";

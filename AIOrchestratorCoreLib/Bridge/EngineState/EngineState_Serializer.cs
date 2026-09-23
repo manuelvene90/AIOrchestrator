@@ -34,6 +34,8 @@ public static class EngineState_Serializer
     const string DISPATCH_PAUSED_UNTIL = "dispatchPausedUntilUtc";
     const string DISPATCH_PAUSE_REASON = "dispatchPauseReason";
     const string DISPATCH_PAUSE_LIFTED_UNTIL = "dispatchPauseLiftedUntilUtc";
+    const string LIMIT_ACCOUNT_ID = "limitAccountId";
+    const string LIMIT_ACCOUNT_SINCE = "limitAccountSinceUtc";
 
     /// <summary>
     /// Reads a snapshot and says how many records it had to drop. Never throws for the CONTENT of
@@ -72,6 +74,8 @@ public static class EngineState_Serializer
             DispatchPausedUntilUtc = Read_Instant_OrNull(root[DISPATCH_PAUSED_UNTIL]),
             DispatchPauseReason = Read_String_OrNull(root[DISPATCH_PAUSE_REASON]),
             DispatchPauseLiftedUntilUtc = Read_Instant_OrNull(root[DISPATCH_PAUSE_LIFTED_UNTIL]),
+            LimitAccountId = Read_String_OrNull(root[LIMIT_ACCOUNT_ID]),
+            LimitAccountSinceUtc = Read_Instant_OrNull(root[LIMIT_ACCOUNT_SINCE]),
         };
 
         return (snapshot, dropped);
@@ -175,6 +179,8 @@ public static class EngineState_Serializer
             [DISPATCH_PAUSED_UNTIL] = snapshot.DispatchPausedUntilUtc == null ? null : Write_Instant(snapshot.DispatchPausedUntilUtc.Value),
             [DISPATCH_PAUSE_REASON] = snapshot.DispatchPauseReason,
             [DISPATCH_PAUSE_LIFTED_UNTIL] = snapshot.DispatchPauseLiftedUntilUtc == null ? null : Write_Instant(snapshot.DispatchPauseLiftedUntilUtc.Value),
+            [LIMIT_ACCOUNT_ID] = snapshot.LimitAccountId,
+            [LIMIT_ACCOUNT_SINCE] = snapshot.LimitAccountSinceUtc == null ? null : Write_Instant(snapshot.LimitAccountSinceUtc.Value),
         };
 
         return root.ToJsonString(Configuration.JsonWriting.INDENTED);

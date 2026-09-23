@@ -244,5 +244,18 @@ public sealed record EngineStateSnapshot
     /// </summary>
     public DateTime? DispatchPauseLiftedUntilUtc { get; init; }
 
+    /// <summary>
+    /// The Claude account the usage readings — and so the pause and the lift above — belong to, or
+    /// null when it could not be read. See <see cref="Limits.ClaudeAccount.IClaudeAccountReader"/>.
+    /// </summary>
+    public string? LimitAccountId { get; init; }
+
+    /// <summary>
+    /// When the app first saw <see cref="LimitAccountId"/> logged in after a DIFFERENT one, or null
+    /// when no switch has been seen. Usage probes written before it are the previous account's
+    /// readings and may not pause dispatch for this one.
+    /// </summary>
+    public DateTime? LimitAccountSinceUtc { get; init; }
+
     public static EngineStateSnapshot Empty => new();
 }
