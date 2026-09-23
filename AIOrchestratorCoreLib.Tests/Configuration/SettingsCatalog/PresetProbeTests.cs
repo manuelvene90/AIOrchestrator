@@ -15,6 +15,12 @@ namespace AIOrchestratorCoreLib.Tests.Configuration.SettingsCatalog;
 /// lines has changed the owner's phone without anyone deciding to.
 ///
 /// <para>
+/// EXTENDED TO THE PHONE BY PLAN 03 (Task 12, 2026-09-23), not replaced: <see cref="PresetPhoneProbeTests"/>
+/// drives the real engine under each preset and asserts what reaches the owner's phone — the sends, edits
+/// and reactions in order, and which of them rang. These rows stay the value half of the gate; a row here
+/// that moves without its phone probe moving says the engine stopped reading the key.
+/// </para>
+/// <para>
 /// SPELLED OUT RATHER THAN COMPUTED. Deriving the expected values from the preset files would make
 /// this test assert that a file equals itself; spec §12 names <c>quiet</c> reproducing the fork's
 /// phone exactly as a top risk, and a risk is not mitigated by a tautology.

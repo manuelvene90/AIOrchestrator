@@ -2,10 +2,11 @@ namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 
 /// <summary>
 /// THE NINE FIELDS A PULSE MAY CARRY, in the order the shipped default lists them. The words, not
-/// the builders: `pulse.fields` is an ORDERED LIST setting whose values are these, and plan 03 makes
-/// TopicStatusLine_Builder.Build iterate the resolved list calling one private per word. Registered
-/// here in plan 02 so the setting can be validated before anything reads it — a list validated
-/// against a builder that does not iterate it yet is still a list that cannot hold a typo.
+/// the builders: `pulse.fields` is an ORDERED LIST setting whose values are these, and since plan 03
+/// (Task 4) TopicStatusLine_Builder.Build iterates the resolved list calling one private per word.
+/// Registered here in plan 02, before anything read it, so the setting could be validated first — a
+/// list validated against a builder that did not iterate it yet was still a list that could not hold
+/// a typo.
 ///
 /// <para>
 /// <see cref="PROGRESS"/> IS THE NINTH, and the only one with a place outside the list's order (owner,
