@@ -81,6 +81,17 @@ public sealed record OpenQuestionRecord
     public int? DefaultOptionIndex { get; init; }
     public bool IsHighRisk { get; init; }
 
+    /// <summary>
+    /// Whether a tap on this question opens the read-back CODE — decided ONCE, at ask time, by
+    /// <c>HighRiskLock_Policy.Needs_Code</c>, and the same value the question's buttons carry as their
+    /// <see cref="PendingButtonRecord.IsHighRisk"/>. Kept apart from <see cref="IsHighRisk"/> since the
+    /// <c>highRiskConfirmation</c> switch (plan 03 task 15): IsHighRisk is what the question IS (no
+    /// default, denied on timeout), this is what a tap COSTS. /pending draws 🔐 from THIS (task 14b) —
+    /// drawn from the classification it promised classic's owner a code that never came. A question asked
+    /// while the code was on keeps its lock after the switch flips, so it keeps its 🔐 too.
+    /// </summary>
+    public bool NeedsCode { get; init; }
+
     /// <summary>Set once the half-window reminder edit has been applied, so it happens once.</summary>
     public bool ReminderSent { get; init; }
 

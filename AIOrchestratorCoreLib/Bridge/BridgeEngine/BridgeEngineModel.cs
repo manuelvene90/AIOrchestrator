@@ -4594,6 +4594,7 @@ internal sealed class BridgeEngineModel(
                     DeadlineUtc = deadlineUtc,
                     DefaultOptionIndex = effectiveDefaultIndex,
                     IsHighRisk = isHighRisk,
+                    NeedsCode = needsCode,
                 };
             }
 
@@ -5180,54 +5181,20 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// THE COLOUR THIS REPOSITORY'S TOPICS ARE CREATED WITH — brief F1; the rotation itself is
-    /// <see cref="TopicColor_Rotation"/>'s and the file format is
-    /// <see cref="ConfigRepoColor_Writer"/>'s. This is only the point of effect, which is the one
-    /// place that knows which repository a topic belongs to.
-    ///
-    /// <para>
-    /// ASSIGNED ON FIRST USE AND WRITTEN DOWN, because the rotation depends on what has already
-    /// been handed out and the repo list is reordered at runtime — a colour derived from a position
-    /// would change under the owner every time they dragged a row. A repository not in config.json
-    /// at all (removed while an orchestration on it is still open) gets no colour rather than a
-    /// wrong one.
-    /// </para>
-    /// <para>
-    /// NEVER FAILS THE TOPIC. A colour is the least important thing happening on this path; every
-    /// way of not getting one ends in null, and the topic is created in Telegram's default.
-    /// </para>
+    /// The colour a topic of this repository is created with, or null for Telegram's default — the rule
+    /// and its reasons live on <see cref="RepoTopicColour_Resolver"/> (moved out by plan 03 task 14). This
+    /// wrapper is the point of effect: <c>topic.repoColours</c> is read from the provider at EACH creation,
+    /// never cached, and the resolver's warning is logged here because the engine owns the log.
     /// </summary>
     int? Resolve_TopicColour_OrNull(string repoName)
     {
-        try
-        {
-            var repos = _configProvider.Get_Current().Repos;
-            var repo = repos.FirstOrDefault(entry => string.Equals(entry.Name, repoName, StringComparison.OrdinalIgnoreCase));
+        var config = _configProvider.Get_Current();
+        var (colour, warning) = RepoTopicColour_Resolver.Resolve(config.Phone.TopicRepoColours, config.Repos, repoName, _paths);
 
-            if (repo == null)
-                return null;
+        if (warning != null)
+            _log.Log_Warning(GLOBAL_ORCH_ID, warning);
 
-            if (repo.TopicColor != null)
-                return repo.TopicColor;
-
-            var inUse = repos.Where(entry => entry.TopicColor != null).Select(entry => entry.TopicColor!.Value).ToList();
-            var colour = TopicColor_Rotation.Pick_ForNewRepo(inUse);
-
-            // A colour that cannot be persisted is still USED for this topic — the alternative is a
-            // repository whose topics are all Telegram's default while the file stays unwritable.
-            // The next topic re-picks; the rotation is deterministic, so it very likely picks the
-            // same one again.
-            if (!ConfigRepoColor_Writer.Persist_Colour(_paths, repo.Name, colour))
-                _log.Log_Warning(GLOBAL_ORCH_ID, $"Topic colour for repo '{repo.Name}' could not be written to config.json — this topic uses it, the next one re-picks");
-
-            return colour;
-        }
-        catch (Exception ex)
-        {
-            // Broad by intent: this must never be the reason a topic is not created.
-            _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not resolve a topic colour for repo '{repoName}' ({ex.Message}) — creating the topic in Telegram's default colour");
-            return null;
-        }
+        return colour;
     }
 
     void Remove_TopicCreationPin_FireAndForget(string orchId, long topicId)

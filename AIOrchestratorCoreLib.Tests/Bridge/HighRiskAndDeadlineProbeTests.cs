@@ -541,6 +541,59 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
         Assert.Equal(1, Count_Occurrences(Read_OwnerChannel(session.OrchId), MERGE_AND_PUSH_OPTION));
     }
 
+    /// <summary>
+    /// /pending DRAWS 🔐 ONLY WHERE A CODE WILL BE ASKED (plan 03 task 14b, from task 15's review). Under
+    /// classic the "merge and push" question is decided by one tap, so a 🔐 beside it in /pending told the
+    /// owner a code was coming — the thing they asked to be rid of. Its outcome text stays keyed on the
+    /// classification: it is still DENIED on timeout, never "option 1 taken" (ruling R21).
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_PendingListsAHighRiskQuestion_WithNoLock_ButStillDeniedOnTimeout()
+    {
+        Write_Config(highRiskConfirmation: null);
+
+        var report = await Ask_MergeAndPush_ThenRead_Pending_Async();
+
+        Assert.DoesNotContain("🔐", report, StringComparison.Ordinal);
+        Assert.Contains("denied in", report, StringComparison.Ordinal);
+        Assert.DoesNotContain("taken", report, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The other preset's value: with the code on (the shipped default, quiet's — stated in config.json for
+    /// the print-runner reason the constructor gives) the same question keeps its 🔐 in /pending.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task WithTheCodeOn_PendingListsAHighRiskQuestion_WithItsLock()
+    {
+        var report = await Ask_MergeAndPush_ThenRead_Pending_Async();
+
+        Assert.StartsWith("🔐 ", report, StringComparison.Ordinal);
+        Assert.Contains("denied in", report, StringComparison.Ordinal);
+    }
+
+    /// <summary>Asks the pattern-matched "merge and push" question with a deadline, then /pending in its topic; returns the report.</summary>
+    async Task<string> Ask_MergeAndPush_ThenRead_Pending_Async()
+    {
+        var session = await Start_WithQuestion_Async(
+            $"QUESTION: Shall I merge and push the branch?\nOPTION: {MERGE_AND_PUSH_OPTION}\nOPTION: Hold\nDEADLINE: 30m\nDEFAULT: 1{CONTRACT_LINES}",
+            MERGE_AND_PUSH_OPTION);
+
+        _telegram.Queue_Updates(Build_OwnerMessageJson("/pending", updateId: 3020, messageId: 90));
+
+        // The report's own line, not the question: only /pending writes "— asked" after the question text.
+        var reportLine = $"[{session.OrchId}] ❓ Shall I merge and push the branch? — asked";
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing(reportLine), 20_000),
+            $"/pending never listed the open question.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
+
+        return _telegram.Find_SentContaining(reportLine)
+            ?? throw new Exception("unreachable — asserted above");
+    }
+
     const string MERGE_AND_PUSH_OPTION = "Merge and push";
 
     /// <summary><see cref="CONTRACT_LINES"/> with the asker's own declaration — the lock that comes from no word at all.</summary>
