@@ -5,6 +5,8 @@ using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using AIOrchestratorCoreLib.Spawning.SessionSpawner;
+using AIOrchestratorCoreLib.Spawning.SpawnCommand;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Tests.TestSupport;
@@ -132,9 +134,12 @@ public class SiblingBirthStepTests : IDisposable
 
         var birth = SiblingBirth_Step.Execute(_store, _launcher, _paths, Request(parent.OrchId));
 
-        Assert.Equal($"🔗 Sibling of {PARENT_NAME}", birth.BirthNote.Subject);
+        // THE SUBJECT IS WHAT THE PHONE SHOWS: an app entry is mirrored as "⚙ App: " + subject, and its
+        // body never leaves the channel (MirrorText_Formatter). So the owner's half — whose sibling, the
+        // job, where to write — is the subject, and the child's pointer to its brief is the body.
+        Assert.Equal($"🔗 Sibling of {PARENT_NAME} — job: {JOB}. Write here about this job only.", birth.BirthNote.Subject);
         Assert.Equal(
-            $"job: {JOB}\nWrite here about this job only.\nYour brief: {_paths.Get_SiblingOutboxFile(parent.OrchId)} entry [{HANDOVER}]",
+            $"Your brief: {_paths.Get_SiblingOutboxFile(parent.OrchId)} entry [{HANDOVER}]",
             birth.BirthNote.Body);
 
         Assert.Equal($"sibling '{birth.Child.OrchId}' started — {CHILD_NAME} (its own topic)", birth.ParentNotice.Subject);
@@ -152,7 +157,7 @@ public class SiblingBirthStepTests : IDisposable
 
         var birth = SiblingBirth_Step.Execute(_store, _launcher, _paths, Request(parent.OrchId));
 
-        Assert.Equal($"🔗 Sibling of {parent.OrchId}", birth.BirthNote.Subject);
+        Assert.StartsWith($"🔗 Sibling of {parent.OrchId} — job: ", birth.BirthNote.Subject, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -167,10 +172,39 @@ public class SiblingBirthStepTests : IDisposable
         var before = _store.Load_All().Count;
         var missing = Path.Combine(_tempRoot, "repo.worktrees", "never-created");
 
-        Assert.ThrowsAny<Exception>(() => SiblingBirth_Step.Execute(_store, _launcher, _paths, Request(parent.OrchId, worktree: missing)));
+        var thrown = Assert.ThrowsAny<Exception>(() => SiblingBirth_Step.Execute(_store, _launcher, _paths, Request(parent.OrchId, worktree: missing)));
+
+        // The launcher's own refusal, not any exception: a NullReferenceException must not pass this.
+        Assert.Contains("does not exist", thrown.Message, StringComparison.Ordinal);
 
         Assert.Null(_store.Get_Session(parent.OrchId).EndeavourId);
         Assert.Equal(before, _store.Load_All().Count);
+    }
+
+    /// <summary>
+    /// A LAUNCH THAT FAILS AFTER THE CHILD WAS CREATED (the spawn threw, after <c>Create_Orchestration</c>
+    /// and the link were already on disk). The child exists, linked and carrying the handover key, so a
+    /// retry is refused as handover-already-used naming it — the parent could never be linked by any
+    /// later birth. So the step links the parent to the child it DID create, and says which child that is.
+    /// </summary>
+    [Fact]
+    public void ASpawnFailureAfterCreation_LinksTheParentToTheCreatedChild_AndNamesIt()
+    {
+        var parent = Start_Parent();
+        var failingLauncher = OrchestrationLauncher_Factory.Create(
+            _paths,
+            OrchestratorConfigProvider_Factory.Create(_paths),
+            _store,
+            new ThrowingSpawner_Fake(),
+            OrchestrationLog_Factory.Create(_paths));
+
+        var thrown = Assert.ThrowsAny<Exception>(() => SiblingBirth_Step.Execute(_store, failingLauncher, _paths, Request(parent.OrchId)));
+
+        var child = Assert.Single(_store.Load_All(), session => session.BornFromHandover == $"{parent.OrchId}#{HANDOVER}");
+        Assert.Contains(child.OrchId, thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("did not start", thrown.Message, StringComparison.Ordinal);
+        Assert.Equal(child.EndeavourId, _store.Get_Session(parent.OrchId).EndeavourId);
+        Assert.Equal(parent.OrchId, _store.Get_Session(parent.OrchId).EndeavourId);
     }
 
     /// <summary>The step returns words; the engine appends them (Task 9 owns the order). Neither channel moved.</summary>
@@ -201,5 +235,14 @@ public class SiblingBirthStepTests : IDisposable
             worktree ?? _worktree,
             "two jobs the owner wants to steer separately; disjoint files",
             Path.Combine(_paths.RequestsFolder, "sibling-test.json"));
+    }
+}
+
+/// <summary>A spawner that fails the way a missing terminal does — after the orchestration is already on disk.</summary>
+internal sealed class ThrowingSpawner_Fake : ISessionSpawner
+{
+    public int? Spawn(ISpawnCommand command)
+    {
+        throw new InvalidOperationException("scripted spawn failure: the terminal could not be started");
     }
 }

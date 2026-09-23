@@ -82,8 +82,17 @@ internal sealed class SiblingEngine_Harness : IDisposable
         _tempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-sibling-engine-{Guid.NewGuid():N}");
 
         // Under its own folder, so no orchestration folder of the supervision tree can share a name
-        // with the repo or the worktree.
-        (RepoPath, WorktreePath) = GitWorktree_Tool.Create_RepoWithWorktree(Path.Combine(_tempRoot, "git"), "limits");
+        // with the repo or the worktree. A constructor that throws is never disposed, so a git failure
+        // cleans up here or the folder it half-built leaks under the temp root.
+        try
+        {
+            (RepoPath, WorktreePath) = GitWorktree_Tool.Create_RepoWithWorktree(Path.Combine(_tempRoot, "git"), "limits");
+        }
+        catch
+        {
+            TempTree.Delete_BestEffort(_tempRoot);
+            throw;
+        }
 
         Paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(Paths.RequestsFolder);
@@ -199,7 +208,7 @@ internal sealed class SiblingEngine_Harness : IDisposable
         var button = Telegram.Find_ButtonMessage_OrNull(labelFragment)!.Value;
 
         Telegram.Queue_Updates(Tap_Json(
-            button.Data, button.MessageId, button.ThreadId ?? FIRST_SOLO_TOPIC_ID,
+            button.Data, button.MessageId, button.ThreadId,
             Interlocked.Increment(ref _nextUpdateId), $"cbq-{Guid.NewGuid():N}"));
     }
 
@@ -207,14 +216,17 @@ internal sealed class SiblingEngine_Harness : IDisposable
     /// A callback-query update, as Telegram delivers a tap. COPIED from
     /// <c>TheInboundLoopSurvivesItsOwnBatchTests.Tap_Json</c> — a known duplicate: that class is not the
     /// sibling plan's to edit. The one change is the topic, a parameter here because a sibling test taps
-    /// in more than one. The callback id is Telegram's own identity for one gesture, so a test delivering
-    /// the SAME tap twice passes the same <paramref name="callbackId"/> twice.
+    /// in more than one; a NULL topic is General, whose messages carry no <c>message_thread_id</c> at
+    /// all — so it is omitted rather than invented. The callback id is Telegram's own identity for one
+    /// gesture, so a test delivering the SAME tap twice passes the same <paramref name="callbackId"/> twice.
     /// </summary>
-    public static string Tap_Json(string callbackData, long questionMessageId, long topicId, long updateId, string callbackId)
+    public static string Tap_Json(string callbackData, long questionMessageId, long? topicId, long updateId, string callbackId)
     {
+        var thread = topicId == null ? string.Empty : $"\"message_thread_id\":{topicId},";
+
         return $"{{\"ok\":true,\"result\":[{{\"update_id\":{updateId},\"callback_query\":{{\"id\":\"{callbackId}\","
             + $"\"data\":\"{callbackData}\",\"from\":{{\"id\":{OWNER_USER_ID}}},"
-            + $"\"message\":{{\"message_id\":{questionMessageId},\"message_thread_id\":{topicId},"
+            + $"\"message\":{{\"message_id\":{questionMessageId},{thread}"
             + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}}}}}}}}]}}";
     }
 

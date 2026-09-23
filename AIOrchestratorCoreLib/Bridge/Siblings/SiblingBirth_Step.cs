@@ -31,7 +31,10 @@ namespace AIOrchestratorCoreLib.Bridge.Siblings;
 /// </para>
 /// <para>
 /// IT THROWS ON LAUNCH FAILURE, and the engine catches — the step has no channel to report into and
-/// no archive to write, by the rule above.
+/// no archive to write, by the rule above. Two failures, two end states: one BEFORE the child was
+/// created (a missing worktree) leaves the parent unlinked and nothing on disk; one AFTER it (the spawn
+/// threw) leaves a linked child, so the parent is linked to it too and the exception names it — see the
+/// catch below (review of 8a3e2e0, 2026-09-23).
 /// </para>
 /// </summary>
 public static class SiblingBirth_Step
@@ -48,23 +51,53 @@ public static class SiblingBirth_Step
     {
         var parent = store.Get_Session(request.OrchId);
         var parentName = parent.DisplayName ?? parent.OrchId;
+        var handoverKey = SiblingRequest_Validator.Format_HandoverKey(parent.OrchId, request.HandoverIndex);
+        var existingIds = store.Load_All().Select(session => session.OrchId).ToHashSet(StringComparer.Ordinal);
 
-        var child = launcher.Start_SiblingOrchestration(
-            parent.OrchId,
-            request.Name,
-            request.WorktreePath,
-            SiblingRequest_Validator.Format_HandoverKey(parent.OrchId, request.HandoverIndex));
+        IOrchestrationSession child;
 
-        var endeavourId = child.EndeavourId
-            ?? throw new Exception($"Sibling '{child.OrchId}' of '{parent.OrchId}' was started with no endeavour id — the launcher links every child it starts");
+        try
+        {
+            child = launcher.Start_SiblingOrchestration(parent.OrchId, request.Name, request.WorktreePath, handoverKey);
+        }
+        catch (Exception ex)
+        {
+            // A FAILURE AFTER THE CHILD WAS CREATED is not a failure that created nothing. The launcher
+            // writes the orchestration and its link BEFORE the spawn (the window title is read at spawn),
+            // so a spawn that throws leaves a linked child carrying this handover key — and from then on
+            // every retry is refused as handover-already-used naming it, so no later birth could ever
+            // link the parent. The parent is linked to the child that exists, and the message names it,
+            // because "the launch failed" alone reads as "nothing happened" and a session left running
+            // with no job is exactly what the owner then needs to hear about.
+            var created = store.Load_All().FirstOrDefault(session =>
+                !existingIds.Contains(session.OrchId) && session.BornFromHandover == handoverKey);
 
-        if (store.Get_Session(parent.OrchId).EndeavourId == null)
-            store.Set_EndeavourId(parent.OrchId, endeavourId);
+            if (created == null)
+                throw;
+
+            Link_Parent_IfUnlinked(store, parent.OrchId, created);
+
+            throw new Exception(
+                $"Sibling '{created.OrchId}' of '{parent.OrchId}' was created and linked; its session did not start: {ex.Message}",
+                ex);
+        }
+
+        Link_Parent_IfUnlinked(store, parent.OrchId, child);
 
         return (
             child,
             SiblingNotice_Wording.Describe_BirthNote(parentName, request.Job, paths.Get_SiblingOutboxFile(parent.OrchId), request.HandoverIndex),
             SiblingNotice_Wording.Describe_ParentStarted(child.OrchId, request.Name),
             SiblingNotice_Wording.Describe_GeneralStarted(child.OrchId, request.Name, parent.OrchId, parentName, request.WorktreePath));
+    }
+
+    /// <summary>Stamps the parent with the endeavour id the CHILD carries — never a second derivation of it.</summary>
+    static void Link_Parent_IfUnlinked(IOrchestrationSessionStore store, string parentOrchId, IOrchestrationSession child)
+    {
+        var endeavourId = child.EndeavourId
+            ?? throw new Exception($"Sibling '{child.OrchId}' of '{parentOrchId}' has no endeavour id — the launcher links every child it creates");
+
+        if (store.Get_Session(parentOrchId).EndeavourId == null)
+            store.Set_EndeavourId(parentOrchId, endeavourId);
     }
 }

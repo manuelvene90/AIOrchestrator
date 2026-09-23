@@ -71,6 +71,14 @@ public class SiblingEngineHarnessTests
         Assert.Equal(ScriptedInbound_Fake.FIRST_DISTINCT_TOPIC_ID + 1, await telegram.Create_ForumTopic_Async("d", null, CancellationToken.None));
     }
 
+    /// <summary>A tap on a General message carries no topic — it is never passed off as a tap in a solo's topic.</summary>
+    [Fact]
+    public void TapJson_ForAGeneralButton_CarriesNoThread()
+    {
+        Assert.DoesNotContain("message_thread_id", SiblingEngine_Harness.Tap_Json("close-yes-x", 4001, null, 9001, "cbq-1"), StringComparison.Ordinal);
+        Assert.Contains("\"message_thread_id\":7373,", SiblingEngine_Harness.Tap_Json("close-yes-x", 4001, 7373, 9001, "cbq-1"), StringComparison.Ordinal);
+    }
+
     /// <summary>The index a request cites as <c>handover</c> is the one the entry actually carries, and the entry is a HANDOVER.</summary>
     [Fact]
     public void AppendOutbox_ReturnsTheIndexTheEntryGot()

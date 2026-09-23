@@ -148,17 +148,26 @@ public static class SiblingNotice_Wording
     // new topic). The general line is Agent: the owner already has both of the others on the phone.
 
     /// <summary>
-    /// THE FIRST MESSAGE IN THE NEW TOPIC (§2.1, §4.3 step 4). It names the parent, the job and WHERE THE
-    /// BRIEF IS — the path and entry index of the parent's outbox — because that HANDOVER entry is the
-    /// only thing the child starts from, and "your brief is in your sibling's outbox" with no index would
-    /// send it reading a file a whole endeavour writes into. "Write here about this job only" is said to
-    /// the owner: one topic, one job (§2.2).
+    /// THE FIRST MESSAGE IN THE NEW TOPIC (§2.1, §4.3 step 4), split by WHO READS WHICH HALF.
+    ///
+    /// <para>
+    /// THE SUBJECT IS THE OWNER'S. An app entry reaches the phone as <c>"⚙ App: " + subject</c> and its
+    /// body never leaves the channel (<c>MirrorText_Formatter</c>: "the body is agent-facing detail the
+    /// owner explicitly does not want texted"). The first draft put the job and "Write here about this
+    /// job only" in the body, so the owner's first message in the new topic read only "🔗 Sibling of …"
+    /// (review of 8a3e2e0, 2026-09-23). So whose sibling, the job and where to write are the subject.
+    /// </para>
+    /// <para>
+    /// THE BODY IS THE CHILD'S: where its brief is — the parent's outbox path and the HANDOVER entry's
+    /// index — because that entry is the only thing it starts from, and a path with no index would send
+    /// it reading a file a whole endeavour writes into. A local path is nothing the owner should see.
+    /// </para>
     /// </summary>
     public static (string Subject, string Body) Describe_BirthNote(string parentName, string job, string parentOutboxPath, int handoverIndex)
     {
         return (
-            $"🔗 Sibling of {parentName}",
-            $"job: {job}\nWrite here about this job only.\nYour brief: {parentOutboxPath} entry [{handoverIndex}]");
+            $"🔗 Sibling of {parentName} — job: {job.TrimEnd().TrimEnd('.')}. Write here about this job only.",
+            $"Your brief: {parentOutboxPath} entry [{handoverIndex}]");
     }
 
     /// <summary>The requesting topic's one line (§2.1): the owner sees that the tap worked, and where to look next.</summary>
