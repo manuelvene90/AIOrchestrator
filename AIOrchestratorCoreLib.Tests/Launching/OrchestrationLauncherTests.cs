@@ -547,8 +547,33 @@ internal sealed class RecordingSpawner_Fake : ISessionSpawner
 {
     public List<ISpawnCommand> SpawnedCommands { get; } = [];
 
+    (string WorkingDirectory, Exception Failure)? _nextFailure;
+    readonly Lock _failureLock = new();
+
+    /// <summary>
+    /// OPT-IN, ONE SHOT, AND AIMED: the next spawn whose working directory is
+    /// <paramref name="workingDirectory"/> throws <paramref name="failure"/> instead of recording; every
+    /// other spawn records as always. Aimed and one-shot because an engine test's watchdog keeps spawning
+    /// on its own schedule (the general supervisor every 45 s), and a failure it could consume would make
+    /// the test about the watchdog.
+    /// </summary>
+    public void Fail_NextSpawnIn_With(string workingDirectory, Exception failure)
+    {
+        lock (_failureLock)
+            _nextFailure = (workingDirectory, failure);
+    }
+
     public int? Spawn(ISpawnCommand command)
     {
+        lock (_failureLock)
+        {
+            if (_nextFailure is { } armed && string.Equals(armed.WorkingDirectory, command.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                _nextFailure = null;
+                throw armed.Failure;
+            }
+        }
+
         SpawnedCommands.Add(command);
         return 77777;
     }

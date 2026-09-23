@@ -155,10 +155,12 @@ public static class SiblingNotice_Wording
 
     // ------------------------------------------------------------------------------- the birth (§4.3)
     //
-    // THE THREE LINES BELOW ARE NOT REFUSALS, and two of them break the Agent-audience rule above on
+    // THE LINES BELOW ARE NOT REFUSALS, and two of them break the Agent-audience rule above on
     // purpose: the birth note and the parent's "started" line are what the owner tapped for, so they are
     // Owner-audience (global constraint, decision 15's test — the owner acts on them by talking to the
     // new topic). The general line is Agent: the owner already has both of the others on the phone.
+    // The birth's FAILURE lines follow the Execute_Close precedent instead: the requester's is Agent, and
+    // General's is Owner, because the prompt the owner tapped points them at it (Task 9, 2026-09-23).
 
     /// <summary>
     /// THE FIRST MESSAGE IN THE NEW TOPIC (§2.1, §4.3 step 4), split by WHO READS WHICH HALF.
@@ -189,6 +191,62 @@ public static class SiblingNotice_Wording
         return (
             $"sibling '{childId}' started — {childName} (its own topic)",
             $"The owner talks to '{childName}' in its own topic. You and it write to each other only through your sibling outboxes; carry on with your own job.");
+    }
+
+    /// <summary>What a refusal re-found AT THE TAP ends with, in place of <see cref="NOTHING_CHANGED"/>.</summary>
+    public const string REFUSED_AT_THE_TAP = "The owner tapped Start, but the request no longer held at that moment, so nothing was started. File a fresh request if it still applies.";
+
+    /// <summary>
+    /// A REFUSAL RE-FOUND AT THE TAP (§4.2, "checked at the tap"). Every refusal ends "The owner has NOT
+    /// been asked", which is the truth at arrival and at prompt time — and false here, where the owner has
+    /// just tapped Start. Same table, same words, one closing sentence swapped, so there is still one
+    /// spelling of each refusal (decision 12).
+    /// </summary>
+    public static (string Subject, string Body) Restate_AtTheTap((string Subject, string Body) refusal)
+    {
+        var body = refusal.Body.EndsWith(NOTHING_CHANGED, StringComparison.Ordinal)
+            ? refusal.Body[..^NOTHING_CHANGED.Length] + REFUSED_AT_THE_TAP
+            : $"{refusal.Body}\n\n{REFUSED_AT_THE_TAP}";
+
+        return (refusal.Subject, body);
+    }
+
+    /// <summary>
+    /// THE BIRTH THREW, told to the requester IN THE STEP'S OWN WORDS (Task 7 carry). The cause is not
+    /// paraphrased: on the created-but-not-spawned path it is the sentence that names the child that now
+    /// exists, and "the start failed" alone reads as "nothing happened" to a solo about to re-drop.
+    /// </summary>
+    public static (string Subject, string Body) Describe_BirthFailed(string childName, string cause)
+    {
+        return (
+            $"sibling '{childName}' did NOT start cleanly — the owner confirmed it",
+            $"The owner tapped Start, and starting the sibling failed: {cause}\n\n"
+            + "If that names a sibling id, it exists and the watchdog will try its session again; do NOT re-drop the request — it would be refused as already used. "
+            + "If it names none, nothing was started and you may file a fresh request once the cause is fixed.");
+    }
+
+    /// <summary>
+    /// The same failure for GENERAL, as <c>Execute_Close</c>'s failure line is: the owner tapped for this,
+    /// the prompt they tapped says "the error is in the General topic", and this is that error — so it is
+    /// the Owner audience, the one failure line here the owner can act on (decision 15's test).
+    /// </summary>
+    public static (string Subject, string Body) Describe_GeneralBirthFailed(string parentId, string childName, string cause)
+    {
+        return (
+            $"sibling start FAILED: '{childName}' for '{parentId}'",
+            $"Error: {cause}");
+    }
+
+    /// <summary>
+    /// The child is up and its job could not be written — the <c>start-orchestration</c> precedent's
+    /// "started WITHOUT its task", word for word in shape: the one state that looks like the app working
+    /// and is not.
+    /// </summary>
+    public static (string Subject, string Body) Describe_StartedWithoutJob(string childId, string childName)
+    {
+        return (
+            $"orchestration '{childId}' started WITHOUT its job",
+            $"Sibling '{childId}' ({childName}) is up, but its owner channel was locked and the job could not be written into it. Tell it what you need in its own topic.");
     }
 
     /// <summary>

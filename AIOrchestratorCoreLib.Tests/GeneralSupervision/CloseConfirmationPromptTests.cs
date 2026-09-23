@@ -326,7 +326,7 @@ public class CloseConfirmationPromptTests
     [Fact]
     public void TheSiblingDecision_SaysStarted_KeptAsOne_OrNeither()
     {
-        string Decide_Sibling(CloseTapOutcomes outcome) => CloseConfirmationPrompt_Builder.Describe_Decision(SIBLING.OrchId, SIBLING, outcome);
+        string Decide_Sibling(CloseTapOutcomes outcome) => CloseConfirmationPrompt_Builder.Describe_Decision(SIBLING.OrchId, SIBLING, outcome, CloseTapOutcome_Decider.SIBLING_STARTED);
 
         Assert.StartsWith("🔗 Start sibling 'AI-Orch · limits rework'?", Decide_Sibling(CloseTapOutcomes.Closed));
         Assert.Contains("✅ Started — you confirmed.", Decide_Sibling(CloseTapOutcomes.Closed));
@@ -335,6 +335,42 @@ public class CloseConfirmationPromptTests
         var uncertain = Decide_Sibling(CloseTapOutcomes.Uncertain);
         Assert.DoesNotContain("✅", uncertain);
         Assert.Contains("General topic", uncertain);
+    }
+
+    /// <summary>
+    /// RULING E, THE HALF THE OUTCOME CANNOT CARRY: a sibling refused at the tap completes cleanly —
+    /// outcome Closed — having started nothing. Only the "started" label may render "✅"; any other label,
+    /// or none, says NOT started and names what happened instead.
+    /// </summary>
+    [Theory]
+    [InlineData("worktree-shared")]
+    [InlineData("unexecuted")]
+    [InlineData(null)]
+    public void AConfirmedSiblingThatDidNotStart_NeverReadsStarted(string? archiveLabel)
+    {
+        var text = CloseConfirmationPrompt_Builder.Describe_Decision(SIBLING.OrchId, SIBLING, CloseTapOutcomes.Closed, archiveLabel);
+
+        Assert.DoesNotContain("✅", text);
+        Assert.Contains("Not started", text);
+        Assert.StartsWith("🔗 Start sibling 'AI-Orch · limits rework'?", text);
+        Assert.DoesNotContain("close", text, StringComparison.OrdinalIgnoreCase);
+
+        if (archiveLabel != null)
+            Assert.Contains(archiveLabel, text);
+    }
+
+    /// <summary>§7.3: a yes tapped during a usage-limit pause is HELD — the prompt says when it starts, and claims nothing yet.</summary>
+    [Fact]
+    public void TheSiblingHeldForAPause_SaysWhenItStarts_AndClaimsNothing()
+    {
+        var text = CloseConfirmationPrompt_Builder.Describe_SiblingHeldForPause(SIBLING);
+
+        Assert.StartsWith("🔗 Start sibling 'AI-Orch · limits rework'?", text);
+        Assert.Contains("usage-limit pause", text);
+        Assert.Contains("asked again", text);
+        Assert.DoesNotContain("✅", text);
+        Assert.DoesNotContain("close", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("usage-limit pause", CloseConfirmationPrompt_Builder.SIBLING_HELD_FOR_PAUSE_TOAST);
     }
 
     static string Decide(CloseTapOutcomes outcome)

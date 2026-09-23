@@ -61,7 +61,11 @@ public static class CloseConfirmationPrompt_Builder
     /// What the tap was about, or null when it could not be read — the ONE case where the wording
     /// cannot name a member or a kind, because nobody can say whether there was one.
     /// </param>
-    public static string Describe_Decision(string orchId, IParkedCloseRequest? request, CloseTapOutcomes outcome)
+    /// <param name="archiveLabel">
+    /// What the arm that ran actually did (<see cref="CloseTapResult.ArchiveLabel"/>). Read only for a
+    /// SIBLING, whose arm can complete cleanly having started nothing — refused at the tap (ruling E).
+    /// </param>
+    public static string Describe_Decision(string orchId, IParkedCloseRequest? request, CloseTapOutcomes outcome, string? archiveLabel = null)
     {
         var isMember = request?.Kind == ParkedCloseKinds.Implementer;
         var isPromotion = request?.Kind == ParkedCloseKinds.Promotion;
@@ -76,7 +80,7 @@ public static class CloseConfirmationPrompt_Builder
         // is how a record comes to say the opposite of what happened.
         var header =
             isPromotion ? $"⚙️ Turn '{orchId}' into a full crew?"
-            : isSibling ? $"🔗 Start sibling '{request!.Sibling?.Name ?? orchId}'?"
+            : isSibling ? Describe_SiblingHeader(request!, orchId)
             : isMember ? $"⚠️ Close member '{request!.MemberId}' in '{orchId}'?"
             : request == null ? $"'{orchId}'"
             : $"⚠️ Close '{orchId}'?";
@@ -96,7 +100,9 @@ public static class CloseConfirmationPrompt_Builder
 
             CloseTapOutcomes.Closed =>
                 isPromotion ? "✅ Promoted — you confirmed. The supervisor is taking over this conversation."
-                : isSibling ? "✅ Started — you confirmed."
+                // "✅" ONLY WHEN THE BIRTH RAN (ruling E). A request re-validated at the tap and refused
+                // completes without a throw, so the outcome alone cannot tell it from a birth.
+                : isSibling ? Describe_SiblingConfirmed(archiveLabel)
                 : request == null ? "✅ You confirmed."
                 : "✅ Closed — you confirmed.",
 
@@ -328,6 +334,40 @@ public static class CloseConfirmationPrompt_Builder
             + $"New topic: {sibling.Name}\n"
             + $"Job: {sibling.Job}\n"
             + $"Why: {sibling.Reason}";
+    }
+
+    /// <summary>The toast of a "✅ Start it" tapped during a usage-limit pause (spec §7.3): held, not started, not refused.</summary>
+    public const string SIBLING_HELD_FOR_PAUSE_TOAST = "held — it starts when the usage-limit pause lifts";
+
+    /// <summary>
+    /// THE PROMPT WHILE A CONFIRMED SIBLING WAITS OUT A USAGE-LIMIT PAUSE (spec §7.3: the pause holds every
+    /// spawning request, and a tap is one). The owner's yes is KEPT, not refused — the start-orchestration
+    /// precedent, where the file waits on disk — so the prompt says what will happen and when, and replaces
+    /// itself with the outcome once the birth has run.
+    ///
+    /// <para>
+    /// IT NAMES THE ONE WAY THE PROMISE BREAKS. The kept yes lives in the running app only: after a restart
+    /// the request is still parked and the owner is simply asked again. Saying so here is what keeps this
+    /// line true on the one path where it would otherwise be stale.
+    /// </para>
+    /// </summary>
+    public static string Describe_SiblingHeldForPause(IParkedCloseRequest request)
+    {
+        return $"{Describe_SiblingHeader(request, request.OrchId)}\n\n"
+            + "⏸ You confirmed — it starts when the usage-limit pause lifts. Nothing has started yet. If the app restarts before then, you will be asked again.";
+    }
+
+    /// <summary>One spelling of the sibling decision's header, for the held line and the outcome that replaces it (decision 12).</summary>
+    static string Describe_SiblingHeader(IParkedCloseRequest request, string orchId)
+    {
+        return $"🔗 Start sibling '{request.Sibling?.Name ?? orchId}'?";
+    }
+
+    static string Describe_SiblingConfirmed(string? archiveLabel)
+    {
+        return archiveLabel == CloseTapOutcome_Decider.SIBLING_STARTED
+            ? "✅ Started — you confirmed."
+            : $"⚠️ Not started — {archiveLabel ?? "no result was recorded"}. The request no longer held when you tapped, so nothing was started and you will NOT be asked again; the session that asked can file a fresh request if it still applies.";
     }
 
     /// <summary>The sibling ask, NAMED: two siblings asked for in one day are two different decisions.</summary>
