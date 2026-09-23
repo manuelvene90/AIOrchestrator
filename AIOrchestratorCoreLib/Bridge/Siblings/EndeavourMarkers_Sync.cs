@@ -34,7 +34,7 @@ public static class EndeavourMarkers_Sync
             text.Append(sibling.OrchId).Append('\t')
                 .Append(sibling.OutboxPath).Append('\t')
                 .Append(sibling.Paused ? PAUSED : LIVE).Append('\t')
-                .Append(Sanitise(sibling.Name)).Append('\n');
+                .Append(Sanitise_Name(sibling.Name)).Append('\n');
         }
 
         return text.ToString();
@@ -62,7 +62,13 @@ public static class EndeavourMarkers_Sync
             Build_Text([.. listed.Select(sibling => (sibling.OrchId, paths.Get_SiblingOutboxFile(sibling.OrchId), sibling.Paused, sibling.DisplayName ?? sibling.OrchId))]));
     }
 
-    static string Sanitise(string name)
+    /// <summary>
+    /// A NAME ON ONE LINE, as one field: the ONE sanitiser for a display name written into a derived file.
+    /// <see cref="EndeavourDigest_Builder"/> uses it for the <c>##</c> header of <c>ENDEAVOUR.md</c> too — a
+    /// newline there would open a forged sibling block in a file the solo trusts as app-written (Task 10 review,
+    /// minor 4), and a second copy of this rule would drift from this one (decision 12).
+    /// </summary>
+    internal static string Sanitise_Name(string name)
     {
         return name.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
     }

@@ -120,11 +120,33 @@ public sealed class EndeavourArtefactsStepTests : IDisposable
         for (var n = 1; n <= 100; n++)
             _tree.Append_Entry(outbox, ChannelAuthors.Solo, $"note {n}", "a sibling note");
 
-        Assert.Empty(EndeavourArtefacts_Step.Reconcile(_tree.Paths, _tree.Sessions()));
+        Assert.Empty(EndeavourArtefacts_Step.Compact_Outboxes(_tree.Paths, _tree.Sessions()));
 
         Assert.True(File.Exists(Channel_Compactor.Build_ArchiveFilePath(outbox)), "no archive — the outbox was never compacted");
         Assert.True(ChannelEntry_Parser.Parse_All(File.ReadAllText(outbox)).Count <= Channel_Compactor.KEEP_RECENT_ENTRIES);
         Assert.Equal(100, ChannelHistory_Counter.Read_Entries(outbox).Count);
+    }
+
+    /// <summary>
+    /// THE RECONCILE DOES NOT COMPACT (Task 10b). Compaction takes the channel lock, and the reconcile runs
+    /// before the owner's delivery in the tick, where a stale sibling lock would spend the allowance the
+    /// owner's message is owed. So the two are separate calls, and the engine places compaction after the
+    /// poll (<see cref="EndeavourArtefactsTickScanTests"/> pins where).
+    /// </summary>
+    [Fact]
+    public void TheReconcile_LeavesALongOutboxAlone()
+    {
+        _tree.Add_Solo(FIRST, "AI-Orch · settings work", FIRST);
+        _tree.Add_Solo(SECOND, "AI-Orch · limits rework", FIRST);
+
+        var outbox = _tree.Paths.Get_SiblingOutboxFile(FIRST);
+        for (var n = 1; n <= 100; n++)
+            _tree.Append_Entry(outbox, ChannelAuthors.Solo, $"note {n}", "a sibling note");
+
+        Assert.Empty(EndeavourArtefacts_Step.Reconcile(_tree.Paths, _tree.Sessions()));
+
+        Assert.False(File.Exists(Channel_Compactor.Build_ArchiveFilePath(outbox)), "the reconcile compacted — it would take the channel lock ahead of the owner's delivery");
+        Assert.Equal(100, ChannelEntry_Parser.Parse_All(File.ReadAllText(outbox)).Count);
     }
 
     /// <summary>

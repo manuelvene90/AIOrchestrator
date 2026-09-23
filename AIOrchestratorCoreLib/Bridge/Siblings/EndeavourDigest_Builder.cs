@@ -65,12 +65,12 @@ public static class EndeavourDigest_Builder
     static void Append_Block(StringBuilder text, SiblingDigestInput sibling)
     {
         text.Append('\n')
-            .Append($"## {sibling.Name} ({sibling.OrchId}) · {sibling.WorkingPath} · branch {sibling.Branch ?? "?"} · {(sibling.Paused ? "paused" : "live")}\n")
+            .Append($"## {EndeavourMarkers_Sync.Sanitise_Name(sibling.Name)} ({sibling.OrchId}) · {sibling.WorkingPath} · branch {sibling.Branch ?? "?"} · {(sibling.Paused ? "paused" : "live")}\n")
             .Append(sibling.Progress == null ? "no task ledger yet" : PlanProgress_Formatter.Describe_Counts(sibling.Progress))
             .Append('\n');
 
         Append_Unfinished(text, sibling.Progress);
-        Append_OwnerChannel(text, sibling.OwnerChannelTail);
+        Append_OwnerChannel(text, sibling.OwnerChannelHistory);
         Append_Outbox(text, sibling.OutboxSubjects);
     }
 

@@ -1845,6 +1845,7 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient != null)
             await Sync_GeneralTopicName_BestEffort_Async(_telegramClient, cancellationToken);
 
+        Compact_SiblingOutboxes();   // after the owner's delivery and the poll: it takes channel locks (Task 10b)
         Compact_LongChannels();
         Persist_BridgeState();
     }
@@ -9761,10 +9762,17 @@ internal sealed class BridgeEngineModel(
             Sync_PausedFlag(session.OrchId, session.ClosedUtc == null && session.Paused);
     }
 
-    /// <summary>The sibling plan's derived files and outbox compaction (Task 10); the rules live in the step.</summary>
+    /// <summary>The sibling plan's derived files (Task 10); the rules live in the step.</summary>
     void Sync_EndeavourArtefacts()
     {
         foreach (var failure in EndeavourArtefacts_Step.Reconcile(_paths, Sessions_ThisTick()))
+            _log.Log_Warning(GLOBAL_ORCH_ID, failure);
+    }
+
+    /// <summary>Sibling outbox compaction (Task 10b): its own call, so it can run after the owner's delivery.</summary>
+    void Compact_SiblingOutboxes()
+    {
+        foreach (var failure in EndeavourArtefacts_Step.Compact_Outboxes(_paths, Sessions_ThisTick()))
             _log.Log_Warning(GLOBAL_ORCH_ID, failure);
     }
 

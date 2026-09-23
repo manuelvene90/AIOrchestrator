@@ -12,7 +12,8 @@ namespace AIOrchestratorCoreLib.Bridge.Siblings;
 /// siblings, removed for anything else. Closed and unlinked sessions are visited too, because that is how a
 /// file a crash left behind is removed on the first tick back, by the same code as every other tick (§7.4);
 /// for them it costs two stats.</item>
-/// <item>COMPACTION of every open linked orchestration's outbox. The outbox is not tailed, so the tailer's
+/// <item>COMPACTION of every open linked orchestration's outbox, through <see cref="Compact_Outboxes"/> — a
+/// separate call the engine places after the poll, for the owner's lock allowance. The outbox is not tailed, so the tailer's
 /// compaction step never sees it; the NO-GUARD overload of <see cref="Channel_Compactor.Compact_IfNeeded(string)"/>
 /// is safe here because no tailer cursor exists to re-anchor, and the print runner's cursor is by entry
 /// IDENTITY ("PENDING IS DECIDED BY IDENTITY"), which compaction does not break. A short outbox is answered
@@ -51,7 +52,22 @@ public static class EndeavourArtefacts_Step
             Reconcile_Digest(paths, session, siblings, inputs, failures);
         }
 
-        foreach (var session in openLinked)
+        return failures;
+    }
+
+    /// <summary>
+    /// COMPACTION IS ITS OWN CALL, not part of <see cref="Reconcile"/> (Task 10b, from the Task 10 review). It
+    /// takes the channel lock with a 1 s budget, and the reconcile runs BEFORE the owner's delivery — so a
+    /// sibling that died holding <c>sibling-outbox.md.lock</c> (broken only after 60 s) spent 1 s of the tick's
+    /// 1.5 s allowance on every tick for half a minute, and the owner's own delivery got what was left. The
+    /// engine's rule is that the owner's message goes first in that allowance; the engine calls this after the
+    /// poll, where the tailed channels' own compaction already runs.
+    /// </summary>
+    public static IReadOnlyList<string> Compact_Outboxes(ISupervisionPaths paths, IReadOnlyList<IOrchestrationSession> sessions)
+    {
+        List<string> failures = [];
+
+        foreach (var session in sessions.Where(session => session.ClosedUtc == null && session.EndeavourId != null))
             Compact_Outbox(paths, session, failures);
 
         return failures;
