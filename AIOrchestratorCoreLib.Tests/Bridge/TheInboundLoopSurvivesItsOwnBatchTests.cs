@@ -370,7 +370,18 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
     readonly object _lock = new();
     readonly List<string> _sentTexts = [];
+
+    /// <summary>
+    /// Every send WITH the id it was given and the sound it went out with, beside <c>_sentTexts</c>
+    /// rather than replacing it: every accessor that already reads the texts keeps reading them
+    /// unchanged. A receipt is ONE message followed through its edits (✓ → ✓✓), which needs its id,
+    /// and "a receipt never rings" lives only in the sound argument.
+    /// </summary>
+    readonly List<(long Id, string Text, TelegramSendSounds Sound)> _sentWithIds = [];
     readonly List<string> _editedTexts = [];
+
+    /// <summary>Every edit that sent no keyboard, by the message it rewrote — the ✓✓ is one of these.</summary>
+    readonly List<(long MessageId, string Text)> _textEdits = [];
     readonly List<(string Data, string Label)> _buttons = [];
     string? _queuedUpdatesJson;
     Exception? _updatesFailure;
@@ -499,6 +510,23 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             return _buttons.FirstOrDefault(button => button.Label.Contains(labelFragment, StringComparison.Ordinal)).Data;
     }
 
+    public IReadOnlyList<(long Id, string Text, TelegramSendSounds Sound)> Sent_WithIds
+    {
+        get { lock (_lock) return [.. _sentWithIds]; }
+    }
+
+    /// <summary>The id of the newest send containing <paramref name="fragment"/> — throws when there is none, which is a setup failure.</summary>
+    public long LastSentMessageId_Containing(string fragment)
+    {
+        lock (_lock)
+            return _sentWithIds.Last(sent => sent.Text.Contains(fragment, StringComparison.Ordinal)).Id;
+    }
+
+    public IReadOnlyList<(long MessageId, string Text)> TextEdits
+    {
+        get { lock (_lock) return [.. _textEdits]; }
+    }
+
     public async Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken)
     {
         string? queued;
@@ -546,7 +574,7 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             _timeoutSendsContaining = fragment;
     }
 
-    long? Record(string text)
+    long? Record(string text, TelegramSendSounds sound)
     {
         lock (_lock)
         {
@@ -575,20 +603,21 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             }
 
             _sentTexts.Add(text);
+            _sentWithIds.Add((_nextMessageId, text, sound));
             return _nextMessageId++;
         }
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(text));
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(text, sound));
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(html));
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(html, sound));
 
     public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
         => Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
 
     public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        var messageId = Record(text);
+        var messageId = Record(text, sound);
 
         lock (_lock)
         {
@@ -625,6 +654,7 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             }
 
             _editedTexts.Add(text);
+            _textEdits.Add((messageId, text));
         }
 
         return Task.CompletedTask;
@@ -664,6 +694,18 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
     readonly List<(long MessageId, string? Emoji)> _reactions = [];
     string? _refuseReactionsReason;
+    int _reactionAttempts;
+
+    /// <summary>
+    /// Every reaction ASKED FOR, refused ones included — <see cref="Reactions"/> holds only the ones
+    /// that landed, so it cannot tell "never attempted" from "attempted and refused", and under
+    /// <c>phone.receipts = ticks</c> the attempt itself is the cost (a Telegram call and a rate-limit
+    /// slot per owner message).
+    /// </summary>
+    public int Reaction_Attempts
+    {
+        get { lock (_lock) return _reactionAttempts; }
+    }
 
     /// <summary>Every reaction set, in order — the receipt brief D replaced the ✓ message with.</summary>
     public IReadOnlyList<(long MessageId, string? Emoji)> Reactions
@@ -682,6 +724,8 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
     {
         lock (_lock)
         {
+            _reactionAttempts++;
+
             if (_refuseReactionsReason != null)
                 return Task.FromException(new Exception(_refuseReactionsReason));
 
@@ -730,6 +774,7 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
     int _answeredCallbacks;
+    readonly List<string> _answeredCallbackTexts = [];
 
     /// <summary>How many taps were answered — a tap left unanswered spins on the owner's phone.</summary>
     public int Answered_Callbacks
@@ -737,10 +782,19 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
         get { lock (_lock) return _answeredCallbacks; }
     }
 
+    /// <summary>What each tap was answered with, in order — the toast the owner reads over the button.</summary>
+    public IReadOnlyList<string> Answered_CallbackTexts
+    {
+        get { lock (_lock) return [.. _answeredCallbackTexts]; }
+    }
+
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
     {
         lock (_lock)
+        {
             _answeredCallbacks++;
+            _answeredCallbackTexts.Add(text);
+        }
 
         return Task.CompletedTask;
     }

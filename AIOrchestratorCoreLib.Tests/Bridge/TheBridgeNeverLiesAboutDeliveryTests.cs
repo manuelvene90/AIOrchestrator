@@ -164,6 +164,8 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task ADocumentWithNoCaption_LandsInMedia_IsNamedInTheChannel_AndIsAcknowledged()
     {
+        Use_ReactionReceipts();
+
         var engine = Build_Engine();
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
@@ -306,6 +308,23 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
         Assert.DoesNotContain("Handling update 9401 failed", _log.Dump(), StringComparison.Ordinal);
         Assert.DoesNotContain("Handling update 9402 failed", _log.Dump(), StringComparison.Ordinal);
         Assert.DoesNotContain("DllNotFound", _log.Dump(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE CASES THAT SPELL THE RECEIPT AS A REACTION say so (plan 03 Task 6). Brief D wrote them when the
+    /// reaction was the only receipt; <c>phone.receipts</c> now chooses, and the machine that names
+    /// nothing is <c>ticks</c> — the ✓ message, pinned in ReceiptStyleTests. Written before the engine
+    /// ever reads the config, with the stamp moved forward so the provider cannot mistake it for the
+    /// constructor's write.
+    /// </summary>
+    void Use_ReactionReceipts()
+    {
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"receipts\":\"reactions\"}}}}");
+
+        File.SetLastWriteTimeUtc(_paths.ConfigFile, DateTime.UtcNow.AddSeconds(2));
     }
 
     /// <summary>
@@ -452,6 +471,8 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task AnOwnerMessage_IsAcknowledgedWithAReaction_AndNoMessageIsSent()
     {
+        Use_ReactionReceipts();
+
         var engine = Build_Engine();
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
@@ -482,6 +503,8 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task AReceivedMessage_TurnsFromEyesToOkWhenASessionPicksItUp()
     {
+        Use_ReactionReceipts();
+
         var engine = Build_Engine();
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
@@ -525,6 +548,8 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task AReactionTelegramRefuses_FallsBackToTheSilentTick()
     {
+        Use_ReactionReceipts();
+
         var engine = Build_Engine();
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
@@ -542,6 +567,10 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
         });
 
         Assert.Empty(_telegram.Reactions);
+
+        // AND THE REACTION WAS ASKED FOR: without this the case passes under ticks too, where no reaction
+        // is attempted at all and the ✓ is the ordinary path rather than the fallback.
+        Assert.True(_telegram.Reaction_Attempts >= 1, "no reaction was attempted, so this is not the fallback path");
     }
 
     /// <summary>

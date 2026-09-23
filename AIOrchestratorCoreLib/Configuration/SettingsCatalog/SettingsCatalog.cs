@@ -763,8 +763,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Receipts,
                 label: "Receipt style",
                 description:
-                    "How the app says it has your message: 'ticks' edits a receipt line, 'reactions' reacts to the owner's " +
-                    $"own message instead. {INERT_NOTE}",
+                    "How the app says it has your message: 'ticks' posts a silent ✓ under it and edits that line to ✓✓ " +
+                    "when a session is handed it; 'reactions' puts 👀 then 👌 on the owner's own message instead, and no " +
+                    "reaction is attempted under 'ticks'. A reaction Telegram refuses still gets the ✓, whichever is set.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
