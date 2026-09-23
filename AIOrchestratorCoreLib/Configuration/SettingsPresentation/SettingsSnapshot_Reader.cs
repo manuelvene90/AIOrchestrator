@@ -48,6 +48,17 @@ public static class SettingsSnapshot_Reader
     /// <summary>What a masked secret reads as when it holds a value. Absent or blank reads <see cref="SettingValue_Formatter.NOT_SET"/>.</summary>
     public const string SECRET_SET = "set";
 
+    /// <summary>
+    /// WHETHER A SECRET'S TEXT COUNTS AS SET — anything but absent, empty or whitespace. ONE predicate for the
+    /// mask below and for the web handler's gate (<c>Web.SettingsRequest_Handler</c>, plan 04 Task 6), because
+    /// the page shows this row's "set" / "not set" and the handler decides whether editing needs the token: two
+    /// copies of the rule could leave the page saying "not set" about a token the handler then demands.
+    /// </summary>
+    public static bool Is_SecretSet(string? text)
+    {
+        return !string.IsNullOrWhiteSpace(text);
+    }
+
     public static IReadOnlyList<ISettingReading> Read_All(
         JsonObject? configTree,
         JsonObject? presetTree,
@@ -150,7 +161,7 @@ public static class SettingsSnapshot_Reader
 
     static string Describe_Masked(JsonNode? value)
     {
-        var isSet = value is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text);
+        var isSet = value is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text) && Is_SecretSet(text);
 
         return isSet ? SECRET_SET : SettingValue_Formatter.NOT_SET;
     }
