@@ -156,10 +156,10 @@ public static class SettingsCatalog
     /// here is null for all six roles, because effort is billed thinking and the owner named two.
     /// </summary>
     const string EFFORT_OWNER_DIRECTIVE_NOTE =
-        "Owner directive 2026-09-09: \"XHigh effort in each solo and sup session\" — the two roles that " +
-        "talk to the owner and decide. That xhigh lives in the classic preset, not in this shipped " +
-        "default, so a machine on quiet carries no flag. Verified against the installed CLI, whose " +
-        "--help lists --effort as (low, medium, high, xhigh, max).";
+        "Owner directive 2026-09-09, revised 2026-09-23 from xhigh to high: the effort of each solo and sup " +
+        "session — the two roles that talk to the owner and decide. That level lives in the classic preset, " +
+        "not in this shipped default, so a machine on quiet carries no flag. Verified against the installed " +
+        "CLI, whose --help lists --effort as (low, medium, high, xhigh, max).";
 
     /// <summary>
     /// ALL SIX ROWS ARE LITERALS, NEVER A READ OF <see cref="OrchestratorConfig_Factory"/>'S OWN
@@ -190,13 +190,13 @@ public static class SettingsCatalog
     {
         return
         [
-            Model_Definition(SessionRoles.Supervisor, "supervisorModel", "opus", SettingScopes.Orchestration,
+            Model_Definition(SessionRoles.Supervisor, "supervisorModel", "claude-opus-5-5", SettingScopes.Orchestration,
                 "The model a SUPERVISOR session spawns with — the turn that is the owner's phone line."),
             Model_Definition(SessionRoles.Implementer, "implementerModel", "opus", SettingScopes.Orchestration,
                 "The model an IMPLEMENTER session spawns with, and the rung the reviewer and solo fall back to."),
             Model_Definition(SessionRoles.Reviewer, "reviewerModel", "opus", SettingScopes.Machine,
                 "The model a REVIEWER session spawns with. A bad review costs more than it saves, so this rung is worth its price."),
-            Model_Definition(SessionRoles.Solo, "soloModel", "opus", SettingScopes.Machine,
+            Model_Definition(SessionRoles.Solo, "soloModel", "claude-opus-5-5", SettingScopes.Machine,
                 "The model a SOLO session spawns with — the session that both talks to the owner and does the work."),
             Model_Definition(SessionRoles.General, "generalSupervisorModel", "sonnet", SettingScopes.Machine,
                 "The model the GENERAL supervisor spawns with. Routing, not judging, so it is deliberately cheap."),

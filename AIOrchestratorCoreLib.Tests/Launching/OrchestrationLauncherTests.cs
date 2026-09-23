@@ -227,7 +227,7 @@ public class OrchestrationLauncherTests : IDisposable
     {
         _launcher.Start_Orchestration("Repo", _tempRepo);
 
-        Assert.Contains("--effort xhigh ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+        Assert.Contains("--effort high ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]));
     }
@@ -249,7 +249,7 @@ public class OrchestrationLauncherTests : IDisposable
         // Supervisor + imp-1 + rev-1, none with an override yet: the supervisor gets its ROLE
         // DEFAULT (xhigh, owner directive 2026-09-09), the members no flag at all.
         Assert.Equal(3, _spawner.SpawnedCommands.Count);
-        Assert.Contains("--effort xhigh ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+        Assert.Contains("--effort high ", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
         Assert.DoesNotContain("--effort", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[2]));
 
@@ -276,7 +276,7 @@ public class OrchestrationLauncherTests : IDisposable
         _launcher.Respawn_Supervisor(orchId);
 
         var resetScript = SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]);
-        Assert.Contains("--effort xhigh ", resetScript);
+        Assert.Contains("--effort high ", resetScript);
         Assert.DoesNotContain("medium", resetScript);
     }
 
@@ -347,7 +347,7 @@ public class OrchestrationLauncherTests : IDisposable
 
         // The supervisor's role default is xhigh (classic, which an `effort` block naming only the
         // implementer leaves standing); the implementer's is the `low` this config states.
-        Assert.Contains($"--effort xhigh {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
+        Assert.Contains($"--effort high {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/supervisor {orchId}'", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[0]));
         Assert.Contains($"--effort low {SpawnCommand_Builder.CLAUDE_LAUNCH_FLAGS} '/implementer {orchId}/imp-1'", SpawnCommand_Builder.Decode_SessionScript(_spawner.SpawnedCommands[1]));
     }
 

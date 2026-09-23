@@ -69,12 +69,12 @@ public class PresetProbeTests
 
     [Theory]
     // Manu's phone, as master shipped it.
-    [InlineData("models.supervisor", "\"opus\"")]
+    [InlineData("models.supervisor", "\"claude-opus-5-5\"")]
     [InlineData("models.implementer", "\"opus\"")]
-    [InlineData("models.solo", "\"opus\"")]
+    [InlineData("models.solo", "\"claude-opus-5-5\"")]
     [InlineData("models.general", "\"sonnet\"")]
-    [InlineData("effort.supervisor", "\"xhigh\"")]
-    [InlineData("effort.solo", "\"xhigh\"")]
+    [InlineData("effort.supervisor", "\"high\"")]
+    [InlineData("effort.solo", "\"high\"")]
     [InlineData("effort.implementer", null)]
     [InlineData("phone.push", "\"filtered\"")]
     [InlineData("phone.status.periodic", "true")]
@@ -97,9 +97,9 @@ public class PresetProbeTests
 
     [Theory]
     // Nathan's phone, as the fork shipped it.
-    [InlineData("models.supervisor", "\"opus\"")]
+    [InlineData("models.supervisor", "\"claude-opus-5-5\"")]
     [InlineData("models.implementer", "\"opus\"")]
-    [InlineData("models.solo", "\"opus\"")]
+    [InlineData("models.solo", "\"claude-opus-5-5\"")]
     [InlineData("models.general", "\"sonnet\"")]
     [InlineData("effort.supervisor", null)]
     [InlineData("effort.solo", null)]

@@ -313,7 +313,11 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
   readonly`, read FROM the catalogue at class-load time, kept only because six call sites and four
   tests still read them by name and because the reviewer/solo compat ladder (absent falls to the
   implementer's value before any default) lives there. General supervisor and communicator stay on
-  `sonnet` (routing/narration = cheap), and neither preset ever states a value for them. **Supervisor and solo sessions spawn with
+  `sonnet` (routing/narration = cheap), and neither preset ever states a value for them.
+  **Revised 2026-09-23 (owner): the supervisor and solo rows ship `claude-opus-5-5` (Opus 5.5, pinned
+  by full id so the version cannot drift under the alias); implementer and reviewer stay on `opus`;
+  and `classic`'s effort for those two roles went from xhigh to high** — read "xhigh" below as
+  "the classic preset's level". **Supervisor and solo sessions spawn with
   `--effort xhigh` UNLESS the orchestration carries an effort override** (`/effort`, decision 24),
   which wins; no other role carries a default. Every flag is emitted by the single chokepoint
   `Build_ClaudeInvocation`. **EFFORT IS DATA TOO AS OF 2026-09-12 (plan 02 task 7, `015b6dd`), and the
