@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
+using AIOrchestratorCoreLib.Status.SessionModelReading;
 
 namespace AIOrchestratorCoreLib.Telegram;
 
@@ -86,7 +87,15 @@ public static class TopicStatusLine_Planner
         // waited on for, a usage-limit pause, when the last event happened. The builder is handed
         // per-member channels and cannot read owner-channel.md or a member's state file, so these
         // arrive as data rather than being fetched. See TopicStatusFields.
-        TopicStatusFields fields = default)
+        TopicStatusFields fields = default,
+
+        // THE SUPERVISOR'S MODEL AND EFFORT, and the two `pulse.*` values — all RESOLVED BY THE ENGINE
+        // and handed through untouched, because this function is pure: it is never given a config
+        // provider, and a value it read for itself would be a second reading of a setting the owner can
+        // change between two ticks. Null keeps the builder's shipped defaults, as it does there.
+        ISessionModelReading? supervisorModel = null,
+        IReadOnlyList<string>? pulseFields = null,
+        int? stepMinutes = null)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
@@ -98,7 +107,8 @@ public static class TopicStatusLine_Planner
         // come to disagree about whether a topic is muted.
         var text = TopicStatusLine_Builder.Build(
             progress, members, Pick_LastEvent_OrNull(members, now), now, existingMessageId != null,
-            figuresUnchangedFor, supervisorContext, fields with { Mode = mode });
+            figuresUnchangedFor, supervisorContext, fields with { Mode = mode },
+            supervisorModel, pulseFields, stepMinutes);
 
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 

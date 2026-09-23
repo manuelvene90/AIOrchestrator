@@ -100,6 +100,15 @@ public static class Settings_Resolver
     /// <c>-1001234567890</c>, which does not fit <see cref="int"/>. An accessor that called
     /// <c>GetValue&lt;int&gt;()</c> would throw on exactly the values the catalogue was widened to
     /// accept.
+    ///
+    /// <para>
+    /// AND NOT <c>GetValue&lt;long&gt;()</c> EITHER, which is what this read until 2026-09-14: a shipped
+    /// default is built by <c>JsonValue.Create(int)</c>, and an int-backed node refuses a long read
+    /// ("A value of type 'System.Int32' cannot be converted to a 'System.Int64'"). Nothing called this
+    /// accessor until plan 03 task 1, whose first loader test — a machine with no config.json — threw
+    /// out of <c>OrchestratorConfig_Loader</c>. It now reads through the definition's own whole-number
+    /// reader, so the validator and the accessor cannot disagree about what a number is.
+    /// </para>
     /// </summary>
     public static long? Resolve_Long(
         ISettingDefinition definition,
@@ -110,7 +119,17 @@ public static class Settings_Resolver
         Require_Kind(definition, SettingKinds.Int);
 
         var (value, _) = Resolve(definition, presetTree, configTree, session);
-        return value?.GetValue<long>();
+
+        if (value == null)
+            return null;
+
+        if (value is JsonValue jsonValue && SettingDefinitionModel.Try_GetLong(jsonValue, out var number))
+            return number;
+
+        // Unreachable for a catalogue row: every layer's answer passed Validate_OrNull, and every
+        // shipped default is checked by SettingsCatalogTests. Reaching it means a definition's default
+        // disagrees with its own Kind, and the message names which definition.
+        throw new InvalidOperationException($"'{definition.Path}' resolved to {value.ToJsonString()}, which is not a whole number");
     }
 
     static void Require_Kind(ISettingDefinition definition, params SettingKinds[] accepted)

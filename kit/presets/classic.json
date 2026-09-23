@@ -1,10 +1,11 @@
 {
-  "_comment": "Manu's way. Keys are flat dotted catalogue paths (SettingsJson_Path), deliberately not nested, so 'does this preset name only catalogue paths' is a one-line test. Only keys whose value differs from the shipped default appear here — a preset that restates a default is a default that can never move. The four models.* rows (supervisor, implementer, reviewer, solo) were removed by ruling on 2026-09-12 (task-6 fix round 1): the owner's own request is that Opus is the SHIPPED default, and a preset that restates an older model on every judging role makes that default unreachable in practice, satisfied on paper and nowhere else. effort.supervisor and effort.solo stay — they are the owner's working preferences, not models.",
+  "_comment": "Manu's way. Keys are flat dotted catalogue paths (SettingsJson_Path), deliberately not nested, so 'does this preset name only catalogue paths' is a one-line test. Only keys whose value differs from the shipped default appear here — a preset that restates a default is a default that can never move. The four models.* rows (supervisor, implementer, reviewer, solo) were removed by ruling on 2026-09-12 (task-6 fix round 1): the owner's own request is that Opus is the SHIPPED default, and a preset that restates an older model on every judging role makes that default unreachable in practice, satisfied on paper and nowhere else. effort.supervisor and effort.solo stay — they are the owner's working preferences, not models. phone.replyKeyboard ('on') was removed by the owner's answer to D5 on 2026-09-14 — the reply keyboard is off for both presets, so classic no longer states the key and reads the shipped 'off'. phone.aggregationSeconds and phone.finishedMessageSeconds are 6 and 6 by the owner's request of 2026-09-23 (ai-orchestrator-29 entry [9]): six seconds to press Wait under the receipt, and NO shorter wait for a message that reads as finished, because the shipped 2 s let one leave before Wait could reach it. pulse.fields leads with 'progress' in place of 'merged' by the owner's request of 2026-09-23 (ai-orchestrator-29 entry [14]): the task count, bare as '1/23 (4%)', is the first line of the pulse because it is the most important information, and 'merged' carried words the owner called useless.",
   "effort.supervisor": "xhigh",
   "effort.solo": "xhigh",
-  "phone.replyKeyboard": "on",
   "topic.modeGlyphs": "name",
-  "pulse.fields": ["supervisor", "members", "modelEffort", "merged", "updated"],
+  "phone.aggregationSeconds": 6,
+  "phone.finishedMessageSeconds": 6,
+  "pulse.fields": ["progress", "supervisor", "members", "modelEffort", "updated"],
   "pulse.buttons": ["screen", "show", "merge", "test", "pc", "close", "pause", "progress"],
   "pulse.holdToggle": false,
   "general.buttons": []

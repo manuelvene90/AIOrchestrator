@@ -178,6 +178,13 @@ public class OrchestratorConfigLoaderGuardrailsTests : IDisposable
     /// Refusing to save over a corrupt config.json would strand the owner with a broken file and
     /// no way to fix it short of editing it by hand — the app is their only remaining way back in,
     /// so a save must succeed and produce a fresh, valid file carrying the keys this build owns.
+    ///
+    /// <para>
+    /// "THE KEYS THIS BUILD OWNS" NO LONGER INCLUDES A MODEL (plan 04 D1, 2026-09-23). This used to prove
+    /// the fresh file by reading <c>supervisorModel</c> back as "opus" — a shipped default Save was
+    /// materialising, which is precisely what D1 stops. It now reads back two keys Save still owns — the
+    /// repo list and the screenshots flag — and pins that the model key is ABSENT from the replacement.
+    /// </para>
     /// </summary>
     [Fact]
     public void Save_OverACorruptConfigJson_StillSucceeds_AndWritesTheKnownKeys()
@@ -189,7 +196,9 @@ public class OrchestratorConfigLoaderGuardrailsTests : IDisposable
         Assert.Null(exception);
 
         var root = JsonNode.Parse(File.ReadAllText(_paths.ConfigFile))!.AsObject();
-        Assert.Equal("opus", root["supervisorModel"]!.GetValue<string>());
+        Assert.IsType<JsonArray>(root["repos"]);
+        Assert.False(root["telegramStatusScreenshots"]!.GetValue<bool>());
+        Assert.False(root.ContainsKey("supervisorModel"));
     }
 
     /// <summary>

@@ -57,9 +57,21 @@ public class ThePhoneRingsOnlyForTheSupervisorTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
+        // phone.push = everything AND phone.appMessagesRing = true (plan 03): this file is the fork's
+        // ruling of 2026-09-09 driven through the engine — "if the supervisor writes to me, I must know
+        // it — that rings" — and that sentence is BOTH keys: everything sent, and a plain report ringing.
+        // The ring is STATED rather than inherited from classic's default, because under D7's answer (b)
+        // the other value silences exactly the plain report this file measures. Neither preset is this
+        // pair: under filtered a plain report is held for the turn-end digest (OwnerPushDeciderTests,
+        // AStatusLineDoesNotSpendTheOwnersWaitTests), and under quiet it is sent SILENT — both presets'
+        // phones are pinned by WhoRingsUnderEachPresetTests.
+        //
+        // phone.receipts = reactions is STATED for the same reason: the receipt assertions below are the
+        // fork's spelling of "one silent acknowledgement" (brief D), and since plan 03 Task 6 the machine
+        // that names nothing acknowledges with the ✓ message instead — ReceiptStyleTests pins that one.
         File.WriteAllText(
             _paths.ConfigFile,
-            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\",\"appMessagesRing\":true,\"receipts\":\"reactions\"}}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -328,6 +340,13 @@ internal sealed class SoundRecordingTelegram_Fake : ITelegramApiClient
     {
         lock (_lock)
             return Sent.Count(sent => sent.Text.Contains(fragment, StringComparison.Ordinal));
+    }
+
+    /// <summary>Under the fake's lock — the engine records from its own loops while a test counts.</summary>
+    public int Count_Sent_WithSound(TelegramSendSounds sound)
+    {
+        lock (_lock)
+            return Sent.Count(sent => sent.Sound == sound);
     }
 
     public string Dump_Sent()

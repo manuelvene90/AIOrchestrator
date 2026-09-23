@@ -38,6 +38,18 @@ public static class HoldButton_Data
     /// <summary>Shown while holding — pressing it releases.</summary>
     public const string GO_LABEL = "▶ GO";
 
+    /// <summary>
+    /// Send now is GO, labelled for the moment BEFORE a hold: the owner is sure the message is whole and
+    /// wants it delivered without waiting out the aggregation window (owner requests 2026-09-14 and
+    /// 2026-09-23: *"a new button that lets me tell the app to forward the message to the solo
+    /// immediately without waiting for the buffer time to pass"*). The engine's GO already skips the
+    /// window and flushes on the tap, so this is a label, not an action — a second delivery path would
+    /// be a second place for the delivery guarantees (put-back on failure, ordinal order, the credit
+    /// raised at delivery) to drift. Its own words, because the label is the only thing that tells it
+    /// from the ▶ GO on a hold receipt.
+    /// </summary>
+    public const string SEND_NOW_LABEL = "▶ Send now";
+
     public static string Build(HoldButtonActions action, long? messageThreadId)
     {
         var prefix = action == HoldButtonActions.Hold ? HOLD_PREFIX : GO_PREFIX;

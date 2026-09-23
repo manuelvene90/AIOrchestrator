@@ -1,9 +1,12 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 using AIOrchestratorCoreLib.Bridge.ChannelChangeWaker;
+using AIOrchestratorCoreLib.Bridge.CommandBars;
 using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+using AIOrchestratorCoreLib.Bridge.ReceiptRegistry;
+using AIOrchestratorCoreLib.Bridge.SuppressedEntries;
 using AIOrchestratorCoreLib.Bridge.TopicDeletion;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
@@ -638,7 +641,15 @@ internal sealed class BridgeEngineModel(
 
     readonly Lock _stateLock = new();
     readonly IBridgeEngineTiming _timing = timing;
-    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(timing.OwnerAggregationSeconds);
+
+    /// <summary>
+    /// THE WINDOW IS THE OWNER'S SETTING, READ ON EVERY FLUSH (2026-09-23, plan 03 task 13): the buffer
+    /// asks this delegate once per <c>Take_ReadyDeliveries</c>, so <c>phone.aggregationSeconds</c> is
+    /// resolved from the provider at the point of effect and never cached here. A test's custom timing
+    /// outranks it — <see cref="OwnerAggregationWindow_Resolver"/> is the one place the two meet.
+    /// </summary>
+    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create_ReadingWindow(
+        () => OwnerAggregationWindow_Resolver.Resolve(timing.OwnerAggregationSeconds_OrNull, configProvider.Get_Current().Phone));
 
     /// <summary>
     /// THE CURSOR AS IT WAS LAST WRITTEN TO DISK — the thing a new one has to differ from before the
@@ -819,26 +830,10 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, DateTime> _statusLineFailedAtByOrchId = [];
 
     /// <summary>
-    /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
-    /// one message instead of three. Key 0 = the General topic (no thread id).
+    /// The receipt being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff, or 👀 → 👌), so three states cost
+    /// one message instead of three — see <see cref="IReceiptRegistry"/> (moved out, plan 03 Task 6b).
     /// </summary>
-    readonly Dictionary<long, long> _receiptMessageIdByThread = [];
-
-    /// <summary>
-    /// The OWNER'S OWN message currently wearing 👀, per thread — brief D's receipt (2026-09-09:
-    /// "acknowledge my messages with a reaction on my bubble instead of a ✓ message").
-    ///
-    /// <para>
-    /// Beside <see cref="_receiptMessageIdByThread"/> rather than replacing it, because the two
-    /// hold DIFFERENT message ids and only one of them exists at a time: this one is the owner's
-    /// message, and that one is a bot message sent only when the reaction was refused. Reusing a
-    /// single dictionary would mean an id whose meaning depends on which path wrote it, and the
-    /// pickup would then edit the owner's own message instead of reacting to it.
-    /// </para>
-    /// </summary>
-    readonly Dictionary<long, long> _reactedOwnerMessageIdByThread = [];
-
-    readonly Lock _receiptLock = new();
+    readonly IReceiptRegistry _receipts = ReceiptRegistry_Factory.Create();
 
     /// <summary>
     /// Message ids KNOWN to belong to each topic (ours + the owner's), for /clear. Telegram message
@@ -904,15 +899,6 @@ internal sealed class BridgeEngineModel(
     /// <summary>Per-orchestration cooldown so the brevity feedback never becomes noise itself.</summary>
     readonly Dictionary<string, DateTime> _lastVerbosityNudgeUtc = [];
 
-    sealed class HoldReceipt
-    {
-        public long? MessageId;
-        public int HeldCount;
-    }
-
-    /// <summary>Target channel → the WAIT acknowledgement being kept up to date while held.</summary>
-    readonly Dictionary<string, HoldReceipt> _holdReceipts = [];
-
     /// <summary>
     /// How long an unanswered question freezes the conversation. Long enough to make "a question
     /// stops the turn" real; short enough that an owner who never answers is not starved of
@@ -939,6 +925,12 @@ internal sealed class BridgeEngineModel(
     /// path alone — sharing _pendingOwnerReplies for this dropped every answer.
     /// </summary>
     readonly HashSet<string> _ownerAwaitingAnswer = [.. restoredState.OwnerAwaitingAnswer];
+
+    /// <summary>
+    /// What <c>phone.push = filtered</c> held back for the turn-end digest — its own store, not a field
+    /// of this file (plan 03 Task 2). See <see cref="ISuppressedEntries"/> for why it is a list.
+    /// </summary>
+    readonly ISuppressedEntries _suppressedEntries = SuppressedEntries_Factory.Create(log);
 
     /// <summary>
     /// Telegram message id → a question the owner has NOT answered yet, restored across a restart.
@@ -1088,10 +1080,11 @@ internal sealed class BridgeEngineModel(
     DateTime _lastOwnerMessageUtc = DateTime.UtcNow;
 
     /// <summary>
-    /// Guards _holdReceipts and _pendingOwnerReplies. GO flushes from the INBOUND loop (waiting for
-    /// the 2 s mirror tick would be exactly the lag GO exists to remove), so both dictionaries are
-    /// now touched from two threads. Short, non-async critical sections only — never hold this
-    /// across an await.
+    /// Guards _pendingOwnerReplies (and the other owner-facing state noted at each field). GO flushes from
+    /// the INBOUND loop (waiting for the 2 s mirror tick would be exactly the lag GO exists to remove), so
+    /// it is touched from two threads. The hold receipts it used to guard too now live in IReceiptRegistry,
+    /// under the lock of the ticks they may become (Task 6c fix round 1). Short, non-async critical
+    /// sections only — never hold this across an await.
     /// </summary>
     readonly Lock _ownerStateLock = new();
 
@@ -1263,25 +1256,6 @@ internal sealed class BridgeEngineModel(
         {
             // A faulty subscriber must not take the bridge down.
         }
-    }
-
-    /// <summary>
-    /// Turns the periodic status's screenshots on or off, APP-WIDE and persisted — the owner asked
-    /// for it to "work app wise, independently from where I place the command", so it lives in
-    /// config.json rather than on any one orchestration.
-    /// </summary>
-    public void Set_StatusScreenshots(bool enabled)
-    {
-        var current = _configProvider.Get_Current();
-
-        if (current.TelegramStatusScreenshots == enabled)
-            return;
-
-        OrchestratorConfig_Loader.Save(OrchestratorConfig_Factory.Create_WithStatusScreenshots(current, enabled), _paths);
-
-        _log.Log_Info(GLOBAL_ORCH_ID, enabled
-            ? "Status screenshots ON — the periodic status carries a picture of each session's terminal"
-            : "Status screenshots OFF — the periodic status is text only");
     }
 
     public void Set_SilenceAllTopics(bool silenced)
@@ -1651,6 +1625,12 @@ internal sealed class BridgeEngineModel(
 
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
+
+        // RECEIPT EDITS THE PER-MESSAGE GAP HELD land here once their door opens (plan 03 Task 6c) — right
+        // after the delivery that most often stages one (the ✓✓), and above the DND gate: an edit rings
+        // nothing, and a mute must not leave "⏸ holding" on a message that has been delivered.
+        if (_telegramClient != null)
+            await ReceiptEdit_Sender.Drain_Async(_receipts, _telegramClient, _log, cancellationToken);
 
         // AFTER the owner's delivery, and that ORDER IS THE POINT. Both draw on the one allowance
         // above, so whichever runs first can spend it — and several wedged channels retrying
@@ -3576,7 +3556,13 @@ internal sealed class BridgeEngineModel(
     }
 
     long? _generalDashboardMessageId;
-    string? _generalDashboardText;
+
+    /// <summary>
+    /// The dashboard's last written RENDERING — text and bar labels, <see cref="Telegram.TopicStatusLine_RenderKey"/>
+    /// — not its text alone, so a changed <c>general.buttons</c> repaints a message whose text did not move.
+    /// </summary>
+    string? _generalDashboardRenderKey;
+
     bool _generalDashboardIdLoaded;
     DateTime? _generalDashboardFailedAtUtc;
 
@@ -3585,8 +3571,8 @@ internal sealed class BridgeEngineModel(
     /// sees the whole machine without asking and without a notification per update. The per-topic
     /// status line already works this way; this is the same idea one level up.
     ///
-    /// It writes only when the TEXT CHANGED — the shared decider's rule — which is why the composer
-    /// puts no clock in it. Everything else here is execution: the decisions that can be pure
+    /// It writes only when the RENDERING CHANGED — its text or its bar, the shared decider's rule over
+    /// PULSE's render key — which is why the composer puts no clock in it. Everything else here is execution: the decisions that can be pure
     /// functions are, because this class is internal sealed with no InternalsVisibleTo and nothing
     /// decided inside it can be reached by the suite.
     /// </summary>
@@ -3613,27 +3599,38 @@ internal sealed class BridgeEngineModel(
 
         Load_GeneralDashboardMessageId_Once();
 
+        // ONE snapshot for the text's glyph and the bar's verbs, read here at the point of effect.
+        var current = _configProvider.Get_Current();
+
         var text = Telegram.GeneralDashboard_Composer.Compose(
             Build_ProgressReportText(null),
-            _configProvider.Get_Current().TelegramStatusScreenshots);
-        var action = Telegram.TopicStatusLine_Decider.Decide(text, _generalDashboardText, _generalDashboardMessageId);
+            current.TelegramStatusScreenshots);
+
+        // GENERAL'S COMMAND BAR RIDES ON THE DASHBOARD, for the reason the topic bar rides on
+        // PULSE: this is the one message in General the app already keeps current and already
+        // keeps near the bottom, so the buttons stay within reach without a pin the owner has
+        // refused. `general.buttons` is read here; an empty list is no rows, which the client
+        // sends as no reply_markup at all (D4).
+        var commandButtonRows = _commandBars.Build_GeneralRows(current.Pulse);
+
+        // THE BAR IS BUILT BEFORE THE DECISION, AND THE DECISION IS MADE ON THE WHOLE RENDERING — the
+        // same key PULSE remembers, for PULSE's reason. Deciding on the text alone meant an edit of
+        // `general.buttons` never reached the phone: the composer puts no clock in the text, so a quiet
+        // machine's dashboard never moved and the old bar stayed up (plan 03 Task 5 review,
+        // 2026-09-23). The key is never blank and neither is the text it opens with (the HEADING), so
+        // the decider's nothing-to-say rule means here what it meant on the text.
+        var renderKey = Telegram.TopicStatusLine_RenderKey.Build(text, commandButtonRows);
+        var action = Telegram.TopicStatusLine_Decider.Decide(renderKey, _generalDashboardRenderKey, _generalDashboardMessageId);
 
         if (action == Telegram.TopicStatusActions.None)
             return;
 
         try
         {
-            // GENERAL'S COMMAND BAR RIDES ON THE DASHBOARD, for the reason the topic bar rides on
-            // PULSE: this is the one message in General the app already keeps current and already
-            // keeps near the bottom, so the buttons stay within reach without a pin the owner has
-            // refused.
-            //
             // THE ROW-AWARE CALLS, NOT THE PLAIN ONES. A plain edit sends no reply_markup and
             // Telegram reads the absence as "remove the keyboard", so editing this message the old
             // way would strip the bar off it on the very next tick — the same trap the per-topic
             // line documents at its own edit.
-            var commandButtonRows = Build_GeneralCommandButtonRows();
-
             if (action == Telegram.TopicStatusActions.Edit && _generalDashboardMessageId != null)
             {
                 await _telegramClient.Edit_MessageTextWithButtonRows_Async(_generalDashboardMessageId.Value, text, commandButtonRows, cancellationToken);
@@ -3649,7 +3646,7 @@ internal sealed class BridgeEngineModel(
                 Save_GeneralDashboardMessageId(messageId.Value);
             }
 
-            _generalDashboardText = text;
+            _generalDashboardRenderKey = renderKey;
             _generalDashboardFailedAtUtc = null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -3659,10 +3656,10 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             // "not modified" is Telegram agreeing with us: the desired state already holds, so it is a
-            // SUCCESS. Recording the text is what stops it being retried every tick for ever.
+            // SUCCESS. Recording the rendering is what stops it being retried every tick for ever.
             if (Telegram.TopicStatusLine_Decider.Is_MessageAlreadyCurrent(ex.Message))
             {
-                _generalDashboardText = text;
+                _generalDashboardRenderKey = renderKey;
                 return;
             }
 
@@ -3671,7 +3668,7 @@ internal sealed class BridgeEngineModel(
             if (Telegram.TopicStatusLine_Decider.Is_MessageGone(ex.Message))
             {
                 _generalDashboardMessageId = null;
-                _generalDashboardText = null;
+                _generalDashboardRenderKey = null;
                 Delete_GeneralDashboardState_BestEffort();
                 return;
             }
@@ -3931,6 +3928,13 @@ internal sealed class BridgeEngineModel(
 
         var deliveredHere = 0;
 
+        // phone.push AND phone.appMessagesRing, READ ONCE PER APPEND at the point of effect, from one
+        // snapshot — never cached on this engine, because the provider re-reads config.json on its write
+        // stamp. General is exempt from the push (D8): see OwnerPush_Policy.Resolve_ModeForChannel for why
+        // the concierge's narration is never filtered. It is not exempt from the sound: EntrySound_Resolver.
+        var phone = _configProvider.Get_Current().Phone;
+        var pushMode = OwnerPush_Policy.Resolve_ModeForChannel(phone.Push, append.Channel.OrchId);
+
         foreach (var entry in mirrorableEntries)
         {
             if (deliveredHere < alreadyDelivered)
@@ -3956,6 +3960,11 @@ internal sealed class BridgeEngineModel(
             // send below has succeeded. The wait is not consumed by an attempt.
             var answersTheOwnersWait = false;
 
+            // The owner's credit as the push block below reads it for THIS entry, and the value the entry's
+            // SOUND is judged on too — read once, so delivery and sound cannot disagree about whether this
+            // entry is the answer. Stays false off an owner channel, where no credit exists.
+            var ownerIsWaiting = false;
+
             // WHAT REACHES THE PHONE, owner's rule: "I answer the sup a question, and then the sup
             // doesn't disturb me anymore unless it has another question. A brief every 30 minutes
             // is fine, but not the waterfall." So a supervisor entry is pushed only when it asks
@@ -3968,47 +3977,62 @@ internal sealed class BridgeEngineModel(
                 // answer reached this line the flag was already false, so every answer to the owner
                 // was silently suppressed — they asked, the supervisor replied, and they never saw
                 // it. This flag is owned solely by this path and cannot race.
-                var ownerIsWaiting = false;
-
                 lock (_ownerStateLock)
                 {
                     ownerIsWaiting = _ownerAwaitingAnswer.Contains(append.Channel.OrchId);
                 }
 
-                // TWO REFUSALS SURVIVE THE FILTER'S REMOVAL, and neither is remembered for a later
-                // release — which is why the suppressed-entry filing that used to sit here is gone.
-                //
-                // What reaches this branch now is an owner RESTATEMENT (their own words quoted back,
-                // which must not be replayed at all) or an EMPTY body. The empty one is the sharp
-                // case and it is why the filing had to go rather than merely stop mattering: it is
-                // not a restatement, so it was filed and then released five minutes later, RINGING,
-                // wearing "nothing has moved for 5 min — sending you the last thing it said". A
-                // blank message, with a notification, about nothing.
-                //
-                // The subject is still passed because Should_Push's signature carries it for the
-                // callers that predate this change.
-                if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting, entry.Subject))
+                // THE DECISION IS A VALUE (plan 03 Task 2), switched on here rather than branched on
+                // inline. DROP is an EMPTY body or an owner RESTATEMENT, in either mode, and is never
+                // filed: an empty entry that was filed was once released five minutes later, RINGING,
+                // wearing "nothing has moved for 5 min — sending you the last thing it said" — a blank
+                // message, with a notification, about nothing. HOLD is narration under
+                // phone.push = filtered, owed to the owner at turn end as one message.
+                switch (OwnerPush_Policy.Decide(pushMode, entry.RawText, ownerIsWaiting, entry.Subject))
                 {
-                    // COUNTED, THOUGH NOTHING WAS SENT. The held-append memo is POSITIONAL — the
-                    // resume skips the first `alreadyDelivered` entries of the re-emitted append —
-                    // so it has to count entries CONSUMED, not entries sent. Counting only the sent
-                    // ones left the prefix short by one for every suppressed entry ahead of a sent
-                    // one, and the resume then re-sent an entry the owner already had.
-                    deliveredHere++;
-                    continue;
-                }
+                    case OwnerPushDecisions.Drop:
+                        // COUNTED, THOUGH NOTHING WAS SENT. The held-append memo is POSITIONAL — the
+                        // resume skips the first `alreadyDelivered` entries of the re-emitted append —
+                        // so it has to count entries CONSUMED, not entries sent. Counting only the sent
+                        // ones left the prefix short by one for every suppressed entry ahead of a sent
+                        // one, and the resume then re-sent an entry the owner already had.
+                        deliveredHere++;
+                        continue;
 
-                lock (_ownerStateLock)
-                {
-                }
+                    case OwnerPushDecisions.HoldForDigest:
+                        _suppressedEntries.File(append.Channel.OrchId, entry.Subject, Format_ForTurnEndDigest(append.Channel, entry));
 
-                // The flag is deliberately NOT cleared here — it is cleared after the send below.
-                // Clearing it at this point consumed the owner's wait on an ATTEMPT: when the send
-                // then failed, the append was left unconfirmed (by design, so it retries), but the
-                // re-emitted entry now read the flag as false, re-evaluated as ordinary narration
-                // and was SUPPRESSED. The answer to a question the owner actually asked was dropped
-                // silently — they asked, the supervisor replied, and nothing ever reached them.
-                answersTheOwnersWait = true;
+                        // Counted for exactly the reason Drop is, above: a held entry is CONSUMED.
+                        deliveredHere++;
+                        continue;
+
+                    case OwnerPushDecisions.SendNow:
+                        // WHAT WAS HELD BEFORE A SEND IS FORGOTTEN AT THE SEND (ruling R7 — master's
+                        // clear-on-send, 58ff547). Two reasons, both real:
+                        //   - STALE WORDS. A "WAITING ON …" status line held seconds before the answer
+                        //     is out of date the moment the answer goes; replayed under it in the
+                        //     turn-end completion, the owner reads the status after the thing it was
+                        //     waiting for — decision 25's 2026-09-10 failure, by another route.
+                        //   - DUPLICATES ON RETRY. A Failed append clears the positional memo, so the
+                        //     re-emission files its held entries AGAIN; each pass reaching a send
+                        //     forgets the copies the pass before it filed.
+                        // Before the send, not after it: a failed send leaves the append unconfirmed,
+                        // and the retry re-files and re-forgets the same entries, so nothing is lost
+                        // that a success would have kept. The store owns its lock.
+                        _suppressedEntries.Forget(append.Channel.OrchId);
+
+                        // The flag is deliberately NOT cleared here — it is cleared after the send below.
+                        // Clearing it at this point consumed the owner's wait on an ATTEMPT: when the send
+                        // then failed, the append was left unconfirmed (by design, so it retries), but the
+                        // re-emitted entry now read the flag as false, re-evaluated as ordinary narration
+                        // and was SUPPRESSED. The answer to a question the owner actually asked was dropped
+                        // silently — they asked, the supervisor replied, and nothing ever reached them.
+                        answersTheOwnersWait = true;
+                        break;
+
+                    default:
+                        throw new Exception($"Unhandled OwnerPushDecisions for entry #{entry.Index} of '{append.Channel.FilePath}'");
+                }
             }
 
             // THE SPEAKER PREFIX IS HELD APART FROM THE AGENT'S WORDS for the whole of this block.
@@ -4083,19 +4107,23 @@ internal sealed class BridgeEngineModel(
             // COMPOSED BACK HERE, and nowhere earlier: everything above reads the agent's own words.
             text = speaker + text;
 
+            // ONE SOUND FOR EVERYTHING THIS ENTRY SENDS — its pieces, its document, its photos, its files
+            // (plan 03 Task 3, phone.appMessagesRing; D7 answer (b)). Judged once, on the credit read above.
+            var entrySound = EntrySound_Resolver.Resolve(entry, ownerIsWaiting, phone.AppMessagesRing);
+
             var prose = _configProvider.Get_Current().TelegramProse;
             var pieces = OwnerMessage_Folder.Fold_ForOwner(text, prose.FoldLongEntriesAbove);
 
             try
             {
                 foreach (var piece in pieces)
-                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, Resolve_EntrySound(entry), cancellationToken));
+                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, entrySound, cancellationToken));
 
                 // ALSO, never INSTEAD. Every piece above has already been sent; the file is a
                 // convenience for an entry long enough that reading it in the chat is the work.
                 await Send_EntryDocument_BestEffort_Async(
                     threadId, pieces.Count, prose.AttachEntriesAbove, entry.Subject, text,
-                    append.Channel.OrchId, Resolve_EntrySound(entry), cancellationToken);
+                    append.Channel.OrchId, entrySound, cancellationToken);
 
                 // Counts toward away detection: a supervisor message that reached the phone and is
                 // so far unanswered. Only the supervisor's own voice counts — app notices and
@@ -4120,10 +4148,10 @@ internal sealed class BridgeEngineModel(
                 }
 
                 foreach (var photoPath in photoPaths)
-                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel, Resolve_EntrySound(entry), cancellationToken);
+                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel, entrySound, cancellationToken);
 
                 foreach (var attachmentPath in attachmentPaths)
-                    await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, Resolve_EntrySound(entry), cancellationToken);
+                    await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, entrySound, cancellationToken);
 
                 // ONLY NOW is the owner's wait consumed: everything this entry had to say is on the
                 // phone, so what follows is narration again. Anything that threw above skipped this
@@ -4208,26 +4236,6 @@ internal sealed class BridgeEngineModel(
     /// interchangeable once a fold is involved — the HTML carries a collapsed quotation that has no
     /// Markdown source — which is why the pair travels together instead of being re-derived here.
     /// </param>
-    /// <summary>
-    /// WHO WROTE IT DECIDES WHETHER IT RINGS — the owner's ruling of 2026-09-09, in one place.
-    ///
-    /// <para>
-    /// *"If the supervisor writes to me, I must know it — that rings. Status, receipts and app
-    /// bookkeeping do not ring."* So an entry whose author SPEAKS TO THE OWNER (the supervisor, or
-    /// the solo that stands in for one) arrives with a notification; an App entry — a confirmation,
-    /// a coaching line, a status post — arrives silently and is there when they next look.
-    /// </para>
-    /// <para>
-    /// <see cref="ChannelAuthor_Kinds.Speaks_ToOwner"/> is the same predicate the away-detection and
-    /// the stall alert already use for "was that the supervisor talking", so a new author kind
-    /// cannot ring here while counting as silence there.
-    /// </para>
-    /// </summary>
-    static TelegramSendSounds Resolve_EntrySound(Channels.ChannelEntry.IChannelEntry entry)
-    {
-        return ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) ? TelegramSendSounds.Rings : TelegramSendSounds.Silent;
-    }
-
     async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         var client = _telegramClient
@@ -4352,12 +4360,17 @@ internal sealed class BridgeEngineModel(
     /// (<see cref="Is_AwaitingAnswer"/>). This set says the OWNER asked and is owed a reply.
     /// </para>
     /// <para>
-    /// Plan 03 adds the suppressed-entry clear here, when the narration filter — and the list of
-    /// entries it holds back — comes back with `phone.push = filtered`.
+    /// AND WHAT WAS HELD BEFORE IT IS FORGOTTEN (plan 03, <c>phone.push = filtered</c>). The turn-end
+    /// digest is what the session said SINCE the owner spoke: an older held entry belongs to a
+    /// conversation that has already moved on, and replaying it under their new question would answer
+    /// something they did not just ask. Master drew the same line with a timestamp against the reply's
+    /// delivery; the delivery is this moment, so forgetting here draws it without one.
     /// </para>
     /// </summary>
     void Raise_OwnerWait(string orchId)
     {
+        _suppressedEntries.Forget(orchId);
+
         lock (_ownerStateLock)
         {
             _ownerAwaitingAnswer.Add(orchId);
@@ -4401,6 +4414,32 @@ internal sealed class BridgeEngineModel(
     bool Is_TopicSilenced(string orchId)
     {
         return Resolve_EffectiveMode(orchId) == TelegramDeliveryModes.Silenced;
+    }
+
+    /// <summary>
+    /// A HELD ENTRY AS THE OWNER WILL READ IT IN THE TURN-END DIGEST — the speaker glyph kept, the
+    /// <c>STATE:</c> line taken out, the subject standing in for a body that was nothing else.
+    ///
+    /// <para>
+    /// THE SAME STEPS THE SEND PATH TAKES, on the same helpers (<see cref="MirrorText_Formatter.Format_Parts"/>,
+    /// <see cref="Extract_MarkerLines"/>), because the digest is those words arriving later. The
+    /// <c>STATE:</c> line is the one marker that matters here: every supervisor turn ends with one by
+    /// skill mandate, it rides exactly the narration this mode holds, and left in, the digest would
+    /// read it aloud once per entry. A <c>QUESTION:</c>/<c>OPTION:</c> line or a column-0 file marker
+    /// cannot reach this method — an entry carrying one is sent now, never held — which is also why a
+    /// held picture is never reduced to its path.
+    /// </para>
+    /// </summary>
+    static string Format_ForTurnEndDigest(Channels.DiscoveredChannel.IDiscoveredChannel channel, Channels.ChannelEntry.IChannelEntry entry)
+    {
+        var (speaker, text) = MirrorText_Formatter.Format_Parts(channel, entry);
+
+        Extract_MarkerLines(ref text, DeclaredState_Parser.MARKER.TrimEnd(':'));
+
+        if (text.Trim().Length == 0)
+            text = entry.Subject;
+
+        return speaker + text;
     }
 
     /// <summary>Pulls '<marker>: value' lines out of the text (which shrinks accordingly) and returns the values.</summary>
@@ -5714,6 +5753,11 @@ internal sealed class BridgeEngineModel(
             // Snapshot BEFORE closing: the topic id is needed after, to delete the topic.
             var session = _store.Get_Session(orchId);
             _store.Close_Orchestration(orchId);
+
+            // A closed orchestration's held narration has no turn end left to arrive at. Forgotten
+            // BEFORE the kill, which can throw, so a failed kill cannot leave it behind.
+            _suppressedEntries.Forget(orchId);
+
             SessionTerminator.Kill_OrchestrationSessions(_paths, orchId);
 
             if (_telegramClient != null && session.TelegramTopicId != null)
@@ -7134,8 +7178,7 @@ internal sealed class BridgeEngineModel(
                         // race the ✓ acks of the batch it arrived in.
                         presenceCommands.Add(message.MessageThreadId);
                     }
-                    else if (command == "dnd" || command == "mute" || command == "unmute"
-                        || command == "dnd-all" || command == "mute-all" || command == "dnd_all" || command == "mute_all")
+                    else if (Telegram.DeliveryModeCommands.Is_ModeCommand(command))
                     {
                         // Deferred until after the loop: toggling must not race the ✓ acks, and a
                         // /dnd must not be auto-unmuted by the very message that requested it.
@@ -7145,134 +7188,10 @@ internal sealed class BridgeEngineModel(
                     {
                         routableMessages.Add(Build_GeneralCommandMessage(message, GENERAL_SUMMARY_REQUEST));
                     }
-                    else if (command == "pending")
-                    {
-                        // ANSWERED BY THE APP, not by the general supervisor. It used to be routed as
-                        // an English instruction, which meant the list cost a model turn, arrived
-                        // whenever that session next ran, and was reconstructed from channel files by
-                        // something that might be mid-turn on something else. The app is holding the
-                        // decisions in a field — the same argument /progress already won.
-                        await Send_PendingDecisions_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    // "left" is an ALIAS, not a second implementation: it is the word the owner used
-                    // ("a slash command that lets me know what's left"), and two commands reading one
-                    // ledger would drift apart — the second-copy hazard applied to features.
-                    else if (command == "progress" || command == "left")
-                    {
-                        // Answered by the APP straight from PLAN.md — instant, and it works even
-                        // while the supervisor is mid-turn (which is exactly when it gets asked).
-                        await Send_ProgressReport_Async(client, message.MessageThreadId, command, cancellationToken);
-                    }
-                    // NOT an alias of /progress: the owner asked to KEEP the full detail when the
-                    // short form was built, so this is the second RENDERING of the same parse.
-                    else if (command == "tasks")
-                    {
-                        await Send_TaskListReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "tokens")
-                    {
-                        await Send_TokensReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "cost")
-                    {
-                        await Send_CostReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command != null && Telegram.ModelEffortCommand_Parser.Is_Command(command, MODEL_COMMAND))
-                    {
-                        // Takes an argument, so it is matched on its leading word — the lexer hands back
-                        // the whole remainder ("model fable 5.1"), and equality would only ever see the
-                        // bare form.
-                        await Handle_DialCommand_Async(client, message.MessageThreadId, command, Telegram.ModelEffortKinds.Model, cancellationToken);
-                    }
-                    else if (command != null && Telegram.ModelEffortCommand_Parser.Is_Command(command, EFFORT_COMMAND))
-                    {
-                        await Handle_DialCommand_Async(client, message.MessageThreadId, command, Telegram.ModelEffortKinds.Effort, cancellationToken);
-                    }
-                    else if (command == "limits")
-                    {
-                        await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "context")
-                    {
-                        await Send_ContextReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "show")
-                    {
-                        await Show_SessionWindow_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "screen")
-                    {
-                        await Send_SessionScreenshot_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "screens")
-                    {
-                        await Toggle_StatusScreenshots_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "organize")
-                    {
-                        await Organize_SessionWindows_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "organize_mains" || command == "organize-mains")
-                    {
-                        // The hyphen is accepted for the same reason mute-all is (see above): the
-                        // Telegram menu only offers the underscore, and an owner typing the shape
-                        // they remember should not be answered with silence — an unmatched command
-                        // falls through to the catch-all and is delivered to the session as chat.
-                        await Organize_MainWindows_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "merge")
-                    {
-                        await Ask_SessionToMerge_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "test")
-                    {
-                        await Toggle_AwaitingTest_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "done")
-                    {
-                        await Toggle_Done_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "pause")
-                    {
-                        await Toggle_Paused_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "refresh")
-                    {
-                        await Refresh_TopicName_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "switch")
-                    {
-                        await Switch_OrchestrationShape_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "close")
-                    {
-                        await Request_Close_FromCommand_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "diff")
-                    {
-                        await Send_GitReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "clear")
-                    {
-                        await Clear_Topic_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "status")
-                    {
-                        await Send_MemberStatusReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "resume")
-                    {
-                        await Resume_AllSessions_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command is "tail" or "log")
-                    {
-                        await Send_TurnLog_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
-                    }
-                    else if (command != null && command.StartsWith("imp", StringComparison.Ordinal))
-                    {
-                        await Send_ImplementerPeek_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
-                    }
-                    else
+                    // EVERY OTHER COMMAND RUNS THROUGH ONE CHAIN, which a tapped bar button with no dedicated case
+                    // reaches too (plan 03 Task 5b, ruling R16) — so a button and the command it names are one
+                    // implementation. What it does not run is not a command, and is the owner's chat.
+                    else if (command == null || !await Try_RunOwnerCommand_Async(client, command, message.MessageThreadId, message.Text, cancellationToken))
                     {
                         routableMessages.Add(message);
                         isRoutable = true;
@@ -7305,8 +7224,10 @@ internal sealed class BridgeEngineModel(
                 }
 
                 // The owner texting or tapping ANYTHING (except a mode command) lifts app-wide DND
-                // — before routing, so the ✓ acks go out.
-                if ((routableMessages.Count > 0 || batch.CallbackTaps.Count > 0) && _telegramMuted)
+                // — before routing, so the ✓ acks go out. The exception now holds for a TAPPED mode
+                // command too (plan 03 Task 5b): a 🌙 /dnd_all tapped while deferred was lifted here and
+                // toggled straight back on by its own tap, so that button could never turn DND off.
+                if ((routableMessages.Count > 0 || batch.CallbackTaps.Any(tap => !Telegram.TopicCommandButtons.Is_DeliveryModeTap(tap.Data))) && _telegramMuted)
                     Set_TelegramMuted(false);
 
                 foreach (var message in routableMessages)
@@ -7442,6 +7363,173 @@ internal sealed class BridgeEngineModel(
                 backoffMilliseconds = Math.Min(backoffMilliseconds * 2, INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS);
             }
         }
+    }
+
+    /// <summary>
+    /// THE TYPED-COMMAND CHAIN — every command the inbound loop runs on the spot, as one method (plan 03
+    /// Task 5b, ruling R16). Returns false when <paramref name="command"/> is none of them, and the caller
+    /// decides what that means: for a typed message it is the owner's chat, for a tap it is a button from
+    /// an older build.
+    ///
+    /// <para>
+    /// IT WAS THE TAIL OF THE INBOUND LOOP'S <c>else if</c> CHAIN, and it moved here so a TAP can reach
+    /// it. Task 5 made the bars configurable and its wiring guard found twenty menu verbs with no case in
+    /// the tap handler, all refused from every bar. Writing twenty more cases would have been twenty
+    /// second implementations — the drift this repo already paid for with /progress and /left — so a tap
+    /// with no dedicated case hands its verb here, as the text the owner would have typed
+    /// (<see cref="Telegram.TopicCommandButtons.Build_TypedCommandText"/>), and a button can never behave
+    /// differently from the command it names. The branches are MOVED VERBATIM, the message's thread and
+    /// text become parameters; nothing about any command changed.
+    /// </para>
+    /// <para>
+    /// NOT HERE, AND DELIBERATELY: /pc and the delivery-mode toggles (deferred to the end of the batch by
+    /// the loop, so they cannot race its ✓ acks), /summary (routed as a canned message built from the
+    /// owner's own message), and the high-risk read-back (typed text only, by definition). The tap handler
+    /// has its own dedicated case for each of the first three.
+    /// </para>
+    /// <para>
+    /// A COMMAND CONFIRMED BY REPEATING IT (/switch) KEEPS ITS STATE IN THE COMMAND'S OWN METHOD, keyed by
+    /// orchestration, so a tap and a typed send arm and complete it interchangeably, and one tap is one
+    /// send — never its own confirmation. HOST-GATED commands are refused inside their methods
+    /// (<c>Refuse_IfNoWindowing_Async</c>), so a tap meets the same gate.
+    /// </para>
+    /// </summary>
+    async Task<bool> Try_RunOwnerCommand_Async(
+        ITelegramApiClient client, string command, long? messageThreadId, string text, CancellationToken cancellationToken)
+    {
+        if (command == "pending")
+        {
+            // ANSWERED BY THE APP, not by the general supervisor. It used to be routed as
+            // an English instruction, which meant the list cost a model turn, arrived
+            // whenever that session next ran, and was reconstructed from channel files by
+            // something that might be mid-turn on something else. The app is holding the
+            // decisions in a field — the same argument /progress already won.
+            await Send_PendingDecisions_Async(client, messageThreadId, cancellationToken);
+        }
+        // "left" is an ALIAS, not a second implementation: it is the word the owner used
+        // ("a slash command that lets me know what's left"), and two commands reading one
+        // ledger would drift apart — the second-copy hazard applied to features.
+        else if (command == "progress" || command == "left")
+        {
+            // Answered by the APP straight from PLAN.md — instant, and it works even
+            // while the supervisor is mid-turn (which is exactly when it gets asked).
+            await Send_ProgressReport_Async(client, messageThreadId, command, cancellationToken);
+        }
+        // NOT an alias of /progress: the owner asked to KEEP the full detail when the
+        // short form was built, so this is the second RENDERING of the same parse.
+        else if (command == "tasks")
+        {
+            await Send_TaskListReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "tokens")
+        {
+            await Send_TokensReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "cost")
+        {
+            await Send_CostReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (Telegram.ModelEffortCommand_Parser.Is_Command(command, MODEL_COMMAND))
+        {
+            // Takes an argument, so it is matched on its leading word — the lexer hands back
+            // the whole remainder ("model fable 5.1"), and equality would only ever see the
+            // bare form.
+            await Handle_DialCommand_Async(client, messageThreadId, command, Telegram.ModelEffortKinds.Model, cancellationToken);
+        }
+        else if (Telegram.ModelEffortCommand_Parser.Is_Command(command, EFFORT_COMMAND))
+        {
+            await Handle_DialCommand_Async(client, messageThreadId, command, Telegram.ModelEffortKinds.Effort, cancellationToken);
+        }
+        else if (command == "limits")
+        {
+            await Send_LimitsReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "context")
+        {
+            await Send_ContextReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "show")
+        {
+            await Show_SessionWindow_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "screen")
+        {
+            await Send_SessionScreenshot_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "screens")
+        {
+            await Toggle_StatusScreenshots_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "organize")
+        {
+            await Organize_SessionWindows_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "organize_mains" || command == "organize-mains")
+        {
+            // The hyphen is accepted for the same reason mute-all is (DeliveryModeCommands): the
+            // Telegram menu only offers the underscore, and an owner typing the shape
+            // they remember should not be answered with silence — an unmatched command
+            // falls through to the catch-all and is delivered to the session as chat.
+            await Organize_MainWindows_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "merge")
+        {
+            await Ask_SessionToMerge_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "test")
+        {
+            await Toggle_AwaitingTest_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "done")
+        {
+            await Toggle_Done_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "pause")
+        {
+            await Toggle_Paused_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "refresh")
+        {
+            await Refresh_TopicName_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "switch")
+        {
+            await Switch_OrchestrationShape_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "close")
+        {
+            await Request_Close_FromCommand_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "diff")
+        {
+            await Send_GitReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "clear")
+        {
+            await Clear_Topic_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "status")
+        {
+            await Send_MemberStatusReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "resume")
+        {
+            await Resume_AllSessions_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command is "tail" or "log")
+        {
+            await Send_TurnLog_Async(client, messageThreadId, command, text, cancellationToken);
+        }
+        else if (command.StartsWith("imp", StringComparison.Ordinal))
+        {
+            await Send_ImplementerPeek_Async(client, messageThreadId, command, text, cancellationToken);
+        }
+        else
+        {
+            return false;
+        }
+
+        return true;
     }
 
     async Task Register_BotCommands_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
@@ -8056,8 +8144,15 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Toggle_StatusScreenshots_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var enabled = !_configProvider.Get_Current().TelegramStatusScreenshots;
-        Set_StatusScreenshots(enabled);
+        // The save and its wording live in StatusScreenshots_Writer (moved out by plan 04 Task 2c). A refused save
+        // changed nothing, so there is no camera to sync — only the owner to answer.
+        var (saved, reply) = StatusScreenshots_Writer.Toggle_Flag(_configProvider.Get_Current(), _paths, _log);
+
+        if (!saved)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, reply, cancellationToken);
+            return;
+        }
 
         // The camera on the General topic is the AMBIENT reminder that it is on, so it is pushed with
         // the reply rather than waiting for the next tick — the owner asked for the two together.
@@ -8070,11 +8165,7 @@ internal sealed class BridgeEngineModel(
 
         await Sync_GeneralTopicName_BestEffort_Async(client, cancellationToken);
 
-        var text = enabled
-            ? "📸 Status screenshots ON — every half-hourly status carries a picture of the session's terminal, taken only while you are away from the PC."
-            : "📸 Status screenshots OFF — the half-hourly status is text only from here on.";
-
-        await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, reply, cancellationToken);
     }
 
     const string MODEL_COMMAND = "model";
@@ -8529,10 +8620,10 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Two buttons per row. Six commands stacked one-per-row — the shape every other keyboard here
-    /// uses — would put a slab of buttons under the one message in the topic the owner reads all day.
+    /// The bars' rows, General's thread id, the hold toggle's placement and the once-only refusal lines
+    /// live in their own component, not in this file (plan 03 Task 5) — see <see cref="ICommandBars"/>.
     /// </summary>
-    const int COMMAND_BUTTONS_PER_ROW = 2;
+    readonly ICommandBars _commandBars = CommandBars_Factory.Create(log);
 
     IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_CommandButtonRows(long messageThreadId)
     {
@@ -8540,7 +8631,23 @@ internal sealed class BridgeEngineModel(
         // buttons class knows the shape of a toggle and nothing about the delivery buffer.
         var (isHolding, heldCount) = Read_HoldState(messageThreadId);
 
-        return Chunk_IntoRows(Telegram.TopicCommandButtons.Build_ForTopic(messageThreadId, isHolding, heldCount));
+        // `pulse.buttons`, `pulse.holdToggle` and `phone.receipts`, read HERE at the point of effect and
+        // never cached — the provider re-reads config.json on its write stamp.
+        var current = _configProvider.Get_Current();
+
+        return _commandBars.Build_TopicRows(current.Pulse, current.Phone.Receipts, messageThreadId, isHolding, heldCount);
+    }
+
+    /// <summary>
+    /// The hold toggle's placement for a RECEIPT, read at the point of effect — the same one value
+    /// <see cref="Build_CommandButtonRows"/> hands the bar, so the toggle is drawn in exactly one of the
+    /// two homes (<see cref="Telegram.ReceiptButtons_Builder"/>).
+    /// </summary>
+    bool Is_HoldToggleOnTheBar()
+    {
+        var current = _configProvider.Get_Current();
+
+        return _commandBars.Is_HoldToggleOnTheBar(current.Pulse, current.Phone.Receipts);
     }
 
     /// <summary>
@@ -8579,43 +8686,6 @@ internal sealed class BridgeEngineModel(
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not read the hold state for topic {messageThreadId} ({ex.Message}) — the bar shows ⏸");
             return (false, 0);
         }
-    }
-
-    /// <summary>
-    /// GENERAL's own bar — `/summary /pending /limits /resume /dnd_all`, the owner's list of
-    /// 2026-09-09.
-    ///
-    /// <para>
-    /// THREAD ID ZERO IS DELIBERATE and is what the parser round-trips for General. General is not a
-    /// topic, so there is no thread to name; the tap handler reads a zero as "use the tap's own
-    /// thread", which in General is null, which every command below already treats as General. A
-    /// sentinel would be a second spelling of the same nothing.
-    /// </para>
-    /// <para>
-    /// The bar was BUILT AND UNIT-TESTED SINCE 2026-09-09 AND NEVER RENDERED: `Build_ForGeneral` had
-    /// no production caller at all, and the wiring guard that would have caught the three unhandled
-    /// buttons walked `Commands` only, never `GeneralCommands`. Both halves are fixed here — this
-    /// call site, and the guard.
-    /// </para>
-    /// </summary>
-    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_GeneralCommandButtonRows()
-    {
-        return Chunk_IntoRows(Telegram.TopicCommandButtons.Build_ForGeneral(0));
-    }
-
-    /// <summary>
-    /// ONE chunker for both bars. The loop existed once per caller for as long as there was one
-    /// caller; a second copy of it is how the two bars come to wrap differently for no reason anybody
-    /// decided.
-    /// </summary>
-    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Chunk_IntoRows(IReadOnlyList<(string Data, string Label)> buttons)
-    {
-        List<IReadOnlyList<(string Data, string Label)>> rows = [];
-
-        for (var index = 0; index < buttons.Count; index += COMMAND_BUTTONS_PER_ROW)
-            rows.Add([.. buttons.Skip(index).Take(COMMAND_BUTTONS_PER_ROW)]);
-
-        return rows;
     }
 
     /// <summary>
@@ -10461,6 +10531,16 @@ internal sealed class BridgeEngineModel(
             IReadOnlyList<IReadOnlyList<(string Data, string Label)>> commandButtonRows =
                 session.TelegramTopicId == null ? [] : Build_CommandButtonRows(session.TelegramTopicId.Value);
 
+            // `pulse.fields` AND `pulse.stepMinutes`, READ HERE, ONCE PER TOPIC, AT THE POINT OF EFFECT —
+            // never cached, because the provider re-reads config.json on its write stamp and the owner
+            // can change either between two ticks. The planner and the builder are pure and are handed
+            // the values.
+            var pulse = _configProvider.Get_Current().Pulse;
+
+            // A basic orchestration has no supervisor file and both readings are null, which is right:
+            // its solo carries them on its own row.
+            var supervisorUsageFile = Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE);
+
             var plan = Telegram.TopicStatusLine_Planner.Plan(
                 ledger,
                 members,
@@ -10473,12 +10553,11 @@ internal sealed class BridgeEngineModel(
                 Find_NewestTopicMessage_OrNull(session.TelegramTopicId),
                 _repostImpossibleOrchIds.Contains(session.OrchId),
                 Note_FiguresAndDescribe_UnchangedFor(session.OrchId, ledger),
-                // The supervisor has no member row on this line, so its context rides on the title.
-                // A basic orchestration has no supervisor file and this reads null, which is right:
-                // its solo carries the figure on its own row.
-                UsageTotals_Reader.Read_ContextUsage_OrNull(
-                    Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE)),
-                Build_TopicStatusFields(session));
+                UsageTotals_Reader.Read_ContextUsage_OrNull(supervisorUsageFile),
+                Build_TopicStatusFields(session),
+                UsageTotals_Reader.Read_ModelReading_OrNull(supervisorUsageFile),
+                pulse.Fields,
+                pulse.StepMinutes);
 
             var action = plan.Action;
             var text = plan.Text;
@@ -10929,7 +11008,12 @@ internal sealed class BridgeEngineModel(
             var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
             var contextUsage = UsageTotals_Reader.Read_ContextUsage_OrNull(usageFile);
 
-            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false, contextUsage));
+            // The model and effort the session itself reports, as master read them (2026-09-09): the
+            // probe is the truth, because a session respawned before an override landed still runs the
+            // old one. Read whatever `pulse.fields` says — whether to DRAW it is the builder's call.
+            var modelReading = UsageTotals_Reader.Read_ModelReading_OrNull(usageFile);
+
+            members.Add(Telegram.TopicStatusMember.TopicStatusMember_Factory.Create(member.MemberId, entries, isClosed: false, contextUsage, modelReading));
         }
 
         return members;
@@ -11116,7 +11200,7 @@ internal sealed class BridgeEngineModel(
             _topicNameRetryAfterUtc.Remove(session.OrchId);
 
             Take_KnownTopicMessageIds(messageThreadId);
-            Take_ReceiptMessageId_OrNull(messageThreadId);
+            _receipts.Take_Tick_OrNull(messageThreadId);
 
             // THE STATUS LINE IS FORGOTTEN HERE, DETERMINISTICALLY, beside the four resets that were
             // already doing this for everything else the old topic owned.
@@ -12257,7 +12341,11 @@ internal sealed class BridgeEngineModel(
             // the tick itself becomes the hold receipt, so the owner sees "✓ ⏸ holding · 1 message"
             // where the bare "✓" was, instead of a stale tick plus a second message.
             var heldAlready = _ownerDeliveryBuffer.Count_Pending(targetKey);
-            var existingTickId = Take_ReceiptMessageId_OrNull(message.MessageThreadId);
+
+            // ONE HOLD, ONE RECEIPT (Task 6c fix round 1): a WAIT while the hold has a receipt redraws that one
+            // (if its count moved) — a second "⏸ holding" stranded the first for ever.
+            var (standingReceiptId, redraw) = HoldTap_Decider.Resolve_WaitReceipt(
+                tappedReceiptId: null, _receipts.Find_HoldReceipt_OrNull(message.MessageThreadId), heldAlready);
 
             try
             {
@@ -12265,13 +12353,24 @@ internal sealed class BridgeEngineModel(
 
                 // The typed WAIT gets the same ▶ GO button the tapped one does. Two ways in, one way
                 // out: an owner who typed WAIT should not have to type GO because the button only
-                // appears on the path they did not take.
-                (string Data, string Label)[] releaseButton =
-                    [(HoldButton_Data.Build(HoldButtonActions.Go, message.MessageThreadId), HoldButton_Data.GO_LABEL)];
+                // appears on the path they did not take. With the toggle on PULSE, that way out is
+                // PULSE's own ▶ GO, and this acknowledgement carries none (plan 03 Task 5).
+                var releaseButton = ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, message.MessageThreadId, Is_HoldToggleOnTheBar());
 
-                if (existingTickId != null)
+                if (standingReceiptId != null)
                 {
-                    await client.Edit_MessageTextWithButtons_Async(existingTickId.Value, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
+                    if (redraw)
+                    {
+                        await ReceiptEdit_Sender.Write_Async(
+                            _receipts, client, Describe_MessageOrch(message), standingReceiptId.Value, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
+                    }
+
+                    receiptId = standingReceiptId;
+                }
+                else if (_receipts.Take_Tick_OrNull(message.MessageThreadId) is { } existingTickId)
+                {
+                    await ReceiptEdit_Sender.Write_Async(
+                        _receipts, client, Describe_MessageOrch(message), existingTickId, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
                     receiptId = existingTickId;
                 }
                 else
@@ -12279,10 +12378,7 @@ internal sealed class BridgeEngineModel(
                     receiptId = await client.Send_MessageWithButtons_Async(message.MessageThreadId, Build_HoldReceiptText(heldAlready), releaseButton, TelegramSendSounds.Silent, cancellationToken);
                 }
 
-                lock (_ownerStateLock)
-                {
-                    _holdReceipts[targetKey] = new HoldReceipt { MessageId = receiptId, HeldCount = heldAlready };
-                }
+                _receipts.Remember_HoldReceipt(message.MessageThreadId, receiptId, heldAlready);
             }
             catch (OperationCanceledException)
             {
@@ -12298,19 +12394,23 @@ internal sealed class BridgeEngineModel(
 
         if (OwnerControlWords.Is_Go(message.Text))
         {
-            _ownerDeliveryBuffer.Release(targetKey);
+            // FINISHED BEFORE THE RELEASE, like every GO (IReceiptRegistry.Finish_Hold has why).
+            var (finishedAHoldReceipt, holdReceiptToRewrite) = _receipts.Finish_Hold(
+                message.MessageThreadId, deliveringHeldMessages: _ownerDeliveryBuffer.Count_Pending(targetKey) > 0);
 
-            lock (_ownerStateLock)
-            {
-                _holdReceipts.Remove(targetKey);
-            }
+            _ownerDeliveryBuffer.Release(targetKey);
 
             _log.Log_Info(Describe_MessageOrch(message), "Owner sent GO — releasing held messages");
 
-            // The receipt the owner did not get per message, now that the thought is complete. It
-            // reacts to the GO message itself — which is the last thing they sent, so the mark
-            // lands where they are looking, exactly as it does for an ordinary message.
-            await Send_ReceivedAck_Async(client, message, cancellationToken);
+            if (holdReceiptToRewrite != null)
+                await Rewrite_HoldButtonMessage_BestEffort_Async(client, holdReceiptToRewrite.Value, HoldButtonActions.Go, message.MessageThreadId, heldCount: 0, cancellationToken);
+
+            // THE GO WORD IS A CONTROL WORD, NOT CONTENT (ruling R19, Task 6c fix round 1): when it ended a hold
+            // with a receipt, its effect is shown THERE — adopted and ✓✓ under classic, back to a ✓ beside a 👀 —
+            // and a ✓ (or 👀) of its own was a second receipt for one hold, which is what left the first saying
+            // "⏸ holding". A GO with no hold receipt to finish still gets the mark where the owner is looking.
+            if (!finishedAHoldReceipt)
+                await Send_ReceivedAck_Async(client, message, cancellationToken);
 
             // Deliver HERE rather than waiting for the next mirror tick. GO means "I am done
             // typing", so every millisecond after it is dead time — and the tick is up to 2 s away.
@@ -13177,27 +13277,22 @@ internal sealed class BridgeEngineModel(
         var (action, threadId) = parsed.Value;
         var targetKey = Resolve_TargetChannelFile_OrNull(threadId);
 
+        // Read BEFORE the tap acts, because the answer goes first: a GO onto an empty, unheld buffer is
+        // a Send now on a message that already left, and says so (HoldTap_Decider, plan 03 Task 6b).
+        var holdingBeforeTheTap = targetKey != null && _ownerDeliveryBuffer.Is_Holding(targetKey);
+        var pendingBeforeTheTap = targetKey == null ? 0 : _ownerDeliveryBuffer.Count_Pending(targetKey);
+
         // ANSWERED FIRST, WHATEVER HAPPENS NEXT: an unanswered callback leaves the button spinning
         // on the phone, which reads as the app being dead at the exact moment they are asking it to
         // stop something.
         await Answer_CallbackTap_BestEffort_Async(
-            client, tap.CallbackQueryId, targetKey == null ? "no orchestration in this topic" : "✓", cancellationToken);
+            client,
+            tap.CallbackQueryId,
+            HoldTap_Decider.Describe_Answer(targetKey != null, action, pendingBeforeTheTap, holdingBeforeTheTap),
+            cancellationToken);
 
         if (targetKey == null)
             return true;
-
-        if (action == HoldButtonActions.Hold)
-        {
-            _ownerDeliveryBuffer.Hold(targetKey, DateTime.UtcNow);
-            _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped WAIT — delivery held until GO");
-        }
-        else
-        {
-            _ownerDeliveryBuffer.Release(targetKey);
-            _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped GO — releasing held messages");
-        }
-
-        var heldCount = _ownerDeliveryBuffer.Count_Pending(targetKey);
 
         // THE STATUS LINE IS NOT A RECEIPT, AND A TAP ON IT MUST NOT REWRITE IT (brief D).
         //
@@ -13213,31 +13308,41 @@ internal sealed class BridgeEngineModel(
         var tappedTheStatusLine = tap.MessageId != null
             && _store.Find_ByTelegramTopicId_OrNull(threadId ?? 0)?.StatusLineMessageId == tap.MessageId;
 
-        if (tap.MessageId != null && !tappedTheStatusLine)
+        if (action == HoldButtonActions.Hold)
         {
-            lock (_ownerStateLock)
-            {
-                if (action == HoldButtonActions.Hold)
-                    _holdReceipts[targetKey] = new HoldReceipt { MessageId = tap.MessageId, HeldCount = heldCount };
-                else
-                    _holdReceipts.Remove(targetKey);
-            }
+            _ownerDeliveryBuffer.Hold(targetKey, DateTime.UtcNow);
+            _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped WAIT — delivery held until GO");
 
-            await Rewrite_HoldButtonMessage_BestEffort_Async(client, tap.MessageId.Value, action, threadId, heldCount, cancellationToken);
+            // ONE HOLD, ONE RECEIPT (Task 6c fix round 1): a ⏸ while the hold has a receipt is about that one.
+            var heldCount = _ownerDeliveryBuffer.Count_Pending(targetKey);
+            var (receiptId, redraw) = HoldTap_Decider.Resolve_WaitReceipt(
+                tappedTheStatusLine ? null : tap.MessageId, _receipts.Find_HoldReceipt_OrNull(threadId), heldCount);
+
+            if (receiptId == null)
+                return true;
+
+            _receipts.Remember_HoldReceipt(threadId, receiptId, heldCount);
+
+            if (redraw)
+                await Rewrite_HoldButtonMessage_BestEffort_Async(client, receiptId.Value, action, threadId, heldCount, cancellationToken);
+
+            return true;
         }
-        else if (action == HoldButtonActions.Go)
-        {
-            // A hold entered from the bar has no receipt message, so there is nothing to forget
-            // except the entry itself — left behind, it would make Update_HoldReceipt_Async keep
-            // rewriting a message that no longer represents a hold.
-            lock (_ownerStateLock)
-                _holdReceipts.Remove(targetKey);
-        }
+
+        // A GO — on a ✓ (▶ Send now), on the hold receipt, or on PULSE — FINISHES THE HOLD'S RECEIPT, and
+        // BEFORE the release (the review's m6): see IReceiptRegistry.Finish_Hold. What it did not adopt goes
+        // back to being a ✓; nothing else is rewritten, so a Send now on a ✓ spends none of that ✓'s edits.
+        var (_, holdReceiptToRewrite) = _receipts.Finish_Hold(threadId, deliveringHeldMessages: pendingBeforeTheTap > 0);
+
+        _ownerDeliveryBuffer.Release(targetKey);
+        _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped GO — releasing held messages");
+
+        if (holdReceiptToRewrite != null)
+            await Rewrite_HoldButtonMessage_BestEffort_Async(client, holdReceiptToRewrite.Value, action, threadId, heldCount: 0, cancellationToken);
 
         // GO means "I am done typing", so the wait for the next mirror tick — up to 2 s — is dead
         // time. Same reasoning as the typed GO, which flushes immediately for exactly this reason.
-        if (action == HoldButtonActions.Go)
-            await Flush_OwnerDeliveries_Async(cancellationToken);
+        await Flush_OwnerDeliveries_Async(cancellationToken);
 
         return true;
     }
@@ -13245,16 +13350,18 @@ internal sealed class BridgeEngineModel(
     async Task Rewrite_HoldButtonMessage_BestEffort_Async(
         ITelegramApiClient client, long messageId, HoldButtonActions action, long? threadId, int heldCount, CancellationToken cancellationToken)
     {
-        // After a HOLD the button becomes the release; after a GO it goes back to offering a hold,
-        // because the next message is already on its way and they may want to stop that one too.
-        var nextAction = action == HoldButtonActions.Hold ? HoldButtonActions.Go : HoldButtonActions.Hold;
-        var nextLabel = action == HoldButtonActions.Hold ? HoldButton_Data.GO_LABEL : HoldButton_Data.HOLD_LABEL;
+        // After a HOLD the button becomes the release; after a GO the receipt is a ✓ again and offers both
+        // directions — ⏸ Wait and ▶ Send now — because the next message may be one to hold or one to send.
         var text = action == HoldButtonActions.Hold ? Build_HoldReceiptText(heldCount) : "✓";
 
         try
         {
-            await client.Edit_MessageTextWithButtons_Async(
-                messageId, text, [(HoldButton_Data.Build(nextAction, threadId), nextLabel)], cancellationToken);
+            // Through the one placement, like every receipt-side hold button (plan 03 Task 5): a receipt
+            // drawn before the toggle moved to PULSE loses its button here rather than keep a second copy.
+            // Through the receipt's slot, like every receipt edit (Task 6c): a held rewrite waits, never drops.
+            await ReceiptEdit_Sender.Write_Async(
+                _receipts, client, Describe_ThreadOrch(threadId), messageId, text,
+                ReceiptButtons_Builder.Build_AfterTap(action, threadId, Is_HoldToggleOnTheBar()), cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -13273,7 +13380,8 @@ internal sealed class BridgeEngineModel(
     ///
     /// It calls the SAME method the typed command calls. A second implementation of /show that only
     /// buttons could reach is precisely how a button and the command it names come to mean different
-    /// things — the hazard this repo has already paid for once with /progress and /left.
+    /// things — the hazard this repo has already paid for once with /progress and /left. A verb with no
+    /// case below goes to the typed chain itself (the default arm, ruling R16).
     /// </summary>
     async Task<bool> Try_HandleTopicCommandTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
     {
@@ -13312,8 +13420,8 @@ internal sealed class BridgeEngineModel(
 
             // THE FOUR THE OWNER PUT ON THE BAR (2026-09-09). Each already existed as a TYPED
             // command; what was missing was a tap route to it, and EveryTopicButtonIsWiredTests is
-            // the thing that noticed — it walks TopicCommandButtons.Commands and demands a case here
-            // for every button the bar renders.
+            // the thing that noticed — it walks every verb an owner may configure (plan 03 Task 5)
+            // and holds this switch to TopicCommandButtons' tap-routed set in both directions.
             case "pending":
                 await Send_PendingDecisions_Async(client, threadId, cancellationToken);
                 return true;
@@ -13372,16 +13480,41 @@ internal sealed class BridgeEngineModel(
                 await Resume_AllSessions_Async(client, threadId, cancellationToken);
                 return true;
 
+            // THE FOUR DELIVERY-MODE TOGGLES — /dnd_all since 2026-09-10, the other three since plan 03
+            // Task 5b. A case rather than the fallback below because the typed chain DEFERS these (see
+            // Try_RunOwnerCommand_Async), so the chain has nothing to hand them to.
+            case "dnd":
+            case "mute":
+            case "mute_all":
             case "dnd_all":
                 // THE LITERAL COMMAND STRING, because that is the argument this method takes: it
                 // derives the wanted mode from the "mute"/"dnd" stem and the app-wide scope from the
                 // "_all" suffix. Passing the string the button already carries keeps the tap and the
-                // typed command on one implementation.
+                // typed command on one implementation — and a bare /dnd or /mute tapped in General
+                // (thread null) takes the app-wide path exactly as typed there.
                 //
                 // NOT deferred the way the typed command is. That deferral keeps the toggle from
                 // racing the ✓ acks of the batch it arrived in — this tap was acknowledged above,
                 // before the switch, so there is nothing left to race. Same reasoning as /pc.
-                await Apply_ModeCommand_Async(client, "dnd_all", threadId, cancellationToken);
+                await Apply_ModeCommand_Async(client, parsed.Value.Command, threadId, cancellationToken);
+                return true;
+
+            // /pause AND /progress ARE CLASSIC'S LAST ROW — master's buttons of 2026-09-09 (a2c9a3d, the
+            // owner's request), whose cases the fork merge dropped with the bar they belonged to. Once
+            // `pulse.buttons` made classic's bar drawable again, the widened wiring guard found both
+            // missing (plan 03 Task 5); they are re-ported here verbatim in behaviour.
+            case "pause":
+                // The button and the typed command are the same act, so they share the method —
+                // including its re-assert window, which is what makes a mistap here cheap: tapping
+                // 💤 twice leaves the topic paused rather than silently waking it.
+                await Toggle_Paused_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "progress":
+                // READ-ONLY, and the reason it is the pause button's partner rather than a second
+                // thing that changes state next to /close. The command already existed; this is the
+                // wiring, and it answers the question the owner asks most often.
+                await Send_ProgressReport_Async(client, threadId, "progress", cancellationToken);
                 return true;
 
             case "close":
@@ -13402,8 +13535,17 @@ internal sealed class BridgeEngineModel(
                 return true;
 
             default:
-                // Our prefix, a command this build does not render: a bar left on a message by an
-                // older build. Swallowing it silently would be a button that does nothing forever.
+                // EVERY OTHER VERB IS THE TYPED COMMAND (plan 03 Task 5b, ruling R16): dispatched exactly as if
+                // the owner had typed "/<verb>" in the topic the button sat in — the same lexer, the same
+                // chain, the same thread — so /cost, /model, /switch and the rest are one implementation
+                // whichever way they arrive, and the owner can put any of them on a bar.
+                var typedText = Telegram.TopicCommandButtons.Build_TypedCommandText(parsed.Value.Command);
+
+                if (await Try_RunOwnerCommand_Async(client, Get_BotCommand_OrNull(typedText)!, threadId, typedText, cancellationToken))
+                    return true;
+
+                // Our prefix, a command no chain runs: a bar left on a message by an older build.
+                // Swallowing it silently would be a button that does nothing forever.
                 _log.Log_Warning(GLOBAL_ORCH_ID, $"Topic command button '{parsed.Value.Command}' is not one this build offers — ignored.");
                 await Send_DirectReply_BestEffort_Async(client, threadId, $"That button (/{parsed.Value.Command}) is from an older version of the app — send the command instead.", cancellationToken);
                 return true;
@@ -13439,33 +13581,26 @@ internal sealed class BridgeEngineModel(
     async Task Update_HoldReceipt_Async(
         ITelegramApiClient client, Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
     {
-        var targetKey = Resolve_TargetChannelFile_OrNull(message);
+        // The count lives with the hold's receipt in the registry (Task 6c fix round 1), under the tick's lock.
+        var receipt = _receipts.Count_HeldMessage_OrNull(message.MessageThreadId);
 
-        if (targetKey == null)
-            return;
-
-        HoldReceipt? receipt;
-
-        lock (_ownerStateLock)
-        {
-            if (!_holdReceipts.TryGetValue(targetKey, out receipt))
-                return;
-
-            receipt.HeldCount++;
-        }
-
-        if (receipt.MessageId == null)
+        if (receipt == null)
             return;
 
         try
         {
             // WITH the release button: a plain edit sends no reply_markup, which Telegram reads as
             // "remove the keyboard" — so counting up the held messages would silently take away the
-            // ▶ GO the owner is meant to press.
-            await client.Edit_MessageTextWithButtons_Async(
-                receipt.MessageId.Value,
-                Build_HoldReceiptText(receipt.HeldCount),
-                [(HoldButton_Data.Build(HoldButtonActions.Go, message.MessageThreadId), HoldButton_Data.GO_LABEL)],
+            // ▶ GO the owner is meant to press. Unless the toggle lives on PULSE (plan 03 Task 5).
+            // THROUGH THE RECEIPT'S SLOT (Task 6c): a count-up inside the gap waits for the door, and a later
+            // one replaces it there — the owner is shown the newest count, never an older one landing late.
+            await ReceiptEdit_Sender.Write_Async(
+                _receipts,
+                client,
+                Describe_MessageOrch(message),
+                receipt.Value.MessageId,
+                Build_HoldReceiptText(receipt.Value.HeldCount),
+                ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, message.MessageThreadId, Is_HoldToggleOnTheBar()),
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -13708,12 +13843,6 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Deliver_OwnerMessage_Async(KeyValuePair<string, IReadyDelivery> delivery, CancellationToken cancellationToken)
     {
-        // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
-        lock (_ownerStateLock)
-        {
-            _holdReceipts.Remove(delivery.Key);
-        }
-
         (string OrchId, long? ThreadId) target;
 
         lock (_deliveryLock)
@@ -13725,7 +13854,9 @@ internal sealed class BridgeEngineModel(
             }
         }
 
-        // WAIT RACES THE AGGREGATION WINDOW, and it was losing. The window is 4 seconds, so a message
+        // WAIT RACES THE AGGREGATION WINDOW, and it was losing. The window is the owner's
+        // phone.aggregationSeconds (4 s when this was written; 3 s shipped and 6 s under classic since
+        // 2026-09-23), so a message
         // is usually already TAKEN from the buffer by the time the owner types "wait" — and a take is
         // irreversible, so the hold set a moment later applied to nothing and the message went out
         // anyway. Measured on da-vinci-fintech-suite-6, 2026-08-15: buffered 08:36:47, WAIT accepted
@@ -13748,6 +13879,16 @@ internal sealed class BridgeEngineModel(
             _log.Log_Info(target.OrchId, "Owner message held mid-delivery — WAIT arrived after it left the buffer; it is back in the buffer until GO");
             return;
         }
+
+        // A HOLD THAT ENDED WITH NO GO TO FINISH IT is finished here, by the rule every GO uses
+        // (IReceiptRegistry.Finish_Hold) — a failure path's put-back Release is the one such end left; there
+        // is no idle cap, a hold ends only with Release. BELOW the "is it held?" check above, on purpose: a
+        // WAIT that arrived after this message left the buffer put it back, and that hold's receipt must
+        // survive or its count-ups and its GO would find nothing (this removal used to sit above the check).
+        var (_, holdReceiptToRewrite) = _receipts.Finish_Hold(target.ThreadId, deliveringHeldMessages: true);
+
+        if (holdReceiptToRewrite != null && _telegramClient != null)
+            await Rewrite_HoldButtonMessage_BestEffort_Async(_telegramClient, holdReceiptToRewrite.Value, HoldButtonActions.Go, target.ThreadId, heldCount: 0, cancellationToken);
 
         var deliveryText = delivery.Value.Text;
 
@@ -13931,15 +14072,12 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// THE RECEIPT IS A REACTION NOW — brief D. 👀 goes on the owner's OWN message the moment the
-    /// bridge has appended it; <see cref="Publish_DeliveryReceipt_Async"/> replaces it with 👌 when
-    /// a session picks it up. No bot message at all in the ordinary case.
+    /// <c>phone.receipts</c> CHOOSES THE RECEIPT (plan 03 Task 6; <see cref="ReceiptStyle_Decider"/>
+    /// has the two phones and why <c>ticks</c> never attempts the reaction). Under <c>reactions</c> 👀
+    /// goes on the owner's OWN message — brief D — and <see cref="Publish_DeliveryReceipt_Async"/> makes
+    /// it 👌 when a session picks it up. Under <c>ticks</c> the silent ✓ below is the receipt, and the
+    /// same method edits it to ✓✓.
     ///
-    /// <para>
-    /// After brief C the ✓ was already silent, but it was still a LINE IN THE TOPIC for every line
-    /// the owner wrote — fifteen of them in one export. A reaction sits on the thing it is about
-    /// and costs nothing.
-    /// </para>
     /// <para>
     /// THE FALLBACK IS THE OLD PATH, UNCHANGED, and it is not optional: Telegram answers 400 for a
     /// message it will not let a bot react to and 429 under load, and an acknowledgement that
@@ -13952,24 +14090,25 @@ internal sealed class BridgeEngineModel(
     {
         var messageThreadId = message.MessageThreadId;
 
-        if (message.MessageId != null && await Try_React_Async(client, message.MessageId.Value, OwnerReaction_Emoji.RECEIVED, cancellationToken))
+        if (ReceiptStyle_Decider.Should_TryReaction(_configProvider.Get_Current().Phone.Receipts, message.MessageId)
+            && await Try_React_Async(client, message.MessageId!.Value, OwnerReaction_Emoji.RECEIVED, cancellationToken))
         {
-            lock (_receiptLock)
-                _reactedOwnerMessageIdByThread[messageThreadId ?? 0] = message.MessageId.Value;
-
+            _receipts.Remember_Reaction(messageThreadId, message.MessageId.Value);
             return;
         }
 
         try
         {
-            // THE TICK CARRIES THE HOLD BUTTON, because it lands exactly where the owner is already
-            // looking — directly under what they just sent — and a tap beats typing WAIT by the
-            // seconds that decide whether the hold catches the message at all. Their words:
-            // "clicking a button is faster than typing wait."
+            // THE TICK CARRIES THE HOLD BUTTON WHEN THE TOGGLE LIVES ON THE RECEIPT, because it lands
+            // exactly where the owner is already looking — directly under what they just sent — and a
+            // tap beats typing WAIT by the seconds that decide whether the hold catches the message at
+            // all. Their words: "clicking a button is faster than typing wait." When the toggle lives on
+            // PULSE the tick carries none: one toggle in two places is decision 12 (plan 03 Task 5).
+            // ▶ Send now rides it either way — delivery, not the toggle (plan 03 Task 6b, ruling R2).
             var messageId = await client.Send_MessageWithButtons_Async(
                 messageThreadId,
                 "✓",
-                [(HoldButton_Data.Build(HoldButtonActions.Hold, messageThreadId), HoldButton_Data.HOLD_LABEL)],
+                ReceiptButtons_Builder.Build_ForTick(messageThreadId, Is_HoldToggleOnTheBar()),
 
                 // A RECEIPT NEVER RINGS. They sent the message it acknowledges a second ago — they
                 // are holding the phone. "I got it" as a notification is the purest form of the
@@ -13979,7 +14118,7 @@ internal sealed class BridgeEngineModel(
 
             if (messageId != null)
             {
-                Remember_ReceiptMessage(messageThreadId, messageId.Value);
+                _receipts.Remember_Tick(messageThreadId, messageId.Value);
                 Remember_TopicMessage(messageThreadId, messageId);
             }
         }
@@ -13990,14 +14129,6 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Received-ack send failed: {ex.Message}");
-        }
-    }
-
-    void Remember_ReceiptMessage(long? messageThreadId, long messageId)
-    {
-        lock (_receiptLock)
-        {
-            _receiptMessageIdByThread[messageThreadId ?? 0] = messageId;
         }
     }
 
@@ -14103,40 +14234,6 @@ internal sealed class BridgeEngineModel(
             // which is "send the tick instead".
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Reaction {emoji} on message {messageId} was refused ({ex.Message}) — falling back to the ✓ receipt");
             return false;
-        }
-    }
-
-    /// <summary>
-    /// The owner message wearing 👀 in this thread, if any, consumed on read — the reaction twin of
-    /// <see cref="Take_ReceiptMessageId_OrNull"/>, and consumed for the same reason: the next batch
-    /// gets its own receipt rather than overwriting one that has already been answered.
-    /// </summary>
-    long? Take_ReactedOwnerMessageId_OrNull(long? messageThreadId)
-    {
-        lock (_receiptLock)
-        {
-            var key = messageThreadId ?? 0;
-
-            if (!_reactedOwnerMessageIdByThread.TryGetValue(key, out var messageId))
-                return null;
-
-            _reactedOwnerMessageIdByThread.Remove(key);
-            return messageId;
-        }
-    }
-
-    long? Take_ReceiptMessageId_OrNull(long? messageThreadId)
-    {
-        lock (_receiptLock)
-        {
-            var key = messageThreadId ?? 0;
-
-            if (!_receiptMessageIdByThread.TryGetValue(key, out var messageId))
-                return null;
-
-            // Consumed: the next batch starts its own receipt rather than rewriting this one.
-            _receiptMessageIdByThread.Remove(key);
-            return messageId;
         }
     }
 
@@ -15270,7 +15367,8 @@ internal sealed class BridgeEngineModel(
                 // The ✓✓ has to survive the edit: the owner still needs to see their message landed.
                 var canvasText = isReceiptCanvas ? $"✓✓  ·  {text}" : text;
 
-                await _telegramClient.Edit_MessageText_Async(canvasMessageId.Value, canvasText, cancellationToken);
+                // Through the canvas's slot (Task 6c): the receipt's other writers edit it too, and last wins.
+                await ReceiptEdit_Sender.Write_Async(_receipts, _telegramClient, orchId, canvasMessageId.Value, canvasText, buttons: null, cancellationToken);
                 pending.NarrationMessageId = canvasMessageId;
             }
             else
@@ -15415,13 +15513,13 @@ internal sealed class BridgeEngineModel(
     /// terminal completes the operation and stops, and I haven't received anything telling me
     /// 'done'."*
     ///
-    /// WHAT THIS USED TO DO AND NO LONGER NEEDS TO. A session's closing report ("merged, 214 tests
-    /// green") was narration by shape — no question, no marker — so OwnerPush_Policy suppressed it,
-    /// and this method rescued it from the suppressed-entry store to serve as the completion the
-    /// owner had asked for. Nothing is suppressed since 2026-09-09: the report reaches them, rung
-    /// and rendered, at the moment it is written. So what is left here is the tick itself, which is
-    /// the app saying the turn ended — silent, and only when it says something the owner does not
-    /// already have.
+    /// WHAT THIS DOES DEPENDS ON <c>phone.push</c> (plan 03). A session's closing report ("merged, 214
+    /// tests green") is narration by shape — no question, no marker — so under <c>filtered</c>
+    /// OwnerPush_Policy holds it, and Build_TurnEndedText hands it over from the suppressed-entry store
+    /// as the completion the owner asked for. Under <c>everything</c> nothing is held: the report
+    /// reaches them, rung and rendered, at the moment it is written, and what is left is the tick
+    /// itself — the app saying the turn ended, silent, and only when it says something the owner does
+    /// not already have.
     /// </summary>
     /// <summary>
     /// The FIRST busy line when the receipt was a reaction, so there is nothing to edit yet. Silent,
@@ -15447,7 +15545,20 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    (string? Text, bool IsCompletion) Build_TurnEndedText(string orchId, PendingOwnerReply pending)
+    /// <param name="pushMode">The channel's resolved <c>phone.push</c>, read by the caller at the point of effect.</param>
+    /// <param name="heldForTheDigest">
+    /// What <c>phone.push = filtered</c> held since the owner spoke, ALREADY DRAINED by the caller — so
+    /// it is spent whatever this method decides to say.
+    /// </param>
+    /// <returns>
+    /// The text (null: send nothing), whether it is a completion, and the sound it is SENT with — which
+    /// rings exactly when the text carries held words (ruling R8). An edit carries no sound whatever this says.
+    /// </returns>
+    (string? Text, bool IsCompletion, TelegramSendSounds Sound) Build_TurnEndedText(
+        string orchId,
+        PendingOwnerReply pending,
+        PhonePushModes pushMode,
+        IReadOnlyList<(string? Subject, string Text)> heldForTheDigest)
     {
         var speaker = Describe_Speaker(orchId);
 
@@ -15459,37 +15570,63 @@ internal sealed class BridgeEngineModel(
             // edit of that tick, which makes the reference doubly wrong.
             var prefix = pending.ReceiptWasReaction ? "" : "✓✓  ·  ";
 
-            return ($"{prefix}{speaker}: turn ended — free now, they are reading this", false);
+            return ($"{prefix}{speaker}: turn ended — free now, they are reading this", false, TelegramSendSounds.Silent);
         }
 
-        // THE "LAST WORDS" HALF IS GONE WITH THE FILTER (2026-09-09). It existed to rescue a
-        // closing report that OwnerPush_Policy had suppressed as narration — and nothing is
-        // suppressed any more, so by the time a turn ends the owner has ALREADY read those words,
-        // rung, rendered, at the moment they were written. Replaying them under a "turn ended" line
-        // would be the same message twice.
-        string? lastWords = null;
+        // THE "LAST WORDS" HALF IS BACK WITH THE FILTER (plan 03, phone.push = filtered). A session's
+        // closing report ("merged, 214 tests green") is narration by shape, so the filter held it, and
+        // at the end of the turn the owner was waiting on it is exactly what they are owed — ALL of
+        // what was held, in order, not the last line (2026-09-10: the last line was the status line,
+        // and the answer was lost).
+        //
+        // UNDER EVERYTHING IT STAYS NULL, exactly as it was while that mode was the only build:
+        // nothing is held there, so by the time a turn ends the owner has ALREADY read those words,
+        // rung, rendered — replaying them would be the same message twice. A digest held under
+        // filtered and outlived by a switch to everything is dropped here, never sent late.
+        var lastWords = pushMode == PhonePushModes.Filtered
+            ? SuppressedDigest_Builder.Build_OrNull(heldForTheDigest)
+            : null;
 
         // ANSWERED, AND NOTHING WAS LEFT UNSAID: the answer the owner is reading IS the completion,
         // and the bubble going down under it says the turn ended. "done for now — turn ended" after
         // it was the second of two status messages per exchange (owner, 2026-09-07). Null, not a
         // line: the caller sends nothing.
         if (string.IsNullOrWhiteSpace(lastWords))
-            return (null, true);
+            return (null, true, TelegramSendSounds.Silent);
 
         // The entry's own text carries its speaker glyph already, so this adds only the fact the
         // owner cannot see from it: that the session has STOPPED, rather than being mid-sentence.
-        return ($"{lastWords}\n\n✓✓  ·  turn ended — {speaker} is free", true);
+        //
+        // IT RINGS (ruling R8). These are the supervisor's own words reaching the owner for the FIRST
+        // time — the filter held them, so they never rang when they were written — and the common case
+        // is the one the completion exists for: "on it" spent the credit, the closing report ("merged,
+        // 214 green") was held, and this message is the only way the finished job reaches them. Sent
+        // silent, it reached them as silence.
+        return ($"{lastWords}\n\n✓✓  ·  turn ended — {speaker} is free", true, TelegramSendSounds.Rings);
     }
 
     async Task Announce_SupervisorFree_Async(string orchId, PendingOwnerReply pending, CancellationToken cancellationToken)
     {
+        // THE DIGEST IS DRAINED AT TURN END WHETHER OR NOT ANYTHING IS SENT — ahead of both early
+        // returns and of every "say nothing" branch below. This method runs once per turn the owner
+        // waited on (the caller latches TurnEndAnnounced first), so a digest left behind here would sit
+        // until some LATER turn end and arrive there hours out of context — after a mode change, a
+        // muted topic, or a turn that ended unanswered.
+        var heldForTheDigest = _suppressedEntries.Drain(orchId);
+
         if (_telegramClient == null)
             return;
 
         if (Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
-            return;
+        {
+            if (heldForTheDigest.Count > 0)
+                _log.Log_Info(orchId, $"Turn ended with {heldForTheDigest.Count} held entries for the digest, not sent — the topic is not in normal delivery; they remain in the channel file");
 
-        var (turnEndedText, isCompletion) = Build_TurnEndedText(orchId, pending);
+            return;
+        }
+
+        var pushMode = OwnerPush_Policy.Resolve_ModeForChannel(_configProvider.Get_Current().Phone.Push, orchId);
+        var (turnEndedText, isCompletion, turnEndedSound) = Build_TurnEndedText(orchId, pending, pushMode, heldForTheDigest);
 
         if (turnEndedText == null)
         {
@@ -15533,10 +15670,21 @@ internal sealed class BridgeEngineModel(
                 // RENDERED (owner's decision, 2026-09-09). This is the second of the two paths that
                 // RESEND WHAT THE SUPERVISOR ALREADY WROTE — a completion carries their last words
                 // above the tick — and it went out as plain text, so their Markdown arrived with the
-                // markers showing. It is also silent: the words themselves already rang when they
-                // were mirrored; this is the app saying the turn ended.
+                // markers showing.
+                //
+                // THE SOUND IS BUILD_TURNENDEDTEXT'S, and it follows the held words (ruling R8). A
+                // completion carrying them RINGS: under phone.push = filtered those words were held
+                // when written, so they have never rung — the earlier "on it" that spent the credit is
+                // not them — and a finished job must not reach the owner as silence. Everything else
+                // this block sends is SILENT: under everything nothing is held, the words already rang
+                // when they were mirrored, and an unanswered turn's line is the app talking about
+                // itself. phone.appMessagesRing is NOT read here (plan 03 Task 3, D7 answer (b)): it
+                // governs the sound of mirrored entries (EntrySound_Resolver), and neither shipped
+                // preset reaches this completion with it false — quiet holds nothing, so it never has
+                // held words to carry. WhoRingsUnderEachPresetTests pins both: the ring of a completion
+                // carrying held words under classic, and a bare turn end sending nothing under quiet.
                 await TelegramProse_Sender.Send_Async(
-                    _telegramClient, _log, orchId, pending.ThreadId, turnEndedText, TelegramSendSounds.Silent, cancellationToken);
+                    _telegramClient, _log, orchId, pending.ThreadId, turnEndedText, turnEndedSound, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -15552,7 +15700,8 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await _telegramClient.Edit_MessageText_Async(canvasMessageId.Value, turnEndedText, cancellationToken);
+            // Through the canvas's slot (Task 6c): a turn end inside the gap of the ✓✓ waits for the door.
+            await ReceiptEdit_Sender.Write_Async(_receipts, _telegramClient, orchId, canvasMessageId.Value, turnEndedText, buttons: null, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -15811,7 +15960,7 @@ internal sealed class BridgeEngineModel(
             try
             {
                 if (nudgeCanvasMessageId != null)
-                    await _telegramClient.Edit_MessageText_Async(nudgeCanvasMessageId.Value, text, cancellationToken);
+                    await ReceiptEdit_Sender.Write_Async(_receipts, _telegramClient, orchId, nudgeCanvasMessageId.Value, text, buttons: null, cancellationToken);
                 else
                     await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, text, cancellationToken);
             }
@@ -15863,7 +16012,7 @@ internal sealed class BridgeEngineModel(
         // fallback path only. A reaction that has since become unsettable (the owner deleted the
         // message) falls through to that path, which sends nothing unless the caller said the text
         // carries information, so a lost 👌 costs the glyph and never a new line in the topic.
-        var reactedMessageId = Take_ReactedOwnerMessageId_OrNull(messageThreadId);
+        var reactedMessageId = _receipts.Take_Reaction_OrNull(messageThreadId);
 
         if (reactedMessageId != null
             && await Try_React_Async(client, reactedMessageId.Value, OwnerReaction_Emoji.PICKED_UP, cancellationToken))
@@ -15871,13 +16020,16 @@ internal sealed class BridgeEngineModel(
             return (null, true);
         }
 
-        var messageId = Take_ReceiptMessageId_OrNull(messageThreadId);
+        var messageId = _receipts.Take_Tick_OrNull(messageThreadId);
 
         if (messageId != null)
         {
             try
             {
-                await client.Edit_MessageText_Async(messageId.Value, text, cancellationToken);
+                // A HELD DOOR IS NOT A FAILED EDIT (plan 03 Task 6c): after a ⏸ Wait this ✓✓ is the message's
+                // second edit inside the per-message gap. The slot keeps it until the door opens (ReceiptEdit_Sender
+                // has the account) and the ✓'s id is returned either way — it IS this exchange's receipt.
+                await ReceiptEdit_Sender.Write_Async(_receipts, client, GLOBAL_ORCH_ID, messageId.Value, text, buttons: null, cancellationToken);
                 return (messageId, false);
             }
             catch (OperationCanceledException)

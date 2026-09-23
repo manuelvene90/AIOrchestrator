@@ -507,16 +507,12 @@ public static class SettingsCatalog
 
         kernel.Add(SettingDefinition_Factory.Create_String(
             path: "web.listen",
-
-            // READ BY NOTHING IN THIS PLAN. The HTTP listener that will consume it is plan 04; the key
-            // is registered now so the resolver, the presets and the renderers have one spelling of it
-            // from the start rather than acquiring one later.
             shippedDefault: "127.0.0.1:7391",
             scope: SettingScopes.Machine,
             category: SettingCategories.Kernel,
             label: "Web listen address",
             description:
-                "host:port the settings web page will listen on, or 'off'. READ BY NOTHING YET — the listener is plan 04. " +
+                "host:port the settings web page listens on, or 'off'. " +
                 "The loopback default is deliberate: the page has no authentication of its own beyond web.token.",
             restart: RestartKinds.Host,
             validator: SettingValidators.LISTEN_ADDRESS));
@@ -527,8 +523,11 @@ public static class SettingsCatalog
             scope: SettingScopes.Machine,
             category: SettingCategories.Kernel,
             label: "Web token",
-            description: "The shared secret the settings web page will require. READ BY NOTHING YET — the listener is plan 04.",
-            restart: RestartKinds.Host));
+            description: "The shared secret the settings web page requires.",
+
+            // NOT Host (ruling P37, 2026-09-23): the listener re-reads it whenever config.json changes, so a token set
+            // by hand is enforced on the next request — a restart label here would tell the owner to do a needless one.
+            restart: RestartKinds.None));
 
         kernel.Add(SettingDefinition_Factory.Create_Composite(
             path: "repos",
@@ -538,7 +537,9 @@ public static class SettingsCatalog
             label: "Repositories",
             description:
                 "The repo list, a structure rather than a value — name, path and topic colour per entry. Shown read-only " +
-                "here because its own editor already exists; the named parser is the authority on its shape.",
+                "here because it is changed elsewhere: in the desktop app's main window, whose REPOSITORIES list is dragged " +
+                "to reorder, with entries added by the installer or by hand in config.json. The named parser is the " +
+                "authority on its shape.",
             restart: RestartKinds.Host));
 
         kernel.Add(SettingDefinition_Factory.Create_Composite(
@@ -548,8 +549,9 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Plan backend",
             description:
-                "Where the task ledger lives — a structure with its own kind and per-kind fields. Read-only here; the " +
-                "named parser is the authority, and a mistyped kind stays LOUD there rather than quietly becoming a default.",
+                "Where the task ledger lives — a structure with its own kind and per-kind fields. Read-only here: it is " +
+                "hand-edited in config.json, and no window or command writes it. The named parser is the authority, and a " +
+                "mistyped kind stays LOUD there rather than quietly becoming a default.",
             restart: RestartKinds.Host));
 
         kernel.AddRange(Build_SessionState());
@@ -631,8 +633,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Phone,
                 label: "What reaches the phone",
                 description:
-                    "'filtered' pushes only what asks, is blocked, carries a picture, or is THE answer (OwnerPush_Policy); " +
-                    $"'everything' mirrors every owner-channel entry. {INERT_NOTE}",
+                    "'filtered' pushes only what asks, is blocked, carries a picture, or is THE answer (OwnerPush_Policy), " +
+                    "and hands the rest over as one message when the turn the owner waited on ends; " +
+                    "'everything' mirrors every owner-channel entry. Orchestration topics only — General always gets everything.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
@@ -662,8 +665,10 @@ public static class SettingsCatalog
                 category: SettingCategories.Phone,
                 label: "App messages ring",
                 description:
-                    "Whether the app's own messages arrive with a notification or silently. An agent's question always " +
-                    $"rings; this governs the app's narration around it. {INERT_NOTE}",
+                    "Whether your supervisor's (or solo's) narration rings as it arrives. When off, only a question, a " +
+                    "BLOCKED ON OWNER, a file, the boot greeting and the answer to what you asked ring; the rest arrives " +
+                    "silently. Under phone.push = filtered, narration held for the turn-end summary still rings once, " +
+                    "with that summary. Receipts, the busy line and a bare turn-ended line are silent either way.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Enum(
@@ -679,31 +684,80 @@ public static class SettingsCatalog
                     $"and disables the icon that collapses it (CLAUDE.md decision 24). {INERT_NOTE}",
                 restart: RestartKinds.Host),
 
+            // THE AGGREGATION WINDOW AND ITS DISCOUNT (plan 03 task 13, owner 2026-09-23: "it should be a
+            // buffer of 6 seconds, giving me the time to press wait if I need"). The shipped values are
+            // today's — the fork's 3 s / 2 s (bb91051a, 2026-09-09) — and classic states the owner's 6 s
+            // with no discount. The reasoning behind each number lives on the constant it reads, one copy.
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.AGGREGATION_SECONDS_PATH,
+                shippedDefault: Bridge.OwnerDeliveryBuffer.OwnerDeliveryBuffer_Factory.DEFAULT_AGGREGATION_SECONDS,
+
+                // ONE, NOT ZERO: OwnerDeliveryBuffer refuses a window under a second, and a window of zero
+                // is a message taken on the tick it lands — out of reach of ⏸ and one turn per message.
+                minimum: 1,
+                maximum: 60,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Message aggregation window (seconds)",
+                description:
+                    "How long the app holds a message you send before handing it to the session. Longer gives you " +
+                    "time to press ⏸ Wait under the receipt — the hold only reaches a message still in the buffer — " +
+                    "and lets a burst of typing arrive as ONE turn instead of one each (a turn costs roughly a million " +
+                    "input tokens, measured 2026-09-09); shorter makes a lone message reach the session sooner. " +
+                    "▶ Send now skips it for one message.",
+                restart: RestartKinds.None),
+
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.FINISHED_MESSAGE_SECONDS_PATH,
+                shippedDefault: Bridge.OwnerDeliveryBuffer.OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS,
+
+                // ZERO IS LEGAL here and only here: it is "a finished message leaves on the next tick".
+                // Never longer than the window — OwnerDeliveryBufferModel clamps it at the point of use.
+                minimum: 0,
+                maximum: 60,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Finished-message window (seconds)",
+                description:
+                    "The shorter wait a single message that reads as finished ('ok, go ahead.') serves instead of the " +
+                    "aggregation window. A discount only while it is the shorter of the two — a value above the window " +
+                    "is served as the window. Equal to the window means no discount: every message stays reachable by " +
+                    "⏸ Wait for the whole window, which is the owner's classic choice (2026-09-23).",
+                restart: RestartKinds.None),
+
             SettingDefinition_Factory.Create_Int(
                 path: "phone.foldLongEntriesAbove",
                 shippedDefault: OwnerMessage_Folder.DEFAULT_FOLD_THRESHOLD,
-                minimum: 1,
+
+                // 0, NOT 1: 0 is the owner's OFF SWITCH (OwnerMessage_Folder — the delivery that predates
+                // the fold), pinned by TelegramProseSettingsJsonTests and LongEntriesFoldOnThePhoneTests.
+                // A floor of 1 was harmless while nothing resolved this row; the day
+                // TelegramProseSettings_Json began resolving it (2026-09-14) it would have turned a
+                // hand-edited 0 into 900.
+                minimum: 0,
                 maximum: 10000,
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Fold long entries above (characters)",
                 description:
-                    "Characters above which an entry is folded on the phone rather than sent whole. Re-homed from " +
-                    $"'telegram.foldLongEntriesAbove', which still resolves as an alias. {INERT_NOTE}",
+                    "Characters above which an entry is folded on the phone rather than sent whole; 0 turns folding off. " +
+                    "Re-homed from 'telegram.foldLongEntriesAbove', which still resolves as an alias.",
                 restart: RestartKinds.None,
                 legacyPath: $"{TelegramProseSettings.TelegramProseSettings_Json.TELEGRAM_KEY}.{TelegramProseSettings.TelegramProseSettings_Json.FOLD_LONG_ENTRIES_ABOVE_KEY}"),
 
             SettingDefinition_Factory.Create_Int(
                 path: "phone.attachEntriesAbove",
                 shippedDefault: OwnerDocument_Builder.DEFAULT_ATTACH_ABOVE_CHUNKS,
-                minimum: 1,
+
+                // 0, NOT 1, for the reason phone.foldLongEntriesAbove gives: 0 is the attachment's off switch.
+                minimum: 0,
                 maximum: 100,
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Attach entries above (chunks)",
                 description:
-                    "How many message-sized chunks an entry may span before it is sent as an attached document instead. " +
-                    $"Re-homed from 'telegram.attachEntriesAbove', which still resolves as an alias. {INERT_NOTE}",
+                    "How many message-sized chunks an entry may span before it is sent as an attached document instead; " +
+                    "0 turns the attachment off. Re-homed from 'telegram.attachEntriesAbove', which still resolves as an alias.",
                 restart: RestartKinds.None,
                 legacyPath: $"{TelegramProseSettings.TelegramProseSettings_Json.TELEGRAM_KEY}.{TelegramProseSettings.TelegramProseSettings_Json.ATTACH_ENTRIES_ABOVE_KEY}"),
 
@@ -752,8 +806,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Receipts,
                 label: "Receipt style",
                 description:
-                    "How the app says it has your message: 'ticks' edits a receipt line, 'reactions' reacts to the owner's " +
-                    $"own message instead. {INERT_NOTE}",
+                    "How the app says it has your message: 'ticks' posts a silent ✓ under it and edits that line to ✓✓ " +
+                    "when a session is handed it; 'reactions' puts 👀 then 👌 on the owner's own message instead, and no " +
+                    "reaction is attempted under 'ticks'. A reaction Telegram refuses still gets the ✓, whichever is set.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
@@ -765,7 +820,8 @@ public static class SettingsCatalog
                 description:
                     "WHERE the ⏸/▶ hold toggle is drawn: true puts it on the PULSE bar, false on the receipt. NEVER BOTH — " +
                     "one toggle in two places is CLAUDE.md decision 12's drift, and this key is the single fact that says " +
-                    $"which place. {INERT_NOTE}",
+                    "which place. False with phone.receipts = 'reactions' has no receipt message to carry it, so the toggle " +
+                    "falls back to the PULSE bar and the log says so once.",
                 restart: RestartKinds.None),
         ];
     }
@@ -797,8 +853,14 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Pulse fields",
                 description:
-                    "Which fields the pulse line carries, in this order. 'modelEffort' is a legal field and is not shipped " +
-                    $"on the line — an owner who wants it adds it. {INERT_NOTE}",
+                    "Which fields the pulse line carries, in this order, under its header. 'modelEffort' is a legal field and " +
+                    "is not shipped on the line — an owner who wants it adds it, and it rides the supervisor and member rows " +
+                    "rather than drawing a line of its own. 'progress' is the task count alone, '1/12 (8%)' — the reading " +
+                    "'merged' carries without its label or its 'unchanged for' clause — and it is the one field with a place " +
+                    "outside this order: listed FIRST, it is drawn above the header, so it is the first line of the message and " +
+                    "of a notification preview; listed anywhere else, it sits in its place like any other field. " +
+                    "Omitting 'updated' removes the heartbeat, which is what tells the " +
+                    "owner a quiet orchestration from a dead app — a frozen status line looks exactly like a correct one.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.PULSE_FIELDS),
 
@@ -811,10 +873,11 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Pulse step (minutes)",
                 description:
-                    "The granularity the pulse's 'unchanged for' reading steps in, and therefore how often the pulse " +
-                    "message is EDITED at all. THE FLOOR IS NOT LOWER BY DEFAULT because of the 429 evidence of " +
-                    "2026-09-10: an edit per minute across every open topic is a rate-limit, and a status line that is " +
-                    $"rate-limited tells the owner nothing at all. {INERT_NOTE}",
+                    "The granularity the pulse's clocks step in — each member's time on task, the 'unchanged for' reading " +
+                    "and the 'updated' heartbeat, all three by the same step — and therefore how often the pulse message " +
+                    "is EDITED at all. THE FLOOR IS NOT LOWER BY DEFAULT because of the 429 evidence of 2026-09-10: an " +
+                    "edit per minute across every open topic is a rate-limit, and a status line that is rate-limited tells " +
+                    "the owner nothing at all.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_StringList(
@@ -824,11 +887,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Orchestration topic buttons",
                 description:
-                    "The verbs on an orchestration topic's button bar, in display order. NOTE FOR WHOEVER IMPLEMENTS THE " +
-                    "botCommands VALIDATOR: 'tail sup' is a verb WITH ITS TARGET, by deliberate design — a tap carries no " +
-                    "text, so the target rides inside the verb — and it is therefore NOT a member of BotCommandMenu.ALL, " +
-                    "which holds the bare 'tail'. A validator that tests exact membership would refuse the shipped default. " +
-                    $"{INERT_NOTE}",
+                    "The verbs on an orchestration topic's button bar, in display order. Any command of the '/' menu can be a " +
+                    "button, and a tap runs it exactly as if you had typed it in that topic. An element carrying a target other " +
+                    "than 'tail sup' (e.g. 'tail 1') is left off the bar and named once in the log — it stays a typed command.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.BOT_COMMANDS),
 
@@ -840,7 +901,8 @@ public static class SettingsCatalog
                 label: "General topic buttons",
                 description:
                     "The verbs on the GENERAL topic's button bar, in display order. All cross-cutting on purpose: General " +
-                    $"has no session of its own, so a /merge or a /close there would have nothing to act on. {INERT_NOTE}",
+                    "has no session of its own, so a /merge or a /close there would have nothing to act on. An empty list " +
+                    "is no bar at all.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.BOT_COMMANDS),
         ];

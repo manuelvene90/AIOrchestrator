@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     readonly IOrchestrationSessionStore _store;
     readonly IOrchestrationLauncher _launcher;
     readonly IBridgeEngine _engine;
+    readonly IOrchestrationLog _log;
     readonly DispatcherTimer _refreshTimer;
 
     public MainWindow(
@@ -54,6 +55,7 @@ public partial class MainWindow : Window
         _store = store;
         _launcher = launcher;
         _engine = engine;
+        _log = log;
 
         InitializeComponent();
         DarkTitleBar_Enabler.Apply(this);
@@ -440,7 +442,7 @@ public partial class MainWindow : Window
 
     void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        var settingsWindow = new SettingsWindow(_paths, _configProvider.Get_Current()) { Owner = this };
+        var settingsWindow = new SettingsWindow(_paths, _configProvider, _log) { Owner = this };
         settingsWindow.ShowDialog();
         Refresh_ReposList();
     }

@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Bridge;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -33,6 +34,12 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// written only so the tailer's trailing-entry rule withholds it instead of the third, keeping the
 /// first three inside ONE append, which is the whole premise.
 /// </para>
+/// <para>
+/// TWO MODES (plan 03, <c>phone.push</c>). The fixture selects <c>everything</c>, the mode this file was
+/// written under, where a restatement is the only entry not sent. Under <c>filtered</c> the same skip is
+/// reached a second way — by narration HELD for the turn-end digest — and that entry is consumed, so
+/// counted, exactly as a dropped one is; the second fact pins it.
+/// </para>
 /// </summary>
 public class AHeldAppendResumesWhereItStoppedTests : IDisposable
 {
@@ -45,12 +52,21 @@ public class AHeldAppendResumesWhereItStoppedTests : IDisposable
 
     const string HELD_TEXT = "The worktree is still open and the branch is not pushed yet.";
 
+    /// <summary>The first entry of the everything fact: the one thing that mode refuses.</summary>
+    const string RESTATEMENT_ENTRY = "reading you back\nOwner: \"how should futures roll by default\"";
+
+    /// <summary>The first entry of the filtered fact: plain narration, which that mode holds for the digest.</summary>
+    const string NARRATION_ENTRY = "progress\nimp-1 is pricing the matrix; rev-1 has the diff.";
+
     readonly string _tempRoot;
     readonly string _tempRepo;
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
-    readonly IOrchestrationLauncher _launcher;
-    readonly IBridgeEngine _engine;
+
+    // NOT READONLY for one reason: Rebuild_Engine_UnderFiltered replaces both before the engine has
+    // ever run. Nothing else assigns them.
+    IOrchestrationLauncher _launcher;
+    IBridgeEngine _engine;
     readonly FailableTelegram_Fake _telegram;
     readonly RecordingLog_Fake _log;
 
@@ -63,10 +79,11 @@ public class AHeldAppendResumesWhereItStoppedTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
+        // phone.push = everything, the mode this file was written under (see the class summary).
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\"}}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -91,7 +108,7 @@ public class AHeldAppendResumesWhereItStoppedTests : IDisposable
     {
         var orchId = await Start_WithChannelAlreadySeen_Async();
 
-        Append_Entries(orchId);
+        Append_Entries(orchId, RESTATEMENT_ENTRY);
 
         Assert.True(
             await Run_Until_Async(() => AwaitingAnswerFlag_Marker.Is_Raised(_paths, orchId), 20_000),
@@ -113,18 +130,91 @@ public class AHeldAppendResumesWhereItStoppedTests : IDisposable
     }
 
     /// <summary>
-    /// Four entries in one write. The first is an owner restatement — the push policy refuses it, and
-    /// it is the only suppression this build still has. The second asks, which is what raises the
-    /// flag. The third meets the hold. The fourth exists so the tailer withholds IT as the trailing
-    /// entry and the first three travel together.
+    /// MEASURES <c>phone.push = filtered</c>. The same positional skip, reached by an entry the filter
+    /// HOLDS for the turn-end digest rather than one it drops: held is consumed, so held is counted. If
+    /// it were not, the prefix would be one short and the resume would text the question a second time.
+    ///
+    /// <para>
+    /// HELD_TEXT cannot be the probe here — it is narration, so this mode holds it too and it never
+    /// reaches the phone. The probe is the resume PASS itself: the engine is stopped between runs, so
+    /// the log is counted exactly at the lift, and a pass logged after that is the re-emission reading
+    /// the skip. After it, the question must have been attempted once and entry #3 never held again.
+    /// </para>
     /// </summary>
-    void Append_Entries(string orchId)
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderFiltered_AnEntryHeldForTheDigestAheadOfASentOne_IsCountedBySkipOrTheQuestionIsTextedTwice()
+    {
+        Rebuild_Engine_UnderFiltered();
+
+        var orchId = await Start_WithChannelAlreadySeen_Async();
+
+        Append_Entries(orchId, NARRATION_ENTRY);
+
+        Assert.True(
+            await Run_Until_Async(() => AwaitingAnswerFlag_Marker.Is_Raised(_paths, orchId), 20_000),
+            $"the question was never texted, so nothing was ever held and this test reached nothing.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("held entry #3"), 20_000),
+            $"the third entry was not held behind the question — the premise of this test is gone.{Environment.NewLine}{_log.Dump()}");
+
+        AwaitingAnswerFlag_Marker.Clear(_paths, orchId, out _);
+
+        var passesAtTheLift = Count_LogLines_Containing("entry #3 FROM Supervisor");
+        var holdsAtTheLift = Count_LogLines_Containing("held entry #3");
+
+        Assert.True(
+            await Run_Until_Async(() => Count_LogLines_Containing("entry #3 FROM Supervisor") > passesAtTheLift, 20_000),
+            $"the held append was never re-emitted after the hold lifted, so the skip was never read.{Environment.NewLine}{_log.Dump()}");
+
+        // A few more ticks, so a second question send that was merely in flight has had time to land.
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(5));
+
+        Assert.Equal(1, _telegram.Count_Attempts_Containing(QUESTION_SENTINEL));
+        Assert.Equal(holdsAtTheLift, Count_LogLines_Containing("held entry #3"));
+    }
+
+    int Count_LogLines_Containing(string fragment)
+    {
+        return _log.Dump()
+            .Split(Environment.NewLine)
+            .Count(line => line.Contains(fragment, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// SELECTS <c>phone.push = filtered</c> by writing the classic fixture — no <c>phone</c> block, no
+    /// preset — and rebuilds on a NEW provider before the engine has ever run: the provider caches on the
+    /// write stamp, and a rewrite inside the same stamp would leave this measuring everything.
+    /// </summary>
+    void Rebuild_Engine_UnderFiltered()
+    {
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+
+        var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
+
+        Assert.Equal(PhonePushModes.Filtered, configProvider.Get_Current().Phone.Push);
+
+        _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
+    }
+
+    /// <summary>
+    /// Four entries in one write. The first is <paramref name="firstEntry"/> (subject line, then body) —
+    /// an entry the mode under test does NOT send. The second asks, which is what raises the flag. The
+    /// third meets the hold. The fourth exists so the tailer withholds IT as the trailing entry and the
+    /// first three travel together.
+    /// </summary>
+    void Append_Entries(string orchId, string firstEntry)
     {
         var channelFile = _paths.Get_OwnerChannelFile(orchId);
         var stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
 
         var text =
-            $"\n## [1] FROM supervisor — {stamp} — reading you back\nOwner: \"how should futures roll by default\"\n"
+            $"\n## [1] FROM supervisor — {stamp} — {firstEntry}\n"
             + $"\n## [2] FROM supervisor — {stamp} — a decision\n"
             + "RECOMMEND: Keep — it is the branch the ledger already names.\nRISK: low\nROW: none\n"
             + $"QUESTION: Which branch carries the {QUESTION_SENTINEL} change?\nOPTION: Keep\nOPTION: Replace\n"

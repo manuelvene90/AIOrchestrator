@@ -70,10 +70,14 @@ public class AHeldAppendsPrefixDiesWithItsAppendTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
+        // phone.push = everything (plan 03), the mode this file was written under. Both of its texts are
+        // plain narration: under filtered AFTERWARDS_TEXT would be held for the turn-end digest and never
+        // sent whatever the memo did, and DROPPED_TEXT's absence — the premise — would have a second
+        // route to it that says nothing about the silence (decision 20).
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\"}}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 

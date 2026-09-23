@@ -36,17 +36,25 @@ internal sealed class TelegramSendBudgetModel : ITelegramSendBudget
     /// </summary>
     readonly Dictionary<long, DateTime> _lastEditUtcByMessageId = [];
 
-    internal TelegramSendBudgetModel(double sendTokens, DateTime sendRefilledUtc)
+    /// <summary>
+    /// The per-message gap this budget enforces — <see cref="TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE"/>
+    /// from every production factory; shorter only through <see cref="TelegramSendBudget_Factory.Create_WithEditGap"/>,
+    /// the test seam that lets an engine test watch a held edit land without waiting thirty seconds.
+    /// </summary>
+    readonly TimeSpan _editGap;
+
+    internal TelegramSendBudgetModel(double sendTokens, DateTime sendRefilledUtc, TimeSpan editGap)
     {
         _sendTokens = sendTokens;
         _sendRefilledUtc = sendRefilledUtc;
+        _editGap = editGap;
     }
 
     public TimeSpan Reserve_MessageEdit(long messageId, DateTime nowUtc)
     {
         lock (_lock)
         {
-            var gap = TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE;
+            var gap = _editGap;
 
             Prune_StaleEdits(nowUtc, gap);
 

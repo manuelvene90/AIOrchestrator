@@ -31,6 +31,11 @@ public class OrchestratorServicesFactoryTests : IDisposable
         Assert.NotNull(services.Store);
         Assert.NotNull(services.Launcher);
         Assert.NotNull(services.Engine);
+
+        // Built, and NOT started: composition binds no socket — each host decides when Run_Async begins (plan 04 Task 7).
+        Assert.NotNull(services.SettingsWebHost);
+        Assert.False(services.SettingsWebHost.IsListening);
+        Assert.Null(services.SettingsWebHost.ListeningOn_OrNull);
         Assert.False(services.ConfigProvider.Get_Current().Is_TelegramConfigured());
     }
 }

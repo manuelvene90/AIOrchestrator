@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Web;
 
 namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 
@@ -15,28 +16,27 @@ public static class SettingValidators
     public const string MODEL_WORD = "modelWord";
 
     /// <summary>
-    /// WILL check for `host:port`, or the literal `off`, for `web.listen`. NOT YET IMPLEMENTED — see
-    /// the fallthrough in <see cref="Validate_OrNull"/>: a definition may point at this name today
-    /// and it accepts any value until a later task wires the check in.
+    /// `host:port` (an IPv6 literal takes brackets), or the literal `off`, for `web.listen`. The parse
+    /// and range rules live in <see cref="Web.ListenAddress"/>, which plan 04's listener (Task 7) reads
+    /// directly through <see cref="Web.ListenAddress.Parse_OrNull"/> / <see cref="Web.ListenAddress.Is_Off"/>;
+    /// this name only routes to the message-crafting case below.
     /// </summary>
     public const string LISTEN_ADDRESS = "listenAddress";
 
     /// <summary>
-    /// WILL check that every element is one of `PulseField_Names.ALL`, with no repeats. NOT YET
-    /// IMPLEMENTED — see the fallthrough in <see cref="Validate_OrNull"/>: a definition may point at
-    /// this name today and it accepts any value until a later task wires the check in.
+    /// Every element is one of <see cref="PulseField_Names.ALL"/>, with no repeats. The EMPTY list is
+    /// accepted: a pulse with no fields is the owner's to choose, not a typo.
     /// </summary>
     public const string PULSE_FIELDS = "pulseFields";
 
     /// <summary>
-    /// WILL check the FIRST space-delimited token of each element against
-    /// <c>Telegram.BotCommandMenu.ALL</c>, with no repeats of that token. A trailing target after the
-    /// space is legal and is not checked against anything — <c>pulse.buttons</c>' shipped default
-    /// carries <c>"tail sup"</c>, a verb WITH ITS TARGET (a button tap carries no text, so the target
-    /// rides inside the verb), and <c>BotCommandMenu.ALL</c> holds only the bare verb <c>"tail"</c>.
-    /// Checking the whole element for exact membership would refuse the catalogue's own default. NOT
-    /// YET IMPLEMENTED — see the fallthrough in <see cref="Validate_OrNull"/>: a definition may point
-    /// at this name today and it accepts any value until a later task wires the check in.
+    /// The FIRST space-delimited token of each element is a verb of <c>Telegram.BotCommandMenu.ALL</c>,
+    /// and no verb appears twice. A trailing target after the space is legal and is not checked against
+    /// anything — <c>pulse.buttons</c>' shipped default carries <c>"tail sup"</c>, a verb WITH ITS TARGET
+    /// (a button tap carries no text, so the target rides inside the verb), and <c>BotCommandMenu.ALL</c>
+    /// holds only the bare verb <c>"tail"</c>. Checking the whole element for exact membership would
+    /// refuse the catalogue's own default. The repeat is of the VERB for the same reason: "tail sup" and
+    /// "tail 1" are one verb twice on a bar. The EMPTY list is accepted — classic's <c>general.buttons</c>.
     /// </summary>
     public const string BOT_COMMANDS = "botCommands";
 
@@ -47,14 +47,96 @@ public static class SettingValidators
         {
             NONE => null,
             MODEL_WORD => Validate_ModelWord_OrNull(value),
+            PULSE_FIELDS => Validate_PulseFields_OrNull(value),
+            BOT_COMMANDS => Validate_BotCommands_OrNull(value),
+            LISTEN_ADDRESS => Validate_ListenAddress_OrNull(value),
 
-            // LISTEN_ADDRESS, PULSE_FIELDS and BOT_COMMANDS are registered names only — a definition
-            // may point at one before its check exists (a definition naming a not-yet-implemented
-            // validator is legitimate). Until a later task adds a case above, any value is accepted;
-            // this is a real gap, not an oversight, and it must stay visible here rather than only in
-            // a report nobody reading this switch will see.
+            // Defensive only: every name this switch's own constants can produce has a case above. An
+            // unrecognised name here means a definition points at a validator that was never registered
+            // — a bug in the catalogue itself, not in the value being checked — so accepting rather than
+            // refusing keeps this switch a pure function of the value, not of whether the catalogue is
+            // well-formed.
             _ => null,
         };
+    }
+
+    static string? Validate_PulseFields_OrNull(JsonNode? value)
+    {
+        if (!Try_ReadWords(value, out var words))
+            return "Expected a list of text values";
+
+        HashSet<string> seen = new(StringComparer.Ordinal);
+
+        foreach (var word in words)
+        {
+            if (!PulseField_Names.ALL.Contains(word, StringComparer.Ordinal))
+                return $"'{word}' is not a pulse field — must be one of: {string.Join(", ", PulseField_Names.ALL)}";
+
+            if (!seen.Add(word))
+                return $"'{word}' appears more than once — a pulse field may be listed only once";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// ORDINAL, AND CASE-SENSITIVE, because the tap parser is: <c>TopicCommandButtons.Parse_OrNull</c>
+    /// matches a verb ordinally, so a "Tail" this accepted would render as a button that parses to
+    /// nothing when tapped — the silent dead button that parser exists to prevent.
+    /// </summary>
+    static string? Validate_BotCommands_OrNull(JsonNode? value)
+    {
+        if (!Try_ReadWords(value, out var elements))
+            return "Expected a list of text values";
+
+        HashSet<string> seen = new(StringComparer.Ordinal);
+
+        foreach (var element in elements)
+        {
+            var verb = element.Split(' ')[0];
+
+            if (!Telegram.BotCommandMenu.ALL.Any(command => string.Equals(command.Command, verb, StringComparison.Ordinal)))
+                return $"'{verb}' (in '{element}') is not a bot command — the verb before the first space must be one of the commands in the '/' menu";
+
+            if (!seen.Add(verb))
+                return $"'{verb}' appears more than once — a verb may be on a bar only once, whatever follows it";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Shape-checks first — same defensive re-check the two list validators above make, because this
+    /// switch is public and a caller may reach it directly, as the tests do — then delegates the actual
+    /// parsing to <see cref="Web.ListenAddress.Problem_OrNull"/> so there is one split routine, not one
+    /// per validator and one per listener.
+    /// </summary>
+    static string? Validate_ListenAddress_OrNull(JsonNode? value)
+    {
+        if (value is not JsonValue jsonValue || !jsonValue.TryGetValue<string>(out var text))
+            return "Expected a string";
+
+        return ListenAddress.Problem_OrNull(text);
+    }
+
+    /// <summary>False for anything that is not an array of strings — a definition checks the shape first, but this switch is public.</summary>
+    static bool Try_ReadWords(JsonNode? value, out IReadOnlyList<string> words)
+    {
+        List<string> read = [];
+        words = read;
+
+        if (value is not JsonArray array)
+            return false;
+
+        foreach (var element in array)
+        {
+            if (element is not JsonValue jsonValue || !jsonValue.TryGetValue<string>(out var word))
+                return false;
+
+            read.Add(word);
+        }
+
+        return true;
     }
 
     static string? Validate_ModelWord_OrNull(JsonNode? value)

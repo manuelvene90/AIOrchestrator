@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Bridge;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -35,9 +36,16 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 ///     without the fix — a green that pins nothing.
 ///
 /// THE ANSWER TEXT CARRIES NO QUESTION MARK, NO QUESTION:/OPTION: MARKER AND NO BLOCKED MARKER, on
-/// purpose: under `OwnerPush_Policy.Should_Push` that leaves exactly ONE route to it being pushed —
-/// the owner waiting. An answer that would push on its own merits would keep this test green with the
-/// flag cleared, which is the "two routes to the asserted state" trap.
+/// purpose: under `phone.push = filtered` that leaves exactly ONE route to it being pushed — the owner
+/// waiting. An answer that would push on its own merits would keep this test green with the flag
+/// cleared, which is the "two routes to the asserted state" trap.
+///
+/// TWO MODES, ONE CLASS (plan 03 Task 2). The fixture below writes no `preset`, so it runs under
+/// classic, which is `filtered` — master's phone, and the one the answer's defect was reported on.
+/// The failed-send scenario is measured under BOTH modes, each fact naming its own: `filtered` gets
+/// master's "narration after the answer is not pushed" oracle back, and `everything` keeps the one that
+/// replaced it while that mode was the only build — "the channel is not wedged afterwards", which is a
+/// real property quiet still needs.
 /// </summary>
 public class OwnerAnswerSurvivesFailedSendTests : IDisposable
 {
@@ -84,8 +92,10 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
     readonly string _tempRepo;
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
-    readonly IOrchestrationLauncher _launcher;
-    readonly IBridgeEngine _engine;
+    // NOT READONLY for one reason: Rebuild_Engine_UnderEverything replaces both before the engine has
+    // ever run. Nothing else assigns them.
+    IOrchestrationLauncher _launcher;
+    IBridgeEngine _engine;
     readonly FailableTelegram_Fake _telegram;
     readonly RecordingLog_Fake _log;
 
@@ -121,9 +131,67 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         Directory.Delete(_tempRoot, recursive: true);
     }
 
+    /// <summary>
+    /// MEASURES <c>phone.push = filtered</c> (the fixture's classic default). Master's oracle, restored
+    /// with the filter: once the answer is out the wait is SPENT, so ordinary narration is held again.
+    /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task AFailedSend_LeavesTheOwnerStillWaiting_SoTheAnswerIsPushedOnTheReEmission()
+    public async Task UnderFiltered_AFailedSend_LeavesTheOwnerStillWaiting_AndNarrationAfterTheAnswerIsNotPushed()
+    {
+        var orchId = await Deliver_TheAnswerThroughAFailedSend_Async();
+
+        // 4 — AND THE WAIT IS NOW SPENT. Without this the suite cannot see the opposite regression:
+        // delete the clear entirely and everything above still passes, because a flag that is never
+        // cleared also delivers the answer. It just delivers EVERYTHING afterwards too, which is the
+        // waterfall the push policy exists to stop.
+        Append_SupervisorEntry(orchId, 2, "progress", NARRATION_TEXT);
+
+        Assert.False(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 12_000),
+            "the answer was delivered but the owner's wait was never consumed, so ordinary narration "
+            + "is still being pushed to their phone");
+
+        // NOT A SILENT PASS: the narration must have been SEEN and held, not missed by a wedged tailer —
+        // otherwise "nothing was sent" is two routes to one state (decision 20).
+        Assert.True(
+            _log.Has_Info_Containing("entry #2 FROM Supervisor"),
+            $"the narration was never tailed, so its absence from the phone proves nothing.{Environment.NewLine}{_log.Dump()}");
+    }
+
+    /// <summary>
+    /// MEASURES <c>phone.push = everything</c> (quiet's phone). Everything the supervisor writes reaches
+    /// the phone under this mode, so "narration was pushed" is no evidence of a stuck flag here; what is
+    /// still worth pinning is that the re-emission did not leave the channel wedged.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderEverything_AFailedSend_LeavesTheOwnerStillWaiting_AndTheChannelIsNotWedgedAfterwards()
+    {
+        Rebuild_Engine_UnderEverything();
+
+        var orchId = await Deliver_TheAnswerThroughAFailedSend_Async();
+
+        // 4 — AND THE PIPELINE KEEPS RUNNING AFTERWARDS. This step used to assert the OPPOSITE: that
+        // a later plain entry was NOT pushed, which is how the suite could see a wait-flag that was
+        // never cleared (it would deliver the answer and then everything else too). Under this mode
+        // that oracle does not apply — everything the supervisor writes reaches the phone, by the
+        // owner's decision of 2026-09-09 — so what is pinned is that the re-emission did not leave the
+        // channel wedged: the entry after the answer gets through too.
+        Append_SupervisorEntry(orchId, 2, "progress", NARRATION_TEXT);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 20_000),
+            "the answer was delivered but the channel stayed wedged afterwards — the entry that "
+            + "followed it never reached the phone");
+    }
+
+    /// <summary>
+    /// Steps 1–3, shared by both modes: the owner asks, the answer's send fails, and the re-emission
+    /// delivers it. The answer is not ask-shaped, so under <c>filtered</c> the owner's wait is its only
+    /// route to the phone — and under <c>everything</c> the same steps still pin that the retry happens.
+    /// </summary>
+    async Task<string> Deliver_TheAnswerThroughAFailedSend_Async()
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
@@ -166,19 +234,32 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
             + "re-evaluated as narration and was suppressed — the owner never got the answer to the "
             + "question they asked");
 
-        // 4 — AND THE PIPELINE KEEPS RUNNING AFTERWARDS. This step used to assert the OPPOSITE: that
-        // a later plain entry was NOT pushed, which is how the suite could see a wait-flag that was
-        // never cleared (it would deliver the answer and then everything else too). That oracle
-        // retired with the narration filter on 2026-09-09 — everything the supervisor writes reaches
-        // the phone now, by the owner's decision, so "narration was pushed" is no longer evidence of
-        // a stuck flag. What is still worth pinning here is that the re-emission did not leave the
-        // channel wedged: the entry after the answer gets through too.
-        Append_SupervisorEntry(session.OrchId, 2, "progress", NARRATION_TEXT);
+        return session.OrchId;
+    }
 
-        Assert.True(
-            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 20_000),
-            "the answer was delivered but the channel stayed wedged afterwards — the entry that "
-            + "followed it never reached the phone");
+    /// <summary>
+    /// SELECTS <c>phone.push = everything</c> the way a seam test selects a mode — the key written into
+    /// config.json — and rebuilds the launcher and engine on it, before the engine has ever run.
+    ///
+    /// <para>
+    /// A NEW PROVIDER, NOT A REWRITE UNDER THE OLD ONE. The provider caches on the file's write stamp,
+    /// and a rewrite landing inside the same stamp would leave this fact measuring the fixture's classic
+    /// default while its name says everything — green for the wrong reason.
+    /// </para>
+    /// </summary>
+    void Rebuild_Engine_UnderEverything()
+    {
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"{PhonePush_Modes.EVERYTHING_TEXT}\"}}}}");
+
+        var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
+
+        Assert.Equal(PhonePushModes.Everything, configProvider.Get_Current().Phone.Push);
+
+        _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast_WithRetryBackoff(RETRY_BACKOFF_SECONDS));
     }
 
     /// <summary>

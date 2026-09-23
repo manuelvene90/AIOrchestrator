@@ -8,12 +8,13 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// The owner wants the commands they reach for constantly to be permanent tappable furniture on
 /// PULSE — an inline keyboard hanging off the status line.
 ///
-/// TWO BARS SINCE 2026-09-09 (Brief C): an orchestration topic's bar (`TOPIC_BUTTONS`, about the ONE
-/// endeavour it belongs to) and the General topic's bar (`GENERAL_BUTTONS`, cross-cutting across all
-/// of them). Rendered twice each and parsed once through a single lexer is three places to drift, and
-/// every drift is silent on the owner's side: a button that renders and does nothing, or a bar
-/// offering a verb the lexer no longer knows. These tests pin both arrays to their commands, their
-/// buttons and the one parser both bars share.
+/// TWO BARS SINCE 2026-09-09 (Brief C): an orchestration topic's bar (about the ONE endeavour it
+/// belongs to) and the General topic's bar (cross-cutting across all of them). Rendered twice each and
+/// parsed once through a single lexer is three places to drift, and every drift is silent on the
+/// owner's side: a button that renders and does nothing, or a bar offering a verb the lexer no longer
+/// knows. These tests pin the SHIPPED lists (<see cref="TopicCommandButtons.Commands"/> and
+/// <see cref="TopicCommandButtons.GeneralCommands"/>, the catalogue's defaults) to their buttons and
+/// the one parser both bars share. What a CONFIGURED list draws is ConfigurableCommandButtonsTests'.
 /// </summary>
 public class TopicCommandButtonsTests
 {
@@ -44,7 +45,7 @@ public class TopicCommandButtonsTests
     [Fact]
     public void TheInlineButtons_FollowTheSameOrderAsTheCommands()
     {
-        var built = TopicCommandButtons.Build_ForTopic(4242L);
+        var built = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, 4242L, isHolding: false, heldCount: 0, holdToggleOnTheBar: false);
 
         Assert.Equal(TopicCommandButtons.Commands.Count, built.Count);
         Assert.Equal(
@@ -70,7 +71,7 @@ public class TopicCommandButtonsTests
     [Fact]
     public void TheGeneralInlineButtons_FollowTheSameOrderAsTheGeneralCommands()
     {
-        var built = TopicCommandButtons.Build_ForGeneral(0L);
+        var built = TopicCommandButtons.Build_ForGeneral(TopicCommandButtons.GeneralCommands, 0L);
 
         Assert.Equal(TopicCommandButtons.GeneralCommands.Count, built.Count);
         Assert.Equal(
@@ -115,7 +116,7 @@ public class TopicCommandButtonsTests
     [InlineData(long.MaxValue)]
     public void EveryButton_RoundTripsWithItsTopic(long messageThreadId)
     {
-        var built = TopicCommandButtons.Build_ForTopic(messageThreadId);
+        var built = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, messageThreadId, isHolding: false, heldCount: 0, holdToggleOnTheBar: false);
 
         for (var i = 0; i < built.Count; i++)
             Assert.Equal((TopicCommandButtons.Commands[i], messageThreadId), TopicCommandButtons.Parse_OrNull(built[i].Data));
@@ -128,7 +129,7 @@ public class TopicCommandButtonsTests
     [InlineData(4242L)]
     public void EveryGeneralButton_RoundTripsWithItsTopic(long messageThreadId)
     {
-        var built = TopicCommandButtons.Build_ForGeneral(messageThreadId);
+        var built = TopicCommandButtons.Build_ForGeneral(TopicCommandButtons.GeneralCommands, messageThreadId);
 
         for (var i = 0; i < built.Count; i++)
             Assert.Equal((TopicCommandButtons.GeneralCommands[i], messageThreadId), TopicCommandButtons.Parse_OrNull(built[i].Data));
@@ -143,7 +144,7 @@ public class TopicCommandButtonsTests
     [Fact]
     public void TheTailSupVerbRoundTripsWithItsEmbeddedSpaceIntact()
     {
-        var built = TopicCommandButtons.Build_ForTopic(4242L);
+        var built = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, 4242L, isHolding: false, heldCount: 0, holdToggleOnTheBar: false);
         var tailSup = built.Single(button => TopicCommandButtons.Parse_OrNull(button.Data)!.Value.Command == "tail sup");
 
         Assert.Equal("cmd:tail sup:4242", tailSup.Data);
@@ -163,7 +164,7 @@ public class TopicCommandButtonsTests
     [InlineData(long.MinValue)]
     public void ANegativeTopic_IsCarriedBackVerbatimRatherThanSwallowed(long messageThreadId)
     {
-        var built = TopicCommandButtons.Build_ForTopic(messageThreadId);
+        var built = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, messageThreadId, isHolding: false, heldCount: 0, holdToggleOnTheBar: false);
 
         Assert.Equal(("pending", messageThreadId), TopicCommandButtons.Parse_OrNull(built[0].Data));
     }
@@ -184,7 +185,7 @@ public class TopicCommandButtonsTests
     [InlineData(0L)]
     public void EveryTopicPayload_FitsTelegramsSixtyFourByteLimit(long messageThreadId)
     {
-        foreach (var (data, _) in TopicCommandButtons.Build_ForTopic(messageThreadId))
+        foreach (var (data, _) in TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, messageThreadId, isHolding: false, heldCount: 0, holdToggleOnTheBar: false))
             Assert.True(
                 Encoding.UTF8.GetByteCount(data) <= TELEGRAM_CALLBACK_DATA_BYTE_LIMIT,
                 $"callback data too long ({Encoding.UTF8.GetByteCount(data)} bytes): '{data}'");
@@ -197,7 +198,7 @@ public class TopicCommandButtonsTests
     [InlineData(0L)]
     public void EveryGeneralPayload_FitsTelegramsSixtyFourByteLimit(long messageThreadId)
     {
-        foreach (var (data, _) in TopicCommandButtons.Build_ForGeneral(messageThreadId))
+        foreach (var (data, _) in TopicCommandButtons.Build_ForGeneral(TopicCommandButtons.GeneralCommands, messageThreadId))
             Assert.True(
                 Encoding.UTF8.GetByteCount(data) <= TELEGRAM_CALLBACK_DATA_BYTE_LIMIT,
                 $"callback data too long ({Encoding.UTF8.GetByteCount(data)} bytes): '{data}'");
@@ -211,7 +212,7 @@ public class TopicCommandButtonsTests
     [Fact]
     public void EveryTopicLabel_IsShortAndNamesItsCommand()
     {
-        foreach (var (data, label) in TopicCommandButtons.Build_ForTopic(7L))
+        foreach (var (data, label) in TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, 7L, isHolding: false, heldCount: 0, holdToggleOnTheBar: false))
         {
             var command = TopicCommandButtons.Parse_OrNull(data)!.Value.Command;
 
@@ -227,7 +228,7 @@ public class TopicCommandButtonsTests
     [Fact]
     public void EveryGeneralLabel_IsShortAndNamesItsCommand()
     {
-        foreach (var (data, label) in TopicCommandButtons.Build_ForGeneral(7L))
+        foreach (var (data, label) in TopicCommandButtons.Build_ForGeneral(TopicCommandButtons.GeneralCommands, 7L))
         {
             var command = TopicCommandButtons.Parse_OrNull(data)!.Value.Command;
 
@@ -266,7 +267,7 @@ public class TopicCommandButtonsTests
     [Fact]
     public void TheHoldParser_DoesNotClaimOurPayloads()
     {
-        foreach (var (data, _) in TopicCommandButtons.Build_ForTopic(4242L))
+        foreach (var (data, _) in TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, 4242L, isHolding: false, heldCount: 0, holdToggleOnTheBar: false))
             Assert.Null(HoldButton_Data.Parse_OrNull(data));
     }
 
@@ -274,12 +275,15 @@ public class TopicCommandButtonsTests
     /// Malformed input returns null; it never throws. This runs on a wire payload, and an exception
     /// on the tap path takes down the handling of every OTHER tap in the same batch.
     ///
-    /// "pending" replaces "show" as the shape-test placeholder verb (no topic, empty topic,
-    /// non-numeric, stray whitespace) since "show" is no longer a command either bar offers — using a
-    /// live verb keeps these cases testing SHAPE alone, not shape-plus-unknown-verb at once.
-    /// "cmd:show:5" is kept as its OWN case, deliberately: /show LEFT the topic bar on 2026-09-09 and
-    /// remains only a typed command, so a well-formed payload for it must now be refused exactly like
-    /// "cmd:pause:5" always was.
+    /// "pending" is the shape-test placeholder verb (no topic, empty topic, non-numeric, stray
+    /// whitespace) — a live verb keeps these cases testing SHAPE alone, not shape-plus-unknown-verb at
+    /// once.
+    ///
+    /// "cmd:pause:5" AND "cmd:show:5" LEFT THIS LIST ON 2026-09-14 (plan 03 Task 5). Both were refused
+    /// because no bar offered them; with the bars configurable, both are verbs an owner may put on one
+    /// (classic names both), so the parser's membership test became "is this a command at all" and both
+    /// now parse — ConfigurableCommandButtonsTests pins that. Their places here are taken by payloads
+    /// that are still not commands: a verb no menu offers, and a verb carrying a target no tap can.
     /// </summary>
     [Theory]
     [InlineData(null)]
@@ -291,8 +295,8 @@ public class TopicCommandButtonsTests
     [InlineData("cmd:pending:notanumber")]
     [InlineData("cmd:pending: 5")]          // whitespace is not something Build_ForTopic ever wrote
     [InlineData("cmd::5")]                  // a topic with no verb
-    [InlineData("cmd:pause:5")]             // a verb this class has never offered
-    [InlineData("cmd:show:5")]              // /show LEFT the bar 2026-09-09 — typed command only now
+    [InlineData("cmd:restart:5")]           // a verb no menu offers
+    [InlineData("cmd:tail 1:5")]            // a legal bar ELEMENT whose target no tap route carries
     [InlineData("cmd:PENDING:5")]           // ordinal, case-sensitive
     [InlineData("CMD:pending:5")]
     [InlineData("cmd")]
