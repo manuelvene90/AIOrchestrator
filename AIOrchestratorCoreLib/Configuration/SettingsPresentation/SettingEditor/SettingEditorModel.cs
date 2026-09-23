@@ -29,6 +29,16 @@ internal sealed class SettingEditorModel(
         return SettingValue_Parser.Parse(Reading.Definition, text);
     }
 
+    public JsonNode? Build_Secret_OrNull(string text)
+    {
+        return string.IsNullOrWhiteSpace(text) ? null : SettingValue_Parser.Parse(Reading.Definition, text);
+    }
+
+    public bool Is_Unchanged(JsonNode? value)
+    {
+        return JsonNode.DeepEquals(value, Reading.Value_OrNull);
+    }
+
     public JsonNode? Build_FromToggle(bool isOn)
     {
         return SettingValue_Parser.Parse(Reading.Definition, isOn ? SettingValue_Formatter.ON : SettingValue_Formatter.OFF);

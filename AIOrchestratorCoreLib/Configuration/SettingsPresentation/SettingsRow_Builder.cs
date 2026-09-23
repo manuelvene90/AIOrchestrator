@@ -45,6 +45,25 @@ public static class SettingsRow_Builder
     /// </summary>
     public const string EMPTY_SECTION_NOTE = "Nothing to set here yet — this section fills in with a later plan.";
 
+    // THE WINDOW'S OWN OWNER-FACING SENTENCES, here and not in its XAML, so plan 04 Task 10's same-strings gate
+    // can compare them with the web page's (decision 12) — a sentence in XAML is out of any test's reach.
+
+    /// <summary>What a ReadOnly row says in place of a control (D12) — the web page's own sentence.</summary>
+    public const string READ_ONLY_NOTE = "Shown here only — its description says where it is changed.";
+
+    /// <summary>The window's header sentence: every change saves at once (D5), and the token is the one exception (D11).</summary>
+    public const string IMMEDIATE_APPLY_NOTE =
+        "Every change is saved the moment you make it — the same way a tap on the phone or the web page saves it. " +
+        "The bot token is the one exception: it has its own Save.";
+
+    /// <summary>What a Secret row says under its box: a blank box changes nothing, and Reset is the only way to clear it.</summary>
+    public const string SECRET_NOTE = "Type a new value to set it. The box is always empty because the value is never shown; Reset clears it.";
+
+    /// <summary>The Telegram bot token card's description on the Connection tab (D11) — the token is not a catalogue row.</summary>
+    public const string BOT_TOKEN_NOTE =
+        "From @BotFather. Kept in secrets.json, never in config.json and never in any settings list. " +
+        "Read when the app starts: restart the app after saving a new one.";
+
     /// <summary>
     /// The readings for <see cref="CONNECTION_PATHS"/>, in that order. A path with no reading is simply absent —
     /// a partial snapshot draws what it has — and a catalogue that renamed one of them is caught by the test that

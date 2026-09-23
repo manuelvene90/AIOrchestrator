@@ -115,10 +115,6 @@ public class SettingsWriterTests : IDisposable
     }
 
     /// <summary>
-    /// <c>preset</c> IS A REAL config.json KEY AND NOT A ROW (D13): the renderers show it in their header and
-    /// never offer it, so the writer that serves them must not write it either.
-    /// </summary>
-    /// <summary>
     /// THE ONE "DID IT TAKE EFFECT" (plan 04 Task 9 moved it here from the web handler, so the WPF window and the
     /// handler cannot classify an outcome two ways). Walked over every outcome, so a seventh must be classified.
     /// </summary>
@@ -129,6 +125,10 @@ public class SettingsWriterTests : IDisposable
             Assert.Equal(outcome is SettingsWriteOutcomes.Applied or SettingsWriteOutcomes.Reset, Settings_Writer.Took_Effect(outcome));
     }
 
+    /// <summary>
+    /// <c>preset</c> IS A REAL config.json KEY AND NOT A ROW (D13): the renderers show it in their header and
+    /// never offer it, so the writer that serves them must not write it either.
+    /// </summary>
     [Theory]
     [InlineData("phone.notARealSetting")]
     [InlineData("preset")]

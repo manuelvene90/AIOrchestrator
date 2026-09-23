@@ -110,6 +110,29 @@ public partial class SettingsWindow : Window
         Commit(row, row.Editor.Build_FromText(row.EditText));
     }
 
+    void SetSecret_Click(object sender, RoutedEventArgs e)
+    {
+        Commit_Secret(Row_Of(sender));
+    }
+
+    void Secret_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+            Commit_Secret(Row_Of(sender));
+    }
+
+    /// <summary>
+    /// The editor answers null for a blank box — NO EDIT, never "clear" (the box is always drawn empty, because the
+    /// value is masked): a set token is cleared by the row's Reset alone (review of 8be367a).
+    /// </summary>
+    void Commit_Secret(SettingRowView row)
+    {
+        var secret = row.Editor.Build_Secret_OrNull(row.EditText);
+
+        if (secret != null)
+            Commit(row, secret);
+    }
+
     void MoveItemUp_Click(object sender, RoutedEventArgs e)
     {
         var item = Item_Of(sender);
@@ -172,8 +195,18 @@ public partial class SettingsWindow : Window
             Commit(row, added);
     }
 
+    /// <summary>
+    /// A value the row already reads writes nothing and says so: an untouched box holds the RESOLVED value, and
+    /// writing it back would turn a preset or shipped value into "set here" (review of 8be367a, P11's spirit).
+    /// </summary>
     void Commit(SettingRowView row, JsonNode? value)
     {
+        if (row.Editor.Is_Unchanged(value))
+        {
+            row.Show_Note((SettingWriteNote_Formatter.UNCHANGED, false));
+            return;
+        }
+
         Write_AndRedraw(row.Path, () => Settings_Writer.Apply(_paths, row.Path, value, _log));
     }
 
@@ -213,14 +246,15 @@ public partial class SettingsWindow : Window
     {
         // secrets.json ONLY, through the token's own door; an unreadable or corrupt secrets.json is refused
         // with an IOException naming the file (Task 2c, P35/P36), and nothing was written.
+        // The box then shows the token AS WRITTEN (the loader trims it), not as pasted.
         try
         {
-            OrchestratorConfig_Loader.Save_BotToken(_paths, BotTokenTextBox.Text);
-            TokenNoteText.Text = SettingWriteNote_Formatter.SAVED;
+            BotTokenTextBox.Text = OrchestratorConfig_Loader.Save_BotToken(_paths, BotTokenTextBox.Text) ?? string.Empty;
+            TokenNoteText.DataContext = new SettingNoteView(SettingWriteNote_Formatter.Describe(SettingsWriteOutcomes.Applied, null));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            TokenNoteText.Text = SettingWriteNote_Formatter.Describe_WriteThrew(ex.Message);
+            TokenNoteText.DataContext = new SettingNoteView((SettingWriteNote_Formatter.Describe_WriteThrew(ex.Message), true));
         }
     }
 

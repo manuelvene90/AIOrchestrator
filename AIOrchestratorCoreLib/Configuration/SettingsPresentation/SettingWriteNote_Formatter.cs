@@ -20,6 +20,9 @@ public static class SettingWriteNote_Formatter
 
     public const string RESET = "Reset.";
 
+    /// <summary>An Apply whose value is what the row already reads: nothing was written, and the origin stays where it was.</summary>
+    public const string UNCHANGED = "Unchanged — nothing was written.";
+
     public static (string Text, bool IsRefusal) Describe(SettingsWriteOutcomes outcome, string? message_OrNull)
     {
         if (!Settings_Writer.Took_Effect(outcome))

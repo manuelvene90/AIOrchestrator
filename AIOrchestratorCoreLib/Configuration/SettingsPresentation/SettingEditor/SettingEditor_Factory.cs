@@ -44,6 +44,9 @@ public static class SettingEditor_Factory
         if (!reading.IsEditable)
             return SettingEditorKinds.ReadOnly;
 
+        if (reading.Definition.Path == SettingsSnapshot_Reader.MASKED_SECRET_PATH)
+            return SettingEditorKinds.Secret;
+
         return reading.Definition.Renderer switch
         {
             SettingRenderers.Toggle => SettingEditorKinds.Toggle,

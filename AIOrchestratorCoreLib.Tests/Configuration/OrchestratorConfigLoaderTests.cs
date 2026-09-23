@@ -152,10 +152,10 @@ public class OrchestratorConfigLoaderTests : IDisposable
     [Fact]
     public void SaveBotToken_TrimsAPastedToken_AndABlankOneIsNoToken()
     {
-        OrchestratorConfig_Loader.Save_BotToken(_paths, "  123:abc \t");
+        Assert.Equal("123:abc", OrchestratorConfig_Loader.Save_BotToken(_paths, "  123:abc \t"));
         Assert.Equal("123:abc", OrchestratorConfig_Loader.Load_OrEmpty(_paths).TelegramBotToken);
 
-        OrchestratorConfig_Loader.Save_BotToken(_paths, "   ");
+        Assert.Null(OrchestratorConfig_Loader.Save_BotToken(_paths, "   "));
         var secrets = JsonNode.Parse(File.ReadAllText(_paths.SecretsFile))!.AsObject();
 
         Assert.True(secrets.ContainsKey("telegramBotToken"));

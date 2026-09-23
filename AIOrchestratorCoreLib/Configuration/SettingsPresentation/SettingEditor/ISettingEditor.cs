@@ -54,6 +54,21 @@ public interface ISettingEditor
     /// <summary>Typed text (a box, or a Choice caption) as the value to write — <c>SettingValue_Parser.Parse</c>, verbatim.</summary>
     JsonNode? Build_FromText(string text);
 
+    /// <summary>
+    /// A Secret row's typed text as the value to write, or null when the box is blank — which is NO EDIT, never
+    /// "clear the secret": the box is always drawn empty (the value is masked), so a blank box says nothing about
+    /// what the owner wants. Clearing is the row's Reset alone.
+    /// </summary>
+    JsonNode? Build_Secret_OrNull(string text);
+
+    /// <summary>
+    /// Whether a value is what the row already reads — then an Apply has nothing to write. Without it, Apply on an
+    /// untouched box wrote the RESOLVED value back and turned "from preset classic" into "set here" with no change
+    /// by the owner (review of 8be367a; the P11 rule that a save never materialises a preset value). JSON-equal,
+    /// so 25 typed and 25 in the file are the same value however each was parsed.
+    /// </summary>
+    bool Is_Unchanged(JsonNode? value);
+
     /// <summary>A Toggle's new state as the value to write, through the parser's own on/off words.</summary>
     JsonNode? Build_FromToggle(bool isOn);
 

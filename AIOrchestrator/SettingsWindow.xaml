@@ -58,6 +58,23 @@
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
 
+        <!-- A note beside a control: green when it took effect, red when it is a refusal (bound Note / NoteIsRefusal). -->
+        <Style x:Key="NoteStyle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="Text" Value="{Binding Note}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0,5,0,0"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentReviewer}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding NoteIsRefusal}" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource StateBlocked}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Note}" Value="{x:Null}">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
         <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Padding" Value="7,2"/>
             <Setter Property="Margin" Value="4,0,0,0"/>
@@ -91,6 +108,17 @@
                 <Button DockPanel.Dock="Right" Content="Apply" Style="{StaticResource SmallButton}" Click="ApplyText_Click"/>
                 <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}" KeyDown="Box_KeyDown" FontFamily="Consolas"/>
             </DockPanel>
+        </DataTemplate>
+
+        <!-- A masked secret (web.token): a blank box is no edit; only the row's Reset clears it. -->
+        <DataTemplate x:Key="{x:Static core:SettingEditorKinds.Secret}">
+            <StackPanel>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="Set token" Style="{StaticResource SmallButton}" Click="SetSecret_Click"/>
+                    <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}" KeyDown="Secret_KeyDown" FontFamily="Consolas"/>
+                </DockPanel>
+                <TextBlock Text="{x:Static core:SettingsRow_Builder.SECRET_NOTE}" Style="{StaticResource Hint}" Margin="0,2,0,0"/>
+            </StackPanel>
         </DataTemplate>
 
         <DataTemplate x:Key="ListItemsTemplate">
@@ -130,7 +158,7 @@
         </DataTemplate>
 
         <DataTemplate x:Key="{x:Static core:SettingEditorKinds.ReadOnly}">
-            <TextBlock Text="Shown here only — its description says where it is changed." Style="{StaticResource Hint}"/>
+            <TextBlock Text="{x:Static core:SettingsRow_Builder.READ_ONLY_NOTE}" Style="{StaticResource Hint}"/>
         </DataTemplate>
 
         <!-- ── One row: who it is on the left, what it reads and its control on the right ── -->
@@ -178,21 +206,7 @@
                                 Visibility="{Binding CanReset, Converter={StaticResource BoolToVisibility}}"
                                 Click="Reset_Click"/>
 
-                        <TextBlock Text="{Binding Note}" TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-                                    <Setter Property="Foreground" Value="{StaticResource AccentReviewer}"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding NoteIsRefusal}" Value="True">
-                                            <Setter Property="Foreground" Value="{StaticResource StateBlocked}"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding Note}" Value="{x:Null}">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
+                        <TextBlock Style="{StaticResource NoteStyle}"/>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -230,7 +244,7 @@
                 <TextBlock x:Name="PresetText" Margin="12,0,0,0" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center"/>
             </DockPanel>
             <TextBlock Style="{StaticResource Hint}" FontSize="11" Margin="0,4,0,0"
-                       Text="Every change is saved the moment you make it — the same way a tap on the phone or the web page saves it. The bot token is the one exception: it has its own Save."/>
+                       Text="{x:Static core:SettingsRow_Builder.IMMEDIATE_APPLY_NOTE}"/>
         </StackPanel>
 
         <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0" LastChildFill="False">
@@ -246,13 +260,13 @@
                         <Border Background="{StaticResource BgCard}" CornerRadius="6" Padding="12,10" Margin="0,0,0,8">
                             <StackPanel>
                                 <TextBlock Text="Telegram bot token" FontWeight="SemiBold"/>
-                                <TextBlock Text="From @BotFather. Kept in secrets.json, never in config.json and never in any settings list. Read when the app starts: restart the app after saving a new one."
+                                <TextBlock Text="{x:Static core:SettingsRow_Builder.BOT_TOKEN_NOTE}"
                                            FontSize="11" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,4,0,6"/>
                                 <DockPanel>
                                     <Button DockPanel.Dock="Right" Content="Save token" Margin="8,0,0,0" Click="SaveTokenButton_Click"/>
                                     <TextBox x:Name="BotTokenTextBox" FontFamily="Consolas"/>
                                 </DockPanel>
-                                <TextBlock x:Name="TokenNoteText" FontSize="11" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="TokenNoteText" Style="{StaticResource NoteStyle}" DataContext="{x:Null}"/>
                             </StackPanel>
                         </Border>
 

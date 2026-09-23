@@ -53,7 +53,7 @@ public class SettingEditorTests
         foreach (var reading in readings)
         {
             var kind = SettingEditor_Factory.Create_ForReading(reading).Kind;
-            var expected = reading.Definition.Renderer switch
+            var expected = reading.Definition.Path == SettingsSnapshot_Reader.MASKED_SECRET_PATH ? SettingEditorKinds.Secret : reading.Definition.Renderer switch
             {
                 SettingRenderers.Toggle => SettingEditorKinds.Toggle,
                 SettingRenderers.Choice => SettingEditorKinds.Choice,
@@ -271,13 +271,48 @@ public class SettingEditorTests
         Assert.Empty(expiry.Items);
     }
 
-    /// <summary>The masked token (P2) holds an empty box: its value never leaves the reader, so the editor cannot put it on screen either.</summary>
+    /// <summary>
+    /// THE MASKED TOKEN (P2) IS A SECRET ROW: its box is always empty because its value never leaves the reader, so a
+    /// blank box is NO EDIT — as a plain Text row an Apply on it wrote "" and cleared a set token with "Saved."
+    /// (review of 8be367a). A typed value sets it; only the row's Reset clears it, and Reset is on offer when
+    /// config.json is what set it.
+    /// </summary>
     [Fact]
-    public void TheMaskedToken_HoldsAnEmptyBox()
+    public void TheMaskedToken_ABlankBoxIsNoEdit_AndOnlyResetClearsIt()
     {
         var token = Editor(SettingsSnapshot_Reader.MASKED_SECRET_PATH, """{"web": {"token": "s3cret"}}""");
 
+        Assert.Equal(SettingEditorKinds.Secret, token.Kind);
         Assert.Equal(SettingsSnapshot_Reader.SECRET_SET, token.Reading.DisplayValue);
         Assert.Equal(string.Empty, token.EditText);
+        Assert.Null(token.Build_Secret_OrNull(string.Empty));
+        Assert.Null(token.Build_Secret_OrNull("   "));
+        Assert.Equal("abc", token.Build_Secret_OrNull("abc")!.GetValue<string>());
+        Assert.True(token.CanReset);
+
+        Assert.False(Editor(SettingsSnapshot_Reader.MASKED_SECRET_PATH).CanReset);
+    }
+
+    /// <summary>
+    /// AN APPLY THAT CHANGES NOTHING WRITES NOTHING (review of 8be367a, P11's spirit): the untouched box holds the
+    /// resolved value, and writing it back would turn "from preset classic" into "set here" with no change by the
+    /// owner. JSON-equal: 25 typed (a long) and 25 read from the file are the same value.
+    /// </summary>
+    [Fact]
+    public void AnUnchangedBox_IsNoEdit_WhateverLayerAnsweredIt()
+    {
+        var shipped = Editor("highRiskCodeExpiryMinutes");
+        var fromFile = Editor("highRiskCodeExpiryMinutes", """{"highRiskCodeExpiryMinutes": 25}""");
+        var chatId = Editor("telegramSupergroupChatId");
+        var voice = Editor("voiceTranscribeCommand", """{"voiceTranscribeCommand": "whisper  --fast"}""");
+
+        Assert.NotEqual(SettingOrigins.ConfigFile, shipped.Reading.Origin);
+        Assert.True(shipped.Is_Unchanged(shipped.Build_FromText(shipped.EditText)));
+        Assert.True(fromFile.Is_Unchanged(fromFile.Build_FromText("25")));
+        Assert.False(fromFile.Is_Unchanged(fromFile.Build_FromText("26")));
+        Assert.True(chatId.Is_Unchanged(chatId.Build_FromText(chatId.EditText)));
+        Assert.False(chatId.Is_Unchanged(chatId.Build_FromText("-100")));
+        Assert.True(voice.Is_Unchanged(voice.Build_FromText(voice.EditText)));
+        Assert.False(voice.Is_Unchanged(voice.Build_FromText("whisper --fast")));
     }
 }

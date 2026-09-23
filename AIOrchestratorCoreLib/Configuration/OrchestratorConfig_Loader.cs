@@ -374,17 +374,25 @@ public static class OrchestratorConfig_Loader
     /// secrets.json holds only what a human put there, so a rewrite is never the smaller loss — the rule
     /// <see cref="Save"/> follows for this file too (P36).
     /// </para>
+    /// <para>
+    /// RETURNS THE TOKEN AS WRITTEN (trimmed, or null for none), so the window's box can show what secrets.json
+    /// now holds rather than what was pasted — the tidy is this method's, and the box must not re-derive it.
+    /// </para>
     /// </summary>
-    public static void Save_BotToken(ISupervisionPaths paths, string? token)
+    public static string? Save_BotToken(ISupervisionPaths paths, string? token)
     {
+        var written = Normalise_BotToken_OrNull(token);
+
         lock (Settings_Writer.CONFIG_WRITE_LOCK)
         {
             var secretsRoot = Read_TreeForEditing_OrThrow(paths.SecretsFile, corruptReadsAsEmpty: false);
 
-            secretsRoot["telegramBotToken"] = Normalise_BotToken_OrNull(token);
+            secretsRoot["telegramBotToken"] = written;
 
             Atomic_FileWriter.Write_AllText(paths.SecretsFile, secretsRoot.ToJsonString(JsonWriting.INDENTED));
         }
+
+        return written;
     }
 
     /// <summary>
