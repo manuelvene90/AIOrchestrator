@@ -139,4 +139,46 @@ public static class SiblingNotice_Wording
             $"'{name}' is already the name of {holderOrchId}, an open session of this endeavour. Two topics with one name are two topics the owner cannot tell apart. Pick another name.\n\n"
             + NOTHING_CHANGED);
     }
+
+    // ------------------------------------------------------------------------------- the birth (§4.3)
+    //
+    // THE THREE LINES BELOW ARE NOT REFUSALS, and two of them break the Agent-audience rule above on
+    // purpose: the birth note and the parent's "started" line are what the owner tapped for, so they are
+    // Owner-audience (global constraint, decision 15's test — the owner acts on them by talking to the
+    // new topic). The general line is Agent: the owner already has both of the others on the phone.
+
+    /// <summary>
+    /// THE FIRST MESSAGE IN THE NEW TOPIC (§2.1, §4.3 step 4). It names the parent, the job and WHERE THE
+    /// BRIEF IS — the path and entry index of the parent's outbox — because that HANDOVER entry is the
+    /// only thing the child starts from, and "your brief is in your sibling's outbox" with no index would
+    /// send it reading a file a whole endeavour writes into. "Write here about this job only" is said to
+    /// the owner: one topic, one job (§2.2).
+    /// </summary>
+    public static (string Subject, string Body) Describe_BirthNote(string parentName, string job, string parentOutboxPath, int handoverIndex)
+    {
+        return (
+            $"🔗 Sibling of {parentName}",
+            $"job: {job}\nWrite here about this job only.\nYour brief: {parentOutboxPath} entry [{handoverIndex}]");
+    }
+
+    /// <summary>The requesting topic's one line (§2.1): the owner sees that the tap worked, and where to look next.</summary>
+    public static (string Subject, string Body) Describe_ParentStarted(string childId, string childName)
+    {
+        return (
+            $"sibling '{childId}' started — {childName} (its own topic)",
+            $"The owner talks to '{childName}' in its own topic. You and it write to each other only through your sibling outboxes; carry on with your own job.");
+    }
+
+    /// <summary>
+    /// The general supervisor's record (§4.3 step 5). It tracks orchestrations, so the subject opens the
+    /// way <c>start-orchestration</c>'s does — "orchestration '&lt;id&gt;' started" — and says in the same
+    /// breath whose sibling it is, which is the fact that line has never had to carry.
+    /// </summary>
+    public static (string Subject, string Body) Describe_GeneralStarted(string childId, string childName, string parentId, string parentName, string workingPath)
+    {
+        return (
+            $"orchestration '{childId}' started — a sibling of '{parentId}'",
+            $"'{childId}' ({childName}) was started on the owner's tap as a sibling of '{parentId}' ({parentName}), in its own worktree '{workingPath}' and its own topic. "
+            + "They share an endeavour: closing one never closes the other.");
+    }
 }
