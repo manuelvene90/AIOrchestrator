@@ -124,6 +124,35 @@ public class ParkedCloseRequestReaderTests : IDisposable
         Assert.NotNull(ParkedCloseRequest_Reader.Read_OrNull(Write_Request(MEMBER_CLOSE)));
     }
 
+    /// <summary>
+    /// A PARKED SPAWN-SIBLING READS AS THE SIBLING KIND, carrying the whole request (plan 2026-09-23
+    /// Task 8). Without the fourth arm the file the executor parks would read as null, and the ask sweep
+    /// would archive it "unreadable" and tell the solo to drop a fresh one — the member-close defect this
+    /// class's header records, for the newest kind. The other kinds carry no sibling at all.
+    /// </summary>
+    [Fact]
+    public void ASpawnSiblingReadsAsTheSiblingKind_CarryingTheWholeRequest()
+    {
+        var worktree = Path.Combine(_tempRoot, "limits").Replace("\\", "\\\\");
+        var path = Write_Request(
+            $$"""{"action":"spawn-sibling","orchId":"ai-orchestrator-7","name":"AI-Orch · limits rework","job":"Rework the pause","handover":14,"worktree":"{{worktree}}","reason":"two jobs to steer apart"}""");
+
+        var parked = ParkedCloseRequest_Reader.Read_OrNull(path);
+
+        Assert.NotNull(parked);
+        Assert.Equal(ParkedCloseKinds.Sibling, parked.Kind);
+        Assert.Equal("ai-orchestrator-7", parked.OrchId);
+        Assert.Null(parked.MemberId);
+        Assert.Equal("two jobs to steer apart", parked.Reason);
+        Assert.Equal(ParkedCloseRequest_Reader.SIBLING_REQUESTER_DESCRIPTION, parked.Requester);
+        Assert.NotNull(parked.Sibling);
+        Assert.Equal("AI-Orch · limits rework", parked.Sibling.Name);
+        Assert.Equal(14, parked.Sibling.HandoverIndex);
+
+        Assert.Null(ParkedCloseRequest_Reader.Read_OrNull(Write_Request(MEMBER_CLOSE))!.Sibling);
+        Assert.Null(ParkedCloseRequest_Reader.Read_OrNull(Write_Request(ORCHESTRATION_CLOSE))!.Sibling);
+    }
+
     string Write_Request(string json)
     {
         var path = Path.Combine(_tempRoot, $"{Guid.NewGuid():N}.json");

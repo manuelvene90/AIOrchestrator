@@ -29,6 +29,14 @@ public static class ParkedCloseRequest_Reader
     /// </summary>
     public const string PROMOTION_REQUESTER_DESCRIPTION = "the solo session of this orchestration";
 
+    /// <summary>
+    /// The same for a spawn-sibling: its schema records no requester either, and the executor refuses
+    /// anything but an open solo before parking (spec 2026-09-23 §4.2, <c>not-a-solo</c>), so only the
+    /// solo can have asked. The prompt names the requester by its display name instead, which the store
+    /// — not the file — supplies.
+    /// </summary>
+    public const string SIBLING_REQUESTER_DESCRIPTION = "the solo session of this orchestration";
+
     public static IParkedCloseRequest? Read_OrNull(string parkedFilePath)
     {
         var orchestrationRequest = OrchestrationRequests_Reader.Read_CloseOrchestrationRequest_OrNull(parkedFilePath);
@@ -64,6 +72,11 @@ public static class ParkedCloseRequest_Reader
                 promotionRequest.Reason,
                 parkedFilePath);
         }
+
+        var siblingRequest = OrchestrationRequests_Reader.Read_SpawnSiblingRequest_OrNull(parkedFilePath);
+
+        if (siblingRequest != null)
+            return ParkedCloseRequest_Factory.Create_ForSibling(siblingRequest, SIBLING_REQUESTER_DESCRIPTION, parkedFilePath);
 
         // Unreadable, or a kind that has no business being parked. Null means "do not act", and the
         // caller files it unexecuted — a request nobody can read is not authority to end anything.

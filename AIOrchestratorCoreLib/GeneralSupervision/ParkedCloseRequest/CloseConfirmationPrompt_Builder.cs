@@ -12,13 +12,25 @@ namespace AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 /// </summary>
 public static class CloseConfirmationPrompt_Builder
 {
-    public static string Build(IParkedCloseRequest request, string? unresolvedLedger)
+    /// <param name="requesterName">
+    /// The requester's display name from the STORE, read only by the Sibling prompt, whose first line
+    /// names who asks (spec 2026-09-23 §2.1 step 3); null falls back to the orch id. It is a parameter of
+    /// THIS method rather than an engine-side choice between two builders (pre-flight ruling H): the
+    /// engine calls one builder for every kind, so there is one route to each owner-facing sentence —
+    /// decision 12, and the Describe_Decision history below records the last time there were two.
+    /// </param>
+    public static string Build(IParkedCloseRequest request, string? unresolvedLedger, string? requesterName = null)
     {
         return request.Kind switch
         {
             ParkedCloseKinds.Orchestration => Build_ForOrchestration(request, unresolvedLedger),
             ParkedCloseKinds.Implementer => Build_ForImplementer(request),
             ParkedCloseKinds.Promotion => Build_ForPromotion(request),
+
+            // REAL FROM THE TASK THAT FIRST PARKS ONE (pre-flight ruling A, 2026-09-23). The per-tick ask
+            // sweep reaches this switch with no tap at all, as soon as the requester has a topic, so an
+            // arm that threw "until the tap task lands" would have thrown on the 2-second tick.
+            ParkedCloseKinds.Sibling => Build_ForSibling(request, requesterName ?? request.OrchId),
             _ => throw new ArgumentOutOfRangeException(nameof(request), $"unhandled close kind '{request.Kind}'"),
         };
     }
@@ -53,6 +65,7 @@ public static class CloseConfirmationPrompt_Builder
     {
         var isMember = request?.Kind == ParkedCloseKinds.Implementer;
         var isPromotion = request?.Kind == ParkedCloseKinds.Promotion;
+        var isSibling = request?.Kind == ParkedCloseKinds.Sibling;
 
         // THE HEADER MUST NAME WHAT THE PROMPT NAMED. Every sentence used to open "Close '{orchId}'?"
         // whatever had been tapped, so retiring one member reported itself under the orchestration's
@@ -63,6 +76,7 @@ public static class CloseConfirmationPrompt_Builder
         // is how a record comes to say the opposite of what happened.
         var header =
             isPromotion ? $"⚙️ Turn '{orchId}' into a full crew?"
+            : isSibling ? $"🔗 Start sibling '{request!.Sibling?.Name ?? orchId}'?"
             : isMember ? $"⚠️ Close member '{request!.MemberId}' in '{orchId}'?"
             : request == null ? $"'{orchId}'"
             : $"⚠️ Close '{orchId}'?";
@@ -75,12 +89,14 @@ public static class CloseConfirmationPrompt_Builder
         {
             CloseTapOutcomes.Declined =>
                 isPromotion ? "✋ Left as one session — you declined. It keeps working exactly as it was."
+                : isSibling ? "✋ Kept as one session — you declined. Nothing was started."
                 : isMember ? "✋ Kept open — you declined. That session keeps running."
                 : request == null ? "✋ You declined. Nothing was changed."
                 : "✋ Kept open — you declined. Its sessions keep running.",
 
             CloseTapOutcomes.Closed =>
                 isPromotion ? "✅ Promoted — you confirmed. The supervisor is taking over this conversation."
+                : isSibling ? "✅ Started — you confirmed."
                 : request == null ? "✅ You confirmed."
                 : "✅ Closed — you confirmed.",
 
@@ -101,8 +117,12 @@ public static class CloseConfirmationPrompt_Builder
             // the close button disabled and "Show session" hidden — the one control that would reach a
             // session still running. It now says what is unusual about this outcome instead: the close
             // is recorded, nothing will ask again, and the error is where errors actually land.
-            CloseTapOutcomes.Uncertain => isPromotion
-                ? "⚠️ The promotion did not complete. It is recorded as done, the crew may not be running, and you will NOT be asked again. The error is in the General topic."
+            CloseTapOutcomes.Uncertain =>
+                isPromotion ? "⚠️ The promotion did not complete. It is recorded as done, the crew may not be running, and you will NOT be asked again. The error is in the General topic."
+
+                // A BIRTH THAT THREW MAY HAVE GOT HALF-WAY: the child can exist, linked, with its session
+                // never started (the birth step's post-create failure). So neither "started" nor "nothing".
+                : isSibling ? "⚠️ The sibling did not start cleanly — it may exist without a running session, and you will NOT be asked again. The error is in the General topic."
                 : $"⚠️ Close did not complete. It is recorded as closed, {survivors}, and you will NOT be asked again. The error is in the General topic.",
 
             _ => throw new ArgumentOutOfRangeException(nameof(outcome), $"unhandled close outcome '{outcome}'"),
@@ -184,6 +204,7 @@ public static class CloseConfirmationPrompt_Builder
         return kind switch
         {
             ParkedCloseKinds.Promotion => ("✅ Make it a crew", "✋ Keep one session"),
+            ParkedCloseKinds.Sibling => ("✅ Start it", "✋ Keep one session"),
             ParkedCloseKinds.Orchestration => ("✅ Close it", "✋ Keep it open"),
             ParkedCloseKinds.Implementer => ("✅ Close it", "✋ Keep it open"),
             _ => throw new ArgumentOutOfRangeException(nameof(kind), $"unhandled close kind '{kind}'"),
@@ -210,6 +231,7 @@ public static class CloseConfirmationPrompt_Builder
             ParkedCloseKinds.Orchestration => "the close of this orchestration",
             ParkedCloseKinds.Implementer => $"the close of '{request.MemberId}'",
             ParkedCloseKinds.Promotion => "the promotion to a full crew",
+            ParkedCloseKinds.Sibling => Describe_SiblingAsk(request),
             _ => "the request you filed",
         };
     }
@@ -234,6 +256,7 @@ public static class CloseConfirmationPrompt_Builder
             ParkedCloseKinds.Orchestration => $"the close of '{orchId}'",
             ParkedCloseKinds.Implementer => $"the close of '{request!.MemberId}' in '{orchId}'",
             ParkedCloseKinds.Promotion => $"the promotion of '{orchId}' to a full crew",
+            ParkedCloseKinds.Sibling => $"{Describe_SiblingAsk(request!)} for '{orchId}'",
             _ => $"a request against '{orchId}'",
         };
     }
@@ -253,6 +276,7 @@ public static class CloseConfirmationPrompt_Builder
         return kind switch
         {
             ParkedCloseKinds.Promotion => confirms ? "promoting…" : "kept as one session",
+            ParkedCloseKinds.Sibling => confirms ? "starting…" : "kept as one session",
             ParkedCloseKinds.Orchestration or ParkedCloseKinds.Implementer => confirms ? "closing…" : "kept open",
             _ => confirms ? "working on it…" : "nothing changed",
         };
@@ -271,6 +295,7 @@ public static class CloseConfirmationPrompt_Builder
         return kind switch
         {
             ParkedCloseKinds.Promotion => "nothing was promoted",
+            ParkedCloseKinds.Sibling => "nothing was started",
             ParkedCloseKinds.Orchestration or ParkedCloseKinds.Implementer => "nothing was closed",
             _ => "nothing was done",
         };
@@ -281,6 +306,35 @@ public static class CloseConfirmationPrompt_Builder
     // sitting beside it. Its two production callers are the two sentences it broke, and no prompt body
     // ever called it — so keeping it would have left a second phrase-maker for one fact, alive on
     // tests alone, and it is the one that requires the caller to supply the verb that went wrong.
+
+    /// <summary>
+    /// THE SIBLING PROMPT, spec 2026-09-23 §2.1 step 3 line for line: who asks, the new topic's name, the
+    /// job, and why one session is not enough — the four facts the owner decides on, and nothing else.
+    /// The job line becomes the child's first FROM owner entry once they tap, so what they read here is
+    /// exactly what they approve.
+    ///
+    /// <para>
+    /// Public, like the rest of this class's sentences, so the suite pins the sentence the owner reads;
+    /// the engine reaches it only through <see cref="Build"/> (pre-flight ruling H).
+    /// </para>
+    /// </summary>
+    public static string Build_ForSibling(IParkedCloseRequest request, string requesterName)
+    {
+        var sibling = request.Sibling
+            ?? throw new ArgumentException($"a Sibling-kind request carries no spawn-sibling request (file '{request.ParkedFilePath}')", nameof(request));
+
+        return
+            $"🔗 {requesterName} wants a sibling session for a parallel job\n"
+            + $"New topic: {sibling.Name}\n"
+            + $"Job: {sibling.Job}\n"
+            + $"Why: {sibling.Reason}";
+    }
+
+    /// <summary>The sibling ask, NAMED: two siblings asked for in one day are two different decisions.</summary>
+    static string Describe_SiblingAsk(IParkedCloseRequest request)
+    {
+        return request.Sibling == null ? "a sibling session" : $"a sibling session ('{request.Sibling.Name}')";
+    }
 
     static string Build_ForOrchestration(IParkedCloseRequest request, string? unresolvedLedger)
     {

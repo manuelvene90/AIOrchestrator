@@ -35,6 +35,19 @@ public static class SiblingNotice_Wording
             + $"You will get an entry here either way. If they do not answer within {CloseConfirmation_Parking.EXPIRY_HOURS} hours it lapses and you are told — do NOT re-drop it in the meantime, and carry on working.");
     }
 
+    /// <summary>
+    /// The request could not be judged or parked — an exception, not a refusal. FAIL CLOSED, the promote
+    /// precedent: nothing is parked, so nothing can start, and the session is told to ask again rather
+    /// than left waiting on a tap that will never be offered.
+    /// </summary>
+    public static (string Subject, string Body) Describe_Unheld(string cause)
+    {
+        return (
+            "sibling NOT held — nothing was started",
+            $"Your spawn-sibling request could not be held for the owner's confirmation ({cause}), so it was not acted on and you are still the only session on this job. Ask again if it is still wanted.\n\n"
+            + NOTHING_CHANGED);
+    }
+
     /// <summary>General-channel failure line: there is no open orchestration to address it to.</summary>
     public static (string Subject, string Body) Describe_Unspawnable(string orchId)
     {

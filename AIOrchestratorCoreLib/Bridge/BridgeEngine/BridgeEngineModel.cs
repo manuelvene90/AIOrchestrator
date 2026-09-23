@@ -7,6 +7,7 @@ using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using AIOrchestratorCoreLib.Bridge.PeriodicStatus;
 using AIOrchestratorCoreLib.Bridge.ReceiptRegistry;
+using AIOrchestratorCoreLib.Bridge.Siblings;
 using AIOrchestratorCoreLib.Bridge.SuppressedEntries;
 using AIOrchestratorCoreLib.Bridge.TopicDeletion;
 using AIOrchestratorCoreLib.Channels;
@@ -5029,12 +5030,13 @@ internal sealed class BridgeEngineModel(
             Delete_RequestFile(malformedRequest.FilePath);
         }
 
-        // THE THREE THAT SPAWN. Left on disk while paused, so they run at the resume.
+        // THE FOUR THAT SPAWN. Left on disk while paused, so they run at the resume.
         if (!dispatchPaused)
         {
             Process_StartRequests(pending);
             Process_AddImplementerRequests(pending);
             Process_PromoteOrchestrationRequests(pending);
+            Process_SpawnSiblingRequests(pending);
         }
 
         Process_CloseImplementerRequests(pending);
@@ -5496,6 +5498,66 @@ internal sealed class BridgeEngineModel(
                     request.OrchId, AppEntryAudiences.Agent,
                     "promotion NOT held — nothing was changed",
                     $"Your promotion request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and you are still the session here. Ask again if it is still wanted.");
+
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
+            }
+        }
+    }
+
+    /// <summary>
+    /// A solo asking for a SIBLING solo (spec 2026-09-23 §4.2): refused to the solo with its own reason,
+    /// or parked for the owner's tap (O1 — the tap is <see cref="Ask_OwnerToConfirmClose_Async"/>'s).
+    /// Call-and-append only: the table is <see cref="SiblingRequest_Validator"/>'s, every word is
+    /// <see cref="SiblingNotice_Wording"/>'s, and the world is read by <see cref="SiblingWorld_Reader"/> —
+    /// which starts git, so it runs HERE, once per arriving request, and never on the tick's sweeps.
+    ///
+    /// <para>
+    /// A refusal has NO owner involvement (the promote precedent). <c>unspawnable</c> has no requester
+    /// channel, so it goes to General — as Agent, not the Owner audience promote uses there: decision 15,
+    /// the owner cannot act on a missing orchestration's request. And nothing is keyed on the raw id
+    /// until the store has vouched for it: only a refusal with a real requester, or the catch below when
+    /// the world named one, writes into an orchestration's channel.
+    /// </para>
+    /// </summary>
+    void Process_SpawnSiblingRequests(IPendingRequests pending)
+    {
+        foreach (var request in pending.SpawnSiblingRequests)
+        {
+            SiblingWorld? world = null;
+
+            try
+            {
+                world = SiblingWorld_Reader.Read(_paths, _store, _configProvider.Get_Current(), request, ownParkedPath: null);
+                var refusal = SiblingRequest_Validator.Decide_Refusal_OrNull(request, world);
+
+                if (refusal != null)
+                {
+                    if (refusal.Value.Label == SiblingRefusals.UNSPAWNABLE)
+                        Append_GeneralAppEntry(AppEntryAudiences.Agent, refusal.Value.Subject, refusal.Value.Body);
+                    else
+                        Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Agent, refusal.Value.Subject, refusal.Value.Body);
+
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, refusal.Value.Label);
+                    continue;
+                }
+
+                var parkedPath = CloseConfirmation_Parking.Park(_paths, request.SourceFilePath);   // O1: the tap is the ask sweep's.
+                _log.Log_Info(request.OrchId, $"spawn-sibling held for the owner's confirmation ({parkedPath})");
+
+                var held = SiblingNotice_Wording.Describe_Held(request);
+                Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Agent, held.Subject, held.Body);
+            }
+            catch (Exception ex)
+            {
+                // Fail closed and say so, as promote does: nothing was parked, so nothing can start.
+                _log.Log_Error(request.OrchId, "spawn-sibling could not be held for confirmation — NOT started", ex);
+
+                var unheld = SiblingNotice_Wording.Describe_Unheld(ex.Message);
+
+                if (world?.Requester != null)
+                    Append_OrchestrationAppEntry(world.Requester.OrchId, AppEntryAudiences.Agent, unheld.Subject, unheld.Body);
+                else
+                    Append_GeneralAppEntry(AppEntryAudiences.Agent, $"{unheld.Subject}: '{request.OrchId}'", unheld.Body);
 
                 Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
             }
@@ -6027,7 +6089,9 @@ internal sealed class BridgeEngineModel(
             : Planning.PlanProgress_Formatter.Describe_UnresolvedAtClose_OrNull(
                 Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(request.OrchId))));
 
-        var text = CloseConfirmationPrompt_Builder.Build(request, unresolved);
+        // The requester's NAME rides into the one builder (pre-flight ruling H): only the Sibling prompt
+        // reads it, and a second, sibling-only builder chosen here would be two routes to one sentence.
+        var text = CloseConfirmationPrompt_Builder.Build(request, unresolved, session.DisplayName ?? session.OrchId);
 
         var confirmData = $"close-yes-{Guid.NewGuid():N}";
         var declineData = $"close-no-{Guid.NewGuid():N}";

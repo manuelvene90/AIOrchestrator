@@ -28,6 +28,16 @@ public enum ParkedCloseKinds
     /// to make.
     /// </summary>
     Promotion,
+
+    /// <summary>
+    /// A solo asks for a SIBLING solo — a second orchestration in its own topic and worktree, linked by an
+    /// endeavour (spec 2026-09-23 §4.3). It closes nothing; it is here because it is the same shape of
+    /// decision as a promotion: a second session running indefinitely is the owner's to start (O1).
+    ///
+    /// LAST, so no persisted ordinal moves: engine state stores the kind by NAME today, but an enum that
+    /// grows in the middle is one serializer change away from re-reading every parked Promotion as this.
+    /// </summary>
+    Sibling,
 }
 
 /// <summary>
@@ -61,4 +71,12 @@ public interface IParkedCloseRequest
     string Reason { get; }
 
     string ParkedFilePath { get; }
+
+    /// <summary>
+    /// The whole spawn-sibling request for <see cref="ParkedCloseKinds.Sibling"/>, and null for the other
+    /// three kinds. The prompt and the birth need its name, job, worktree and handover — fields no other
+    /// kind has — so it travels whole rather than being flattened into slots the other kinds would leave
+    /// empty or, worse, reuse.
+    /// </summary>
+    SpawnSiblingRequest.ISpawnSiblingRequest? Sibling { get; }
 }

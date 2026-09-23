@@ -91,6 +91,7 @@ public static class ParkedConfirmation_Planner
             OrchestrationRequests_Reader.CLOSE_ORCHESTRATION_ACTION => ParkedCloseRequest.ParkedCloseKinds.Orchestration,
             OrchestrationRequests_Reader.CLOSE_IMPLEMENTER_ACTION => ParkedCloseRequest.ParkedCloseKinds.Implementer,
             OrchestrationRequests_Reader.PROMOTE_ORCHESTRATION_ACTION => ParkedCloseRequest.ParkedCloseKinds.Promotion,
+            OrchestrationRequests_Reader.SPAWN_SIBLING_ACTION => ParkedCloseRequest.ParkedCloseKinds.Sibling,
             _ => null,
         };
     }
