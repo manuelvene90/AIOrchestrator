@@ -3584,7 +3584,13 @@ internal sealed class BridgeEngineModel(
     }
 
     long? _generalDashboardMessageId;
-    string? _generalDashboardText;
+
+    /// <summary>
+    /// The dashboard's last written RENDERING — text and bar labels, <see cref="Telegram.TopicStatusLine_RenderKey"/>
+    /// — not its text alone, so a changed <c>general.buttons</c> repaints a message whose text did not move.
+    /// </summary>
+    string? _generalDashboardRenderKey;
+
     bool _generalDashboardIdLoaded;
     DateTime? _generalDashboardFailedAtUtc;
 
@@ -3593,8 +3599,8 @@ internal sealed class BridgeEngineModel(
     /// sees the whole machine without asking and without a notification per update. The per-topic
     /// status line already works this way; this is the same idea one level up.
     ///
-    /// It writes only when the TEXT CHANGED — the shared decider's rule — which is why the composer
-    /// puts no clock in it. Everything else here is execution: the decisions that can be pure
+    /// It writes only when the RENDERING CHANGED — its text or its bar, the shared decider's rule over
+    /// PULSE's render key — which is why the composer puts no clock in it. Everything else here is execution: the decisions that can be pure
     /// functions are, because this class is internal sealed with no InternalsVisibleTo and nothing
     /// decided inside it can be reached by the suite.
     /// </summary>
@@ -3621,28 +3627,38 @@ internal sealed class BridgeEngineModel(
 
         Load_GeneralDashboardMessageId_Once();
 
+        // ONE snapshot for the text's glyph and the bar's verbs, read here at the point of effect.
+        var current = _configProvider.Get_Current();
+
         var text = Telegram.GeneralDashboard_Composer.Compose(
             Build_ProgressReportText(null),
-            _configProvider.Get_Current().TelegramStatusScreenshots);
-        var action = Telegram.TopicStatusLine_Decider.Decide(text, _generalDashboardText, _generalDashboardMessageId);
+            current.TelegramStatusScreenshots);
+
+        // GENERAL'S COMMAND BAR RIDES ON THE DASHBOARD, for the reason the topic bar rides on
+        // PULSE: this is the one message in General the app already keeps current and already
+        // keeps near the bottom, so the buttons stay within reach without a pin the owner has
+        // refused. `general.buttons` is read here; an empty list is no rows, which the client
+        // sends as no reply_markup at all (D4).
+        var commandButtonRows = _commandBars.Build_GeneralRows(current.Pulse);
+
+        // THE BAR IS BUILT BEFORE THE DECISION, AND THE DECISION IS MADE ON THE WHOLE RENDERING — the
+        // same key PULSE remembers, for PULSE's reason. Deciding on the text alone meant an edit of
+        // `general.buttons` never reached the phone: the composer puts no clock in the text, so a quiet
+        // machine's dashboard never moved and the old bar stayed up (plan 03 Task 5 review,
+        // 2026-09-23). The key is never blank and neither is the text it opens with (the HEADING), so
+        // the decider's nothing-to-say rule means here what it meant on the text.
+        var renderKey = Telegram.TopicStatusLine_RenderKey.Build(text, commandButtonRows);
+        var action = Telegram.TopicStatusLine_Decider.Decide(renderKey, _generalDashboardRenderKey, _generalDashboardMessageId);
 
         if (action == Telegram.TopicStatusActions.None)
             return;
 
         try
         {
-            // GENERAL'S COMMAND BAR RIDES ON THE DASHBOARD, for the reason the topic bar rides on
-            // PULSE: this is the one message in General the app already keeps current and already
-            // keeps near the bottom, so the buttons stay within reach without a pin the owner has
-            // refused.
-            //
             // THE ROW-AWARE CALLS, NOT THE PLAIN ONES. A plain edit sends no reply_markup and
             // Telegram reads the absence as "remove the keyboard", so editing this message the old
             // way would strip the bar off it on the very next tick — the same trap the per-topic
-            // line documents at its own edit. `general.buttons` is read here, at the point of effect;
-            // an empty list is no rows, which the client sends as no reply_markup at all (D4).
-            var commandButtonRows = _commandBars.Build_GeneralRows(_configProvider.Get_Current().Pulse);
-
+            // line documents at its own edit.
             if (action == Telegram.TopicStatusActions.Edit && _generalDashboardMessageId != null)
             {
                 await _telegramClient.Edit_MessageTextWithButtonRows_Async(_generalDashboardMessageId.Value, text, commandButtonRows, cancellationToken);
@@ -3658,7 +3674,7 @@ internal sealed class BridgeEngineModel(
                 Save_GeneralDashboardMessageId(messageId.Value);
             }
 
-            _generalDashboardText = text;
+            _generalDashboardRenderKey = renderKey;
             _generalDashboardFailedAtUtc = null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -3668,10 +3684,10 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             // "not modified" is Telegram agreeing with us: the desired state already holds, so it is a
-            // SUCCESS. Recording the text is what stops it being retried every tick for ever.
+            // SUCCESS. Recording the rendering is what stops it being retried every tick for ever.
             if (Telegram.TopicStatusLine_Decider.Is_MessageAlreadyCurrent(ex.Message))
             {
-                _generalDashboardText = text;
+                _generalDashboardRenderKey = renderKey;
                 return;
             }
 
@@ -3680,7 +3696,7 @@ internal sealed class BridgeEngineModel(
             if (Telegram.TopicStatusLine_Decider.Is_MessageGone(ex.Message))
             {
                 _generalDashboardMessageId = null;
-                _generalDashboardText = null;
+                _generalDashboardRenderKey = null;
                 Delete_GeneralDashboardState_BestEffort();
                 return;
             }
