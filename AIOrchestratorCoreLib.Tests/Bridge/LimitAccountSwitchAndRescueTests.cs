@@ -49,6 +49,9 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
     readonly CapturingTelegram_Fake _telegram = new();
     readonly RecordingSpawner_Fake _spawner = new();
 
+    /// <summary>Every seeded slot reads as running, and a stop is recorded rather than performed.</summary>
+    readonly SessionProcesses_Fake _processes = new() { EverythingAlive = true };
+
     /// <summary>At the wall clock: the usage-probe reader filters windows on <c>DateTime.Now</c>.</summary>
     readonly FixedClock_Fake _clock = new(DateTime.UtcNow);
 
@@ -208,12 +211,14 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
 
         Assert.True(_log.Has_Line_Containing($"{memberId} was still stuck on a usage limit"), _log.Dump());
+        Assert.Single(_processes.Killed);
 
         // Past the check throttle, inside the minimum interval: not stopped a second time.
         _clock.Advance(TimeSpan.FromMinutes(2));
         await Run_Until_Async(engine, () => false, BridgeTestTiming.Window_ForTicks(10));
 
         Assert.Equal(1, Count_Lines_Containing("still stuck on a usage limit"));
+        Assert.Single(_processes.Killed);
     }
 
     /// <summary>Inside the grace the CLI's own auto-continue gets its turn, and a working member is never touched.</summary>
@@ -226,6 +231,7 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
 
         await Run_Until_Async(engine, () => false, BridgeTestTiming.Window_ForTicks(10));
         Assert.False(_log.Has_Line_Containing("still stuck on a usage limit"), _log.Dump());
+        Assert.Empty(_processes.Killed);
     }
 
     [Fact]
@@ -238,6 +244,62 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
 
         await Run_Until_Async(engine, () => false, BridgeTestTiming.Window_ForTicks(10));
         Assert.False(_log.Has_Line_Containing("still stuck on a usage limit"), _log.Dump());
+        Assert.Empty(_processes.Killed);
+    }
+
+    /// <summary>
+    /// /RESUME WAKES EVERYONE (owner, 2026-09-23 10:00Z: <i>"I sent a /resume command to the gen sup,
+    /// and not all got awakened"</i>). It used to wake only by appending GO AHEAD to channels, heard
+    /// only by an armed watcher — and at a usage limit every watcher had expired and could not re-arm.
+    /// Now the member blocked on the limit is stopped so the watchdog respawns it into the GO AHEAD,
+    /// with no grace (the refusal is a minute old), and the member that is working is not touched.
+    /// The reply counts restarts against sessions already awake, never "woke N" for appends nobody heard.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task Resume_RestartsTheBlockedMember_AndLeavesTheAwakeOnesAlone()
+    {
+        var (orchId, memberId) = Start_WithAMemberWhoseLastReplyIs(Limit_Refusal(_clock.UtcNow.AddMinutes(-1)));
+        var engine = Create_Engine();
+
+        _telegram.Queue_Updates(Build_GeneralOwnerMessageJson("/resume"));
+
+        Assert.True(
+            await Run_Until_Async(engine, () => _telegram.Has_Sent_Containing("restarted"), 20_000),
+            "THE DEFECT: /resume did not restart the session blocked on the usage limit."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}"
+            + $"{Environment.NewLine}Sent:{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        Assert.Equal([_paths.Get_ImplementerPidFile(orchId, memberId)], _processes.Killed);
+        Assert.True(_telegram.Has_Sent_Containing("restarted 1"), _telegram.Dump_Sent());
+        Assert.True(_telegram.Has_Sent_Containing("3 already awake"), _telegram.Dump_Sent());
+        Assert.False(_telegram.Has_Sent_Containing("go ahead sent to"), _telegram.Dump_Sent());
+        Assert.True(_log.Has_Line_Containing($"{orchId}/{memberId}"), _log.Dump());
+        Assert.True(_log.Has_Line_Containing($"{orchId}/supervisor (awake"), _log.Dump());
+    }
+
+    /// <summary>
+    /// ONE GO AHEAD PER BASIC ORCHESTRATION. A solo's channel IS the owner channel, so the member loop
+    /// used to write the same entry into the file the owner-channel append had just written — "woke 7"
+    /// on a morning with four sessions.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task Resume_WritesOneGoAhead_IntoABasicOrchestration()
+    {
+        var session = _launcher.Start_BasicOrchestration("Repo", _tempRepo);
+        var engine = Create_Engine();
+
+        _telegram.Queue_Updates(Build_GeneralOwnerMessageJson("/resume"));
+
+        Assert.True(
+            await Run_Until_Async(engine, () => _telegram.Has_Sent_Containing("already awake"), 20_000),
+            $"setup: /resume did not reply.{Environment.NewLine}{_log.Dump()}{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        var ownerChannel = File.ReadAllText(_paths.Get_OwnerChannelFile(session.OrchId));
+        var goAheads = ownerChannel.Split('\n').Count(line => line.StartsWith("## [", StringComparison.Ordinal) && line.Contains("GO AHEAD — resume", StringComparison.Ordinal));
+
+        Assert.True(goAheads == 1, $"the basic orchestration's owner channel carries {goAheads} GO AHEAD entries:{Environment.NewLine}{ownerChannel}");
     }
 
     IBridgeEngine Create_Engine()
@@ -246,7 +308,8 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
             _paths, _configProvider, _store, _launcher, _log, _telegram,
             _engineState, _clock,
             BridgeTestTiming.Fast(),
-            accountReader: ClaudeAccountReader_Factory.Create_FromFile(_claudeGlobalConfig));
+            accountReader: ClaudeAccountReader_Factory.Create_FromFile(_claudeGlobalConfig),
+            sessionProcesses: _processes);
     }
 
     void Seed_Pause(DateTime pausedUntilUtc, string? accountId)
@@ -300,6 +363,14 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
         return _log.Dump()
             .Split(Environment.NewLine)
             .Count(line => line.Contains(fragment, StringComparison.Ordinal));
+    }
+
+    /// <summary>A message in the General topic — no thread id, which is where /resume is offered.</summary>
+    static string Build_GeneralOwnerMessageJson(string text)
+    {
+        return $"{{\"ok\":true,\"result\":[{{\"update_id\":4001,\"message\":{{\"message_id\":91,"
+            + $"\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\"}}}}]}}";
     }
 
     static string Stamp(DateTime utc) => utc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");

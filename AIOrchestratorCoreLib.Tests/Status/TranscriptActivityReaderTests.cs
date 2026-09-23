@@ -437,6 +437,45 @@ public class TranscriptActivityReaderTests
     public void UnknownIsNotBlockedOnALimit()
     {
         Assert.False(TranscriptActivity_Reader.TranscriptActivity.Unknown.RefusedForUsageLimit);
+        Assert.Null(TranscriptActivity_Reader.TranscriptActivity.Unknown.RefusedAtUtc);
+    }
+
+    /// <summary>
+    /// THE REFUSAL CARRIES ITS OWN WORDS AND ITS OWN STAMP (owner, 2026-09-23). The rescue restarts a
+    /// stuck session only once the reset the refusal NAMES has passed, so it needs the sentence and the
+    /// moment it was said — not the last-activity stamp, which the CLI's `system` turn_duration record
+    /// moves straight after the refusal. The LATEST refusal wins: a retry refused again names the
+    /// current reset.
+    /// </summary>
+    [Fact]
+    public void A_refusal_carries_its_text_status_and_stamp_and_the_latest_one_wins()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(
+                LimitRefusal("2026-09-23T07:40:00.000Z", "You've hit your session limit · resets 7am (Europe/Rome)"),
+                Activity("2026-09-23T08:10:00.000Z"),
+                LimitRefusal("2026-09-23T09:13:00.000Z", "You've hit your session limit · resets 12pm (Europe/Rome)"),
+                Activity("2026-09-23T09:13:00.020Z", type: "system")),
+            startedMidFile: false);
+
+        Assert.True(activity.RefusedForUsageLimit);
+        Assert.Equal(new DateTime(2026, 9, 23, 9, 13, 0, DateTimeKind.Utc), activity.RefusedAtUtc);
+        Assert.Contains("resets 12pm (Europe/Rome)", activity.RefusalText);
+        Assert.Equal(429, activity.RefusalApiStatus);
+    }
+
+    [Fact]
+    public void A_reply_after_the_refusal_clears_its_text_and_stamp_too()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(
+                LimitRefusal("2026-09-23T09:13:00.000Z", "You've hit your session limit · resets 12pm (Europe/Rome)"),
+                Activity("2026-09-23T10:01:00.000Z")),
+            startedMidFile: false);
+
+        Assert.False(activity.RefusedForUsageLimit);
+        Assert.Null(activity.RefusedAtUtc);
+        Assert.Null(activity.RefusalText);
     }
 
     /// <summary>The CLI's refusal record as it appears in a live transcript (Claude Code 2.1.268/2.1.269).</summary>

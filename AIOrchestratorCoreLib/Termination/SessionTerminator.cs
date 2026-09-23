@@ -18,6 +18,36 @@ public static class SessionTerminator
     /// <summary>The spawned session host is always a PowerShell shell — the pid-recycling guard.</summary>
     static readonly IReadOnlySet<string> SHELL_PROCESS_NAMES = new HashSet<string> { "powershell", "pwsh" };
 
+    /// <summary>
+    /// The pid file names a live session shell. Moved here from the watchdog on 2026-09-23 so the limit
+    /// rescue asks the same question with the same pid-recycling guard, instead of a second copy.
+    /// </summary>
+    public static bool Is_SessionAlive(string pidFilePath)
+    {
+        try
+        {
+            if (!File.Exists(pidFilePath))
+                return false;
+
+            var pidText = File.ReadAllText(pidFilePath).Trim();
+
+            if (!int.TryParse(pidText, out var pid))
+                return false;
+
+            var process = Process.GetProcessById(pid);
+
+            if (process.HasExited)
+                return false;
+
+            // Guard against Windows pid recycling: the pid must still be a PowerShell shell.
+            return SHELL_PROCESS_NAMES.Contains(process.ProcessName.ToLowerInvariant());
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static void Kill_SessionTree_ByPidFile(string pidFilePath)
     {
         try

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -28,8 +27,6 @@ internal sealed class SessionWatchdogModel(
     /// a DUPLICATE (the launcher never claims the watchdog's own backoff slot).
     /// </summary>
     const int SPAWN_GRACE_SECONDS = 90;
-
-    static readonly IReadOnlySet<string> SHELL_PROCESS_NAMES = new HashSet<string> { "powershell", "pwsh" };
 
     readonly ISupervisionPaths _paths = paths;
     readonly IOrchestratorConfigProvider _configProvider = configProvider;
@@ -328,27 +325,6 @@ internal sealed class SessionWatchdogModel(
 
     static bool Is_SessionAlive(string pidFilePath)
     {
-        try
-        {
-            if (!File.Exists(pidFilePath))
-                return false;
-
-            var pidText = File.ReadAllText(pidFilePath).Trim();
-
-            if (!int.TryParse(pidText, out var pid))
-                return false;
-
-            var process = Process.GetProcessById(pid);
-
-            if (process.HasExited)
-                return false;
-
-            // Guard against Windows pid recycling: the pid must still be a PowerShell shell.
-            return SHELL_PROCESS_NAMES.Contains(process.ProcessName.ToLowerInvariant());
-        }
-        catch
-        {
-            return false;
-        }
+        return Termination.SessionTerminator.Is_SessionAlive(pidFilePath);
     }
 }

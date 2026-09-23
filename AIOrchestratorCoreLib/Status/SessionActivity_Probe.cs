@@ -72,6 +72,22 @@ public static class SessionActivity_Probe
     }
 
     /// <summary>
+    /// The usage-limit refusal this session is blocked on — when it was said, its words, its status —
+    /// or null when <see cref="Is_BlockedOnUsageLimit"/> would answer false. One transcript read for
+    /// the whole question, so "blocked" and "blocked since, until" cannot come from two different
+    /// reads of a file the session is appending to.
+    /// </summary>
+    public static (DateTime RefusedAtUtc, string Text, int? ApiStatus)? Read_UsageLimitRefusal_OrNull(string usageFilePath)
+    {
+        var activity = Read_Activity(usageFilePath);
+
+        if (!activity.RefusedForUsageLimit || activity.RefusedAtUtc == null)
+            return null;
+
+        return (activity.RefusedAtUtc.Value, activity.RefusalText ?? string.Empty, activity.RefusalApiStatus);
+    }
+
+    /// <summary>
     /// Working right now. Shared with the UI's chips and the Telegram status line, so "working now"
     /// means one thing everywhere — the reason the fifteen readers of this function move together
     /// rather than one at a time. Two liveness clocks disagreeing is how this subsystem got here.

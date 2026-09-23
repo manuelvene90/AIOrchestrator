@@ -119,6 +119,28 @@ public static class LimitReset_Parser
         TimeSpan.FromMilliseconds(250));
 
     /// <summary>
+    /// THE WEEKLY REFUSAL'S DATED CLAUSE — <c>resets Sep 15, 9pm (Europe/Rome)</c>, measured in a live
+    /// transcript on 2026-09-12. <see cref="RESETS_CLAUSE"/> never matched it (it wants the hour
+    /// straight after "resets"), which is right for the dispatcher: a weekly reset is days away and
+    /// its <see cref="MAX_DEFERRAL"/> would refuse it anyway. It is read ONLY by
+    /// <see cref="Read_ResetInstant_OrNull"/>. Everything after the date is
+    /// <see cref="RESETS_CLAUSE"/>'s own grammar, with the same group names, so the clock and the zone
+    /// are validated by the same code.
+    /// </summary>
+    static readonly Regex DATED_RESETS_CLAUSE = new(
+        @"resets\s+(?<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(?<day>\d{1,2})(?:st|nd|rd|th)?,?\s+(?:at\s+)?(?<hour>\d{1,2})(?::(?<minute>\d{2}))?(?![\d:])(?:\s*(?<meridiem>[ap]\.?m\.?))?(?:\s*\((?<zone>[^)]{1,64})\)|\s+(?<zoneBare>(?-i:[A-Z]{2,5})|[A-Za-z_]+/[A-Za-z0-9_+\-]+))?",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(250));
+
+    static readonly string[] MONTH_PREFIXES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+    /// <summary>
+    /// The furthest reset the rescue's reading accepts: a weekly window plus a day of slack for the
+    /// zone and the rounding. Anything further is not a window the CLI has ever named.
+    /// </summary>
+    public static readonly TimeSpan MAX_RESCUE_HORIZON = TimeSpan.FromDays(8);
+
+    /// <summary>
     /// WORDS ONLY A REFUSAL CARRIES. The gate used to be a case-insensitive <c>Contains("limit")</c>,
     /// which is true of <c>rate limiter</c>, <c>unlimited</c>, <c>no limit</c> and the Italian
     /// <c>limite</c> — and two probes on 2026-09-09 parked healthy sessions through it: a turn that
@@ -263,6 +285,77 @@ public static class LimitReset_Parser
             zone == null);
     }
 
+    /// <summary>
+    /// WHEN THE WINDOW A REFUSAL NAMES REOPENS, read as of the moment the refusal was SEEN — the
+    /// question the limit rescue asks (owner, 2026-09-23), not the dispatcher's. Two differences from
+    /// <see cref="Read_OrNull"/>, both because this reading only ever makes a restart WAIT and never
+    /// buys a silence: it is not capped at <see cref="MAX_DEFERRAL"/> (a weekly reset days away is the
+    /// true answer, and "nothing" would send the rescue to its no-reset rule, restarting a session
+    /// into the same wall every half hour), and it also reads the weekly refusal's dated clause
+    /// (<see cref="DATED_RESETS_CLAUSE"/>). Same gate, same clock and zone validation, same "two
+    /// clauses answer nothing" rule; <see cref="LimitResetReading.ZoneAssumedUtc"/> is carried for the
+    /// caller to judge. <see cref="Read_OrNull"/> is untouched by this method.
+    /// </summary>
+    public static LimitResetReading? Read_ResetInstant_OrNull(string? resultText, int? apiErrorStatus, DateTime seenAt)
+    {
+        if (string.IsNullOrWhiteSpace(resultText) || !Looks_LikeUsageLimit(resultText, apiErrorStatus))
+            return null;
+
+        Match plain;
+        Match dated;
+
+        try
+        {
+            plain = RESETS_CLAUSE.Match(resultText);
+            dated = DATED_RESETS_CLAUSE.Match(resultText);
+
+            var clauses = (plain.Success ? 1 : 0) + (plain.Success && plain.NextMatch().Success ? 1 : 0)
+                + (dated.Success ? 1 : 0) + (dated.Success && dated.NextMatch().Success ? 1 : 0);
+
+            if (clauses != 1)
+                return null;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return null;
+        }
+
+        var match = plain.Success ? plain : dated;
+        var clock = Read_Clock_OrNull(match);
+
+        if (clock == null)
+            return null;
+
+        var zoneText = Read_ZoneText_OrNull(match);
+        var zone = Find_Zone_OrNull(zoneText);
+        var seenAtUtc = seenAt.ToUniversalTime();
+
+        DateTime? resolved;
+
+        if (plain.Success)
+        {
+            resolved = Resolve_NextOccurrence_Uncapped_OrNull(clock.Value.Hour, clock.Value.Minute, zone ?? TimeZoneInfo.Utc, seenAtUtc);
+        }
+        else
+        {
+            var month = Array.IndexOf(MONTH_PREFIXES, match.Groups["month"].Value.ToLowerInvariant()) + 1;
+
+            if (month == 0 || !int.TryParse(match.Groups["day"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var day) || day < 1)
+                return null;
+
+            resolved = Resolve_OnDate_OrNull(month, day, clock.Value.Hour, clock.Value.Minute, zone ?? TimeZoneInfo.Utc, seenAtUtc);
+        }
+
+        if (resolved == null)
+            return null;
+
+        return new LimitResetReading(
+            resolved.Value,
+            match.Value.Trim(),
+            zone == null ? zoneText ?? "UTC" : zoneText!,
+            zone == null);
+    }
+
     /// <summary>The parenthesised zone if the text gave one, else the bare token, else nothing.</summary>
     static string? Read_ZoneText_OrNull(Match match)
     {
@@ -374,6 +467,21 @@ public static class LimitReset_Parser
     /// </summary>
     static DateTime? Resolve_NextOccurrence(int hour, int minute, TimeZoneInfo zone, DateTime nowUtc)
     {
+        var resolvedUtc = Resolve_NextOccurrence_Uncapped_OrNull(hour, minute, zone, nowUtc);
+
+        if (resolvedUtc == null)
+            return null;
+
+        return resolvedUtc.Value - nowUtc > MAX_DEFERRAL ? null : resolvedUtc;
+    }
+
+    /// <summary>
+    /// <see cref="Resolve_NextOccurrence"/> without the <see cref="MAX_DEFERRAL"/> cap — the whole of
+    /// its body before 2026-09-23, split out so the rescue's reading shares it rather than copying it.
+    /// Still null for an instant behind <paramref name="nowUtc"/>.
+    /// </summary>
+    static DateTime? Resolve_NextOccurrence_Uncapped_OrNull(int hour, int minute, TimeZoneInfo zone, DateTime nowUtc)
+    {
         var nowInZone = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, zone);
         var candidate = new DateTime(nowInZone.Year, nowInZone.Month, nowInZone.Day, 0, 0, 0, DateTimeKind.Unspecified).AddHours(hour).AddMinutes(minute);
 
@@ -392,7 +500,39 @@ public static class LimitReset_Parser
         if (resolvedUtc < nowUtc)
             return null;
 
-        return resolvedUtc - nowUtc > MAX_DEFERRAL ? null : resolvedUtc;
+        return resolvedUtc;
+    }
+
+    /// <summary>
+    /// A DATED clock, <c>Sep 15, 9pm</c>, as a UTC instant — in the year that puts it at or after
+    /// <paramref name="seenAtUtc"/> (a refusal seen on 30 Dec naming "Jan 2" means next year's). Null
+    /// for a date that does not exist, and for anything more than <see cref="MAX_RESCUE_HORIZON"/> out
+    /// or already behind the moment the sentence was said: the CLI names the NEXT reset, so either is a
+    /// reading this parser cannot stand behind. DST handling is <see cref="Resolve_NextOccurrence"/>'s.
+    /// </summary>
+    static DateTime? Resolve_OnDate_OrNull(int month, int day, int hour, int minute, TimeZoneInfo zone, DateTime seenAtUtc)
+    {
+        var seenInZone = TimeZoneInfo.ConvertTimeFromUtc(seenAtUtc, zone);
+
+        foreach (var year in new[] { seenInZone.Year, seenInZone.Year + 1 })
+        {
+            if (day > DateTime.DaysInMonth(year, month))
+                continue;
+
+            var candidate = new DateTime(year, month, day, 0, 0, 0, DateTimeKind.Unspecified).AddHours(hour).AddMinutes(minute);
+
+            while (zone.IsInvalidTime(candidate))
+                candidate = candidate.AddMinutes(1);
+
+            var resolvedUtc = TimeZoneInfo.ConvertTimeToUtc(candidate, zone);
+
+            if (resolvedUtc < seenAtUtc)
+                continue;
+
+            return resolvedUtc - seenAtUtc > MAX_RESCUE_HORIZON ? null : resolvedUtc;
+        }
+
+        return null;
     }
 }
 

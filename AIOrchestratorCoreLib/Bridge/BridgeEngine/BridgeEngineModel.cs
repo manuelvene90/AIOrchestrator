@@ -65,6 +65,9 @@ internal sealed class BridgeEngineModel(
     // Which Claude account is logged in — a usage-limit pause belongs to one (owner, 2026-09-23).
     Limits.ClaudeAccount.IClaudeAccountReader accountReader,
 
+    // The session shells, by pid file — what the limit rescue stops so the watchdog restarts them.
+    Termination.SessionProcesses.ISessionProcesses sessionProcesses,
+
     // The OUTBOUND ALLOWANCE the Telegram client spends from, held here only so it can be written
     // into .bridge-state.json beside the cursor (brief F5) — the engine never asks it for a token.
     // Null in file-only mode and on the test seams that hand in their own client.
@@ -1218,15 +1221,16 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Since when the dispatcher has been OPEN — the app's start, or the instant the last pause
-    /// ended. Read by <see cref="Stop_LimitBlockedSessions"/>, which gives the CLI's own auto-continue
-    /// a grace from this instant before it steps in. Mirror loop only.
+    /// ended. Handed to <see cref="_limitRescuer"/>, which gives the CLI's own auto-continue a grace
+    /// from this instant before it steps in.
     /// </summary>
     DateTime _dispatchOpenSinceUtc = clock.UtcNow;
 
-    /// <summary>When each slot was last stopped for being stuck on a limit. Mirror loop only.</summary>
-    readonly Dictionary<string, DateTime> _limitRescuedUtc = [];
-
-    DateTime _lastLimitRescueCheckUtc = DateTime.MinValue;
+    /// <summary>
+    /// Stops terminal sessions stuck on a usage limit so the watchdog restarts them — on the tick once
+    /// the reset has passed, and on /resume at once. See <see cref="LimitRescue.ILimitRescuer"/>.
+    /// </summary>
+    readonly LimitRescue.ILimitRescuer _limitRescuer = LimitRescue.LimitRescuer_Factory.Create(paths, store, log, sessionProcesses);
 
     /// <summary>
     /// False until the first pause check of this host run. That check announces a pause restored
@@ -1665,7 +1669,7 @@ internal sealed class BridgeEngineModel(
         // nothing to do with the session. Work already running is never touched.
         if (!dispatchPaused)
         {
-            Stop_LimitBlockedSessions();
+            Rescue_LimitBlockedSessions();
             _watchdog.Check_AndRestart_DeadSessions();
             Persist_EngineState_IfRespawnCountsMoved();
         }
@@ -10145,9 +10149,12 @@ internal sealed class BridgeEngineModel(
     /// a session that hit the limit ends its turn without doing the work, and nothing will speak to
     /// it again on its own, so the whole fleet sits idle until someone says go.
     ///
-    /// It works by APPENDING to each channel rather than touching the terminals: a channel change
-    /// is what every monitor is already watching for, so the wake goes through the same path as
-    /// ordinary traffic and needs no window handling, no pids, no respawn.
+    /// It APPENDS a GO AHEAD to each channel, and then STOPS every terminal session still blocked on
+    /// the limit so the watchdog respawns it into that entry (owner, 2026-09-23). The append alone was
+    /// the whole command until then, and it is heard only by an ARMED watcher: at 10:00:33Z that day
+    /// /resume answered "woke 7 session(s)" and not one session woke because of it — every monitor had
+    /// expired at the limit and the CLI refused to re-arm it. A session that is not blocked is never
+    /// stopped: /resume must not interrupt live work.
     /// </summary>
     async Task Resume_AllSessions_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
@@ -10213,7 +10220,7 @@ internal sealed class BridgeEngineModel(
             wokenOrchestrations++;
 
             // Every counter increments only on a written entry. The total is reported to the owner
-            // below as "go ahead sent to N sessions", and /resume is the one command with no retry —
+            // below as "GO AHEAD written to N channels", and /resume is the one command with no retry —
             // it exists for the usage-limit reset, where nothing else will speak to a session again.
             // Counting an append that did not happen tells the owner a session was woken and leaves
             // it asleep, which is the exact failure /resume is the remedy for.
@@ -10227,8 +10234,14 @@ internal sealed class BridgeEngineModel(
                 if (member.ClosedUtc != null)
                     continue;
 
-                if (ChannelAppender.Append_AppEntry(
-                        Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId), AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
+                var memberChannel = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
+
+                // A SOLO'S CHANNEL IS THE OWNER CHANNEL, written just above: one GO AHEAD per basic
+                // orchestration, not two (2026-09-23 — "woke 7" on a morning with four sessions).
+                if (string.Equals(memberChannel, _paths.Get_OwnerChannelFile(session.OrchId), StringComparison.Ordinal))
+                    continue;
+
+                if (ChannelAppender.Append_AppEntry(memberChannel, AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
                     wokenSessions++;
                 else
                     notWoken.Add($"{session.OrchId}/{member.MemberId}");
@@ -10243,7 +10256,7 @@ internal sealed class BridgeEngineModel(
         else
             notWoken.Add("general");
 
-        _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — woke {wokenSessions} session(s) across {wokenOrchestrations} orchestration(s)");
+        _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — GO AHEAD written to {wokenSessions} channel(s) across {wokenOrchestrations} orchestration(s) + general");
 
         // Named, not counted: "3 of 5" leaves the owner to work out which two are still asleep, and
         // /resume is exactly when they cannot afford to guess.
@@ -10259,10 +10272,27 @@ internal sealed class BridgeEngineModel(
             ? string.Empty
             : $" — cleared {clearedAppointments} usage-limit appointment{(clearedAppointments == 1 ? "" : "s")}";
 
+        // THE APPENDS ARE ONLY HEARD BY AN ARMED WATCHER, so every session still blocked on the limit
+        // is stopped now, AFTER its GO AHEAD is on disk, for the watchdog to respawn into it. Guarded
+        // like the two overrides above: the reply below must still go out.
+        LimitRescue.LimitRescueSweep? sweep = null;
+
+        try
+        {
+            sweep = _limitRescuer.Rescue_AllBlocked_Now(_clock.UtcNow, Is_BridgeDriven);
+            _log.Log_Info(GLOBAL_ORCH_ID, sweep.Describe_ForLog());
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(GLOBAL_ORCH_ID, "/resume could not restart the sessions blocked on a usage limit — the GO AHEAD entries are written, but a session whose watcher died at the limit will not hear them", ex);
+        }
+
+        var sweepNote = sweep == null ? "could not check which sessions are blocked (see the log)" : sweep.Describe_ForOwner();
+
         await Send_DirectReply_BestEffort_Async(
             client,
             messageThreadId,
-            $"▶ go ahead sent to {wokenSessions} session{(wokenSessions == 1 ? "" : "s")} across {wokenOrchestrations} orchestration{(wokenOrchestrations == 1 ? "" : "s")} (+ general){clearedNote}",
+            $"▶ /resume: {sweepNote} — GO AHEAD written to {wokenSessions} channel{(wokenSessions == 1 ? "" : "s")} across {wokenOrchestrations} orchestration{(wokenOrchestrations == 1 ? "" : "s")} (+ general){clearedNote}",
             cancellationToken);
     }
 
@@ -12271,78 +12301,28 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Stops every terminal session still stuck on a usage limit once the allowance is back, so the
-    /// watchdog's ordinary dead-session path restarts it. See <see cref="Limits.LimitRescue_Decider"/>
-    /// for the overnight incident and every rule. Only while the dispatcher is open — a stopped session
-    /// is only worth anything if the watchdog will bring it back.
+    /// The mirror tick's half of the limit rescue — see <see cref="LimitRescue.ILimitRescuer"/>. Only
+    /// while the dispatcher is open: a stopped session is only worth anything if the watchdog will
+    /// bring it back.
     /// </summary>
-    void Stop_LimitBlockedSessions()
+    void Rescue_LimitBlockedSessions()
     {
-        var nowUtc = _clock.UtcNow;
+        DateTime? accountSwitchedAtUtc;
 
-        if ((nowUtc - _lastLimitRescueCheckUtc).TotalSeconds < LIMIT_CHECK_INTERVAL_SECONDS)
-            return;
+        lock (_ownerStateLock)
+            accountSwitchedAtUtc = _limitAccountSinceUtc;
 
-        _lastLimitRescueCheckUtc = nowUtc;
-
-        // Nothing can qualify inside the grace — skip the glob and the transcript reads entirely.
-        if (nowUtc - _dispatchOpenSinceUtc < TimeSpan.FromMinutes(Limits.LimitRescue_Decider.GRACE_MINUTES))
-            return;
-
-        Stop_IfBlockedOnLimit(
-            GLOBAL_ORCH_ID, "general supervisor", Running.SessionRoles.General, Running.SessionLaunch.SessionLaunch_Factory.GENERAL_MEMBER_ID,
-            Path.Combine(_paths.GeneralFolder, UsageTotals_Reader.SESSION_USAGE_FILE), _paths.GeneralPidFile, nowUtc);
-
-        foreach (var session in _store.Load_All())
-        {
-            // The watchdog's own two exemptions: a closed session is never revived, and a paused one
-            // is asleep by the owner's decision, not stuck.
-            if (session.ClosedUtc != null || session.Paused)
-                continue;
-
-            if (!Sessions.OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc))
-            {
-                Stop_IfBlockedOnLimit(
-                    session.OrchId, "supervisor", Running.SessionRoles.Supervisor, Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
-                    Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE),
-                    _paths.Get_SupervisorPidFile(session.OrchId), nowUtc);
-            }
-
-            foreach (var member in session.Members)
-            {
-                if (member.ClosedUtc != null)
-                    continue;
-
-                Stop_IfBlockedOnLimit(
-                    session.OrchId, member.MemberId,
-                    Running.SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(member.MemberId)), member.MemberId,
-                    Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE),
-                    _paths.Get_ImplementerPidFile(session.OrchId, member.MemberId), nowUtc);
-            }
-        }
+        _limitRescuer.Rescue_Due(_clock.UtcNow, _dispatchOpenSinceUtc, accountSwitchedAtUtc, Is_BridgeDriven, FreshProbe_ShowsAllowance_Since);
     }
 
-    void Stop_IfBlockedOnLimit(string orchId, string slot, Running.SessionRoles role, string memberId, string usageFile, string pidFile, DateTime nowUtc)
+    /// <summary>
+    /// The account's live windows, from probes written at or after <paramref name="floorUtc"/>, say the
+    /// allowance is back — through <see cref="Read_CurrentLimitWindows"/>, the one reader the pause and
+    /// the alerts already share (decision 12).
+    /// </summary>
+    bool FreshProbe_ShowsAllowance_Since(DateTime floorUtc)
     {
-        // A BRIDGE-DRIVEN session is not stuck at a menu: its dispatcher already reads the refusal's
-        // reset time and runs the turn again then (LimitReset_Parser).
-        if (Is_BridgeDriven(role, orchId, memberId))
-            return;
-
-        var key = $"{orchId}/{memberId}";
-        _limitRescuedUtc.TryGetValue(key, out var lastRestartUtc);
-
-        if (!Limits.LimitRescue_Decider.Should_Restart(
-                SessionActivity_Probe.Is_BlockedOnUsageLimit(usageFile),
-                SessionActivity_Probe.Get_LastActivityUtc_OrNull(usageFile),
-                _dispatchOpenSinceUtc,
-                lastRestartUtc == default ? null : lastRestartUtc,
-                nowUtc))
-            return;
-
-        _limitRescuedUtc[key] = nowUtc;
-        _log.Log_Info(orchId, Limits.LimitRescue_Decider.Describe_Restart(slot));
-        SessionTerminator.Kill_SessionTree_ByPidFile(pidFile);
+        return Limits.LimitRescue_Decider.Shows_AllowanceBack(Read_CurrentLimitWindows(floorUtc).Values.Select(window => window.Percent).ToList());
     }
 
     /// <summary>
