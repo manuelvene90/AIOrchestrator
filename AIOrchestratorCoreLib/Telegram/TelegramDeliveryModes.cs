@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Configuration.PhoneSettings;
+
 namespace AIOrchestratorCoreLib.Telegram;
 
 /// <summary>
@@ -34,6 +36,14 @@ public enum TelegramDeliveryModes
 /// machine-wide state change wrote a line into every one of the owner's threads to tell them
 /// something they had just done themselves. In PULSE's header the same fact costs one silent edit of
 /// a message that was being edited anyway.
+/// </para>
+/// <para>
+/// THAT RULING IS THE SHIPPED DEFAULT, NOT THE ONLY WAY, since plan 03 (Task 7, the catalogue's
+/// <c>topic.modeGlyphs</c>). Master drew the five on the NAME, where the topic list shows them without
+/// opening anything, and classic — master's phone — states <see cref="ModeGlyphPlacements.Name"/>.
+/// Either way they are drawn in EXACTLY ONE of the two places, by ONE implementation
+/// (<see cref="Compose_ModeGlyphs"/>): the name draws them only under <c>name</c>, the header only
+/// under <c>pulseHeader</c>.
 /// </para>
 /// <para>
 /// ⛔ IS GONE, FOLDED INTO ❓. It was split from it on 2026-08-19 to distinguish "waiting on you" from
@@ -195,9 +205,11 @@ public static class TelegramDeliveryMode_Glyphs
     /// timestamps, in the class next door.
     /// </para>
     /// <para>
-    /// FOUR OF THOSE EIGHT ARE GONE rather than carried unused: mode, away, quiet and presence moved
-    /// to PULSE's header on 2026-09-10, and keeping them here as ignored parameters would leave every
-    /// caller still able to ask for a glyph this surface no longer draws.
+    /// FOUR OF THOSE EIGHT LEFT on 2026-09-10, when mode, away, quiet and presence moved to PULSE's
+    /// header, and CAME BACK in plan 03 (Task 7): <c>topic.modeGlyphs = name</c> draws them here again,
+    /// so the engine must hand them in. They are drawn only under that placement — under the shipped
+    /// <c>pulseHeader</c> they are carried and ignored, which is the price of one record whichever the
+    /// owner chose, and <see cref="Compose_TopicName"/>'s placement argument is what decides.
     /// </para>
     /// </summary>
     /// <param name="OwnerReply">
@@ -214,16 +226,25 @@ public static class TelegramDeliveryMode_Glyphs
     /// <param name="IsClosed">The orchestration is over and its topic has outlived it.</param>
     /// <param name="IsAwaitingTest">/test — the owner's own "finished, but I have not checked it".</param>
     /// <param name="IsDone">/done — the owner's own "I have checked it, leave the topic open".</param>
+    /// <param name="Mode">The topic's EFFECTIVE delivery mode — 🌙 or 🔕, drawn only under <c>name</c>.</param>
+    /// <param name="IsAway">Away mode, app-wide — ✈, drawn only under <c>name</c>.</param>
+    /// <param name="IsQuiet">This orchestration stopped asking — 🤐, drawn only under <c>name</c>.</param>
+    /// <param name="Presence">The owner in THIS orchestration's terminal — 💻, drawn only under <c>name</c>.</param>
     public readonly record struct TopicNameFlags(
         OwnerReplyStates OwnerReply = OwnerReplyStates.None,
         bool IsPausedByOwner = false,
         bool IsPausedForUsageLimit = false,
         bool IsClosed = false,
         bool IsAwaitingTest = false,
-        bool IsDone = false);
+        bool IsDone = false,
+        TelegramDeliveryModes Mode = TelegramDeliveryModes.Normal,
+        bool IsAway = false,
+        bool IsQuiet = false,
+        OwnerPresenceModes Presence = OwnerPresenceModes.Remote);
 
     /// <summary>
-    /// The topic's name as the owner reads it in their topic list: `❓ ✅ crm bug`.
+    /// The topic's name as the owner reads it in their topic list: `❓ ✅ crm bug` — or, under
+    /// <c>topic.modeGlyphs = name</c>, `❓ ✈ 🔕 ✅ crm bug`.
     ///
     /// <para>
     /// ❓ IS OUTERMOST, ahead of everything — the owner asked for it "at the beginning of the topic
@@ -239,8 +260,23 @@ public static class TelegramDeliveryMode_Glyphs
     /// machine stopped. Each one REPLACES the ones below it for the same reason 💻 used to replace the
     /// mode glyph: stating one fact twice is what made this list too long to read.
     /// </para>
+    /// <para>
+    /// THE MODE GLYPHS GO BETWEEN THEM, and only under <see cref="ModeGlyphPlacements.Name"/>: ❓ stays
+    /// outermost because it is the one that asks something of the owner, and master drew ✈ ahead of
+    /// 🧪 and ✅, so the state glyph stays beside the name. What they say and in what precedence is
+    /// <see cref="Compose_ModeGlyphs"/>'s, the same call PULSE's header makes — never a second copy.
+    /// </para>
     /// </summary>
-    public static string Compose_TopicName(string baseName, TopicNameFlags flags)
+    /// <param name="modeGlyphs">
+    /// <c>topic.modeGlyphs</c> as the engine resolved it at the point of effect — the engine always
+    /// passes it. NULL IS THE CATALOGUE'S SHIPPED VALUE, READ FROM THE CATALOGUE, the convention
+    /// <c>TopicStatusLine_Builder.Build</c> keeps for its own settings, rather than a member named here:
+    /// a literal default would be a second copy of the catalogue's row (CLAUDE.md decision 12), and
+    /// either value is somebody's right answer (classic states <c>name</c>, the shipped default is
+    /// <c>pulseHeader</c>). A name composed under the wrong placement is a rename, and a service
+    /// message, in every open topic — so the one production caller never leaves it to this default.
+    /// </param>
+    public static string Compose_TopicName(string baseName, TopicNameFlags flags, ModeGlyphPlacements? modeGlyphs = null)
     {
         var replyPrefix = flags.OwnerReply switch
         {
@@ -269,7 +305,60 @@ public static class TelegramDeliveryMode_Glyphs
             _ => "",
         };
 
-        return $"{replyPrefix}{stateGlyph}{baseName}";
+        var placement = modeGlyphs ?? PhoneSettings_Json.Parse(configRoot: null, presetTree: null).TopicModeGlyphs;
+
+        var modePrefix = placement switch
+        {
+            ModeGlyphPlacements.Name => Compose_ModeGlyphs(flags.Mode, flags.IsAway, flags.IsQuiet, flags.Presence),
+            ModeGlyphPlacements.PulseHeader => "",
+            _ => throw new Exception($"Unhandled ModeGlyphPlacements: {placement}"),
+        };
+
+        return $"{replyPrefix}{modePrefix}{stateGlyph}{baseName}";
+    }
+
+    /// <summary>
+    /// THE FIVE MODE GLYPHS, COMPOSED ONCE — `✈ 💻 ` — for whichever surface <c>topic.modeGlyphs</c>
+    /// puts them on: PULSE's header (<c>TopicStatusLine_Builder</c>) or the topic name
+    /// (<see cref="Compose_TopicName"/>). Empty when there is nothing to say; otherwise every glyph is
+    /// followed by one space, so a caller prepends it to whatever it decorates.
+    ///
+    /// <para>
+    /// ONE IMPLEMENTATION FOR BOTH SURFACES (CLAUDE.md decision 12). The precedence below lived in
+    /// `Build_HeaderLine` from 2026-09-10 until plan 03, and before that on the name; a second copy for
+    /// the <c>name</c> placement would let the two drift, and the owner would see a topic say one thing
+    /// in the list and another on its header the day they switched.
+    /// </para>
+    /// <para>
+    /// THE PRECEDENCE IS THE TOPIC NAME'S, MOVED VERBATIM, because it was right and because changing
+    /// it in the same commit as the move would make a behaviour change look like a relocation. AWAY
+    /// SUPERSEDES QUIET: away already means every orchestration has stopped asking, so both together
+    /// state one fact twice. TERMINAL REPLACES THE DELIVERY GLYPH: sitting in the terminal is what
+    /// silences the topic, so 💻 🔕 says the same thing in two characters. Away still shows beside
+    /// terminal — it is about the owner's PHONE, which is a different fact from where they are
+    /// sitting for this one endeavour.
+    /// </para>
+    /// </summary>
+    public static string Compose_ModeGlyphs(TelegramDeliveryModes mode, bool isAway, bool isQuiet, OwnerPresenceModes presence)
+    {
+        var presenceOrMode = presence == OwnerPresenceModes.Terminal
+            ? $"{TERMINAL} "
+            : mode switch
+            {
+                TelegramDeliveryModes.Normal => "",
+                TelegramDeliveryModes.Deferred => $"{DEFERRED} ",
+                TelegramDeliveryModes.Silenced => $"{SILENCED} ",
+                _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
+            };
+
+        var ownerAttention = (isAway, isQuiet) switch
+        {
+            (true, _) => $"{AWAY} ",
+            (false, true) => $"{QUIET} ",
+            _ => "",
+        };
+
+        return $"{ownerAttention}{presenceOrMode}";
     }
 
     /// <summary>
@@ -277,11 +366,12 @@ public static class TelegramDeliveryMode_Glyphs
     /// because a name can carry more than one.
     ///
     /// <para>
-    /// IT STILL KNOWS THE GLYPHS THIS SURFACE NO LONGER DRAWS — 🌙 🔕 ✈ 🤐 💻 ⛔ — and that is the
-    /// migration. Every topic in the owner's list was named by the build before this one, so the
-    /// first rename after the change has to be able to take a moon off a name nothing will ever put
-    /// a moon on again. Narrowing this list to what is currently drawn would strand the old glyph on
-    /// the name for as long as the topic lives.
+    /// IT KNOWS EVERY GLYPH EITHER PLACEMENT CAN DRAW, and the ones nothing draws any more — 🌙 🔕 ✈ 🤐
+    /// 💻 ⛔ 📸 — and that is the migration. Every topic in the owner's list was named by an earlier
+    /// build, or under the other <c>topic.modeGlyphs</c> placement, so the first rename after a change
+    /// has to be able to take a moon off a name nothing will put a moon on again. Narrowing this list to
+    /// what the current placement draws would strand the old glyph on the name for as long as the topic
+    /// lives.
     /// </para>
     /// </summary>
     public static string Strip_Glyph(string topicName)

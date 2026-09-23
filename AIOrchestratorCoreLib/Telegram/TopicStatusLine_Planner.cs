@@ -95,7 +95,11 @@ public static class TopicStatusLine_Planner
         // change between two ticks. Null keeps the builder's shipped defaults, as it does there.
         ISessionModelReading? supervisorModel = null,
         IReadOnlyList<string>? pulseFields = null,
-        int? stepMinutes = null)
+        int? stepMinutes = null,
+
+        // `topic.modeGlyphs`, resolved by the engine for the same reason: whether the header or the
+        // topic name carries the five mode glyphs. Null is the builder's shipped default.
+        ModeGlyphPlacements? modeGlyphs = null)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
@@ -108,7 +112,7 @@ public static class TopicStatusLine_Planner
         var text = TopicStatusLine_Builder.Build(
             progress, members, Pick_LastEvent_OrNull(members, now), now, existingMessageId != null,
             figuresUnchangedFor, supervisorContext, fields with { Mode = mode },
-            supervisorModel, pulseFields, stepMinutes);
+            supervisorModel, pulseFields, stepMinutes, modeGlyphs);
 
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 

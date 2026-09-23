@@ -190,13 +190,19 @@ public class AwayTopicGlyphTests
     /// topic at once, and Telegram writes a service message into each thread it renames — one state
     /// change the owner had just made themselves, announced back to them once per orchestration. On
     /// the header the same fact costs one silent edit of a message that was being edited anyway.
+    ///
+    /// UNDER THE SHIPPED PLACEMENT (plan 03 Task 7). Classic's <c>topic.modeGlyphs = name</c> puts
+    /// them back, as master drew them — TelegramDeliveryModeGlyphsTests pins that half. And away and
+    /// quiet are SET here now: the test used to pass flags that could not carry them at all, so it
+    /// could not have failed.
     /// </summary>
     [Fact]
-    public void AwayAndQuietNoLongerReachATopicName()
+    public void AwayAndQuietDoNotReachATopicName_UnderTheShippedPlacement()
     {
         var name = TelegramDeliveryMode_Glyphs.Compose_TopicName(
             "crm bug",
-            new TelegramDeliveryMode_Glyphs.TopicNameFlags(OwnerReply: OwnerReplyStates.Blocking, IsAwaitingTest: true));
+            new TelegramDeliveryMode_Glyphs.TopicNameFlags(OwnerReply: OwnerReplyStates.Blocking, IsAwaitingTest: true, IsAway: true, IsQuiet: true),
+            ModeGlyphPlacements.PulseHeader);
 
         Assert.DoesNotContain(TelegramDeliveryMode_Glyphs.AWAY, name);
         Assert.DoesNotContain(TelegramDeliveryMode_Glyphs.QUIET, name);
