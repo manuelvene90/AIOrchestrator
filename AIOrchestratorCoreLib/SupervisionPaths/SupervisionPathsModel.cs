@@ -31,6 +31,21 @@ internal sealed class SupervisionPathsModel(string root) : ISupervisionPaths
         return Path.Combine(Get_OrchestrationFolder(orchId), "PLAN.md");
     }
 
+    public string Get_SiblingOutboxFile(string orchId)
+    {
+        return Path.Combine(Get_OrchestrationFolder(orchId), "sibling-outbox.md");
+    }
+
+    public string Get_SiblingsListFile(string orchId)
+    {
+        return Path.Combine(Get_OrchestrationFolder(orchId), ".siblings");
+    }
+
+    public string Get_EndeavourDigestFile(string orchId)
+    {
+        return Path.Combine(Get_OrchestrationFolder(orchId), "ENDEAVOUR.md");
+    }
+
     public string Get_ProgressFile(string orchId)
     {
         return Path.Combine(Get_OrchestrationFolder(orchId), ".progress.json");
