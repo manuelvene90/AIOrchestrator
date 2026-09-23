@@ -959,13 +959,35 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
     {
+        Action? beforeThisAnswer;
+
         lock (_lock)
         {
             _answeredCallbacks++;
             _answeredCallbackTexts.Add(text);
+
+            beforeThisAnswer = _beforeNextCallbackAnswer;
+            _beforeNextCallbackAnswer = null;
         }
 
+        // Outside the lock: the action touches the disk, not this fake.
+        beforeThisAnswer?.Invoke();
+
         return Task.CompletedTask;
+    }
+
+    Action? _beforeNextCallbackAnswer;
+
+    /// <summary>
+    /// ONE-SHOT: runs <paramref name="action"/> when the next tap is answered. The engine answers a tap
+    /// AFTER it has read the tapped request and BEFORE it acts on it, so this is the one moment a test can
+    /// change the disk between those two — the seam the "unreadable at classification, readable at
+    /// execution" race needs (Task 9b, 2026-09-23).
+    /// </summary>
+    public void Run_OnNextCallbackAnswer(Action action)
+    {
+        lock (_lock)
+            _beforeNextCallbackAnswer = action;
     }
     public Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken)
     {

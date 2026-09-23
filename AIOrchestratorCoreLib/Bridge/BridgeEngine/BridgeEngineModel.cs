@@ -1639,6 +1639,8 @@ internal sealed class BridgeEngineModel(
         // it here is what stops a flag surviving a crash into an orchestration nobody paused.
         Sync_PausedFlags();
 
+        Sync_EndeavourArtefacts();   // after .paused, so a sibling's `paused|live` column reads this tick's truth
+
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
@@ -6340,8 +6342,13 @@ internal sealed class BridgeEngineModel(
             return true;
         }
 
+        // THE EXECUTOR ACTS ON `tapped`, THE ONE READ — never a second one (Task 9b, 2026-09-23). It used to
+        // re-read the file, so a classification read that failed transiently (siblingBirth false) followed
+        // by a re-read that succeeded ran the Sibling arm HERE, on the inbound loop: past the dispatch-pause
+        // gate and inside the watchdog's double-spawn window. A tap that cannot be classified is now the
+        // executor's unreadable branch — nothing done, left parked, asked again.
         var result = confirmation.Confirms
-            ? Execute_ConfirmedClose(confirmation)
+            ? Execute_ConfirmedClose(confirmation, tapped)
             : Decline_CloseConfirmation(confirmation);
 
         // THE DECISION IS RECORDED AFTER THE OUTCOME IS KNOWN, and it used to be recorded before.
@@ -6440,11 +6447,12 @@ internal sealed class BridgeEngineModel(
     ///
     /// WHICH outcome is chosen is not decided here — <see cref="CloseTapOutcome_Decider"/> owns that,
     /// because a decision made in this class cannot be reached by the suite and this one is the fix.
+    ///
+    /// THE CALLER READS <paramref name="request"/> (Task 9b, 2026-09-23): the tap hands in the read it
+    /// already classified the tap by, so the kind that chose this path is the kind executed.
     /// </summary>
-    CloseTapResult Execute_ConfirmedClose(CloseConfirmation confirmation)
+    CloseTapResult Execute_ConfirmedClose(CloseConfirmation confirmation, IParkedCloseRequest? request)
     {
-        var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
-
         // NON-NEGOTIABLE: a request we cannot read is not authority to end an orchestration. This
         // used to close anyway and record it as "Asked by: unrecorded" — killing every session of an
         // orchestration whose close nobody could produce, which is the precise failure this entire
@@ -6552,9 +6560,11 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            // Already logged and reported to the general channel by Execute_Close. Swallowed HERE
-            // because this runs on the inbound loop with nobody watching, and a throw would take the
-            // loop down; the owner's own close does the opposite and surfaces it.
+            // Already logged and reported by the arm that threw (Execute_Close to the general channel,
+            // Execute_SiblingBirth to the requester and General). Swallowed HERE because this runs on a
+            // loop with nobody watching — the inbound loop for a close or a promotion, the mirror tick for
+            // a sibling's birth (Run_ApprovedSiblingBirths_Async) — and a throw would take that loop down;
+            // the owner's own close does the opposite and surfaces it.
             //
             // SWALLOWED IS NOT UNREPORTED, and it used to be. Execute_Close marks the orchestration
             // closed before it kills the sessions, so a throw between those two can leave it flagged
@@ -6704,7 +6714,7 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                result = Execute_ConfirmedClose(confirmation);
+                result = Execute_ConfirmedClose(confirmation, ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath));
             }
             finally
             {
@@ -9749,6 +9759,13 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var session in Sessions_ThisTick())
             Sync_PausedFlag(session.OrchId, session.ClosedUtc == null && session.Paused);
+    }
+
+    /// <summary>The sibling plan's derived files and outbox compaction (Task 10); the rules live in the step.</summary>
+    void Sync_EndeavourArtefacts()
+    {
+        foreach (var failure in EndeavourArtefacts_Step.Reconcile(_paths, Sessions_ThisTick()))
+            _log.Log_Warning(GLOBAL_ORCH_ID, failure);
     }
 
     async Task Request_Close_FromCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)

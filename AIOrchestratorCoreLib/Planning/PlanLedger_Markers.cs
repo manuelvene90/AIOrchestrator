@@ -24,25 +24,36 @@ namespace AIOrchestratorCoreLib.Planning;
 /// </summary>
 public static class PlanLedger_Markers
 {
+    // ONE NAME PER MARKER, so a reader that must pick some of them (the endeavour digest's "not finished":
+    // open, in progress, blocked, blocked on the owner) names them rather than re-typing the characters —
+    // ALL is built from these, so the two cannot drift (plan 2026-09-23 Task 10, pre-flight stale #20).
+    // DONE is the NORMALISED form: the parser folds `[X]` to it (PlanLedgerLine).
+    public const string OPEN = " ";
+    public const string IN_PROGRESS = ">";
+    public const string DONE = "x";
+    public const string BLOCKED = "!";
+    public const string BLOCKED_ON_OWNER = "?";
+    public const string NOT_DOING = "-";
+
     /// <summary>The marker as written between the brackets, and what it means, in ledger order.</summary>
     public static readonly IReadOnlyList<(string Marker, string Meaning)> ALL =
     [
-        (" ", "open"),
-        (">", "in progress"),
-        ("x", "done"),
-        ("!", "blocked"),
+        (OPEN, "open"),
+        (IN_PROGRESS, "in progress"),
+        (DONE, "done"),
+        (BLOCKED, "blocked"),
 
         // BLOCKED ON THE OWNER SPECIFICALLY, and separate from `!` by the owner's own call
         // (2026-08-19, choosing this over inferring it from the line's words). `!` had been carrying
         // both kinds: `arb portfolio UX` showed a `[!]` line blocked on a REVIEWER while the owner
         // read the count as something waiting on them, asked what had got stuck, and nothing had.
         // Only the supervisor knows which kind it is, so only the supervisor can say.
-        ("?", "blocked on the owner"),
+        (BLOCKED_ON_OWNER, "blocked on the owner"),
 
         // NOT "dropped" and not "cancelled": it is the only marker that removes weight from the
         // denominator, and the wording has to survive being read by someone deciding whether to use
         // it. "Not doing" is what the owner called it.
-        ("-", "not doing"),
+        (NOT_DOING, "not doing"),
     ];
 
     /// <summary>

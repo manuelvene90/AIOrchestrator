@@ -127,6 +127,25 @@ public class PauseGatesEveryWakerScanTests
     }
 
     /// <summary>
+    /// THE ENDEAVOUR ARTEFACTS (sibling plan 2026-09-23 Task 10) are reconciled on the tick AFTER the
+    /// paused marker, so a sibling's <c>paused|live</c> column in <c>.siblings</c> is written in the same
+    /// pass that settled <c>.paused</c> — never a tick behind it. Its own case rather than a line added to
+    /// the one above, so the Task 13 edit to this file (ruling G) stays a textual neighbour, not a merge.
+    /// </summary>
+    [Fact]
+    public void TheEndeavourArtefacts_AreReconciledOnEveryTick_AfterThePausedMarker()
+    {
+        var body = Extract_Method("async Task Execute_MirrorTick_Inside_Snapshot_Async");
+
+        var paused = body.IndexOf("Sync_PausedFlags()", StringComparison.Ordinal);
+        var endeavour = body.IndexOf("Sync_EndeavourArtefacts()", StringComparison.Ordinal);
+
+        Assert.True(paused >= 0, "the paused reconcile is gone — this scan is reading a tick it does not understand");
+        Assert.True(endeavour >= 0, "nothing reconciles .siblings / ENDEAVOUR.md on the tick, so they can outlive the siblings they list");
+        Assert.True(endeavour > paused, "the endeavour reconcile runs before the paused marker, so its paused|live column reads last tick's truth");
+    }
+
+    /// <summary>
     /// AND THE WATCHDOG, which is the one waker that does not write to a channel at all: it respawns
     /// a dead terminal. A session booted back up reads its role command, arms a watcher and starts
     /// working — the pause silently over, with nothing on screen saying so.

@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Bridge.Siblings;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.Git;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Spawning;
 using AIOrchestratorCoreLib.Tests.Launching;
@@ -432,6 +433,88 @@ public class SiblingConfirmationTests
         Assert.True(
             await SiblingEngine_Harness.Wait_Until_Async(() => Has_Archived(harness, "started"), WAIT_MILLISECONDS),
             $"never archived as started after the lift. Archived: [{string.Join(", ", harness.Archived_Names())}]{Environment.NewLine}{harness.Log.Dump()}");
+    }
+
+    /// <summary>
+    /// THE TICK WRITES THE DERIVED FILES (Task 10, spec §3.4): once the birth has linked parent and child,
+    /// each gets a <c>.siblings</c> line naming the other and an <c>ENDEAVOUR.md</c> about the other — driven
+    /// through the real engine, so the wiring is pinned by behaviour and not only by the source scan.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ABornSibling_AndItsParent_GetTheDerivedFilesOnTheTick()
+    {
+        using var harness = new SiblingEngine_Harness();
+        var (solo, _, _) = await Arrange_Asked_Async(harness);
+
+        await harness.Tap_Async("Start it");
+        var child = await Wait_ForChild_Async(harness, solo);
+
+        string Read_OrEmpty_Now(string path) => File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(
+                () => Read_OrEmpty_Now(harness.Paths.Get_SiblingsListFile(solo)).StartsWith($"{child.OrchId}\t", StringComparison.Ordinal)
+                    && Read_OrEmpty_Now(harness.Paths.Get_SiblingsListFile(child.OrchId)).StartsWith($"{solo}\t", StringComparison.Ordinal),
+                WAIT_MILLISECONDS),
+            $"the tick never wrote .siblings for both.{Environment.NewLine}{harness.Log.Dump()}");
+
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(
+                () => Read_OrEmpty_Now(harness.Paths.Get_EndeavourDigestFile(solo)).Contains(SIBLING_NAME, StringComparison.Ordinal)
+                    && Read_OrEmpty_Now(harness.Paths.Get_EndeavourDigestFile(child.OrchId)).Contains(PARENT_NAME, StringComparison.Ordinal),
+                WAIT_MILLISECONDS),
+            $"the tick never wrote ENDEAVOUR.md for both.{Environment.NewLine}{harness.Log.Dump()}");
+
+        Assert.Contains($"branch {GitHead_Reader.Read_Branch_OrNull(harness.WorktreePath)}", File.ReadAllText(harness.Paths.Get_EndeavourDigestFile(solo)));
+    }
+
+    /// <summary>
+    /// A CONFIRMED TAP THAT CANNOT BE CLASSIFIED STARTS NOTHING (Task 9 review, fixed in 9b). The tap
+    /// reads the parked file once to decide whether it is a sibling — whose birth belongs on the tick,
+    /// behind the dispatch-pause gate and sequenced with the watchdog. When that read fails (a transient
+    /// sharing violation; here a half-written file) and a LATER read succeeds, the old code fell into the
+    /// inline executor, which re-read the file and ran the Sibling arm on the INBOUND loop: past the pause
+    /// gate and inside the watchdog's double-spawn window. The one read is now the one the executor acts
+    /// on: unreadable is "nothing done, left parked", and the owner is asked again.
+    ///
+    /// <para>
+    /// THE SEAM: the file is garbage when the tap reads it and restored the moment the tap is answered —
+    /// after the classification read, before anything acts on it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AConfirmedTapWhoseRequestCannotBeReadOnce_StartsNothing_AndIsAskedAgain()
+    {
+        using var harness = new SiblingEngine_Harness();
+        var (solo, _, _) = await Arrange_Asked_Async(harness);
+
+        var parked = Assert.Single(CloseConfirmation_Parking.Find_Parked(harness.Paths));
+        var valid = File.ReadAllText(parked);
+        var firstPrompt = harness.Telegram.Find_ButtonMessage_OrNull("Start it")!.Value.MessageId;
+
+        harness.Telegram.Run_OnNextCallbackAnswer(() => File.WriteAllText(parked, valid));
+        File.WriteAllText(parked, "{\"action\":\"spawn-sib");
+
+        await harness.Tap_Async("Start it");
+
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(() => Find_AppEntry_OrNull(harness.Paths.Get_OwnerChannelFile(solo), "could not be read just now") != null, WAIT_MILLISECONDS),
+            $"the unclassifiable tap was not answered as not executed. Children: {Children_Of(harness, solo).Count}, archived: [{string.Join(", ", harness.Archived_Names())}]{Environment.NewLine}{harness.Log.Dump()}");
+
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(() => harness.Telegram.Find_ButtonMessage_OrNull("Start it")?.MessageId is { } id && id != firstPrompt, WAIT_MILLISECONDS),
+            $"the owner was never asked again.{Environment.NewLine}{harness.Telegram.Dump_Sent()}{Environment.NewLine}{harness.Log.Dump()}");
+
+        Assert.Empty(Children_Of(harness, solo));
+        Assert.Empty(harness.Archived_Names());
+        Assert.Single(CloseConfirmation_Parking.Find_Parked(harness.Paths));
+
+        // The positive control: the re-asked prompt, tapped with the file readable, starts it on the tick.
+        await harness.Tap_Async("Start it");
+        await Wait_ForChild_Async(harness, solo);
+        Assert.Single(Children_Of(harness, solo));
     }
 
     /// <summary>
