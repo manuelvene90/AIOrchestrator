@@ -6,12 +6,14 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Web.SettingsWebHost;
 
 namespace AIOrchestratorCoreLib.Composition.OrchestratorServices;
 
 /// <summary>
 /// The composition root, extracted from the WPF app's OnStartup: log, config provider, session
-/// store, spawner, launcher, bridge engine — in that order, because each takes the ones before it.
+/// store, spawner, launcher, bridge engine — in that order, because each takes the ones before it —
+/// and last the settings web host, which needs the config provider and the log and nothing needs it.
 /// (The log and config provider swapped places 2026-09-12, task-6 fix round 2, so the provider could
 /// take the log — see the reorder note at the call site.) Nothing here starts running; the host
 /// decides when Run_Async begins.
@@ -36,6 +38,11 @@ public static class OrchestratorServices_Factory
         var launcher = OrchestrationLauncher_Factory.Create(paths, configProvider, store, spawner, log, pluginGate);
         var engine = BridgeEngine_Factory.Create(paths, configProvider, store, launcher, log);
 
-        return new OrchestratorServicesModel(paths, configProvider, log, store, launcher, engine, pluginGate);
+        // AFTER THE ENGINE, and last (plan 04 Task 7): it takes only the paths, the config provider and the
+        // log — all built above — and nothing below takes it, so it cannot disturb the order the lines above
+        // depend on. Built, never started here: each host calls Run_Async beside the engine's.
+        var settingsWebHost = SettingsWebHost_Factory.Create(paths, configProvider, log);
+
+        return new OrchestratorServicesModel(paths, configProvider, log, store, launcher, engine, settingsWebHost, pluginGate);
     }
 }

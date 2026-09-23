@@ -507,16 +507,12 @@ public static class SettingsCatalog
 
         kernel.Add(SettingDefinition_Factory.Create_String(
             path: "web.listen",
-
-            // READ BY NOTHING IN THIS PLAN. The HTTP listener that will consume it is plan 04; the key
-            // is registered now so the resolver, the presets and the renderers have one spelling of it
-            // from the start rather than acquiring one later.
             shippedDefault: "127.0.0.1:7391",
             scope: SettingScopes.Machine,
             category: SettingCategories.Kernel,
             label: "Web listen address",
             description:
-                "host:port the settings web page will listen on, or 'off'. READ BY NOTHING YET — the listener is plan 04. " +
+                "host:port the settings web page listens on, or 'off'. " +
                 "The loopback default is deliberate: the page has no authentication of its own beyond web.token.",
             restart: RestartKinds.Host,
             validator: SettingValidators.LISTEN_ADDRESS));
@@ -527,7 +523,7 @@ public static class SettingsCatalog
             scope: SettingScopes.Machine,
             category: SettingCategories.Kernel,
             label: "Web token",
-            description: "The shared secret the settings web page will require. READ BY NOTHING YET — the listener is plan 04.",
+            description: "The shared secret the settings web page requires.",
             restart: RestartKinds.Host));
 
         kernel.Add(SettingDefinition_Factory.Create_Composite(
