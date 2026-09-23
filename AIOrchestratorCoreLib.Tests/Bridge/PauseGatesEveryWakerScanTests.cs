@@ -47,8 +47,23 @@ public class PauseGatesEveryWakerScanTests
         { "async Task Check_LedgerHealth_Async", "_ledgerDebtSinceUtc" },
         { "void Flag_IdleMembers", "IdleMember" },
         { "async Task Resume_AllSessions_Async", "GO AHEAD — resume" },
-        { "async Task Push_AwayDigests_Async", "AwayDigest_Decider.Should_Send" },
     };
+
+    /// <summary>
+    /// THE STATUS SWEEP LEFT THIS LIST BY LEAVING THE ENGINE (plan 03 Task 8, 2026-09-23) — it was the
+    /// row <c>Push_AwayDigests_Async</c>, and CLAUDE.md's PAUSE bullet names it
+    /// <c>Push_PeriodicStatus_Async</c>. The sweep now lives in <c>Bridge/PeriodicStatus/</c>, where it can
+    /// be driven, so its pause gate is proven by what it POSTS
+    /// (<c>PeriodicStatusSweepTests.APausedOrMeetingOrchestration_IsSkippedBeforeTheSlotIsStamped</c>)
+    /// rather than by a word found in a body. This keeps the list honest: the gate is in the file that
+    /// decides, and the engine hands the tick to that file.
+    /// </summary>
+    [Fact]
+    public void ThePeriodicStatusSweep_SkipsAPausedOrchestration_InTheFileThatDecides()
+    {
+        Assert.Contains("session.Paused", Read_Source("PeriodicStatusSweepModel.cs"), StringComparison.Ordinal);
+        Assert.Contains("_periodicStatus.Push_Async(", Read_Source(ENGINE_FILE), StringComparison.Ordinal);
+    }
 
     [Theory]
     [MemberData(nameof(TheWakers))]

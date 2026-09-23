@@ -3,29 +3,27 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
 /// <summary>
-/// THE HALF-HOURLY STATUS MESSAGE IS GONE, AND CANNOT COME BACK BY ACCIDENT.
+/// THE PERIODIC STATUS IS BACK — AS A SETTING, CHANGE-GATED, AND OUT OF THE ENGINE.
 ///
 /// <para>
-/// WHAT THIS FILE USED TO TEST, and why that claim retired. It pinned `Has_WorkInFlight` — the
-/// trigger of the periodic status feed — after `Tear-off tabs` went five hours without a status on
-/// 2026-08-20: the ledger said nothing was `[>]`, and "is a member mid-turn?" asked once every
-/// thirty minutes fails almost every time. Both fixes were right for a feed that POSTS.
+/// WHAT THIS FILE HAS TESTED, in order. First `Has_WorkInFlight` — the status's trigger — after
+/// `Tear-off tabs` went five hours without a status on 2026-08-20 while its solo worked: the ledger
+/// said nothing was `[>]`. Then, after the fork deleted the feed on 2026-09-09 (ten messages in five
+/// and a half hours, three identical), that the cadence was GONE: nothing in the engine could post a
+/// status on a clock again.
 /// </para>
 /// <para>
-/// The owner removed the feed instead (2026-09-09). It sent a fresh fifteen-line message every half
-/// hour — ten in five and a half hours in one topic, three identical with every member closed — and
-/// a cadence that posts is a waterfall by construction, however good its content is. So the trigger
-/// this file guarded no longer exists, and the claim that replaces it is that the CADENCE is gone:
-/// nothing in the engine may post a status entry on a clock again.
+/// That second claim retired on 2026-09-23. The owner: *"he removed the status message, but I liked
+/// it, so we should be able to opt in"* — D1 (a), plan 03 Task 8. The feed is re-ported under
+/// `phone.status.periodic` (classic on, quiet off), posted only when it CHANGED (ruling R6), and its
+/// trigger, text and baseline live in `Bridge/PeriodicStatus/`, where the suite can drive them:
+/// `PeriodicStatusSweepTests` carries every behavioural claim, the ledger-hygiene one included
+/// (`WithNoWorkInFlight_NoStatusIsPosted` — a session that WORKED with no `[>]` line still gets its
+/// status).
 /// </para>
 /// <para>
-/// The original concern — the owner's view of the work must not depend on a session maintaining its
-/// ledger — did not retire with it. It moved to the one surface that remains, PULSE, and is tested
-/// where that is built (`TopicStatusLineBuilderTests`).
-/// </para>
-/// <para>
-/// A source scan, because the engine is `internal sealed` with no InternalsVisibleTo: the suite
-/// cannot call these methods at all. A weak oracle that exists beats a strong one that cannot run.
+/// What stays a scan is what a test of the sweep cannot see: that the engine kept no second copy of
+/// the cadence after handing it over, so there is one place a status is decided.
 /// </para>
 /// </summary>
 public class StatusDoesNotDependOnLedgerHygieneTests
@@ -33,36 +31,38 @@ public class StatusDoesNotDependOnLedgerHygieneTests
     const string ENGINE_FILE = "BridgeEngineModel.cs";
 
     /// <summary>
-    /// The half-hourly poster and its trigger are absent from the engine — not merely unreachable.
-    /// A dormant `Has_WorkInFlight` and a `Build_PeriodicStatusText` left in the file are an
-    /// invitation to wire them up again, and the owner's decision was about the cadence existing at
-    /// all.
+    /// No trigger, text builder, baseline or slot decision in the engine — each is the sweep's now, and
+    /// a dormant copy here would be the second copy decision 12 warns about.
     /// </summary>
     [Fact]
-    public void ThePeriodicStatusFeed_AndItsTrigger_AreGoneFromTheEngine()
+    public void ThePeriodicStatusCadence_LivesInTheSweep_NotInTheEngine()
     {
         var source = Read_EngineSource();
 
         Assert.DoesNotContain("Has_WorkInFlight", source);
         Assert.DoesNotContain("Build_PeriodicStatusText", source);
         Assert.DoesNotContain("Remember_PostedProgress", source);
+        Assert.DoesNotContain("PeriodicStatusSlot_Planner.Decide", source);
+
+        Assert.Contains("_periodicStatus.Push_Async(", source);
     }
 
     /// <summary>
-    /// The ONE surviving caller of the status-entry poster is the AWAY digest, which is not a
-    /// cadence: it fires only while the owner is away, and only when its content has changed. If a
-    /// second caller ever appears, this test is the thing that asks why.
+    /// THE ENGINE'S ONE STATUS POSTER IS THE HOST ADAPTER the sweep calls. If a second caller ever
+    /// appears inside the engine, it posts a status that no change gate and no slot decided — the
+    /// waterfall by a side door — and this test is the thing that asks why.
     /// </summary>
     [Fact]
-    public void TheOnlyThingThatStillPostsAStatusEntry_IsTheAwayDigest()
+    public void TheOnlyThingInTheEngineThatPostsAStatusEntry_IsTheSweepsHost()
     {
-        var body = Extract_Method("async Task Push_AwayDigests_Async");
+        var body = Extract_Method("async Task Push_PeriodicStatus_Async");
 
-        var posts = body.Split("Post_StatusEntry(").Length - 1;
+        Assert.Contains("_periodicStatus.Push_Async(", body);
 
-        Assert.Equal(1, posts);
-        Assert.Contains("Is_AwayMode()", body);
-        Assert.Contains("AwayDigest_Decider.Should_Send", body);
+        var source = Read_EngineSource();
+
+        Assert.Equal(1, source.Split("=> Post_StatusEntry(").Length - 1);
+        Assert.Equal(0, source.Split(" Post_StatusEntry(session").Length - 1);
     }
 
     static string Extract_Method(string signatureMark)

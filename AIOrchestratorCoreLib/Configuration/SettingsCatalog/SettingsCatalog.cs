@@ -642,7 +642,10 @@ public static class SettingsCatalog
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Periodic status",
-                description: $"Whether the app pushes an unprompted periodic status at all. {INERT_NOTE}",
+                description:
+                    "Whether the app posts master's periodic STATUS (the /status roster plus the current task) into each " +
+                    "orchestration topic on its interval — and only when it changed since the last one, so an idle topic " +
+                    "stays silent. The away digest is not this: it keeps its own half hour whatever this says.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Int(
@@ -653,7 +656,9 @@ public static class SettingsCatalog
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Periodic status interval (minutes)",
-                description: $"Minutes between periodic status messages, when they are on at all. {INERT_NOTE}",
+                description:
+                    "Minutes between periodic status messages, when they are on — a grid on the wall clock counted from " +
+                    "midnight, shared by every topic. Moves the periodic status only; the away digest stays on 30.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
