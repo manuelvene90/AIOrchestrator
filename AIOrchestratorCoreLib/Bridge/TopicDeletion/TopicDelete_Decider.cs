@@ -12,8 +12,17 @@ namespace AIOrchestratorCoreLib.Bridge.TopicDeletion;
 /// topic, and the ask was <c>Delete_TelegramTopic_FireAndForget</c>: one call, no retry, a failure
 /// swallowed into a log line, and nothing written down anywhere. A delete that failed therefore left
 /// an orphan topic on the owner's phone with no record that it should not be there — and the owner's
-/// decision, recorded in the same brief, is that topics ARE deleted (they will have thousands, and a
+/// decision, recorded in the same brief, was that topics ARE deleted (they will have thousands, and a
 /// list full of finished ones is noise). A delete nobody retries is that decision not being kept.
+/// </para>
+/// <para>
+/// SINCE PLAN 03 THAT IS ONE OF TWO CONFIGURED BEHAVIOURS, not the only one (Task 10,
+/// <c>topic.onClose</c>). The owner's answer D2 of 2026-09-14 kept <c>delete</c> as the SHIPPED DEFAULT
+/// for both presets, and everything here applies to it unchanged; <c>close</c> stays available as an
+/// option ("close-but-keep stays available"), and a close gets none of this — see
+/// <see cref="TopicClose_Decider"/> for why the delete keeps the retry and the close does not. The
+/// start-up sweep still pays off a delete owed from before a machine switched to <c>close</c>: that
+/// debt was incurred under <c>delete</c>, and switching does not forgive it.
 /// </para>
 /// <para>
 /// HERE RATHER THAN IN THE ENGINE, for the reason <see cref="TelegramAttempt_Gate"/> gives in full:

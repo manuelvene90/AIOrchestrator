@@ -128,7 +128,7 @@ public class PhoneSettingsJsonTests : IDisposable
 
     /// <summary>
     /// TOPIC CLOSE'S DEFAULT IS THE CATALOGUE'S, NOT A LITERAL — the one parser whose fallback is ruled
-    /// to move (D2, owner 2026-09-14; Task 10 moves it), so it reads the catalogue rather than naming a
+    /// to move (D2, owner 2026-09-14; plan 03 Task 10 moved it to delete), so it reads the catalogue rather than naming a
     /// member. An unknown word must land wherever the catalogue's default currently is.
     /// </summary>
     [Fact]

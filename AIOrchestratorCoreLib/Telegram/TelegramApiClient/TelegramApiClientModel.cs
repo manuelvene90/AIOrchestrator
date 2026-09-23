@@ -154,6 +154,17 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("deleteForumTopic", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
+    public async Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_thread_id"] = messageThreadId,
+        };
+
+        await Post_Async("closeForumTopic", payload, cancellationToken, TelegramCallClasses.Control);
+    }
+
     public async Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken)
     {
         var unpinPayload = new JsonObject

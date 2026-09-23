@@ -5740,18 +5740,38 @@ internal sealed class BridgeEngineModel(
 
             SessionTerminator.Kill_OrchestrationSessions(_paths, orchId);
 
+            // `topic.onClose`, READ HERE, AT THE POINT OF EFFECT (plan 03 Task 10) — never cached: the
+            // provider re-reads config.json on its write stamp. `delete` is the shipped default (D2,
+            // owner 2026-09-14) and is exactly the path this was before; `close` keeps the topic.
+            var onClose = _configProvider.Get_Current().Phone.TopicOnClose;
+
             if (_telegramClient != null && session.TelegramTopicId != null)
             {
-                // STAMPED BEFORE THE ASK, not after it. The stamp is what a later start reads to
-                // know a delete is owed; written after the attempt it would be missing for exactly
-                // the case it exists to cover — the process dying while the delete was failing.
-                _store.Mark_TopicDeletePending(orchId);
-                Delete_TelegramTopic_FireAndForget(orchId, session.TelegramTopicId.Value);
+                switch (onClose)
+                {
+                    case TopicCloseActions.Delete:
+                        // STAMPED BEFORE THE ASK, not after it. The stamp is what a later start reads to
+                        // know a delete is owed; written after the attempt it would be missing for exactly
+                        // the case it exists to cover — the process dying while the delete was failing.
+                        _store.Mark_TopicDeletePending(orchId);
+                        Delete_TelegramTopic_FireAndForget(orchId, session.TelegramTopicId.Value);
+                        break;
+
+                    // NO STAMP AND NO RETRY — a close owes nothing a later start could pay off; see
+                    // TopicClose_Decider for why the delete gets the retry and the close does not.
+                    case TopicCloseActions.Close:
+                        Close_TelegramTopic_FireAndForget(orchId, session.TelegramTopicId.Value);
+                        break;
+
+                    default:
+                        throw new Exception($"Unhandled TopicCloseActions: {onClose}");
+                }
             }
 
             Append_GeneralAppEntry(AppEntryAudiences.Owner,
                 $"orchestration '{orchId}' closed — {reason}",
-                $"{authorisation} Asked by: {requester}. Sessions ended; folder kept as audit trail; Telegram topic deleted.");
+                $"{authorisation} Asked by: {requester}. Sessions ended; folder kept as audit trail; "
+                + (onClose == TopicCloseActions.Close ? "Telegram topic closed and kept in the list." : "Telegram topic deleted."));
         }
         catch (Exception ex)
         {
@@ -6662,6 +6682,64 @@ internal sealed class BridgeEngineModel(
     void Delete_TelegramTopic_FireAndForget(string orchId, long topicId)
     {
         _ = Task.Run(() => Delete_TelegramTopic_WithRetries_Async(orchId, topicId, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// <c>topic.onClose = close</c>: ONE <c>closeForumTopic</c>, detached for the delete's reason (closing
+    /// an orchestration must not wait on Telegram) and bounded by <see cref="TopicClose_Decider"/>'s
+    /// single attempt — none of the delete's stamp, retry or sweep, because a failed close leaves a
+    /// topic that is merely still open, not an orphan.
+    /// </summary>
+    void Close_TelegramTopic_FireAndForget(string orchId, long topicId)
+    {
+        _ = Task.Run(() => Close_TelegramTopic_Once_Async(orchId, topicId, CancellationToken.None));
+    }
+
+    async Task Close_TelegramTopic_Once_Async(string orchId, long topicId, CancellationToken cancellationToken)
+    {
+        Exception? failure = null;
+
+        try
+        {
+            var client = _telegramClient
+                ?? throw new Exception($"Telegram client vanished while closing topic {topicId} of '{orchId}'");
+
+            await client.Close_ForumTopic_Async(topicId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Broad by intent, as for the delete: the classification is TopicClose_Decider's.
+            failure = ex;
+        }
+
+        var outcome = TopicClose_Decider.Classify(failure);
+
+        switch (outcome)
+        {
+            case TopicCloseOutcomes.Closed:
+                _log.Log_Info(orchId, $"Telegram topic {topicId} closed — kept in the owner's list (topic.onClose = close)");
+                break;
+
+            case TopicCloseOutcomes.AlreadyClosed:
+                _log.Log_Info(orchId, $"Telegram topic {topicId} was already closed — nothing to do");
+                break;
+
+            // NO TOPIC TO CLOSE, and none to rename either: recorded as deleted so the name sync stops
+            // asking, exactly as its own TOPIC_ID_INVALID branch does.
+            case TopicCloseOutcomes.AlreadyGone:
+                _store.Mark_TopicDeleted(orchId);
+                _log.Log_Info(orchId, $"Telegram topic {topicId} is already gone — recorded as deleted");
+                break;
+
+            // THE LOG AND NOTHING ELSE (decision 15): the topic is merely still open, its name reads 🏁,
+            // and there is nothing for the owner to do that closing again would not do.
+            case TopicCloseOutcomes.NotClosed:
+                _log.Log_Warning(orchId, $"Telegram topic {topicId} was NOT closed ({failure?.Message}) — it stays open in the list; not retried, closing again fixes it");
+                break;
+
+            default:
+                throw new Exception($"Unhandled TopicCloseOutcomes: {outcome}");
+        }
     }
 
     /// <summary>
@@ -9975,6 +10053,14 @@ internal sealed class BridgeEngineModel(
         // They travel as a named record rather than as seven positional arguments, four of them
         // bool: any two of those could be swapped with everything still compiling, and this caller
         // is `internal sealed`, so the suite could not see the swap either.
+        //
+        // AND THE FOUR CAME BACK AS A SETTING (plan 03 Task 7, `topic.modeGlyphs`): under `name` —
+        // classic's, master's topic list — the mode glyphs are drawn here again, so they are always
+        // filled, from the SAME readings PULSE's header takes (the effective mode, away, quiet, the
+        // session's presence). The placement is read HERE, at the point of effect, every call: the
+        // provider re-reads config.json on its write stamp, and the sync below compares the result
+        // against the name it last applied, so a changed placement is one rename per topic and an
+        // unchanged one is none — never one per tick.
         return TelegramDeliveryMode_Glyphs.Compose_TopicName(
             baseName,
             new TelegramDeliveryMode_Glyphs.TopicNameFlags(
@@ -9983,7 +10069,12 @@ internal sealed class BridgeEngineModel(
                 IsPausedForUsageLimit: Is_SupervisorPausedForUsageLimit(session),
                 IsClosed: session.ClosedUtc != null,
                 IsAwaitingTest: session.AwaitingTest,
-                IsDone: session.Done));
+                IsDone: session.Done,
+                Mode: Resolve_EffectiveMode(session.OrchId),
+                IsAway: Is_AwayMode(),
+                IsQuiet: Is_Quiet(session.OrchId),
+                Presence: session.OwnerPresence),
+            _configProvider.Get_Current().Phone.TopicModeGlyphs);
     }
 
     async Task Sync_TopicNames_Inside_Gate_Async(CancellationToken cancellationToken)
@@ -10511,8 +10602,10 @@ internal sealed class BridgeEngineModel(
             // `pulse.fields` AND `pulse.stepMinutes`, READ HERE, ONCE PER TOPIC, AT THE POINT OF EFFECT —
             // never cached, because the provider re-reads config.json on its write stamp and the owner
             // can change either between two ticks. The planner and the builder are pure and are handed
-            // the values.
-            var pulse = _configProvider.Get_Current().Pulse;
+            // the values. `topic.modeGlyphs` rides the same single read (plan 03 Task 7): the header draws
+            // the mode glyphs only when the topic name does not.
+            var current = _configProvider.Get_Current();
+            var pulse = current.Pulse;
 
             // A basic orchestration has no supervisor file and both readings are null, which is right:
             // its solo carries them on its own row.
@@ -10534,7 +10627,8 @@ internal sealed class BridgeEngineModel(
                 Build_TopicStatusFields(session),
                 UsageTotals_Reader.Read_ModelReading_OrNull(supervisorUsageFile),
                 pulse.Fields,
-                pulse.StepMinutes);
+                pulse.StepMinutes,
+                current.Phone.TopicModeGlyphs);
 
             var action = plan.Action;
             var text = plan.Text;

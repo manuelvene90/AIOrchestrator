@@ -385,6 +385,8 @@ internal sealed class TypingRecordingTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    public Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;

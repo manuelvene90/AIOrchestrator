@@ -23,6 +23,12 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// FAILURE paths, because the success path already worked and is not what stranded topics.
 /// </para>
 /// <para>
+/// UNDER <c>topic.onClose = delete</c>, THE SHIPPED DEFAULT — the owner's answer D2 (2026-09-14) —
+/// which is what a config naming no preset and no key resolves to, as every case here does. The other
+/// value, <c>close</c>, keeps the topic and has none of this machinery; TopicOnCloseTests pins it,
+/// and the rate-limit case below asserts that the delete path never closes as well.
+/// </para>
+/// <para>
 /// Through <see cref="BridgeEngine_Factory"/>, which is public and takes interfaces only —
 /// <c>BridgeEngineModel</c> is <c>internal sealed</c> and this repo has twice refused
 /// <c>InternalsVisibleTo</c>, so the retry loop and the start-up sweep are observed by their effects
@@ -104,6 +110,7 @@ public class ClosingATopicReallyDeletesItTests : IDisposable
 
         Assert.Equal(2, _telegram.DeleteAttempts);
         Assert.Contains(TOPIC_ID, _telegram.DeletedTopicIds);
+        Assert.Equal(0, _telegram.CloseAttempts);
 
         // And the pending stamp was written BEFORE the attempt — that record is the only thing a
         // later start could have read if this process had died between the two calls.
@@ -309,10 +316,17 @@ public class ClosingATopicReallyDeletesItTests : IDisposable
 }
 
 /// <summary>
-/// A Telegram client whose only interesting method is the delete. Scoped to this file rather than
-/// shared, because what it has to do — hand out a DIFFERENT answer per attempt and count them — is
-/// not what the other engine probes' fakes do; consolidating the six of them is real work and is
-/// parked (decision 22), not folded into this row.
+/// A Telegram client whose only interesting methods are the delete and the close. Scoped to this file
+/// rather than shared, because what it has to do — hand out a DIFFERENT answer per attempt and count
+/// them — is not what the other engine probes' fakes do; consolidating the six of them is real work
+/// and is parked (decision 22), not folded into this row.
+///
+/// <para>
+/// THE CLOSE MODELS TELEGRAM'S OWN ANSWERS (plan 03 Task 10, TopicOnCloseTests): a closed topic
+/// stays in the owner's list, and closing it again is answered <c>TOPIC_NOT_MODIFIED</c>, exactly as
+/// the Bot API does — so "closing twice is idempotent" is proven against the refusal the real second
+/// call gets, not against a fake that happens to accept anything.
+/// </para>
 /// </summary>
 internal sealed class DeletingTelegram_Fake : ITelegramApiClient
 {
@@ -320,11 +334,60 @@ internal sealed class DeletingTelegram_Fake : ITelegramApiClient
 
     readonly Lock _lock = new();
     readonly List<long> _deleted = [];
+    readonly HashSet<long> _closed = [];
 
     Exception? _oneOffFailure;
     Exception? _permanentFailure;
+    Exception? _closeFailure;
     int _deleteAttempts;
+    int _closeAttempts;
     long _nextMessageId = 1;
+
+    public int CloseAttempts
+    {
+        get { lock (_lock) return _closeAttempts; }
+    }
+
+    /// <summary>Whether the topic is CLOSED — it is still in the list, which is the whole of <c>close</c>.</summary>
+    public bool Is_Closed(long topicId)
+    {
+        lock (_lock)
+            return _closed.Contains(topicId);
+    }
+
+    /// <summary>
+    /// Whether the owner still sees the topic in their list: every topic this fake was never asked to
+    /// delete (or whose delete it refused) is still there.
+    /// </summary>
+    public bool Is_InTheOwnersList(long topicId)
+    {
+        lock (_lock)
+            return !_deleted.Contains(topicId);
+    }
+
+    /// <summary>Refuses every close with this failure — for the "a failed close is not retried" case.</summary>
+    public void Refuse_AllCloses(Exception failure)
+    {
+        lock (_lock)
+            _closeFailure = failure;
+    }
+
+    public Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            _closeAttempts++;
+
+            if (_closeFailure != null)
+                return Task.FromException(_closeFailure);
+
+            // Telegram's own answer to closing a topic that is already closed.
+            if (!_closed.Add(messageThreadId))
+                return Task.FromException(new TelegramApiException(400, "Telegram 'closeForumTopic' failed with HTTP 400: {\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: TOPIC_NOT_MODIFIED\"}"));
+        }
+
+        return Task.CompletedTask;
+    }
 
     public int DeleteAttempts
     {
