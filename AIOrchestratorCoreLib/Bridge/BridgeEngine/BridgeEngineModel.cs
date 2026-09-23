@@ -16528,7 +16528,7 @@ internal sealed class BridgeEngineModel(
                     DispatchPauseReason = _dispatchPauseReason,
                     DispatchPauseLiftedUntilUtc = _dispatchPauseLiftedUntilUtc,
                     SettingsMenuMessageId = _settingsMenu.State.LiveMenuMessageId,
-                    SettingsReplySteps = _settingsMenu.State.Read_Steps(),
+                    SettingsReplySteps = _settingsMenu.Read_PersistableSteps(),
                 };
             }
         }

@@ -11,7 +11,9 @@ namespace AIOrchestratorCoreLib.Telegram.SettingsMenu;
 /// never across topics; <see cref="EXPIRY_MINUTES"/> long, after which it swallows nothing
 /// (<see cref="SettingsReplyStepActions.Lapsed"/>); ended by ANY <c>/command</c>, which then runs normally, so
 /// <c>/pending</c> still works mid-prompt; ended and answered by <see cref="CANCEL_COMMAND"/>; and a message
-/// that is not text (a photo, a voice note) is never taken as a value. The prompt says all of this in its own
+/// that is not text (a photo, a voice note) is never taken as a value — nor is one the APP composed (fix round 1
+/// of d63cd76: <c>/summary</c> typed in an orchestration topic becomes a canned request for the GENERAL supervisor,
+/// thread null, and a live step in General took it as its value, so the summary never reached anyone). The prompt says all of this in its own
 /// words (<see cref="SettingsMenu_Builder.Build_ReplyPrompt"/>).
 /// </para>
 /// <para>
@@ -38,7 +40,8 @@ public static class SettingsReplyStep_Decider
     /// <param name="nowUtc">Now.</param>
     /// <param name="command">The message's bot command as the engine lexed it, or null for plain text.</param>
     /// <param name="carriesMedia">A photo, a voice note or a document — never a value.</param>
-    public static SettingsReplyStepActions Decide(bool hasStep, bool isHeld, DateTime expiresUtc, DateTime nowUtc, string? command, bool carriesMedia)
+    /// <param name="isAppComposed">Text the app wrote on the owner's behalf (a canned /summary request, a tapped option) — never a value.</param>
+    public static SettingsReplyStepActions Decide(bool hasStep, bool isHeld, DateTime expiresUtc, DateTime nowUtc, string? command, bool carriesMedia, bool isAppComposed)
     {
         if (!hasStep)
             return SettingsReplyStepActions.NoStep;
@@ -52,7 +55,7 @@ public static class SettingsReplyStep_Decider
         if (command != null)
             return SettingsReplyStepActions.EndedByCommand;
 
-        if (isHeld || carriesMedia)
+        if (isHeld || carriesMedia || isAppComposed)
             return SettingsReplyStepActions.PassThrough;
 
         return SettingsReplyStepActions.TakeAsValue;

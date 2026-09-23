@@ -79,6 +79,19 @@ internal sealed class SettingsMenuModel(
 
     public ISettingsMenuState State => state;
 
+    public IReadOnlyList<ISettingsReplyStep> Read_PersistableSteps()
+    {
+        var now = clock.UtcNow;
+
+        return [.. state.Read_Steps().Where(step => now < step.ExpiresUtc && !Holds_Secret(step))];
+    }
+
+    /// <summary>The one secret path the reader masks (ruling P2) is the one a held value must never be persisted for.</summary>
+    static bool Holds_Secret(ISettingsReplyStep step)
+    {
+        return step.HeldText_OrNull != null && step.Path == SettingsSnapshot_Reader.MASKED_SECRET_PATH;
+    }
+
     public async Task Send_Menu_Async(ITelegramApiClient client, ISettingsMenuHost host, long? messageThreadId, CancellationToken cancellationToken)
     {
         if (messageThreadId != null)
@@ -138,7 +151,7 @@ internal sealed class SettingsMenuModel(
         {
             var reading = Find_Reading(readings, definition.Path);
 
-            note = Is_Refused_OnThePhone(reading) ?? Apply_Edit(reading, edit!.Value, word, step);
+            note = Describe_PhoneRefusal_OrNull(reading) ?? Apply_Edit(reading, edit!.Value, word, step);
 
             if (edit == SettingsMenuEdits.ApplyHeldReply)
                 state.Clear_Step(null);
@@ -151,7 +164,7 @@ internal sealed class SettingsMenuModel(
             var reading = Find_Reading(readings, definition.Path);
             var back = SettingsButton_Data.Build(SettingsMenuViews.Setting, null, index, 0, null, null);
 
-            note = Is_Refused_OnThePhone(reading);
+            note = Describe_PhoneRefusal_OrNull(reading);
 
             if (note == null)
             {
@@ -201,7 +214,7 @@ internal sealed class SettingsMenuModel(
     {
         var step = state.Find_Step_OrNull(message.MessageThreadId);
         var action = SettingsReplyStep_Decider.Decide(
-            step != null, step?.HeldText_OrNull != null, step?.ExpiresUtc ?? default, clock.UtcNow, command, carriesMedia: false);
+            step != null, step?.HeldText_OrNull != null, step?.ExpiresUtc ?? default, clock.UtcNow, command, carriesMedia: false, isAppComposed: message.IsAppComposed);
 
         switch (action)
         {
@@ -237,7 +250,7 @@ internal sealed class SettingsMenuModel(
         var step = state.Find_Step_OrNull(threadId);
         var carriesMedia = message.PhotoFileId != null || message.VoiceFileId != null || message.Document != null;
         var action = SettingsReplyStep_Decider.Decide(
-            step != null, step?.HeldText_OrNull != null, step?.ExpiresUtc ?? default, clock.UtcNow, command: null, carriesMedia);
+            step != null, step?.HeldText_OrNull != null, step?.ExpiresUtc ?? default, clock.UtcNow, command: null, carriesMedia, message.IsAppComposed);
 
         switch (action)
         {
@@ -291,7 +304,7 @@ internal sealed class SettingsMenuModel(
         var (readings, presetName) = Read_Snapshot();
         var reading = Find_Reading(readings, definition.Path);
         var index = Index_Of(definition.Path);
-        var fenced = Is_Refused_OnThePhone(reading);
+        var fenced = Describe_PhoneRefusal_OrNull(reading);
 
         if (fenced != null)
         {
@@ -321,10 +334,29 @@ internal sealed class SettingsMenuModel(
         var note = Apply_Edit(reading, SettingsMenuEdits.Set, text, step);
 
         state.Clear_Step(step.ThreadId);
-        (readings, presetName) = Read_Snapshot();
 
-        var after = SettingsMenu_Builder.Build(SettingsMenuViews.Setting, null, index, 0, null, null, readings, presetName);
-        await Post_LiveMenu_Async(client, host, Prefix_Note(note, after.Text), after.Rows, cancellationToken);
+        // FROM HERE THE WRITE HAS HAPPENED (fix round 1 of d63cd76). A menu that cannot be posted must not let the
+        // inbound loop log "this one message is dropped" about a value that WAS saved, with the owner told nothing:
+        // the outcome is logged as it is, and the owner gets it as a plain line instead.
+        try
+        {
+            (readings, presetName) = Read_Snapshot();
+
+            var after = SettingsMenu_Builder.Build(SettingsMenuViews.Setting, null, index, 0, null, null, readings, presetName);
+            await Post_LiveMenu_Async(client, host, Prefix_Note(note, after.Text), after.Rows, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            log.Log_Warning(
+                Describe_Scope(step.ThreadId),
+                $"Settings: the reply for '{definition.Path}' was handled (the writer answered: {note}) but the menu showing it could not be posted ({ex.GetType().Name}: {ex.Message}) — the owner is told in a plain line");
+
+            await Reply_Async(client, host, step.ThreadId, $"{note} ({definition.Label})", cancellationToken);
+        }
     }
 
     /// <summary>
@@ -405,7 +437,7 @@ internal sealed class SettingsMenuModel(
     /// fenced row, but a stale or forged payload can still name one, and the rule that refuses it must be the
     /// same rule that drew nothing. Null when the phone may change the row.
     /// </summary>
-    static string? Is_Refused_OnThePhone(ISettingReading reading)
+    static string? Describe_PhoneRefusal_OrNull(ISettingReading reading)
     {
         if (SettingsMenu_Builder.Is_EditableOnThePhone(reading))
             return null;

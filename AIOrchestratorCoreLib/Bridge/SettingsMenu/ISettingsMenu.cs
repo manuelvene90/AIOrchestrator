@@ -23,6 +23,14 @@ public interface ISettingsMenu
     ISettingsMenuState State { get; }
 
     /// <summary>
+    /// THE STEPS WORTH PERSISTING (fix round 1 of d63cd76): every pending step EXCEPT one already past its
+    /// deadline — no trap, only stale text on disk — and one HOLDING a secret, whose typed <c>web.token</c> must
+    /// never reach the engine-state file. A restart then answers that Confirm's Yes with "tap Reply again": a
+    /// re-ask, never a secret kept on disk. A secret step still waiting for its value holds nothing and is kept.
+    /// </summary>
+    IReadOnlyList<ISettingsReplyStep> Read_PersistableSteps();
+
+    /// <summary>
     /// <c>/settings</c>. In General: the categories, as a NEW live menu message (the previous one is released and
     /// taken down). In an orchestration topic: that orchestration's rows, read-only, pointing at /model and
     /// /effort (D3) — no buttons, so nothing there can write a machine setting.

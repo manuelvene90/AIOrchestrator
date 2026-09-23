@@ -273,6 +273,87 @@ public class SettingsReplyStepTests : IDisposable
         Assert.Equal(NUMBER_PATH, Assert.Single(_harness.EngineState.Load_OrEmpty().SettingsReplySteps).Path);
     }
 
+    /// <summary>
+    /// AN APP-COMPOSED MESSAGE IS NEVER A VALUE (fix round 1 of d63cd76). /summary typed in an orchestration's
+    /// topic becomes a canned request for the GENERAL supervisor — thread null, app-composed — and a live step in
+    /// General took it as the setting's value: the summary never reached the general supervisor, and the canned
+    /// sentence was offered to the catalogue as a number. <c>Build_GeneralCommandMessage</c>'s own doc records
+    /// the tree paying for this class once already.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ASummaryTypedInATopic_IsNeverTakenAsTheValueOfAStepInGeneral()
+    {
+        var configBefore = "";
+
+        await _harness.Run_WhileAsync(_harness.Build_Engine(), async () =>
+        {
+            await Open_Prompt_Async(NUMBER_PATH);
+            configBefore = File.ReadAllText(_harness.Paths.ConfigFile);
+
+            await _harness.Owner_Types_Async("/summary", Harness.TOPIC_ID);
+        });
+
+        Assert.Equal(1, _harness.Count_RoutedMessages());
+        Assert.Equal(configBefore, File.ReadAllText(_harness.Paths.ConfigFile));
+        Assert.Equal(NUMBER_PATH, Assert.Single(_harness.EngineState.Load_OrEmpty().SettingsReplySteps).Path);
+    }
+
+    /// <summary>
+    /// A TYPED web.token HELD FOR ITS CONFIRM IS NEVER WRITTEN TO THE ENGINE-STATE FILE (fix round 1 of d63cd76).
+    /// The held step is dropped from what is persisted — a restart then answers the Yes with "tap Reply again"
+    /// rather than keeping the secret on disk — and nothing was written to config.json either.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AHeldSecret_IsNeverPersistedWithTheEngineState()
+    {
+        const string SENTINEL = "tok-SENTINEL-7f3a";
+
+        await _harness.Run_WhileAsync(_harness.Build_Engine(), async () =>
+        {
+            await Open_Prompt_Async("web.token");
+            await _harness.Owner_Types_Async(SENTINEL, threadId: null);
+
+            Assert.Contains("It is a secret", _harness.Telegram.Current_Of_OrNull(_harness.Live_MenuMessageId())!.Value.Text, StringComparison.Ordinal);
+        });
+
+        var persisted = _harness.EngineState.Load_OrEmpty();
+
+        Assert.Empty(persisted.SettingsReplySteps);
+        Assert.DoesNotContain(SENTINEL, EngineState_Serializer.To_Json(persisted), StringComparison.Ordinal);
+        Assert.DoesNotContain(SENTINEL, File.ReadAllText(_harness.Paths.ConfigFile), StringComparison.Ordinal);
+        Assert.DoesNotContain(SENTINEL, _harness.Log.Dump(), StringComparison.Ordinal);
+        Assert.DoesNotContain(_harness.Telegram.Sent_WithIds, sent => sent.Text.Contains(SENTINEL, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A VALUE THAT WAS SAVED IS NEVER REPORTED AS DROPPED (fix round 1 of d63cd76). When the menu that would show
+    /// the result cannot be posted, the write has already happened: the owner is still told, and the log says the
+    /// value was saved — never the inbound loop's "this one message is dropped".
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task WhenTheResultMenuCannotBePosted_TheSavedValueIsStillAnswered_AndNotLoggedAsDropped()
+    {
+        var before = 0;
+
+        await _harness.Run_WhileAsync(_harness.Build_Engine(), async () =>
+        {
+            await Open_Prompt_Async(NUMBER_PATH);
+
+            _harness.Telegram.Fail_Sends_Containing(Harness.MENU_HEADER);
+            before = _harness.Telegram.Sent_WithIds.Count;
+
+            await _harness.Owner_Types_Async("45", threadId: null);
+        });
+
+        Assert.Equal(45, _harness.Read_ConfigValue_OrNull(NUMBER_PATH)?.GetValue<long>());
+        Assert.Contains(_harness.Sent_Since(before), sent => sent.Text.Contains("Saved.", StringComparison.Ordinal));
+        Assert.False(_harness.Log.Has_Line_Containing("this one message is dropped"), _harness.Log.Dump());
+        Assert.Equal(0, _harness.Count_RoutedMessages());
+    }
+
     /// <summary>/settings in General, then the setting's ✎ Reply — the prompt is up and the step is live.</summary>
     async Task Open_Prompt_Async(string path)
     {
