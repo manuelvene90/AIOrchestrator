@@ -53,11 +53,11 @@ namespace AIOrchestratorCoreLib.Tests.Configuration.SettingsCatalog;
 /// its sweep <c>DateTime.Now</c>, not the injected clock, so a half-hour boundary cannot be crossed by
 /// an engine test; the preset half is pinned by <c>PeriodicStatusSweepTests.UnderClassic_ThePeriodicStatusIsPostedOnItsSlot_WhenTheStatusChanged</c>
 /// and <c>UnderQuiet_NoPeriodicStatusIsEverSent</c>, which drive the real sweep with the phone block
-/// resolved from the real presets through the real loader. PULSE's REPOST CADENCE is excluded from the
-/// conversation timeline, because on this tree the engine hands the planner a render key where the
-/// planner compares raw text, so PULSE is re-edited on every tick and reposted after every burst even
-/// when its content did not change — a pre-existing defect (it is on master, from 2143db8) recorded in
-/// the plan 03 report rather than pinned here as if it were the design.
+/// resolved from the real presets through the real loader. PULSE's CADENCE is kept out of the
+/// conversation timeline and has facts of its own (Task 17, "PULSE's cadence" below): until 2026-09-23
+/// the engine handed the planner a render key where the planner compared raw text, so PULSE was
+/// re-edited on every tick and reposted after every burst even when its content did not change (on
+/// master since the fork's 2143db8; plan 03 report §5.3).
 /// </para>
 /// <para>
 /// THE RUNNERS ARE PINNED TO <c>terminal</c> in config.json, outranking quiet's print/stream rows: a
@@ -292,6 +292,229 @@ public class PresetPhoneProbeTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------------------------
+    // PULSE's cadence (Task 17)
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Classic's field list without <c>updated</c>. The heartbeat steps every five minutes, so a fact that
+    /// happened to straddle a step would see one honest edit and read it as noise. What these facts
+    /// measure is the rest of the rendering, so the only clock on the line is taken off it.
+    /// </summary>
+    const string PULSE_WITHOUT_HEARTBEAT = ",\"pulse\":{\"fields\":[\"progress\",\"supervisor\",\"members\",\"modelEffort\"]}";
+
+    /// <summary>The same, with a bar of two verbs where classic has eight — a change to the buttons alone.</summary>
+    const string PULSE_WITH_A_SHORTER_BAR =
+        ",\"pulse\":{\"fields\":[\"progress\",\"supervisor\",\"members\",\"modelEffort\"],\"buttons\":[\"screen\",\"show\"]}";
+
+    const string DECLARED_STATE = "rebuilding the images";
+
+    /// <summary>
+    /// A PULSE THAT SAYS THE SAME THING IS NOT WRITTEN AGAIN. Found by the Task 12 gate (report §5.3): the
+    /// engine remembered a render key and the planner compared it with raw text, so the two never matched
+    /// and every tick edited the line with the text it already had — once every ~60 ms at this fixture's
+    /// tick, once every 30 s per topic in production (the per-message edit gap), each one answered "not
+    /// modified".
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_AnUnchangedPulse_IsNeverEditedAgain()
+    {
+        var (timeline, mark) = await Run_Pulse_Async(async _ => await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(60)));
+
+        Assert.True(Pulse_Activity(timeline, mark).Count == 0, Describe_PulseActivity(timeline, mark));
+    }
+
+    /// <summary>
+    /// THE OWNER'S RULE OF 2026-09-09: PULSE is deleted and re-posted only when it is buried AND its content
+    /// changed. The owner asks, the supervisor answers, the topic goes quiet for longer than the repost
+    /// window — and PULSE, which says nothing new, stays where it is. The defect deleted and re-sent it
+    /// about ten seconds after every such exchange.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_AnExchangeThatChangesNothingInPulse_DoesNotMoveIt()
+    {
+        var (timeline, mark) = await Run_Pulse_Async(Bury_Pulse_UnderAnExchange_Async);
+
+        Assert.DoesNotContain(Pulse_Activity(timeline, mark), line => line.StartsWith("delete", StringComparison.Ordinal) || line.StartsWith("post", StringComparison.Ordinal));
+        Assert.Contains(timeline.Skip(mark), e => e.Kind == PhoneEventKinds.Sent && e.Text.Contains(ANSWER_TEXT, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A CHANGE WHILE PULSE IS STILL THE LAST THING IN THE TOPIC IS ONE EDIT. The supervisor declares a
+    /// state; under classic that entry is held rather than sent, so nothing buries the line and the new row
+    /// is written in place — once.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_APulseThatChangedWhileLast_IsEditedOnce()
+    {
+        var (timeline, mark) = await Run_Pulse_Async(async channelFile =>
+        {
+            Append_SupervisorEntry(channelFile, 2, "status", $"Still on it.\nSTATE: {DECLARED_STATE}");
+
+            await Require_Async(() => Pulse_Activity(_telegram.Events_Since(0), 0).Any(line => line.Contains(DECLARED_STATE, StringComparison.Ordinal)), 20_000, "PULSE never showed the declared state", 0);
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(60));
+        });
+
+        var activity = Pulse_Activity(timeline, mark);
+
+        Assert.True(activity.Count == 1, Describe_PulseActivity(timeline, mark));
+        Assert.StartsWith("edit", activity[0], StringComparison.Ordinal);
+        Assert.Contains(DECLARED_STATE, activity[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A CHANGE WHILE PULSE IS BURIED AND THE TOPIC IS QUIET MOVES IT, ONCE: the old line is deleted and the
+    /// new one is sent at the bottom, and nothing follows it. This is the half of the owner's rule the
+    /// fix must not lose — "changed" still moves the line.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_APulseThatChangedWhileBuried_IsRepostedOnce()
+    {
+        var changedAt = 0;
+
+        var (timeline, _) = await Run_Pulse_Async(async channelFile =>
+        {
+            await Bury_Pulse_UnderAnExchange_Async(channelFile);
+
+            changedAt = _telegram.Mark();
+
+            Append_SupervisorEntry(channelFile, 3, "status", $"Still on it.\nSTATE: {DECLARED_STATE}");
+
+            await Require_Async(() => Pulse_Activity(_telegram.Events_Since(0), changedAt).Any(line => line.Contains(DECLARED_STATE, StringComparison.Ordinal)), 20_000, "PULSE never showed the declared state", changedAt);
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(60));
+        });
+
+        var activity = Pulse_Activity(timeline, changedAt);
+
+        Assert.True(activity.Count == 2, Describe_PulseActivity(timeline, changedAt));
+        Assert.Equal("delete", activity[0]);
+        Assert.StartsWith("post", activity[1], StringComparison.Ordinal);
+        Assert.Contains(DECLARED_STATE, activity[1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A CHANGE TO THE BAR ALONE STILL REACHES THE PHONE, as one edit. The render key exists for this
+    /// (brief D): a quiet orchestration's text does not move for hours, so a bar compared by text would
+    /// never be repainted. The fix compares text with text and must not lose it.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_AChangeToThePulseBarAlone_IsEditedOnce()
+    {
+        var (timeline, mark) = await Run_Pulse_Async(async _ =>
+        {
+            Write_Config(Presets_Loader.CLASSIC, "[]", PULSE_WITH_A_SHORTER_BAR);
+
+            await Require_Async(() => Pulse_Activity(_telegram.Events_Since(0), 0).Any(line => line.EndsWith("{📸 /screen | 👁 /show}", StringComparison.Ordinal)), 20_000, "the shorter bar never reached PULSE", 0);
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(60));
+        });
+
+        var activity = Pulse_Activity(timeline, mark);
+        var textBefore = Pulse_Texts(timeline.Take(mark).ToList())[^1];
+
+        Assert.True(activity.Count == 1, Describe_PulseActivity(timeline, mark));
+        Assert.Equal($"edit {textBefore.Replace("\n", "⏎")} {{📸 /screen | 👁 /show}}", activity[0]);
+    }
+
+    /// <summary>
+    /// Starts classic (without the heartbeat, see <see cref="PULSE_WITHOUT_HEARTBEAT"/>), waits for PULSE's
+    /// first post and for the line to settle, then marks the timeline and runs <paramref name="body"/>.
+    /// </summary>
+    async Task<(List<PhoneEvent> Timeline, int Mark)> Run_Pulse_Async(Func<string, Task> body)
+    {
+        Use_Preset(Presets_Loader.CLASSIC, extraConfigJson: PULSE_WITHOUT_HEARTBEAT);
+
+        var session = Launcher().Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        var channelFile = Ensure_OwnerChannel(session.OrchId);
+        var mark = 0;
+
+        await Run_WhileAsync(async () =>
+        {
+            await Require_Async(() => Pulse_Texts(_telegram.Events_Since(0)).Count > 0, 20_000, "PULSE was never posted", 0);
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(20));
+
+            mark = _telegram.Mark();
+
+            await body(channelFile);
+        });
+
+        return (_telegram.Events_Since(0), mark);
+    }
+
+    /// <summary>
+    /// The owner asks, the supervisor answers — both land below PULSE — and then the topic stays quiet for
+    /// longer than the repost window, so a line that had anything new to say would move.
+    /// </summary>
+    async Task Bury_Pulse_UnderAnExchange_Async(string channelFile)
+    {
+        // The id comes from the fake's own sequence, as a real one comes from the chat's: above PULSE, so it
+        // buries the line, and below whatever the bot sends next, so a reposted line is not buried by it.
+        _telegram.Queue_Updates(Message_Json(OWNER_TEXT, 8101, _telegram.Allocate_IncomingMessageId()));
+
+        await Require_Async(() => Channel_Contains(channelFile, OWNER_TEXT), 30_000, "the owner's message was never delivered", 0);
+
+        Append_SupervisorEntry(channelFile, 2, "the rebuild", ANSWER_TEXT);
+
+        await Require_Async(() => _telegram.Has_Sent_Containing(ANSWER_TEXT), 20_000, "the answer never reached the phone", 0);
+        await Wait_Until_Async(() => false, (TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS + 3) * 1000);
+    }
+
+    /// <summary>
+    /// Every write to PULSE from <paramref name="mark"/> on, one line each: <c>post …</c>, <c>edit …</c>
+    /// (text and bar), <c>delete</c>. PULSE's ids are taken from the WHOLE timeline, so an edit of a line
+    /// posted before the mark is still recognised.
+    /// </summary>
+    static List<string> Pulse_Activity(List<PhoneEvent> timeline, int mark)
+    {
+        var pulseIds = timeline
+            .Where(e => e.Kind == PhoneEventKinds.Sent && Is_Pulse(e.Text))
+            .Select(e => e.MessageId)
+            .ToHashSet();
+
+        List<string> lines = [];
+
+        foreach (var e in timeline.Skip(mark))
+        {
+            if (!pulseIds.Contains(e.MessageId))
+                continue;
+
+            var rendering = $"{e.Text.Replace("\n", "⏎")} {{{e.Labels}}}";
+
+            switch (e.Kind)
+            {
+                case PhoneEventKinds.Sent:
+                    lines.Add($"post {rendering}");
+                    break;
+
+                case PhoneEventKinds.Edited:
+                    lines.Add($"edit {rendering}");
+                    break;
+
+                case PhoneEventKinds.Deleted:
+                    lines.Add("delete");
+                    break;
+
+                default:
+                    lines.Add(e.Describe());
+                    break;
+            }
+        }
+
+        return lines;
+    }
+
+    string Describe_PulseActivity(List<PhoneEvent> timeline, int mark)
+    {
+        return $"PULSE from the mark:{Environment.NewLine}{string.Join(Environment.NewLine, Pulse_Activity(timeline, mark).Take(20))}"
+            + $"{Environment.NewLine}Phone:{Environment.NewLine}{_telegram.Dump(mark)}";
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // Scenarios
     // ---------------------------------------------------------------------------------------------
 
@@ -422,7 +645,7 @@ public class PresetPhoneProbeTests : IDisposable
     /// <summary>
     /// The conversation as the owner reads it: one line per thing on the phone, named by what it IS.
     /// PULSE, General's dashboard and renames are left out — PULSE and the name are the topic probes'
-    /// subject, and PULSE's repost cadence is the parked defect in the class summary. Anything the
+    /// subject, and PULSE's cadence has its own facts (Task 17). Anything the
     /// projection does not recognise is written out raw, so an unexpected send shows up in the diff
     /// instead of disappearing into a filter.
     /// </summary>
@@ -594,16 +817,9 @@ public class PresetPhoneProbeTests : IDisposable
     /// (<c>Create_Custom_WindowFromSettings</c>), because a window named by the timing outranks the
     /// setting, and the owner's six seconds are part of what is probed.
     /// </summary>
-    void Use_Preset(string preset, string reposJson = "[]")
+    void Use_Preset(string preset, string reposJson = "[]", string extraConfigJson = "")
     {
-        var terminalRunners = string.Join(
-            ",",
-            SessionRole_Names.ALL.Select(role => $"\"{SessionRole_Names.Get_ConfigKey(role)}\":{{\"runner\":\"terminal\"}}"));
-
-        File.WriteAllText(
-            _paths.ConfigFile,
-            $"{{\"repos\":{reposJson},\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"preset\":\"{preset}\",\"runners\":{{{terminalRunners}}}}}");
+        Write_Config(preset, reposJson, extraConfigJson);
 
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
         var config = configProvider.Get_Current();
@@ -619,6 +835,23 @@ public class PresetPhoneProbeTests : IDisposable
                 BridgeTestTiming.RETRY_BACKOFF_SECONDS,
                 BridgeTestTiming.TICK_LOCK_ALLOWANCE_MILLISECONDS,
                 BridgeTestTiming.TRAILING_ENTRY_QUIET_MILLISECONDS));
+    }
+
+    /// <summary>
+    /// config.json as every fact writes it; <paramref name="extraConfigJson"/> is spliced in as further
+    /// top-level members (a leading comma included), so a fact can state a key over its preset — and
+    /// rewrite the file mid-run, which the provider picks up on its write stamp.
+    /// </summary>
+    void Write_Config(string preset, string reposJson, string extraConfigJson)
+    {
+        var terminalRunners = string.Join(
+            ",",
+            SessionRole_Names.ALL.Select(role => $"\"{SessionRole_Names.Get_ConfigKey(role)}\":{{\"runner\":\"terminal\"}}"));
+
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":{reposJson},\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"preset\":\"{preset}\",\"runners\":{{{terminalRunners}}}{extraConfigJson}}}");
     }
 
     IOrchestrationLauncher Launcher() => _launcher ?? throw new Exception("Use_Preset was not called");
@@ -731,6 +964,18 @@ internal sealed class PhoneTimelineTelegram_Fake(long createdTopicId) : ITelegra
     {
         lock (_lock)
             return [.. _events.Skip(mark)];
+    }
+
+    /// <summary>
+    /// An id for a message the OWNER sends, taken from the same counter as the bot's sends. Telegram ids
+    /// rise chat-wide, so an owner message sits between the bot message before it and the one after it —
+    /// the ordering PULSE's burial check reads. An id picked from outside the sequence would bury every
+    /// later bot message too.
+    /// </summary>
+    public long Allocate_IncomingMessageId()
+    {
+        lock (_lock)
+            return _nextMessageId++;
     }
 
     public void Queue_Updates(string updatesJson)

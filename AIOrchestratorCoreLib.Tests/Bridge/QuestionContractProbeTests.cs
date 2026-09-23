@@ -442,8 +442,11 @@ public class QuestionContractProbeTests : IDisposable
         // Edits accepted BEFORE the refusal are not the subject; only what happens from here on is.
         var acceptedBefore = _telegram.Count_EditAttempts(pulseId);
 
-        // An open question changes the line ("waiting on you"), so an edit is due — and refused.
-        Append_Supervisor(orchId, COMPLETE_QUESTION);
+        // A declared state changes the supervisor's row, so an edit is due — and refused. It was an open
+        // question until plan 03 Task 17 (2026-09-23): its "waiting on you" row is not in the field list a
+        // config naming no preset resolves to (classic's), so the question changed nothing on the line and
+        // the edit this case saw was the render-key defect's every-tick edit of an unchanged PULSE.
+        Append_Supervisor(orchId, "Working on it.\nSTATE: rebuilding the images");
 
         Assert.True(
             await Run_Until_Async(() => _telegram.Count_EditAttempts(pulseId) > acceptedBefore, 20_000),
