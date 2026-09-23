@@ -881,8 +881,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Orchestration topic buttons",
                 description:
-                    "The verbs on an orchestration topic's button bar, in display order. A verb no tap can run yet is left " +
-                    "off the bar and named once in the log — it stays a typed command.",
+                    "The verbs on an orchestration topic's button bar, in display order. Any command of the '/' menu can be a " +
+                    "button, and a tap runs it exactly as if you had typed it in that topic. An element carrying a target other " +
+                    "than 'tail sup' (e.g. 'tail 1') is left off the bar and named once in the log — it stays a typed command.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.BOT_COMMANDS),
 

@@ -7197,8 +7197,7 @@ internal sealed class BridgeEngineModel(
                         // race the ✓ acks of the batch it arrived in.
                         presenceCommands.Add(message.MessageThreadId);
                     }
-                    else if (command == "dnd" || command == "mute" || command == "unmute"
-                        || command == "dnd-all" || command == "mute-all" || command == "dnd_all" || command == "mute_all")
+                    else if (Telegram.DeliveryModeCommands.Is_ModeCommand(command))
                     {
                         // Deferred until after the loop: toggling must not race the ✓ acks, and a
                         // /dnd must not be auto-unmuted by the very message that requested it.
@@ -7208,134 +7207,10 @@ internal sealed class BridgeEngineModel(
                     {
                         routableMessages.Add(Build_GeneralCommandMessage(message, GENERAL_SUMMARY_REQUEST));
                     }
-                    else if (command == "pending")
-                    {
-                        // ANSWERED BY THE APP, not by the general supervisor. It used to be routed as
-                        // an English instruction, which meant the list cost a model turn, arrived
-                        // whenever that session next ran, and was reconstructed from channel files by
-                        // something that might be mid-turn on something else. The app is holding the
-                        // decisions in a field — the same argument /progress already won.
-                        await Send_PendingDecisions_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    // "left" is an ALIAS, not a second implementation: it is the word the owner used
-                    // ("a slash command that lets me know what's left"), and two commands reading one
-                    // ledger would drift apart — the second-copy hazard applied to features.
-                    else if (command == "progress" || command == "left")
-                    {
-                        // Answered by the APP straight from PLAN.md — instant, and it works even
-                        // while the supervisor is mid-turn (which is exactly when it gets asked).
-                        await Send_ProgressReport_Async(client, message.MessageThreadId, command, cancellationToken);
-                    }
-                    // NOT an alias of /progress: the owner asked to KEEP the full detail when the
-                    // short form was built, so this is the second RENDERING of the same parse.
-                    else if (command == "tasks")
-                    {
-                        await Send_TaskListReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "tokens")
-                    {
-                        await Send_TokensReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "cost")
-                    {
-                        await Send_CostReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command != null && Telegram.ModelEffortCommand_Parser.Is_Command(command, MODEL_COMMAND))
-                    {
-                        // Takes an argument, so it is matched on its leading word — the lexer hands back
-                        // the whole remainder ("model fable 5.1"), and equality would only ever see the
-                        // bare form.
-                        await Handle_DialCommand_Async(client, message.MessageThreadId, command, Telegram.ModelEffortKinds.Model, cancellationToken);
-                    }
-                    else if (command != null && Telegram.ModelEffortCommand_Parser.Is_Command(command, EFFORT_COMMAND))
-                    {
-                        await Handle_DialCommand_Async(client, message.MessageThreadId, command, Telegram.ModelEffortKinds.Effort, cancellationToken);
-                    }
-                    else if (command == "limits")
-                    {
-                        await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "context")
-                    {
-                        await Send_ContextReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "show")
-                    {
-                        await Show_SessionWindow_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "screen")
-                    {
-                        await Send_SessionScreenshot_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "screens")
-                    {
-                        await Toggle_StatusScreenshots_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "organize")
-                    {
-                        await Organize_SessionWindows_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "organize_mains" || command == "organize-mains")
-                    {
-                        // The hyphen is accepted for the same reason mute-all is (see above): the
-                        // Telegram menu only offers the underscore, and an owner typing the shape
-                        // they remember should not be answered with silence — an unmatched command
-                        // falls through to the catch-all and is delivered to the session as chat.
-                        await Organize_MainWindows_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "merge")
-                    {
-                        await Ask_SessionToMerge_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "test")
-                    {
-                        await Toggle_AwaitingTest_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "done")
-                    {
-                        await Toggle_Done_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "pause")
-                    {
-                        await Toggle_Paused_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "refresh")
-                    {
-                        await Refresh_TopicName_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "switch")
-                    {
-                        await Switch_OrchestrationShape_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "close")
-                    {
-                        await Request_Close_FromCommand_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "diff")
-                    {
-                        await Send_GitReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "clear")
-                    {
-                        await Clear_Topic_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "status")
-                    {
-                        await Send_MemberStatusReport_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command == "resume")
-                    {
-                        await Resume_AllSessions_Async(client, message.MessageThreadId, cancellationToken);
-                    }
-                    else if (command is "tail" or "log")
-                    {
-                        await Send_TurnLog_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
-                    }
-                    else if (command != null && command.StartsWith("imp", StringComparison.Ordinal))
-                    {
-                        await Send_ImplementerPeek_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
-                    }
-                    else
+                    // EVERY OTHER COMMAND RUNS THROUGH ONE CHAIN, which a tapped bar button with no dedicated case
+                    // reaches too (plan 03 Task 5b, ruling R16) — so a button and the command it names are one
+                    // implementation. What it does not run is not a command, and is the owner's chat.
+                    else if (command == null || !await Try_RunOwnerCommand_Async(client, command, message.MessageThreadId, message.Text, cancellationToken))
                     {
                         routableMessages.Add(message);
                         isRoutable = true;
@@ -7368,8 +7243,10 @@ internal sealed class BridgeEngineModel(
                 }
 
                 // The owner texting or tapping ANYTHING (except a mode command) lifts app-wide DND
-                // — before routing, so the ✓ acks go out.
-                if ((routableMessages.Count > 0 || batch.CallbackTaps.Count > 0) && _telegramMuted)
+                // — before routing, so the ✓ acks go out. The exception now holds for a TAPPED mode
+                // command too (plan 03 Task 5b): a 🌙 /dnd_all tapped while deferred was lifted here and
+                // toggled straight back on by its own tap, so that button could never turn DND off.
+                if ((routableMessages.Count > 0 || batch.CallbackTaps.Any(tap => !Telegram.TopicCommandButtons.Is_DeliveryModeTap(tap.Data))) && _telegramMuted)
                     Set_TelegramMuted(false);
 
                 foreach (var message in routableMessages)
@@ -7505,6 +7382,173 @@ internal sealed class BridgeEngineModel(
                 backoffMilliseconds = Math.Min(backoffMilliseconds * 2, INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS);
             }
         }
+    }
+
+    /// <summary>
+    /// THE TYPED-COMMAND CHAIN — every command the inbound loop runs on the spot, as one method (plan 03
+    /// Task 5b, ruling R16). Returns false when <paramref name="command"/> is none of them, and the caller
+    /// decides what that means: for a typed message it is the owner's chat, for a tap it is a button from
+    /// an older build.
+    ///
+    /// <para>
+    /// IT WAS THE TAIL OF THE INBOUND LOOP'S <c>else if</c> CHAIN, and it moved here so a TAP can reach
+    /// it. Task 5 made the bars configurable and its wiring guard found twenty menu verbs with no case in
+    /// the tap handler, all refused from every bar. Writing twenty more cases would have been twenty
+    /// second implementations — the drift this repo already paid for with /progress and /left — so a tap
+    /// with no dedicated case hands its verb here, as the text the owner would have typed
+    /// (<see cref="Telegram.TopicCommandButtons.Build_TypedCommandText"/>), and a button can never behave
+    /// differently from the command it names. The branches are MOVED VERBATIM, the message's thread and
+    /// text become parameters; nothing about any command changed.
+    /// </para>
+    /// <para>
+    /// NOT HERE, AND DELIBERATELY: /pc and the delivery-mode toggles (deferred to the end of the batch by
+    /// the loop, so they cannot race its ✓ acks), /summary (routed as a canned message built from the
+    /// owner's own message), and the high-risk read-back (typed text only, by definition). The tap handler
+    /// has its own dedicated case for each of the first three.
+    /// </para>
+    /// <para>
+    /// A COMMAND CONFIRMED BY REPEATING IT (/switch) KEEPS ITS STATE IN THE COMMAND'S OWN METHOD, keyed by
+    /// orchestration, so a tap and a typed send arm and complete it interchangeably, and one tap is one
+    /// send — never its own confirmation. HOST-GATED commands are refused inside their methods
+    /// (<c>Refuse_IfNoWindowing_Async</c>), so a tap meets the same gate.
+    /// </para>
+    /// </summary>
+    async Task<bool> Try_RunOwnerCommand_Async(
+        ITelegramApiClient client, string command, long? messageThreadId, string text, CancellationToken cancellationToken)
+    {
+        if (command == "pending")
+        {
+            // ANSWERED BY THE APP, not by the general supervisor. It used to be routed as
+            // an English instruction, which meant the list cost a model turn, arrived
+            // whenever that session next ran, and was reconstructed from channel files by
+            // something that might be mid-turn on something else. The app is holding the
+            // decisions in a field — the same argument /progress already won.
+            await Send_PendingDecisions_Async(client, messageThreadId, cancellationToken);
+        }
+        // "left" is an ALIAS, not a second implementation: it is the word the owner used
+        // ("a slash command that lets me know what's left"), and two commands reading one
+        // ledger would drift apart — the second-copy hazard applied to features.
+        else if (command == "progress" || command == "left")
+        {
+            // Answered by the APP straight from PLAN.md — instant, and it works even
+            // while the supervisor is mid-turn (which is exactly when it gets asked).
+            await Send_ProgressReport_Async(client, messageThreadId, command, cancellationToken);
+        }
+        // NOT an alias of /progress: the owner asked to KEEP the full detail when the
+        // short form was built, so this is the second RENDERING of the same parse.
+        else if (command == "tasks")
+        {
+            await Send_TaskListReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "tokens")
+        {
+            await Send_TokensReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "cost")
+        {
+            await Send_CostReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (Telegram.ModelEffortCommand_Parser.Is_Command(command, MODEL_COMMAND))
+        {
+            // Takes an argument, so it is matched on its leading word — the lexer hands back
+            // the whole remainder ("model fable 5.1"), and equality would only ever see the
+            // bare form.
+            await Handle_DialCommand_Async(client, messageThreadId, command, Telegram.ModelEffortKinds.Model, cancellationToken);
+        }
+        else if (Telegram.ModelEffortCommand_Parser.Is_Command(command, EFFORT_COMMAND))
+        {
+            await Handle_DialCommand_Async(client, messageThreadId, command, Telegram.ModelEffortKinds.Effort, cancellationToken);
+        }
+        else if (command == "limits")
+        {
+            await Send_LimitsReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "context")
+        {
+            await Send_ContextReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "show")
+        {
+            await Show_SessionWindow_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "screen")
+        {
+            await Send_SessionScreenshot_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "screens")
+        {
+            await Toggle_StatusScreenshots_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "organize")
+        {
+            await Organize_SessionWindows_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "organize_mains" || command == "organize-mains")
+        {
+            // The hyphen is accepted for the same reason mute-all is (DeliveryModeCommands): the
+            // Telegram menu only offers the underscore, and an owner typing the shape
+            // they remember should not be answered with silence — an unmatched command
+            // falls through to the catch-all and is delivered to the session as chat.
+            await Organize_MainWindows_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "merge")
+        {
+            await Ask_SessionToMerge_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "test")
+        {
+            await Toggle_AwaitingTest_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "done")
+        {
+            await Toggle_Done_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "pause")
+        {
+            await Toggle_Paused_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "refresh")
+        {
+            await Refresh_TopicName_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "switch")
+        {
+            await Switch_OrchestrationShape_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "close")
+        {
+            await Request_Close_FromCommand_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "diff")
+        {
+            await Send_GitReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "clear")
+        {
+            await Clear_Topic_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "status")
+        {
+            await Send_MemberStatusReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "resume")
+        {
+            await Resume_AllSessions_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command is "tail" or "log")
+        {
+            await Send_TurnLog_Async(client, messageThreadId, command, text, cancellationToken);
+        }
+        else if (command.StartsWith("imp", StringComparison.Ordinal))
+        {
+            await Send_ImplementerPeek_Async(client, messageThreadId, command, text, cancellationToken);
+        }
+        else
+        {
+            return false;
+        }
+
+        return true;
     }
 
     async Task Register_BotCommands_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
@@ -13352,7 +13396,8 @@ internal sealed class BridgeEngineModel(
     ///
     /// It calls the SAME method the typed command calls. A second implementation of /show that only
     /// buttons could reach is precisely how a button and the command it names come to mean different
-    /// things — the hazard this repo has already paid for once with /progress and /left.
+    /// things — the hazard this repo has already paid for once with /progress and /left. A verb with no
+    /// case below goes to the typed chain itself (the default arm, ruling R16).
     /// </summary>
     async Task<bool> Try_HandleTopicCommandTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
     {
@@ -13451,16 +13496,23 @@ internal sealed class BridgeEngineModel(
                 await Resume_AllSessions_Async(client, threadId, cancellationToken);
                 return true;
 
+            // THE FOUR DELIVERY-MODE TOGGLES — /dnd_all since 2026-09-10, the other three since plan 03
+            // Task 5b. A case rather than the fallback below because the typed chain DEFERS these (see
+            // Try_RunOwnerCommand_Async), so the chain has nothing to hand them to.
+            case "dnd":
+            case "mute":
+            case "mute_all":
             case "dnd_all":
                 // THE LITERAL COMMAND STRING, because that is the argument this method takes: it
                 // derives the wanted mode from the "mute"/"dnd" stem and the app-wide scope from the
                 // "_all" suffix. Passing the string the button already carries keeps the tap and the
-                // typed command on one implementation.
+                // typed command on one implementation — and a bare /dnd or /mute tapped in General
+                // (thread null) takes the app-wide path exactly as typed there.
                 //
                 // NOT deferred the way the typed command is. That deferral keeps the toggle from
                 // racing the ✓ acks of the batch it arrived in — this tap was acknowledged above,
                 // before the switch, so there is nothing left to race. Same reasoning as /pc.
-                await Apply_ModeCommand_Async(client, "dnd_all", threadId, cancellationToken);
+                await Apply_ModeCommand_Async(client, parsed.Value.Command, threadId, cancellationToken);
                 return true;
 
             // /pause AND /progress ARE CLASSIC'S LAST ROW — master's buttons of 2026-09-09 (a2c9a3d, the
@@ -13499,8 +13551,17 @@ internal sealed class BridgeEngineModel(
                 return true;
 
             default:
-                // Our prefix, a command this build does not render: a bar left on a message by an
-                // older build. Swallowing it silently would be a button that does nothing forever.
+                // EVERY OTHER VERB IS THE TYPED COMMAND (plan 03 Task 5b, ruling R16): dispatched exactly as if
+                // the owner had typed "/<verb>" in the topic the button sat in — the same lexer, the same
+                // chain, the same thread — so /cost, /model, /switch and the rest are one implementation
+                // whichever way they arrive, and the owner can put any of them on a bar.
+                var typedText = Telegram.TopicCommandButtons.Build_TypedCommandText(parsed.Value.Command);
+
+                if (await Try_RunOwnerCommand_Async(client, Get_BotCommand_OrNull(typedText)!, threadId, typedText, cancellationToken))
+                    return true;
+
+                // Our prefix, a command no chain runs: a bar left on a message by an older build.
+                // Swallowing it silently would be a button that does nothing forever.
                 _log.Log_Warning(GLOBAL_ORCH_ID, $"Topic command button '{parsed.Value.Command}' is not one this build offers — ignored.");
                 await Send_DirectReply_BestEffort_Async(client, threadId, $"That button (/{parsed.Value.Command}) is from an older version of the app — send the command instead.", cancellationToken);
                 return true;

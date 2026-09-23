@@ -7,12 +7,13 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// THE LABELS USED TO LIVE INSIDE THE TWO BAR ARRAYS, one (verb, label) pair per button, which was fine
 /// while the arrays WERE the bars. <c>pulse.buttons</c> and <c>general.buttons</c> made the bars lists of
 /// verbs an owner chooses, and a label kept beside a verb in a private array can only be found for the
-/// verbs that array happened to name — classic's own bar names six verbs no array ever labelled.
+/// verbs that array happened to name — classic's own bar names six verbs no array of THIS tree labelled
+/// (master's array did, and those six labels are back: see the table).
 /// </para>
 /// <para>
 /// A VERB THIS TABLE DOES NOT KNOW RENDERS AS ITS BARE SLASH COMMAND (D3, answered 2026-09-14: the
 /// labelled verbs keep their emoji, every other verb renders as <c>/verb</c>). A button reading
-/// <c>/screen</c> is usable; a verb with no label that could not be rendered at all would make a preset
+/// <c>/cost</c> is usable; a verb with no label that could not be rendered at all would make a preset
 /// the validator accepted impossible to draw. The emoji is a nicety, the slash command is the contract.
 /// </para>
 /// <para>
@@ -52,6 +53,17 @@ public static class CommandButton_Labels
         ["summary"] = "📊 /summary",
         ["resume"] = "▶ /resume",
         ["dnd_all"] = "🌙 /dnd_all",
+
+        // MASTER'S SIX (a2c9a3d, 2026-09-09), restored by plan 03 Task 5b. They are the labels classic's
+        // own bar wore on the owner's phone before the fork merge dropped the bar with them, so D3's bare
+        // `/verb` was the wrong reading for these six: it is for a verb that NEVER had a label. 📊 is
+        // shared with /summary exactly as master had it — the one is "this ledger", the other "everything".
+        ["screen"] = "📸 /screen",
+        ["show"] = "👁 /show",
+        ["test"] = "🧪 /test",
+        ["pc"] = "💻 /pc",
+        ["pause"] = "💤 /pause",
+        ["progress"] = "📊 /progress",
     };
 
     /// <summary>The verb's label, or <c>/verb</c> when this table has none. Ordinal, like the parser.</summary>
