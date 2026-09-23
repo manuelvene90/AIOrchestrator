@@ -216,6 +216,41 @@ public class PhoneSettingsJsonTests : IDisposable
         Assert.Equal(20, phone.FinishedMessageSeconds);
     }
 
+    /// <summary>
+    /// NO PER-REPO TOPIC COLOUR UNDER CLASSIC (plan 03 task 14). Owner, 2026-09-23: <i>"the topic icon gets
+    /// colored without any context of why, red, blue, green, seemingly random."</i> Classic states
+    /// <c>topic.repoColours</c> false; no config file at all is classic.
+    /// </summary>
+    [Fact]
+    public void WithNoConfigFileAtAll_TopicsAreNotColouredPerRepo()
+    {
+        Assert.False(OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone.TopicRepoColours);
+    }
+
+    /// <summary>Quiet states nothing: the shipped default IS today's behaviour, the fork's brief F1.</summary>
+    [Fact]
+    public void UnderTheQuietPreset_TopicsAreColouredPerRepo_AsToday()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
+
+        Assert.True(OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone.TopicRepoColours);
+    }
+
+    /// <summary>
+    /// The third rung, in config.json's own nested spelling: a <c>topic</c> object beats classic's false,
+    /// and a word where a boolean belongs costs the key its preset value, never the load.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"repos":[],"topic":{"repoColours":true}}""", true)]
+    [InlineData("""{"repos":[],"preset":"quiet","topic":{"repoColours":false}}""", false)]
+    [InlineData("""{"repos":[],"topic":{"repoColours":"yes please"}}""", false)]
+    public void ARepoColoursValueInConfigJson_BeatsThePreset(string configJson, bool expected)
+    {
+        File.WriteAllText(_paths.ConfigFile, configJson);
+
+        Assert.Equal(expected, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone.TopicRepoColours);
+    }
+
     static IReadOnlyList<string> Words(string path)
     {
         return Sorted(Catalog.Find_OrNull(path)!.EnumValues);

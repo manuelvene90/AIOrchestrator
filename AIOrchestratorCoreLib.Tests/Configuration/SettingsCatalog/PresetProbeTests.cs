@@ -95,6 +95,9 @@ public class PresetProbeTests
     [InlineData("general.buttons", "[]")]
     [InlineData("topic.onClose", "\"close\"")]
     [InlineData("topic.modeGlyphs", "\"name\"")]
+
+    // NO PER-REPO TOPIC COLOUR (owner, 2026-09-23, plan 03 task 14): "colored without any context of why".
+    [InlineData("topic.repoColours", "false")]
     [InlineData("runners.supervisor.runner", "\"terminal\"")]
     [InlineData("runners.implementer.runner", "\"terminal\"")]
     [InlineData("runners.implementer.resume", "\"transcript\"")]
@@ -126,6 +129,7 @@ public class PresetProbeTests
     [InlineData("pulse.holdToggle", "true")]
     [InlineData("topic.onClose", "\"delete\"")]
     [InlineData("topic.modeGlyphs", "\"pulseHeader\"")]
+    [InlineData("topic.repoColours", "true")]
     [InlineData("runners.supervisor.runner", "\"stream\"")]
     [InlineData("runners.implementer.runner", "\"print\"")]
     [InlineData("runners.reviewer.runner", "\"print\"")]

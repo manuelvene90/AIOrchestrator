@@ -811,6 +811,25 @@ public static class SettingsCatalog
                     "owner's threads to tell them something they had just done themselves. In PULSE's header the same " +
                     $"fact costs one silent edit of a message that was being edited anyway (spec §7.4). {INERT_NOTE}",
                 restart: RestartKinds.None),
+
+            // THE PER-REPO TOPIC COLOUR (plan 03 task 14; owner 2026-09-23 08:10: "since we merged his forks
+            // the topic icon gets colored without any context of why, red, blue, green, seemingly random").
+            // The shipped value is today's — the fork's brief F1 (dfb33688, 2026-09-10) — and classic states
+            // the owner's false (ruling R14). Read at the point of effect by RepoTopicColour_Resolver.
+            SettingDefinition_Factory.Create_Bool(
+                path: PhoneSettings.PhoneSettings_Json.TOPIC_REPO_COLOURS_PATH,
+                shippedDefault: true,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Colour topics by repository",
+                description:
+                    "Whether each repository's topics are created with a colour of their own: the first repository " +
+                    "takes blue, the next yellow, then violet, green, rose and red, and the colour is written onto the " +
+                    "repository in config.json so reordering the list never changes it. Off creates every topic in " +
+                    "Telegram's default. TELEGRAM ONLY TAKES A COLOUR WHEN A TOPIC IS CREATED (editForumTopic has no " +
+                    "icon_color), so a change reaches topics created afterwards — existing topics keep the colour they " +
+                    "have. Turning it off erases no assignment: on again, each repository gets its old colour back.",
+                restart: RestartKinds.None),
         ];
     }
 
