@@ -22,12 +22,6 @@ internal sealed class LimitRescuerModel(
 
     const string GENERAL_SLOT = "general";
 
-    /// <summary>
-    /// How often the periodic path reads the transcripts — the engine's own limit-check cadence. Every
-    /// grace here is minutes, so a minute of latency costs nothing and saves a glob per 2-second tick.
-    /// </summary>
-    const int CHECK_INTERVAL_SECONDS = 60;
-
     readonly ISupervisionPaths _paths = paths;
     readonly IOrchestrationSessionStore _store = store;
     readonly IOrchestrationLog _log = log;
@@ -53,7 +47,7 @@ internal sealed class LimitRescuerModel(
     {
         lock (_lock)
         {
-            if ((nowUtc - _lastCheckUtc).TotalSeconds < CHECK_INTERVAL_SECONDS)
+            if ((nowUtc - _lastCheckUtc).TotalSeconds < LimitRescue_Decider.CHECK_INTERVAL_SECONDS)
                 return;
 
             _lastCheckUtc = nowUtc;
@@ -75,13 +69,13 @@ internal sealed class LimitRescuerModel(
                 _lastRestartUtc.TryGetValue(slot.Key, out var lastRestartUtc);
                 var refusedAtUtc = refusal.Value.RefusedAtUtc;
 
-                // THE PROBE IS READ LAST AND ONLY FOR A BLOCKED SESSION: it globs every usage file, and
-                // a session that is not blocked never needs it.
+                // THE PROBE IS READ LAST AND ONLY FOR A BLOCKED SESSION: it globs every usage file, so it
+                // is handed over as a Func the decider asks only when no earlier gate has decided.
                 var grounds = LimitRescue_Decider.Decide_Grounds_OrNull(
                     refusedAtUtc,
                     LimitRescue_Decider.Read_RefusalResetsAtUtc_OrNull(refusal.Value.Text, refusal.Value.ApiStatus, refusedAtUtc),
                     accountSwitchedAtUtc,
-                    freshProbeShowsAllowanceSince(LimitRescue_Decider.Build_FreshProbeFloor(refusedAtUtc, accountSwitchedAtUtc, nowUtc)),
+                    () => freshProbeShowsAllowanceSince(LimitRescue_Decider.Build_FreshProbeFloor(refusedAtUtc, accountSwitchedAtUtc, nowUtc)),
                     dispatchOpenSinceUtc,
                     lastRestartUtc == default ? null : lastRestartUtc,
                     nowUtc);

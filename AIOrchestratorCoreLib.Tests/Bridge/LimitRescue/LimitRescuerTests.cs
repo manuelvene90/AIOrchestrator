@@ -182,9 +182,16 @@ public class LimitRescuerTests : IDisposable
         Assert.True(_log.Has_Line_Containing("supervisor was still stuck on a usage limit"), _log.Dump());
         Assert.True(_log.Has_Line_Containing("resets 12pm (Europe/Rome)"), _log.Dump());
 
+        // Alive again, and not a respawn since the refusal: the half-hour cap is the ONLY brake left.
+        Revive_AsTheRefusedProcess(supervisorPid);
         _rescuer.Rescue_Due(new DateTime(2026, 9, 23, 10, 20, 0, DateTimeKind.Utc), dispatchOpenSince, null, NothingBridgeDriven, NoProbe);
 
         Assert.Single(_processes.Killed);
+
+        // The positive control for that Single: past the cap, the same slot IS stopped again.
+        _rescuer.Rescue_Due(new DateTime(2026, 9, 23, 10, 35, 0, DateTimeKind.Utc), dispatchOpenSince, null, NothingBridgeDriven, NoProbe);
+
+        Assert.Equal(2, _processes.Killed.Count);
     }
 
     /// <summary>A /resume restart counts toward the half-hour cap — the periodic path does not stop the same session again a tick later.</summary>
@@ -192,10 +199,11 @@ public class LimitRescuerTests : IDisposable
     public void AForcedRestart_CountsTowardThePeriodicCap()
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
-        Seed_Supervisor(session.OrchId, Limit_Refusal(RefusedAt, ROME_NOON), alive: true);
+        var supervisorPid = Seed_Supervisor(session.OrchId, Limit_Refusal(RefusedAt, ROME_NOON), alive: true);
         var afterReset = new DateTime(2026, 9, 23, 10, 10, 0, DateTimeKind.Utc);
 
         _rescuer.Rescue_AllBlocked_Now(afterReset, NothingBridgeDriven);
+        Revive_AsTheRefusedProcess(supervisorPid);
         _rescuer.Rescue_Due(afterReset.AddMinutes(2), RefusedAt.AddHours(-3), null, NothingBridgeDriven, NoProbe);
 
         Assert.Single(_processes.Killed);
@@ -219,6 +227,15 @@ public class LimitRescuerTests : IDisposable
 
         Assert.Equal([supervisorPid], _processes.Killed);
         Assert.Equal(new DateTime(2026, 9, 23, 9, 53, 0, DateTimeKind.Utc), askedFloor);
+    }
+
+    /// <summary>
+    /// The slot alive again, as a process that started BEFORE the refusal — so neither "not running"
+    /// nor "started since its refusal" can be what spares it, and a cap test pins the cap (decision 20).
+    /// </summary>
+    void Revive_AsTheRefusedProcess(string pidFile)
+    {
+        _processes.Mark_Alive(pidFile, startedUtc: RefusedAt.AddMinutes(-30));
     }
 
     string Seed_Supervisor(string orchId, string transcriptLine, bool alive)

@@ -464,6 +464,64 @@ public class TranscriptActivityReaderTests
         Assert.Equal(429, activity.RefusalApiStatus);
     }
 
+    /// <summary>
+    /// THE CLI'S OWN AUTO-CONTINUE, record for record as the general supervisor's transcript wrote it on
+    /// 2026-09-23 (Claude Code 2.1.280): the refusal, the `system` "Usage limit reached · continuing
+    /// automatically at 12pm" notice and turn_duration straight after it (still blocked), then at the
+    /// reset the queue operations, a `system` "Usage limit reset · continuing automatically" and the
+    /// `user` "Your claude.ai usage limit has reset…" prompt. The first ASSISTANT record follows 3-14 s
+    /// later — and in that gap the session is already moving: a /resume sweep that read it as blocked
+    /// would kill a turn that had just restarted by itself (review of 171a23d).
+    /// </summary>
+    [Fact]
+    public void The_CLIs_auto_continue_is_not_blocked_before_its_first_reply()
+    {
+        const string SESSION_LIMIT = "You've hit your session limit · resets 12pm (Europe/Rome)";
+
+        var refusedAndWaiting = Join(
+            LimitRefusal("2026-09-23T09:16:40.628Z", SESSION_LIMIT),
+            System_Informational("2026-09-23T09:16:40.633Z", "Usage limit reached · continuing automatically at 12pm · esc or type to cancel"),
+            Activity("2026-09-23T09:16:40.639Z", type: "system"));
+
+        Assert.True(TranscriptActivity_Reader.Parse_Tail(refusedAndWaiting, startedMidFile: false).RefusedForUsageLimit,
+            "the CLI's 'continuing automatically at 12pm' notice is the WAIT, not the continue — the session is still blocked");
+
+        var continuing = Join(
+            refusedAndWaiting,
+            QueueOp("2026-09-23T10:01:10.747Z", "enqueue"),
+            QueueOp("2026-09-23T10:01:10.787Z", "dequeue"),
+            System_Informational("2026-09-23T10:01:10.748Z", "Usage limit reset · continuing automatically"));
+
+        var afterNotice = TranscriptActivity_Reader.Parse_Tail(continuing, startedMidFile: false);
+        Assert.False(afterNotice.RefusedForUsageLimit, "the CLI said 'Usage limit reset · continuing automatically' and the session still read as blocked");
+
+        var prompted = Join(
+            continuing,
+            "{\"type\":\"user\",\"timestamp\":\"2026-09-23T10:01:10.827Z\",\"uuid\":\"u\",\"isMeta\":true,"
+            + "\"message\":{\"role\":\"user\",\"content\":\"Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.\"},"
+            + "\"origin\":{\"kind\":\"auto-continuation\"}}");
+
+        var afterPrompt = TranscriptActivity_Reader.Parse_Tail(prompted, startedMidFile: false);
+        Assert.False(afterPrompt.RefusedForUsageLimit, "a user record after the refusal is the session moving on, and it still read as blocked");
+        Assert.Null(afterPrompt.RefusedAtUtc);
+    }
+
+    /// <summary>A USER record alone after the refusal — the owner typing into the terminal — is the session moving on too.</summary>
+    [Fact]
+    public void A_user_record_after_the_refusal_means_the_session_moved_on()
+    {
+        var activity = TranscriptActivity_Reader.Parse_Tail(
+            Join(
+                LimitRefusal("2026-09-23T09:13:00.000Z", "You've hit your session limit · resets 12pm (Europe/Rome)"),
+                "{\"type\":\"user\",\"timestamp\":\"2026-09-23T10:20:00.000Z\",\"uuid\":\"u\",\"message\":{\"role\":\"user\",\"content\":\"go on\"}}"),
+            startedMidFile: false);
+
+        Assert.False(activity.RefusedForUsageLimit);
+    }
+
+    static string System_Informational(string stamp, string content)
+        => "{\"type\":\"system\",\"subtype\":\"informational\",\"content\":\"" + content + "\",\"timestamp\":\"" + stamp + "\",\"uuid\":\"u\",\"level\":\"notice\"}";
+
     [Fact]
     public void A_reply_after_the_refusal_clears_its_text_and_stamp_too()
     {

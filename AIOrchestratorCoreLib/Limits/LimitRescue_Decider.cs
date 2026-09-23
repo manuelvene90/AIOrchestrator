@@ -47,6 +47,14 @@ public static class LimitRescue_Decider
 
     public const int MIN_INTERVAL_MINUTES = 30;
 
+    /// <summary>
+    /// How often the app reads the usage probes and transcripts for a limit decision — the alert scan,
+    /// the dispatch pause and the rescue's periodic path, ONE constant (decision 12; the engine and the
+    /// rescuer each had their own 60 until the review of 171a23d). Every grace these decisions use is
+    /// minutes, so a minute of latency costs nothing and saves a glob per 2-second tick.
+    /// </summary>
+    public const int CHECK_INTERVAL_SECONDS = 60;
+
     /// <summary>How recent a probe file must be to speak for the account's allowance NOW.</summary>
     public const int FRESH_PROBE_MINUTES = 5;
 
@@ -56,12 +64,16 @@ public static class LimitRescue_Decider
     /// <param name="refusedAtUtc">When the refusal the session is blocked on was said; null when it is not blocked (or we cannot tell).</param>
     /// <param name="refusalResetsAtUtc">The reset that refusal names (<see cref="Read_RefusalResetsAtUtc_OrNull"/>); null when it names none we trust.</param>
     /// <param name="accountSwitchedAtUtc">When the owner last logged in to a different account; null when never seen.</param>
-    /// <param name="freshProbeShowsAllowance">A probe written since <see cref="Build_FreshProbeFloor"/> shows every live window below its limit.</param>
+    /// <param name="freshProbeShowsAllowance">
+    /// A probe written since <see cref="Build_FreshProbeFloor"/> shows every live window below its
+    /// limit. A FUNC, asked last and only when its answer can change the verdict: the engine's answer
+    /// globs every usage file on the machine.
+    /// </param>
     public static LimitRescueGrounds? Decide_Grounds_OrNull(
         DateTime? refusedAtUtc,
         DateTime? refusalResetsAtUtc,
         DateTime? accountSwitchedAtUtc,
-        bool freshProbeShowsAllowance,
+        Func<bool> freshProbeShowsAllowance,
         DateTime dispatchOpenSinceUtc,
         DateTime? lastRestartUtc,
         DateTime nowUtc)
@@ -83,7 +95,7 @@ public static class LimitRescue_Decider
         if (refusalResetsAtUtc != null && nowUtc >= refusalResetsAtUtc.Value + grace)
             return LimitRescueGrounds.ResetPassed;
 
-        if (freshProbeShowsAllowance)
+        if (freshProbeShowsAllowance())
             return LimitRescueGrounds.ProbeShowsAllowance;
 
         return refusalResetsAtUtc == null ? LimitRescueGrounds.NoResetKnown : null;

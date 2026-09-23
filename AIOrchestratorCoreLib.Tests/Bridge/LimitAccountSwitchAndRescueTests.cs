@@ -201,7 +201,7 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task AMemberStillStuckOnTheLimit_AfterTheGrace_IsStoppedForTheWatchdog_Once()
     {
-        var (_, memberId) = Start_WithAMemberWhoseLastReplyIs(Limit_Refusal(_clock.UtcNow.AddHours(-1)));
+        var (orchId, memberId) = Start_WithAMemberWhoseLastReplyIs(Limit_Refusal(_clock.UtcNow.AddHours(-1)));
         var engine = Create_Engine();
         _clock.Advance(TimeSpan.FromMinutes(AIOrchestratorCoreLib.Limits.LimitRescue_Decider.GRACE_MINUTES + 1));
 
@@ -213,7 +213,10 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
         Assert.True(_log.Has_Line_Containing($"{memberId} was still stuck on a usage limit"), _log.Dump());
         Assert.Single(_processes.Killed);
 
-        // Past the check throttle, inside the minimum interval: not stopped a second time.
+        // Past the check throttle, inside the minimum interval, and ALIVE again (the fake's respawn) with
+        // no start time after the refusal: the cap is the only thing left that can spare it
+        // (decision 20 — a dead slot is skipped before the cap is ever asked).
+        _processes.Mark_Alive(_paths.Get_ImplementerPidFile(orchId, memberId));
         _clock.Advance(TimeSpan.FromMinutes(2));
         await Run_Until_Async(engine, () => false, BridgeTestTiming.Window_ForTicks(10));
 

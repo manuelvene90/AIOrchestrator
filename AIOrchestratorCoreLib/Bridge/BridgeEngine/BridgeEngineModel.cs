@@ -176,7 +176,9 @@ internal sealed class BridgeEngineModel(
     /// failure catch — see <c>Note_InboundConflicted_IfNew_Async</c>.
     /// </summary>
     const int TELEGRAM_CONFLICT_STATUS = 409;
-    const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
+
+    /// <summary>Shared with the limit rescue — one cadence for every limit decision (decision 12).</summary>
+    const int LIMIT_CHECK_INTERVAL_SECONDS = Limits.LimitRescue_Decider.CHECK_INTERVAL_SECONDS;
 
     /// <summary>Pause before relaunching a bridge loop that ended, so a broken loop cannot spin.</summary>
     const int LOOP_RELAUNCH_DELAY_MILLISECONDS = 5000;

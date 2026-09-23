@@ -20,7 +20,7 @@ public class LimitRescueDeciderTests
     /// <summary>The rule for a refusal that names no reset (today's rule, kept as the fallback).</summary>
     static LimitRescueGrounds? Decide_NoReset(DateTime? refusedAtUtc, DateTime dispatchOpenSinceUtc, DateTime? lastRestartUtc, DateTime nowUtc)
     {
-        return LimitRescue_Decider.Decide_Grounds_OrNull(refusedAtUtc, null, null, false, dispatchOpenSinceUtc, lastRestartUtc, nowUtc);
+        return LimitRescue_Decider.Decide_Grounds_OrNull(refusedAtUtc, null, null, () => false, dispatchOpenSinceUtc, lastRestartUtc, nowUtc);
     }
 
     /// <summary>
@@ -40,7 +40,7 @@ public class LimitRescueDeciderTests
         Assert.Equal(Utc(10, 0), resetsAt);
 
         LimitRescueGrounds? At(DateTime nowUtc, DateTime? lastRestartUtc = null)
-            => LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, resetsAt, null, false, dispatchOpenSince, lastRestartUtc, nowUtc);
+            => LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, resetsAt, null, () => false, dispatchOpenSince, lastRestartUtc, nowUtc);
 
         Assert.Null(At(Utc(9, 30)));
         Assert.Null(At(Utc(9, 50)));
@@ -64,9 +64,35 @@ public class LimitRescueDeciderTests
 
         Assert.Equal(
             LimitRescueGrounds.ProbeShowsAllowance,
-            LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, Utc(10, 0), null, true, Utc(6, 0), null, Utc(9, 58)));
+            LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, Utc(10, 0), null, () => true, Utc(6, 0), null, Utc(9, 58)));
 
-        Assert.Null(LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, Utc(10, 0), null, true, Utc(6, 0), null, Utc(9, 16)));
+        Assert.Null(LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, Utc(10, 0), null, () => true, Utc(6, 0), null, Utc(9, 16)));
+    }
+
+    /// <summary>
+    /// THE PROBE IS READ LAST, AND ONLY WHEN IT CAN DECIDE: it globs every usage file on the machine, so
+    /// a session inside a grace or the cap, or one whose named reset has already passed, never pays for
+    /// it (review of 171a23d — the probe used to be evaluated before the decider was even called).
+    /// </summary>
+    [Fact]
+    public void TheProbe_IsNotReadWhenAnEarlierGateDecides()
+    {
+        var refusedAt = Utc(9, 13);
+        var probeReads = 0;
+
+        bool Probe()
+        {
+            probeReads++;
+            return true;
+        }
+
+        LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, Utc(10, 0), null, Probe, Utc(6, 0), null, Utc(9, 16));
+        LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, Utc(10, 0), null, Probe, Utc(6, 0), Utc(10, 0), Utc(10, 10));
+        LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, Utc(10, 0), null, Probe, Utc(6, 0), null, Utc(10, 6));
+        Assert.Equal(0, probeReads);
+
+        LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, Utc(10, 0), null, Probe, Utc(6, 0), null, Utc(9, 58));
+        Assert.Equal(1, probeReads);
     }
 
     /// <summary>
@@ -81,10 +107,10 @@ public class LimitRescueDeciderTests
 
         Assert.Equal(
             LimitRescueGrounds.AccountSwitched,
-            LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, weeklyReset, Utc(5, 3), false, Utc(5, 3), null, Utc(5, 9)));
+            LimitRescue_Decider.Decide_Grounds_OrNull(refusedAt, weeklyReset, Utc(5, 3), () => false, Utc(5, 3), null, Utc(5, 9)));
 
         // A refusal AFTER the switch is the new account's own, and waits for its reset.
-        Assert.Null(LimitRescue_Decider.Decide_Grounds_OrNull(Utc(5, 4), weeklyReset, Utc(5, 3), false, Utc(5, 3), null, Utc(5, 30)));
+        Assert.Null(LimitRescue_Decider.Decide_Grounds_OrNull(Utc(5, 4), weeklyReset, Utc(5, 3), () => false, Utc(5, 3), null, Utc(5, 30)));
     }
 
     /// <summary>
@@ -97,7 +123,7 @@ public class LimitRescueDeciderTests
         Assert.Equal(LimitRescueGrounds.NoResetKnown, Decide_NoReset(LongRefused, LongOpen, null, Now));
         Assert.Equal(
             LimitRescueGrounds.ProbeShowsAllowance,
-            LimitRescue_Decider.Decide_Grounds_OrNull(LongRefused, null, null, true, LongOpen, null, Now));
+            LimitRescue_Decider.Decide_Grounds_OrNull(LongRefused, null, null, () => true, LongOpen, null, Now));
     }
 
     [Fact]
