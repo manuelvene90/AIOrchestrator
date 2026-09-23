@@ -131,10 +131,16 @@ public class SettingValueParserTests
     }
 
     /// <summary>
-    /// WHAT A RENDERER OFFERS, IT CAN WRITE. Every Toggle and Choice offer, parsed back, is a value its own
-    /// definition accepts and reads as the very words on the button; every picker's full list is a value the
-    /// definition accepts. A renderer that draws an offer and then shows a refusal for it is the one failure a
-    /// picker exists to prevent.
+    /// WHAT A RENDERER OFFERS, IT CAN WRITE — ONE TAP AT A TIME. Every Toggle and Choice offer, parsed back,
+    /// is a value its own definition accepts and reads as the very words on the button; every OrderedList
+    /// offer, parsed back as the SINGLE-ELEMENT list a picker actually writes when the owner taps one word,
+    /// is a value its own definition accepts and reads back the same way. It is NOT every offer joined into
+    /// one list: the offer set is candidates a picker lets the owner choose FROM, not a list meant to be
+    /// written whole — <c>pulse.buttons</c>' offers legitimately contain both "tail" and "tail sup", which
+    /// the BOT_COMMANDS validator refuses together on one bar (see
+    /// <c>SettingsSnapshotReaderTests.PulseButtons_OffersEveryVerbATapCanRun_TailSupIncluded</c> for that
+    /// refusal pinned). A renderer that draws an offer and then shows a refusal for the single word it just
+    /// drew is the one failure a picker exists to prevent.
     /// </summary>
     [Fact]
     public void EveryOfferedValue_ParsesToAValueItsDefinitionAccepts_AndReadsBackAsTheSameWords()
@@ -145,7 +151,7 @@ public class SettingValueParserTests
         {
             var definition = reading.Definition;
 
-            if (definition.Renderer is SettingRenderers.Toggle or SettingRenderers.Choice)
+            if (definition.Renderer is SettingRenderers.Toggle or SettingRenderers.Choice or SettingRenderers.OrderedList)
             {
                 foreach (var offered in reading.OfferedValues)
                 {
@@ -155,9 +161,6 @@ public class SettingValueParserTests
                     Assert.Equal(offered, SettingValue_Formatter.Describe(definition, value));
                 }
             }
-
-            if (definition.Renderer == SettingRenderers.OrderedList && reading.OfferedValues.Count > 0)
-                Assert.Null(definition.Validate_OrNull(SettingValue_Parser.Parse(definition, string.Join(", ", reading.OfferedValues))));
         }
     }
 }

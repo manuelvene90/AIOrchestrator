@@ -233,14 +233,25 @@ public class SettingsSnapshotReaderTests : IDisposable
         var drawable = everyConfigurableVerb.Where(TopicCommandButtons.Has_TapRoute).ToArray();
 
         Assert.Contains("tail sup", pulseButtons.OfferedValues);
+
+        // THE OFFER SET IS THE DRAWABLE SET — set equality against TopicCommandButtons.Has_TapRoute's own
+        // predicate over the menu plus "tail sup", not a claim that the offers are one list a picker would
+        // ever write whole (see the mixed-bar refusal below: "tail" and "tail sup" are both offered and
+        // cannot share a bar).
         Assert.Equal(drawable.Order(), pulseButtons.OfferedValues.Order());
         Assert.All(pulseButtons.OfferedValues, verb => Assert.True(TopicCommandButtons.Has_TapRoute(verb), $"'{verb}' is offered but no tap can run it"));
         Assert.Equal(pulseButtons.OfferedValues.Count, pulseButtons.OfferedValues.Distinct().Count());
         Assert.Equal(pulseButtons.OfferedValues, generalButtons.OfferedValues);
 
-        var everyOffered = new JsonArray(pulseButtons.OfferedValues.Select(verb => (JsonNode?)JsonValue.Create(verb)).ToArray());
-        Assert.Null(pulseButtons.Definition.Validate_OrNull(everyOffered));
-        Assert.Null(generalButtons.Definition.Validate_OrNull(everyOffered));
+        // THE PICKER'S CONTRACT, PINNED: "tail" and "tail sup" are both offered (candidates the owner picks
+        // FROM), but the BOT_COMMANDS validator refuses them together on one bar — a repeated first token,
+        // whatever follows it. This is the rule SettingValueParserTests relies on when it validates each
+        // offer as its own single-element list rather than the whole offer set joined into one.
+        var mixedBar = new JsonArray(JsonValue.Create("tail"), JsonValue.Create("tail sup"));
+        var refusal = pulseButtons.Definition.Validate_OrNull(mixedBar);
+        Assert.NotNull(refusal);
+        Assert.Contains("appears more than once", refusal);
+        Assert.Contains("appears more than once", generalButtons.Definition.Validate_OrNull(mixedBar));
     }
 
     /// <summary>
