@@ -4549,7 +4549,10 @@ internal sealed class BridgeEngineModel(
             Compose_RiskSurface(questionPrompt, optionLabels),
             guardrails.HighRiskPatterns);
 
-        var isHighRisk = question.DeclaredHighRisk || matchedPattern != null;
+        // THE CODE ITSELF IS A SETTING (plan 03 task 15; owner, 2026-09-23: "I don't want that").
+        // Off, a question that classifies high risk is an ordinary one for every use below — default
+        // kept, no code terms, buttons that act on a tap — and only the log records it would have locked.
+        var isHighRisk = HighRiskLock_Policy.Is_Locked(matchedPattern, question.DeclaredHighRisk, guardrails.HighRiskConfirmation);
 
         // A HIGH-RISK QUESTION LOSES ITS DEFAULT HERE, at the point of asking, rather than being
         // trusted not to have one. The agent may well have written DEFAULT: 1 on a push question in
@@ -4596,14 +4599,10 @@ internal sealed class BridgeEngineModel(
                 };
             }
 
-            if (isHighRisk)
-            {
-                _log.Log_Info(
-                    channel.OrchId,
-                    matchedPattern != null
-                        ? $"Question classified HIGH RISK (matched '{matchedPattern}') — a tap will require the read-back code"
-                        : "Question classified HIGH RISK (declared by the asker, no pattern matched) — a tap will require the read-back code");
-            }
+            var riskLine = HighRiskLock_Policy.Describe_OrNull(matchedPattern, question.DeclaredHighRisk, guardrails.HighRiskConfirmation);
+
+            if (riskLine != null)
+                _log.Log_Info(channel.OrchId, riskLine);
 
             await Supersede_OlderQuestions_Async(channel, toSupersede, cancellationToken);
 

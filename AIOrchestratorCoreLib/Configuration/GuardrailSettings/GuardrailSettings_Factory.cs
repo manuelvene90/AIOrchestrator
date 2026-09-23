@@ -42,11 +42,25 @@ public static class GuardrailSettings_Factory
     /// </summary>
     public const int DEFAULT_BUTTON_EXPIRY_MINUTES = 720;
 
+    /// <summary>
+    /// On: today's behaviour, and the guarded one — an absent config must never be the unguarded
+    /// answer. The owner's off lives in <c>kit/presets/classic.json</c> (2026-09-23), not here, so a
+    /// machine that picks another preset or none at the catalogue layer still gets the code.
+    /// </summary>
+    public const bool DEFAULT_HIGH_RISK_CONFIRMATION = true;
+
+    /// <summary>
+    /// The config key, named once: the catalogue registers this spelling and the loader resolves it,
+    /// and a key spelled in two places is a key read under one spelling and stated under the other.
+    /// </summary>
+    public const string HIGH_RISK_CONFIRMATION_KEY = "highRiskConfirmation";
+
     public static IGuardrailSettings Create(
         IReadOnlyList<string>? highRiskPatterns,
         int? highRiskCodeExpiryMinutes,
         double? dispatchPauseThresholdPercent,
-        int? buttonExpiryMinutes)
+        int? buttonExpiryMinutes,
+        bool? highRiskConfirmation = null)
     {
         return new GuardrailSettingsModel(
             // An EMPTY list in config means "nothing is high risk", which is a choice the owner is
@@ -55,7 +69,8 @@ public static class GuardrailSettings_Factory
             highRiskPatterns ?? DEFAULT_HIGH_RISK_PATTERNS,
             Positive_OrDefault(highRiskCodeExpiryMinutes, DEFAULT_HIGH_RISK_CODE_EXPIRY_MINUTES),
             dispatchPauseThresholdPercent is > 0 and <= 100 ? dispatchPauseThresholdPercent.Value : DEFAULT_DISPATCH_PAUSE_THRESHOLD_PERCENT,
-            Positive_OrDefault(buttonExpiryMinutes, DEFAULT_BUTTON_EXPIRY_MINUTES));
+            Positive_OrDefault(buttonExpiryMinutes, DEFAULT_BUTTON_EXPIRY_MINUTES),
+            highRiskConfirmation ?? DEFAULT_HIGH_RISK_CONFIRMATION);
     }
 
     public static IGuardrailSettings Create_Default()

@@ -81,10 +81,15 @@ public class QuestionContractProbeTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
+        // THE LOCK IS STATED, NOT INHERITED (plan 03 task 15): two cases below assert the read-back
+        // code (ADeclaredHighRisk_LocksAQuestionWhoseWordsAreHarmless, AReadBackThatLapsesOnAClosedQuestion_NamesWhatClosedIt),
+        // and classic — what a config with no `preset` resolves to — turns it off since the owner's
+        // request of 2026-09-23. `true` is the shipped default and quiet's answer; quiet itself is not
+        // selected because it names print runners, which an engine test must never register.
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"highRiskConfirmation\":true}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 

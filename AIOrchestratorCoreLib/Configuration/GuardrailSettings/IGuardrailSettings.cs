@@ -1,7 +1,7 @@
 namespace AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 
 /// <summary>
-/// The three numbers and one list that govern how hard the app makes it to take an irreversible
+/// The three numbers, one list and one switch that govern how hard the app makes it to take an irreversible
 /// decision from a phone, and when it stops spending an allowance it is about to exhaust.
 ///
 /// <para>
@@ -38,4 +38,21 @@ public interface IGuardrailSettings
     /// keyboard that is still live a day later is a decision anyone holding the phone can take.
     /// </summary>
     int ButtonExpiryMinutes { get; }
+
+    /// <summary>
+    /// Whether a high-risk question costs the owner a typed 4-digit code at all. Off, a question the
+    /// asker declared <c>RISK: high</c> or that matched <see cref="HighRiskPatterns"/> behaves like any
+    /// other: it keeps its declared default, its terms say nothing about a code, and a tap decides it.
+    ///
+    /// <para>
+    /// A SEPARATE SWITCH, NOT AN EMPTY PATTERN LIST. <c>highRiskPatterns: []</c> only silences the
+    /// pattern half — the asker's own <c>RISK: high</c> still locked the question, and the question
+    /// contract REQUIRES that line on every question, so there was no way to say "no code, ever".
+    /// Owner, 2026-09-23 (ai-orchestrator-29 entry [9]): <i>"He added an annoying feature where I'm
+    /// asked to enter a code when a requested change is impactful, I don't want that."</i> The shipped
+    /// default stays ON — this interface's rule that an unconfigured guard is the guarded one — and
+    /// <c>kit/presets/classic.json</c> states the owner's off.
+    /// </para>
+    /// </summary>
+    bool HighRiskConfirmation { get; }
 }

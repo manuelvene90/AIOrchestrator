@@ -468,6 +468,24 @@ public static class SettingsCatalog
             description: "How long a typed high-risk code stays valid. Long enough to fetch the phone from another room; short enough to be a second gesture.",
             restart: RestartKinds.Host));
 
+        // ON BY DEFAULT, OFF IN CLASSIC (owner, 2026-09-23, plan 03 task 15): the shipped default is
+        // today's behaviour and the guarded one (ruling R14); classic.json states the owner's way.
+        // Read by the engine at the one place a question's risk is decided, per question, so the
+        // switch takes effect on the next question with no restart.
+        kernel.Add(SettingDefinition_Factory.Create_Bool(
+            path: GuardrailSettings_Factory.HIGH_RISK_CONFIRMATION_KEY,
+            shippedDefault: GuardrailSettings_Factory.DEFAULT_HIGH_RISK_CONFIRMATION,
+            scope: SettingScopes.Machine,
+            category: SettingCategories.Kernel,
+            label: "High-risk confirmation code",
+            description:
+                "Whether a high-risk question — declared RISK: high by the asker, or matching a high-risk pattern — costs a " +
+                "typed 4-digit code. OFF, it behaves like any other question: it keeps its declared default, and a tap " +
+                "decides it. The question contract does not change: every question still carries its RISK: line, and the " +
+                "log still records which questions would have locked. highRiskPatterns: [] only silences the pattern half; " +
+                "this is the switch for both.",
+            restart: RestartKinds.None));
+
         kernel.Add(SettingDefinition_Factory.Create_Int(
             path: "dispatchPauseThresholdPercent",
             shippedDefault: (int)GuardrailSettings_Factory.DEFAULT_DISPATCH_PAUSE_THRESHOLD_PERCENT,
@@ -684,7 +702,9 @@ public static class SettingsCatalog
                 description:
                     "The bar of literal slash commands above the input box. Off by default and deliberately not persistent: " +
                     "is_persistent re-shows the bar whenever the phone keyboard hides — which is what the back button does — " +
-                    $"and disables the icon that collapses it (CLAUDE.md decision 24). {INERT_NOTE}",
+                    "and disables the icon that collapses it (CLAUDE.md decision 24). 'on' INSTALLS NOTHING YET: the owner " +
+                    "answered D5 'off for both presets' (2026-09-14), so plan 03 task 9 wired no carrier and ReplyKeyboard_Markup " +
+                    "stays built, tested and deliberately uncalled — wiring it is its own request.",
                 restart: RestartKinds.Host),
 
             // THE AGGREGATION WINDOW AND ITS DISCOUNT (plan 03 task 13, owner 2026-09-23: "it should be a

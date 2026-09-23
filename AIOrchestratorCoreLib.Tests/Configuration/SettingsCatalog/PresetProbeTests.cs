@@ -99,6 +99,9 @@ public class PresetProbeTests
     [InlineData("runners.implementer.runner", "\"terminal\"")]
     [InlineData("runners.implementer.resume", "\"transcript\"")]
     [InlineData("runners.general.resume", "\"fresh\"")]
+
+    // NO CODE ON A HIGH-RISK QUESTION (owner, 2026-09-23, plan 03 task 15): "I don't want that."
+    [InlineData("highRiskConfirmation", "false")]
     public void UnderClassic_TheMachineResolvesToMastersWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.CLASSIC, path));
@@ -131,6 +134,7 @@ public class PresetProbeTests
     [InlineData("runners.communicator.runner", "\"terminal\"")]
     [InlineData("runners.implementer.resume", "\"fresh\"")]
     [InlineData("runners.general.resume", "\"fresh\"")]
+    [InlineData("highRiskConfirmation", "true")]
     public void UnderQuiet_TheMachineResolvesToTheForksWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.QUIET, path));

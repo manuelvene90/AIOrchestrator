@@ -79,10 +79,13 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        File.WriteAllText(
-            _paths.ConfigFile,
-            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+        // THE LOCK IS STATED, NOT INHERITED (plan 03 task 15). Every test below except the two
+        // `UnderClassic_` ones is about what the read-back code does, and classic — what a config with
+        // no `preset` resolves to — turns the code OFF since the owner's request of 2026-09-23. `true`
+        // is the shipped default and what quiet resolves to (PresetProbeTests pins both); quiet itself
+        // is not selected because it also names print runners, and an engine test that registers a
+        // print session can spawn the real `claude`.
+        Write_Config(highRiskConfirmation: true);
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -426,6 +429,117 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
             _telegram.Has_Edited_Containing("You are about to"),
             "THE DEFECT: a pricing question was locked behind a 4-digit code because its NARRATIVE "
             + $"mentioned a deploy.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+    }
+
+    /// <summary>
+    /// UNDER CLASSIC THE ASKER'S <c>RISK: high</c> LOCKS NOTHING (plan 03 task 15). Owner, 2026-09-23:
+    /// <i>"He added an annoying feature where I'm asked to enter a code when a requested change is
+    /// impactful, I don't want that."</i> Classic states <c>highRiskConfirmation: false</c>, so a question
+    /// the asker declared high risk reaches the phone with no 🔐 terms and a tap on it DELIVERS — the
+    /// option reaches the channel with no read-back in between. The declaration is still required by
+    /// the question contract (it is in <c>HIGH_RISK_CONTRACT_LINES</c> and the question is forwarded);
+    /// only what the app does with it changes.
+    ///
+    /// <para>
+    /// The log still says what WOULD have locked, because the owner who later turns the code back on
+    /// needs to know which questions it would have caught — and that line is the log's, never Telegram's
+    /// (decision 15).
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_ADeclaredHighRiskQuestion_IsDecidedByATap_WithNoCode()
+    {
+        Write_Config(highRiskConfirmation: null);
+
+        var session = await Start_WithQuestion_Async(
+            "QUESTION: Which plan gets the tail-risk methods?\nOPTION: Advanced\nOPTION: Ultimate" + HIGH_RISK_CONTRACT_LINES,
+            "Advanced");
+
+        Assert.False(
+            _telegram.Has_Sent_Containing("🔐"),
+            $"the question still carries the type-the-code terms under classic.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        Tap_Option("Advanced");
+
+        Assert.True(
+            await Run_Until_Async(() => Count_Occurrences(Read_OwnerChannel(session.OrchId), "Advanced") > 1, 20_000),
+            "THE DEFECT: under classic a tap on a declared-high-risk question did not deliver the option — "
+            + $"the code the owner asked to be rid of is still standing in the way.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.False(_telegram.Has_Edited_Containing("You are about to"), "a read-back was opened under classic");
+        Assert.False(_telegram.Has_Sent_Containing("You are about to"), "a read-back was sent under classic");
+
+        Assert.True(
+            _log.Has_Info_Containing("high-risk confirmation is off"),
+            $"nothing in the log says this question would have locked.{Environment.NewLine}{_log.Dump()}");
+    }
+
+    /// <summary>
+    /// UNDER CLASSIC A PATTERN MATCH LOCKS NOTHING EITHER, AND THE DEFAULT SURVIVES. "merge and push"
+    /// matches <c>push</c> on the shipped list; with the code on that question would lose its declared
+    /// default and lapse as DENIED (<see cref="AHighRiskQuestionThatLapses_IsDenied_EvenThoughItsAgentDeclaredADefault"/>).
+    /// With the code off it is an ordinary question in every downstream use: its message names the
+    /// default it will take, and a tap decides it.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_AMergeAndPushQuestion_KeepsItsDefault_AndIsDecidedByATap()
+    {
+        Write_Config(highRiskConfirmation: null);
+
+        var session = await Start_WithQuestion_Async(
+            $"QUESTION: Shall I merge and push the branch?\nOPTION: {MERGE_AND_PUSH_OPTION}\nOPTION: Hold\nDEADLINE: 30m\nDEFAULT: 1{CONTRACT_LINES}",
+            MERGE_AND_PUSH_OPTION);
+
+        Assert.False(_telegram.Has_Sent_Containing("🔐"), _telegram.Dump_Sent());
+        Assert.True(
+            _telegram.Has_Sent_Containing($"option 1 ({MERGE_AND_PUSH_OPTION}) is taken"),
+            $"the declared default was dropped although the code is off.{Environment.NewLine}{_telegram.Dump_Sent()}");
+        Assert.False(_telegram.Has_Sent_Containing("this is DENIED"), _telegram.Dump_Sent());
+
+        Tap_Option(MERGE_AND_PUSH_OPTION);
+
+        Assert.True(
+            await Run_Until_Async(() => Count_Occurrences(Read_OwnerChannel(session.OrchId), MERGE_AND_PUSH_OPTION) > 1, 20_000),
+            "THE DEFECT: under classic a tap on a pattern-matched question did not deliver the option."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.False(_telegram.Has_Edited_Containing("You are about to"), "a read-back was opened under classic");
+        Assert.True(
+            _log.Has_Info_Containing("matched 'push'"),
+            $"the log does not name the pattern that would have locked the question.{Environment.NewLine}{_log.Dump()}");
+    }
+
+    const string MERGE_AND_PUSH_OPTION = "Merge and push";
+
+    /// <summary><see cref="CONTRACT_LINES"/> with the asker's own declaration — the lock that comes from no word at all.</summary>
+    const string HIGH_RISK_CONTRACT_LINES = "\nRECOMMEND: hold, unless you have a reason not to.\nRISK: high\nROW: none";
+
+    void Tap_Option(string optionLabel)
+    {
+        var button = _telegram.Find_ButtonFor(optionLabel)
+            ?? throw new Exception($"'{optionLabel}' never reached the phone");
+
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(button, questionMessageId));
+    }
+
+    /// <summary>
+    /// Null writes no <c>highRiskConfirmation</c> key, which is classic's answer — the rung under test in
+    /// the two <c>UnderClassic_</c> cases. The provider re-reads config.json on its write stamp, so a
+    /// test may rewrite it after the constructor and before the engine's first pass.
+    /// </summary>
+    void Write_Config(bool? highRiskConfirmation)
+    {
+        var lockKey = highRiskConfirmation == null ? string.Empty : $",\"highRiskConfirmation\":{(highRiskConfirmation.Value ? "true" : "false")}";
+
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}{lockKey}}}");
     }
 
     /// <summary>
