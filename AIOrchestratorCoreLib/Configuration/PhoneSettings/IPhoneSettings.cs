@@ -54,4 +54,18 @@ public interface IPhoneSettings
 
     /// <summary><c>topic.modeGlyphs</c> — whether the delivery-mode glyphs are drawn on the topic name or in PULSE's header.</summary>
     ModeGlyphPlacements TopicModeGlyphs { get; }
+
+    /// <summary>
+    /// <c>phone.aggregationSeconds</c> — how long an owner message waits in the buffer before it is handed
+    /// to the session (1–60). Read by the engine's flush on every pass through
+    /// <c>OwnerAggregationWindow_Resolver</c>, which is also where a test's custom timing outranks it.
+    /// </summary>
+    int AggregationSeconds { get; }
+
+    /// <summary>
+    /// <c>phone.finishedMessageSeconds</c> — the shorter wait a single finished message serves (0–60). AS
+    /// RESOLVED, NOT AS SERVED: a value above the window is legal here and clamped to the window by the
+    /// buffer at the point of use, so this property never pretends to know which window is in force.
+    /// </summary>
+    int FinishedMessageSeconds { get; }
 }

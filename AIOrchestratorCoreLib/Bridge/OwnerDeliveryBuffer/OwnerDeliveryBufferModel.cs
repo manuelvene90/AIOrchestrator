@@ -1,6 +1,6 @@
 namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 
-internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerDeliveryBuffer
+internal sealed class OwnerDeliveryBufferModel(Func<(int AggregationSeconds, int FinishedMessageSeconds)> readWindow) : IOwnerDeliveryBuffer
 {
     /// <summary>
     /// One buffered segment and the ORDINAL it arrived with. The ordinal is what makes ordering
@@ -16,17 +16,13 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
         public bool ReleaseRequested;
     }
 
-    readonly int _aggregationSeconds = aggregationSeconds;
-
     /// <summary>
-    /// CLAMPED TO THE WINDOW, and that is the whole reason it is computed rather than read. The discount
-    /// a finished message gets (<see cref="OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS"/>)
-    /// is only a discount while the window is the longer of the two; the test seam runs a one-second
-    /// window, and without this a finished message would be the SLOW one there — a rule inverting itself
-    /// under a configuration nobody would think to check.
+    /// WHERE THE WINDOW COMES FROM — asked once per take and never kept. Since 2026-09-23 (plan 03 task
+    /// 13) the window is the owner's setting (<c>phone.aggregationSeconds</c>,
+    /// <c>phone.finishedMessageSeconds</c>) and the provider re-reads config.json on its write stamp, so a
+    /// copy held here would be the hot-reload defect the settings catalogue exists to prevent.
     /// </summary>
-    readonly int _finishedMessageQuietSeconds =
-        Math.Min(OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS, aggregationSeconds);
+    readonly Func<(int AggregationSeconds, int FinishedMessageSeconds)> _readWindow = readWindow;
     readonly Dictionary<string, PendingDelivery> _pending = [];
 
     /// <summary>
@@ -144,6 +140,10 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
     {
         Dictionary<string, IReadyDelivery> ready = [];
 
+        // ASKED OUTSIDE THE LOCK, because the production reader resolves config — a file stamp at least —
+        // and nothing else that wants this buffer should queue behind that.
+        var window = Read_Window();
+
         lock (_lock)
         {
             List<string> readyKeys = [];
@@ -151,7 +151,7 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
 
             foreach (var pair in _pending)
             {
-                if (!Is_Ready(pair.Key, pair.Value, nowUtc))
+                if (!Is_Ready(pair.Key, pair.Value, nowUtc, window))
                     continue;
 
                 // A hold that only ever received WAIT (or WAIT then GO) has nothing to deliver —
@@ -185,7 +185,26 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
         return ready;
     }
 
-    bool Is_Ready(string targetKey, PendingDelivery delivery, DateTime nowUtc)
+    /// <summary>
+    /// THE WINDOW IN FORCE FOR THIS TAKE, with the discount CLAMPED TO IT — and that clamp is the whole
+    /// reason the discount is computed rather than read. A finished message's shorter wait is only a
+    /// discount while the window is the longer of the two; the test seam runs a one-second window, and
+    /// without this a finished message would be the SLOW one there — a rule inverting itself under a
+    /// configuration nobody would think to check. It moved here from a constructor-time field on
+    /// 2026-09-23, when both numbers became settings: a config.json may now legally name a discount
+    /// above the window (the catalogue bounds each row on its own), and the point of use is the only
+    /// place that knows both.
+    /// </summary>
+    (int AggregationSeconds, int FinishedMessageSeconds) Read_Window()
+    {
+        var (aggregationSeconds, finishedMessageSeconds) = _readWindow();
+
+        OwnerDeliveryBuffer_Factory.Validate_Window(aggregationSeconds, finishedMessageSeconds);
+
+        return (aggregationSeconds, Math.Min(finishedMessageSeconds, aggregationSeconds));
+    }
+
+    bool Is_Ready(string targetKey, PendingDelivery delivery, DateTime nowUtc, (int AggregationSeconds, int FinishedMessageSeconds) window)
     {
         // GO: deliver now, no window — the owner has said they are done typing.
         if (delivery.ReleaseRequested)
@@ -214,7 +233,9 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
         // that day: 11–12 s median from the owner's text to the entry landing in the supervisor's
         // channel, six of them this window. Every message was serving it so that the occasional burst
         // could arrive as ONE turn; a message that is plainly over must not pay in full for the ones
-        // that are not.
+        // that are not. SINCE 2026-09-23 THE DISCOUNT IS A SETTING and the owner's classic states none
+        // (phone.finishedMessageSeconds = the window): the 2 s left a finished message out of reach of
+        // ⏸ Wait. The branch stays — under quiet it is still the fork's 2 s.
         //
         // IT WAITED FOR NOTHING AT ALL FOR ONE EVENING, and that is the line this comment exists to
         // stop coming back. Flush_OwnerDeliveries_Async runs on EVERY mirror tick, so "ready at zero
@@ -232,9 +253,9 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
         // thought, so a burst serves the FULL window from the later message — Bridge.OwnerMessageComplete_Decider
         // decides only whether ONE text reads as finished, never whether it is alone.
         if (delivery.Segments.Count == 1 && OwnerMessageComplete_Decider.Is_Complete(delivery.Segments[0].Text))
-            return idleSeconds >= _finishedMessageQuietSeconds;
+            return idleSeconds >= window.FinishedMessageSeconds;
 
-        return idleSeconds >= _aggregationSeconds;
+        return idleSeconds >= window.AggregationSeconds;
     }
 
     PendingDelivery Get_OrCreate(string targetKey)

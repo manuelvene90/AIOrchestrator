@@ -682,6 +682,47 @@ public static class SettingsCatalog
                     $"and disables the icon that collapses it (CLAUDE.md decision 24). {INERT_NOTE}",
                 restart: RestartKinds.Host),
 
+            // THE AGGREGATION WINDOW AND ITS DISCOUNT (plan 03 task 13, owner 2026-09-23: "it should be a
+            // buffer of 6 seconds, giving me the time to press wait if I need"). The shipped values are
+            // today's — the fork's 3 s / 2 s (bb91051a, 2026-09-09) — and classic states the owner's 6 s
+            // with no discount. The reasoning behind each number lives on the constant it reads, one copy.
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.AGGREGATION_SECONDS_PATH,
+                shippedDefault: Bridge.OwnerDeliveryBuffer.OwnerDeliveryBuffer_Factory.DEFAULT_AGGREGATION_SECONDS,
+
+                // ONE, NOT ZERO: OwnerDeliveryBuffer refuses a window under a second, and a window of zero
+                // is a message taken on the tick it lands — out of reach of ⏸ and one turn per message.
+                minimum: 1,
+                maximum: 60,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Message aggregation window (seconds)",
+                description:
+                    "How long the app holds a message you send before handing it to the session. Longer gives you " +
+                    "time to press ⏸ Wait under the receipt — the hold only reaches a message still in the buffer — " +
+                    "and lets a burst of typing arrive as ONE turn instead of one each (a turn costs roughly a million " +
+                    "input tokens, measured 2026-09-09); shorter makes a lone message reach the session sooner. " +
+                    "▶ Send now skips it for one message.",
+                restart: RestartKinds.None),
+
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.FINISHED_MESSAGE_SECONDS_PATH,
+                shippedDefault: Bridge.OwnerDeliveryBuffer.OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS,
+
+                // ZERO IS LEGAL here and only here: it is "a finished message leaves on the next tick".
+                // Never longer than the window — OwnerDeliveryBufferModel clamps it at the point of use.
+                minimum: 0,
+                maximum: 60,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Finished-message window (seconds)",
+                description:
+                    "The shorter wait a single message that reads as finished ('ok, go ahead.') serves instead of the " +
+                    "aggregation window. A discount only while it is the shorter of the two — a value above the window " +
+                    "is served as the window. Equal to the window means no discount: every message stays reachable by " +
+                    "⏸ Wait for the whole window, which is the owner's classic choice (2026-09-23).",
+                restart: RestartKinds.None),
+
             SettingDefinition_Factory.Create_Int(
                 path: "phone.foldLongEntriesAbove",
                 shippedDefault: OwnerMessage_Folder.DEFAULT_FOLD_THRESHOLD,

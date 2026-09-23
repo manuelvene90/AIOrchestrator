@@ -6,7 +6,8 @@ namespace AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 /// stream has been quiet for the aggregation window.
 ///
 /// The window is deliberately SHORT, because most messages arrive alone and a long one makes every
-/// single message feel slow. The owner covers the other case explicitly with WAIT … GO: while a
+/// single message feel slow — and since 2026-09-23 it is the owner's to set (<c>phone.aggregationSeconds</c>,
+/// 6 s under classic so ⏸ Wait can still reach a message; 3 s shipped), read on every take. The owner covers the other case explicitly with WAIT … GO: while a
 /// target is HELD nothing is delivered and no per-message receipts are sent, so a long dictated
 /// thought lands on the session as one turn and on the owner's phone as one acknowledgement.
 /// </summary>

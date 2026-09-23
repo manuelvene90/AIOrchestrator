@@ -17,8 +17,8 @@ namespace AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 /// <para>
 /// WHY NOT <see cref="Time.Clock.IClock"/>. The clock answers "what time is it", which is what a
 /// deadline sweep needs. None of the three below is a deadline read: two of them are how long a loop
-/// SLEEPS, which no clock can shorten, and the third is handed to
-/// <c>OwnerDeliveryBuffer_Factory</c> at construction. See <see cref="Time.Clock.IClock"/> for why
+/// SLEEPS, which no clock can shorten, and the third is the window the owner-message buffer serves —
+/// named here only by a test; production reads it from the settings on every flush. See <see cref="Time.Clock.IClock"/> for why
 /// that interface is deliberately narrow and deliberately not widened by drift.
 /// </para>
 /// </summary>
@@ -27,8 +27,13 @@ public interface IBridgeEngineTiming
     /// <summary>How long the mirror loop sleeps between ticks.</summary>
     int MirrorTickMilliseconds { get; }
 
-    /// <summary>Quiet time an owner message waits in the buffer, so a burst is delivered as ONE entry.</summary>
-    int OwnerAggregationSeconds { get; }
+    /// <summary>
+    /// A TEST'S aggregation window, or null — and null is production. Since 2026-09-23 (plan 03 task 13)
+    /// the window is the owner's setting, <c>phone.aggregationSeconds</c>, read on every flush through
+    /// <c>OwnerAggregationWindow_Resolver</c>; a value here outranks it there, which is what keeps every
+    /// engine test that runs on a one-second or sixty-second window exactly as it was.
+    /// </summary>
+    int? OwnerAggregationSeconds_OrNull { get; }
 
     /// <summary>Pause before a channel whose mirror send failed is attempted again.</summary>
     int MirrorRetryBackoffSeconds { get; }

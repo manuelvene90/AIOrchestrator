@@ -47,6 +47,11 @@ public static class PhoneSettings_Json
 
     /// <summary>Public so a line that names this key — the hold toggle's D10 fallback warning — spells it from here, not from a second copy.</summary>
     public const string RECEIPTS_PATH = "phone.receipts";
+    /// <summary>Public because the catalogue row registers this spelling — one copy of the path.</summary>
+    public const string AGGREGATION_SECONDS_PATH = "phone.aggregationSeconds";
+
+    /// <summary>Public for the same reason as <see cref="AGGREGATION_SECONDS_PATH"/>.</summary>
+    public const string FINISHED_MESSAGE_SECONDS_PATH = "phone.finishedMessageSeconds";
     const string TOPIC_ON_CLOSE_PATH = "topic.onClose";
     const string TOPIC_MODE_GLYPHS_PATH = "topic.modeGlyphs";
 
@@ -66,7 +71,9 @@ public static class PhoneSettings_Json
             ReplyKeyboard_Modes.Parse_OrOff(Read_Word_OrNull(REPLY_KEYBOARD_PATH, configRoot, presetTree)),
             Receipt_Styles.Parse_OrTicks(Read_Word_OrNull(RECEIPTS_PATH, configRoot, presetTree)),
             TopicClose_Actions.Parse_OrDefault(Read_Word_OrNull(TOPIC_ON_CLOSE_PATH, configRoot, presetTree)),
-            ModeGlyph_Placements.Parse_OrPulseHeader(Read_Word_OrNull(TOPIC_MODE_GLYPHS_PATH, configRoot, presetTree)));
+            ModeGlyph_Placements.Parse_OrPulseHeader(Read_Word_OrNull(TOPIC_MODE_GLYPHS_PATH, configRoot, presetTree)),
+            Read_Int(AGGREGATION_SECONDS_PATH, configRoot, presetTree),
+            Read_Int(FINISHED_MESSAGE_SECONDS_PATH, configRoot, presetTree));
     }
 
     static string? Read_Word_OrNull(string path, JsonObject? configRoot, JsonObject? presetTree)

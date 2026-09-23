@@ -1,4 +1,8 @@
+using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Bridge;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
+using AIOrchestratorCoreLib.Configuration.PhoneSettings;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
@@ -541,5 +545,125 @@ public class OwnerDeliveryBufferTests
         buffer.Release("chan-a");
 
         Assert.Equal("restart the crew.", buffer.Take_ReadyDeliveries(T0.AddMinutes(10))["chan-a"].Text);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // THE WINDOW AS A PER-USER SETTING (plan 03 task 13, owner 2026-09-23: "it should be a buffer of
+    // 6 seconds, giving me the time to press wait if I need"). The buffer is built the way the engine
+    // builds it — reading the window through OwnerAggregationWindow_Resolver over a resolved phone block
+    // on every take, with no test timing in the way.
+    // ---------------------------------------------------------------------------------------
+
+    const string FINISHED_MESSAGE = "ok, go ahead.";
+    const string FRAGMENT = "and then we should";
+
+    /// <summary>
+    /// UNDER CLASSIC A FINISHED MESSAGE IS STILL IN REACH OF ⏸ AT TWO SECONDS — the owner's complaint
+    /// exactly: with the fork's 2-second discount "ok, go ahead." left before they could press Wait.
+    /// No config file at all is classic (<c>Resolve_ForConfig(null)</c>).
+    /// </summary>
+    [Fact]
+    public void UnderClassic_AFinishedMessage_IsNotReleasedAtTwoSeconds_AndIsAtSix()
+    {
+        Assert.True(OwnerMessageComplete_Decider.Is_Complete(FINISHED_MESSAGE), "the fixture's finished message does not read as finished — the test would measure the fragment path");
+
+        var buffer = Build_BufferReading(Presets_Loader.Resolve_ForConfig(configRoot: null).Tree);
+
+        buffer.Add_Segment("chan-a", FINISHED_MESSAGE, T0);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(2)));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(5.9)));
+        Assert.Equal(FINISHED_MESSAGE, buffer.Take_ReadyDeliveries(T0.AddSeconds(6))["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// UNDER QUIET, TODAY'S BEHAVIOUR, BOTH HALVES: the finished message at 2 s, the fragment at 3 s and not
+    /// before. Quiet states nothing new — the fork's numbers ARE the shipped ones.
+    /// </summary>
+    [Fact]
+    public void UnderQuiet_AFinishedMessageLeavesAtTwoSeconds_AndAFragmentAtThree()
+    {
+        var buffer = Build_BufferReading(Presets_Loader.Load_Embedded(Presets_Loader.QUIET));
+
+        buffer.Add_Segment("chan-a", FINISHED_MESSAGE, T0);
+        buffer.Add_Segment("chan-b", FRAGMENT, T0);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(1.9)));
+
+        var atTwo = buffer.Take_ReadyDeliveries(T0.AddSeconds(2));
+        Assert.Equal(FINISHED_MESSAGE, Assert.Single(atTwo).Value.Text);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(2.9)));
+        Assert.Equal(FRAGMENT, buffer.Take_ReadyDeliveries(T0.AddSeconds(3))["chan-b"].Text);
+    }
+
+    /// <summary>
+    /// ⏸ STILL STOPS EVERYTHING UNDER BOTH PRESETS, finished sentences included — the condition the owner
+    /// attached to the discount (the hold check is asked first), and it must hold whichever window the
+    /// setting names.
+    /// </summary>
+    [Theory]
+    [InlineData(Presets_Loader.CLASSIC)]
+    [InlineData(Presets_Loader.QUIET)]
+    public void UnderEitherPreset_AHoldStopsAFinishedMessageAndAFragment(string presetName)
+    {
+        var buffer = Build_BufferReading(Presets_Loader.Load_Embedded(presetName));
+
+        buffer.Hold("chan-a", T0);
+        buffer.Add_Segment("chan-a", FINISHED_MESSAGE, T0);
+        buffer.Hold("chan-b", T0);
+        buffer.Add_Segment("chan-b", FRAGMENT, T0);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(6)));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddMinutes(10)));
+
+        buffer.Release("chan-a");
+        buffer.Release("chan-b");
+
+        Assert.Equal(2, buffer.Take_ReadyDeliveries(T0.AddMinutes(10)).Count);
+    }
+
+    /// <summary>
+    /// A DISCOUNT LONGER THAN THE WINDOW IS SERVED AS THE WINDOW — the clamp, now at the point of use,
+    /// because config.json may legally name each row on its own. Without it a finished message would be
+    /// the SLOW one: 10 s against a 3-second window for a fragment.
+    /// </summary>
+    [Fact]
+    public void AFinishedMessageDiscountLongerThanTheWindow_IsServedAsTheWindow()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create_ReadingWindow(() => (3, 10));
+
+        buffer.Add_Segment("chan-a", FINISHED_MESSAGE, T0);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(2.9)));
+        Assert.Equal(FINISHED_MESSAGE, buffer.Take_ReadyDeliveries(T0.AddSeconds(3))["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// THE WINDOW IS ASKED ON EVERY TAKE, NEVER KEPT — the buffer's half of hot reload. A message buffered
+    /// under a 60-second window is released on the next take after the reader starts answering 1 s, with
+    /// no new buffer; a copy taken at construction would hold it for the remaining minute.
+    /// </summary>
+    [Fact]
+    public void AChangedWindow_IsObeyedOnTheNextTake_WithoutANewBuffer()
+    {
+        var aggregationSeconds = 60;
+        var buffer = OwnerDeliveryBuffer_Factory.Create_ReadingWindow(() => (aggregationSeconds, aggregationSeconds));
+
+        buffer.Add_Segment("chan-a", FRAGMENT, T0);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(5)));
+
+        aggregationSeconds = 1;
+
+        Assert.Equal(FRAGMENT, buffer.Take_ReadyDeliveries(T0.AddSeconds(5))["chan-a"].Text);
+    }
+
+    static IOwnerDeliveryBuffer Build_BufferReading(JsonObject presetTree)
+    {
+        var phone = PhoneSettings_Json.Parse(configRoot: null, presetTree);
+
+        return OwnerDeliveryBuffer_Factory.Create_ReadingWindow(
+            () => OwnerAggregationWindow_Resolver.Resolve(customAggregationSecondsOrNull: null, phone));
     }
 }

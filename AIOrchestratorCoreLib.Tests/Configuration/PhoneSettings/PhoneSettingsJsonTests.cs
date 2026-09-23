@@ -141,6 +141,81 @@ public class PhoneSettingsJsonTests : IDisposable
         Assert.Equal(TopicCloseActions.Close, TopicClose_Actions.Parse_OrDefault("Close"));
     }
 
+    /// <summary>
+    /// THE OWNER'S WINDOW, 2026-09-23 (plan 03 task 13): <i>"it should be a buffer of 6 seconds, giving me
+    /// the time to press wait if I need."</i> Classic states 6 s and NO discount — the finished-message
+    /// wait equal to the window — because the fork's 2-second discount let a finished single message leave
+    /// before ⏸ Wait could reach it. No config file at all is classic.
+    /// </summary>
+    [Fact]
+    public void WithNoConfigFileAtAll_TheAggregationWindowIsSixSeconds_WithNoFinishedMessageDiscount()
+    {
+        var phone = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone;
+
+        Assert.Equal(6, phone.AggregationSeconds);
+        Assert.Equal(6, phone.FinishedMessageSeconds);
+    }
+
+    /// <summary>Quiet states nothing new: it IS today's behaviour, the fork's 3 s and 2 s (bb91051a).</summary>
+    [Fact]
+    public void UnderTheQuietPreset_TheAggregationWindowIsTodays_ThreeSecondsAndTwo()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
+
+        var phone = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone;
+
+        Assert.Equal(3, phone.AggregationSeconds);
+        Assert.Equal(2, phone.FinishedMessageSeconds);
+    }
+
+    /// <summary>The third rung for the window: config.json beats classic's 6 for either key, independently.</summary>
+    [Fact]
+    public void AnAggregationWindowInConfigJson_BeatsThePreset()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"phone":{"aggregationSeconds":10,"finishedMessageSeconds":1}}""");
+
+        var phone = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone;
+
+        Assert.Equal(10, phone.AggregationSeconds);
+        Assert.Equal(1, phone.FinishedMessageSeconds);
+    }
+
+    /// <summary>
+    /// A BAD WINDOW COSTS THAT KEY ITS PRESET VALUE, NEVER THE LOAD — zero (a window a message could not be
+    /// held in), a word, a value past the row's 60 s ceiling, a negative discount. Each falls to classic's
+    /// 6, and the load still answers.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"repos":[],"phone":{"aggregationSeconds":0,"finishedMessageSeconds":-1}}""")]
+    [InlineData("""{"repos":[],"phone":{"aggregationSeconds":"six","finishedMessageSeconds":"none"}}""")]
+    [InlineData("""{"repos":[],"phone":{"aggregationSeconds":999,"finishedMessageSeconds":61}}""")]
+    public void AMisspelledOrOutOfRangeWindow_FallsToThePresetsValue_AndDoesNotThrow(string configJson)
+    {
+        File.WriteAllText(_paths.ConfigFile, configJson);
+
+        var phone = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone;
+
+        Assert.Equal(6, phone.AggregationSeconds);
+        Assert.Equal(6, phone.FinishedMessageSeconds);
+    }
+
+    /// <summary>
+    /// A DISCOUNT LONGER THAN THE WINDOW IS LEGAL CONFIG — each row is bounded on its own — and the block
+    /// reports it AS STATED. Serving it as the window is the buffer's job at the point of use
+    /// (<c>OwnerDeliveryBufferTests.AFinishedMessageDiscountLongerThanTheWindow_IsServedAsTheWindow</c>);
+    /// clamping here as well would be a second copy of the rule.
+    /// </summary>
+    [Fact]
+    public void AFinishedMessageDiscountAboveTheWindow_IsReportedAsStated()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet","phone":{"finishedMessageSeconds":20}}""");
+
+        var phone = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone;
+
+        Assert.Equal(3, phone.AggregationSeconds);
+        Assert.Equal(20, phone.FinishedMessageSeconds);
+    }
+
     static IReadOnlyList<string> Words(string path)
     {
         return Sorted(Catalog.Find_OrNull(path)!.EnumValues);

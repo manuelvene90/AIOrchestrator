@@ -84,6 +84,10 @@ public class PresetProbeTests
     // OFF, NOT MASTER'S "on": the owner's answer to D5 (2026-09-14) is "off for both presets", so
     // classic stopped stating the key and reads the catalogue's shipped default like quiet does.
     [InlineData("phone.replyKeyboard", "\"off\"")]
+
+    // THE OWNER'S 6 s WITH NO DISCOUNT (2026-09-23, plan 03 task 13): time to press ⏸ Wait.
+    [InlineData("phone.aggregationSeconds", "6")]
+    [InlineData("phone.finishedMessageSeconds", "6")]
     [InlineData("pulse.holdToggle", "false")]
     [InlineData("pulse.fields", """["supervisor","members","modelEffort","merged","updated"]""")]
     [InlineData("general.buttons", "[]")]
@@ -112,6 +116,8 @@ public class PresetProbeTests
     [InlineData("phone.appMessagesRing", "false")]
     [InlineData("phone.receipts", "\"reactions\"")]
     [InlineData("phone.replyKeyboard", "\"off\"")]
+    [InlineData("phone.aggregationSeconds", "3")]
+    [InlineData("phone.finishedMessageSeconds", "2")]
     [InlineData("pulse.holdToggle", "true")]
     [InlineData("topic.onClose", "\"delete\"")]
     [InlineData("topic.modeGlyphs", "\"pulseHeader\"")]

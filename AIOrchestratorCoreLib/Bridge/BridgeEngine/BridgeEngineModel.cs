@@ -641,7 +641,15 @@ internal sealed class BridgeEngineModel(
 
     readonly Lock _stateLock = new();
     readonly IBridgeEngineTiming _timing = timing;
-    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(timing.OwnerAggregationSeconds);
+
+    /// <summary>
+    /// THE WINDOW IS THE OWNER'S SETTING, READ ON EVERY FLUSH (2026-09-23, plan 03 task 13): the buffer
+    /// asks this delegate once per <c>Take_ReadyDeliveries</c>, so <c>phone.aggregationSeconds</c> is
+    /// resolved from the provider at the point of effect and never cached here. A test's custom timing
+    /// outranks it — <see cref="OwnerAggregationWindow_Resolver"/> is the one place the two meet.
+    /// </summary>
+    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create_ReadingWindow(
+        () => OwnerAggregationWindow_Resolver.Resolve(timing.OwnerAggregationSeconds_OrNull, configProvider.Get_Current().Phone));
 
     /// <summary>
     /// THE CURSOR AS IT WAS LAST WRITTEN TO DISK — the thing a new one has to differ from before the
@@ -13801,7 +13809,9 @@ internal sealed class BridgeEngineModel(
             }
         }
 
-        // WAIT RACES THE AGGREGATION WINDOW, and it was losing. The window is 4 seconds, so a message
+        // WAIT RACES THE AGGREGATION WINDOW, and it was losing. The window is the owner's
+        // phone.aggregationSeconds (4 s when this was written; 3 s shipped and 6 s under classic since
+        // 2026-09-23), so a message
         // is usually already TAKEN from the buffer by the time the owner types "wait" — and a take is
         // irreversible, so the hold set a moment later applied to nothing and the message went out
         // anyway. Measured on da-vinci-fintech-suite-6, 2026-08-15: buffered 08:36:47, WAIT accepted
