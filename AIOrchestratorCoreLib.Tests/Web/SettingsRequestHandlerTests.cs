@@ -53,26 +53,44 @@ public class SettingsRequestHandlerTests : IDisposable
     const string CHAT_ID_PATH = "telegramSupergroupChatId";
     const string JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 
-    static readonly Func<string, string?> NO_HEADERS = _ => null;
+    /// <summary>What the page's own browser sends through the default listener: a loopback Host and nothing else.</summary>
+    const string LOOPBACK_HOST = "127.0.0.1:7391";
+
+    static readonly Func<string, string?> LOOPBACK_HEADERS = Headers(LOOPBACK_HOST);
+
+    /// <summary>A request's headers: <paramref name="host"/> as Host (null = absent) and, when given, the token header.</summary>
+    static Func<string, string?> Headers(string? host, string? token = null)
+    {
+        return name =>
+        {
+            if (string.Equals(name, SettingsRequest_Handler.HOST_HEADER, StringComparison.OrdinalIgnoreCase))
+                return host;
+
+            if (string.Equals(name, SettingsRequest_Handler.TOKEN_HEADER, StringComparison.OrdinalIgnoreCase))
+                return token;
+
+            return null;
+        };
+    }
 
     static Func<string, string?> Header_Carrying(string token)
     {
-        return name => string.Equals(name, SettingsRequest_Handler.TOKEN_HEADER, StringComparison.OrdinalIgnoreCase) ? token : null;
+        return Headers(LOOPBACK_HOST, token);
     }
 
-    (int Status, string ContentType, string Body) Get(string configuredToken = "")
+    (int Status, string ContentType, string Body) Get(string configuredToken = "", Func<string, string?>? header = null)
     {
-        return SettingsRequest_Handler.Handle("GET", SettingsRequest_Handler.SETTINGS_PATH, NO_HEADERS, "", _paths, configuredToken, log: null);
+        return SettingsRequest_Handler.Handle("GET", SettingsRequest_Handler.SETTINGS_PATH, header ?? LOOPBACK_HEADERS, "", _paths, configuredToken, log: null);
     }
 
     (int Status, string ContentType, string Body) Put(string body, string configuredToken = "", Func<string, string?>? header = null, IOrchestrationLog? log = null)
     {
-        return SettingsRequest_Handler.Handle("PUT", SettingsRequest_Handler.SETTINGS_PATH, header ?? NO_HEADERS, body, _paths, configuredToken, log);
+        return SettingsRequest_Handler.Handle("PUT", SettingsRequest_Handler.SETTINGS_PATH, header ?? LOOPBACK_HEADERS, body, _paths, configuredToken, log);
     }
 
     (int Status, string ContentType, string Body) Delete(string target, string configuredToken = "", Func<string, string?>? header = null)
     {
-        return SettingsRequest_Handler.Handle("DELETE", target, header ?? NO_HEADERS, "", _paths, configuredToken, log: null);
+        return SettingsRequest_Handler.Handle("DELETE", target, header ?? LOOPBACK_HEADERS, "", _paths, configuredToken, log: null);
     }
 
     static string Reset_Target(string settingPath)
@@ -482,6 +500,14 @@ public class SettingsRequestHandlerTests : IDisposable
     [InlineData("null")]
     [InlineData("{}")]
     [InlineData("""{"phone.status.intervalMinutes":45,"phone.status.intervalMinutes":30}""")]
+    // LONE SURROGATES, SPELLED AS JSON ESCAPES IN PLAIN ASCII (review of 649a38c, 2026-09-23): each parses, and
+    // each used to throw InvalidOperationException later — the key at the parse, a string value inside the
+    // definition's validator. Raw string literals, so the body carries the six characters \uD800, not the char.
+    [InlineData("""{"\uD800":1}""")]
+    [InlineData("""{"web.token":"\uD800"}""")]
+    [InlineData("""{"voiceTranscribeCommand":"\uDC00x"}""")]
+    [InlineData("""{"highRiskPatterns":["ok","\uD800"]}""")]
+    [InlineData("""{"phone.status.intervalMinutes":{"\uDBFF":1}}""")]
     public void Put_ABodyThatIsNotJson_IsFourHundred_NotAThrow(string body)
     {
         const string original = """{"phone":{"status":{"intervalMinutes":45}}}""";
@@ -525,6 +551,9 @@ public class SettingsRequestHandlerTests : IDisposable
     [InlineData("   ")]
     public void Put_WithNoConfiguredToken_Applies(string configuredToken)
     {
+        // An UNFENCED row (ruling P32b leaves D4 intact for every row outside FENCED_PATHS).
+        Assert.DoesNotContain(INTERVAL_PATH, SettingsRequest_Handler.FENCED_PATHS);
+
         var (status, _, body) = Put($$"""{"{{INTERVAL_PATH}}":45}""", configuredToken);
 
         Assert.Equal(200, status);
@@ -540,7 +569,7 @@ public class SettingsRequestHandlerTests : IDisposable
         const string configured = "the-right-token";
         Write_Config(original);
 
-        foreach (var header in new[] { NO_HEADERS, Header_Carrying("the-wrong-token"), Header_Carrying("the-right-toke"), Header_Carrying("") })
+        foreach (var header in new[] { LOOPBACK_HEADERS, Header_Carrying("the-wrong-token"), Header_Carrying("the-right-toke"), Header_Carrying("") })
         {
             var (status, _, body) = Put($$"""{"{{INTERVAL_PATH}}":30}""", configured, header);
 
@@ -641,6 +670,206 @@ public class SettingsRequestHandlerTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------------------
+    // Ruling P32 — open on loopback must not mean "any caller can make the bridge run a command"
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// DNS REBINDING (ruling P32a). A site whose name is made to resolve to 127.0.0.1 is SAME-ORIGIN to the
+    /// browser that loaded it, so CORS never stops it; the Host header still carries its name. Refused before
+    /// anything else — the route, the token, the body — so it reads nothing and writes nothing, and a set token
+    /// is no way past it. The look-alikes are the point: a suffix, a trailing dot, an unbracketed IPv6, an
+    /// empty or non-numeric port.
+    /// </summary>
+    [Theory]
+    [InlineData("evil.example")]
+    [InlineData("evil.example:7391")]
+    [InlineData("127.0.0.1.evil.example:7391")]
+    [InlineData("localhost.evil.example")]
+    [InlineData("192.168.1.5:7391")]
+    [InlineData("0.0.0.0:7391")]
+    [InlineData("[::2]:7391")]
+    [InlineData("::1")]
+    [InlineData("[::1]7391")]
+    [InlineData("localhost.")]
+    [InlineData("localhost:")]
+    [InlineData("localhost:notaport")]
+    [InlineData("127.0.0.1:123456")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void ARequest_NotAddressedToALoopbackName_IsFourTwentyOne_AndAppliesNothing(string? host)
+    {
+        const string original = """{"phone":{"status":{"intervalMinutes":45}}}""";
+        const string configured = "the-right-token";
+        Write_Config(original);
+
+        var (getStatus, contentType, getBody) = Get(header: Headers(host));
+
+        Assert.Equal(421, getStatus);
+        Assert.Equal(JSON_CONTENT_TYPE, contentType);
+        Assert.Null(Json(getBody)["sections"]);
+        Assert.False(string.IsNullOrWhiteSpace((string?)Json(getBody)["error"]));
+
+        Assert.Equal(421, SettingsRequest_Handler.Handle("GET", "/nope", Headers(host), "", _paths, "", log: null).Status);
+        Assert.Equal(421, Put($$"""{"{{INTERVAL_PATH}}":30}""", header: Headers(host)).Status);
+        Assert.Equal(421, Delete(Reset_Target(INTERVAL_PATH), header: Headers(host)).Status);
+        Assert.Equal(421, Put($$"""{"{{INTERVAL_PATH}}":30}""", configured, Headers(host, configured)).Status);
+        Assert.Equal(original, Config_Text());
+    }
+
+    /// <summary>
+    /// The three loopback names, any case, with or WITHOUT a port — and ANY port, because an SSH tunnel's local
+    /// end (<c>ssh -L 8080:127.0.0.1:7391</c>) arrives as <c>localhost:8080</c>, which is how the owner's
+    /// brother reaches the page on his VPS.
+    /// </summary>
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("127.0.0.1:7391")]
+    [InlineData("localhost")]
+    [InlineData("localhost:8080")]
+    [InlineData("LocalHost:7391")]
+    [InlineData("[::1]")]
+    [InlineData("[::1]:7391")]
+    [InlineData("  localhost:7391  ")]
+    public void ALoopbackHost_IsAnswered_WithAnyPortOrNone(string host)
+    {
+        Assert.True(SettingsRequest_Handler.Is_LoopbackHost(host));
+        Assert.Equal(200, Get(header: Headers(host)).Status);
+        Assert.Equal(200, Put($$"""{"{{INTERVAL_PATH}}":30}""", header: Headers(host)).Status);
+    }
+
+    /// <summary>
+    /// A TOKEN-LESS EDIT OF A FENCED ROW IS A 403 AND WRITES NOTHING (ruling P32b). Each value is one its own
+    /// definition ACCEPTS — asserted first — so the refusal measured is the fence and not the catalogue:
+    /// <c>voiceTranscribeCommand</c> is a command line the bridge shells out to, <c>web.listen</c> would move
+    /// this door off loopback, <c>web.token</c> would let the first caller pick the owner's secret.
+    /// </summary>
+    [Theory]
+    [InlineData("voiceTranscribeCommand", "\"whisper {input}\"")]
+    [InlineData("web.listen", "\"0.0.0.0:7391\"")]
+    [InlineData("web.token", "\"chosen-by-the-first-caller\"")]
+    public void Put_AFencedRow_WithNoConfiguredToken_IsFourOhThree_AndAppliesNothing(string path, string valueJson)
+    {
+        const string original = """{"phone":{"status":{"intervalMinutes":45}}}""";
+        Write_Config(original);
+
+        Assert.Contains(path, SettingsRequest_Handler.FENCED_PATHS);
+        Assert.Null(Definition(path).Validate_OrNull(JsonNode.Parse(valueJson)));
+
+        var (status, contentType, body) = Put($$"""{"{{path}}":{{valueJson}}}""");
+
+        Assert.Equal(403, status);
+        Assert.Equal(JSON_CONTENT_TYPE, contentType);
+
+        var error = (string?)Json(body)["error"];
+        Assert.Contains(path, error);
+        Assert.Contains("set web.token first", error);
+        Assert.Contains("config.json", error);
+        Assert.Equal(original, Config_Text());
+    }
+
+    /// <summary>The fence is a token-less limit, not a ban: with web.token set and sent, the same row applies.</summary>
+    [Fact]
+    public void Put_AFencedRow_WithTheRightToken_Applies()
+    {
+        const string configured = "the-right-token";
+
+        var (status, _, body) = Put("""{"voiceTranscribeCommand":"whisper {input}"}""", configured, Header_Carrying(configured));
+
+        Assert.Equal(200, status);
+        Assert.Equal("Applied", (string?)Single_Result(body)["outcome"]);
+        Assert.Equal("whisper {input}", Reading("voiceTranscribeCommand").Value_OrNull!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// REFUSED WHOLE: an unfenced edit riding beside a fenced one is not applied either. Half-written and
+    /// half-refused would leave the caller to work out which half landed; "nothing" needs no reading.
+    /// </summary>
+    [Fact]
+    public void Put_AMixedBody_WithOneFencedRow_IsRefusedWhole()
+    {
+        const string original = """{"phone":{"status":{"intervalMinutes":45}}}""";
+        Write_Config(original);
+
+        var (status, _, body) = Put($$"""{"{{INTERVAL_PATH}}":30,"voiceTranscribeCommand":"whisper {input}"}""");
+
+        Assert.Equal(403, status);
+        Assert.Contains("voiceTranscribeCommand", (string?)Json(body)["error"]);
+        Assert.DoesNotContain(INTERVAL_PATH, (string?)Json(body)["error"]);
+        Assert.Equal(original, Config_Text());
+    }
+
+    /// <summary>A Reset of a fenced row is fenced too — the ruling covers PUT and DELETE alike.</summary>
+    [Fact]
+    public void Delete_AFencedRow_WithNoConfiguredToken_IsFourOhThree_AndWithTheTokenResets()
+    {
+        const string original = """{"voiceTranscribeCommand":"whisper {input}"}""";
+        const string configured = "the-right-token";
+        Write_Config(original);
+
+        var (status, _, body) = Delete(Reset_Target("voiceTranscribeCommand"));
+
+        Assert.Equal(403, status);
+        Assert.Contains("set web.token first", (string?)Json(body)["error"]);
+        Assert.Equal(original, Config_Text());
+
+        var (allowed, _, allowedBody) = Delete(Reset_Target("voiceTranscribeCommand"), configured, Header_Carrying(configured));
+
+        Assert.Equal(200, allowed);
+        Assert.Equal("Reset", (string?)Single_Result(allowedBody)["outcome"]);
+        Assert.False(Json(Config_Text()).ContainsKey("voiceTranscribeCommand"));
+    }
+
+    /// <summary>
+    /// THE ONE LIST IS REAL AND THE PAGE IS TOLD IT. Every fenced path must be a catalogue row under exactly that
+    /// spelling — a row renamed without this list would silently unfence it — and the GET marks exactly those
+    /// rows, so the page greys them out from data rather than from a second copy of the list.
+    /// </summary>
+    [Fact]
+    public void EveryFencedPath_IsACatalogueRow_AndTheGetMarksExactlyThose()
+    {
+        Assert.NotEmpty(SettingsRequest_Handler.FENCED_PATHS);
+        Assert.All(SettingsRequest_Handler.FENCED_PATHS, path => Assert.Equal(path, Definition(path).Path));
+
+        var marked = Rows(Json(Get().Body))
+            .Where(row => (bool)row["fenced"]!)
+            .Select(row => (string)row["path"]!)
+            .OrderBy(path => path, StringComparer.Ordinal);
+
+        Assert.Equal(SettingsRequest_Handler.FENCED_PATHS.OrderBy(path => path, StringComparer.Ordinal), marked);
+    }
+
+    /// <summary>
+    /// NEVER A THROW FOR ANY TEXT A CALLER CONTROLS. A route, a method, a Host, a DELETE's path or a token
+    /// carrying a lone surrogate is answered with the status its request earns, and the body still parses. The
+    /// echoed text survives because the JSON writer's default encoder writes a lone surrogate as U+FFFD instead of
+    /// throwing (measured 2026-09-23) — pinned below by the path the Reset answer quotes back, so an encoder change
+    /// in the handler goes red here rather than in the bridge host.
+    /// </summary>
+    [Fact]
+    public void AClientsText_WithALoneSurrogate_IsAnswered_NeverThrown()
+    {
+        const string loneSurrogate = "\uD800";
+
+        var notFound = SettingsRequest_Handler.Handle("GET", "/" + loneSurrogate, LOOPBACK_HEADERS, "", _paths, "", log: null);
+        var badMethod = SettingsRequest_Handler.Handle("PO" + loneSurrogate + "ST", SettingsRequest_Handler.SETTINGS_PATH, LOOPBACK_HEADERS, "", _paths, "", log: null);
+        var badHost = Get(header: Headers("localhost" + loneSurrogate));
+        var unknownReset = Delete($"{SettingsRequest_Handler.SETTINGS_PATH}?path={loneSurrogate}");
+        var badToken = Put($$"""{"{{INTERVAL_PATH}}":30}""", "the-right-token", Header_Carrying(loneSurrogate));
+
+        Assert.Equal(404, notFound.Status);
+        Assert.Equal(405, badMethod.Status);
+        Assert.Equal(421, badHost.Status);
+        Assert.Equal(422, unknownReset.Status);
+        Assert.Equal(401, badToken.Status);
+
+        foreach (var (_, _, body) in new[] { notFound, badMethod, badHost, unknownReset, badToken })
+            Assert.NotNull(JsonNode.Parse(body));
+
+        Assert.Equal("RefusedUnknownPath", (string?)Single_Result(unknownReset.Body)["outcome"]);
+        Assert.Equal(char.ConvertFromUtf32(0xFFFD), (string?)Single_Result(unknownReset.Body)["path"]);
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Routing
     // ---------------------------------------------------------------------------------------
 
@@ -656,7 +885,7 @@ public class SettingsRequestHandlerTests : IDisposable
     [InlineData("/settings/")]
     public void AnUnknownPath_IsFourOhFour(string target)
     {
-        var (status, contentType, body) = SettingsRequest_Handler.Handle("GET", target, NO_HEADERS, "", _paths, "", log: null);
+        var (status, contentType, body) = SettingsRequest_Handler.Handle("GET", target, LOOPBACK_HEADERS, "", _paths, "", log: null);
 
         Assert.Equal(404, status);
         Assert.Equal(JSON_CONTENT_TYPE, contentType);
@@ -681,7 +910,7 @@ public class SettingsRequestHandlerTests : IDisposable
         Write_Config(original);
 
         var (status, _, body) = SettingsRequest_Handler.Handle(
-            method, SettingsRequest_Handler.SETTINGS_PATH, NO_HEADERS, $$"""{"{{INTERVAL_PATH}}":30}""", _paths, "", log: null);
+            method, SettingsRequest_Handler.SETTINGS_PATH, LOOPBACK_HEADERS, $$"""{"{{INTERVAL_PATH}}":30}""", _paths, "", log: null);
 
         Assert.Equal(405, status);
 

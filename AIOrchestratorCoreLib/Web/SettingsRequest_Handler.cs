@@ -12,6 +12,8 @@ using AIOrchestratorCoreLib.Configuration.SettingsWriting;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
+
 namespace AIOrchestratorCoreLib.Web;
 
 /// <summary>
@@ -50,6 +52,7 @@ namespace AIOrchestratorCoreLib.Web;
 ///           "displayValue": "xhigh",               // SettingValue_Formatter's one line
 ///           "origin": "Preset", "originLabel": "from preset classic",
 ///           "editable": true,                      // Renderer != ReadOnly — the writer's own rule (P4)
+///           "fenced": false,                       // true: this page may change it only once web.token is set (P32)
 ///           "sessionNote": null,                   // always null here: the page reads the machine, not a session
 ///           "offers": [ { "caption": "xhigh", "value": "xhigh" },
 ///                       { "caption": "not set", "value": null } ] } ] } ]
@@ -64,9 +67,19 @@ namespace AIOrchestratorCoreLib.Web;
 ///                  "message": null | "&lt;the definition's own words&gt;" } ] }
 ///
 /// Anything else → { "error": "…" } with 400 (unreadable body, DELETE without ?path=), 401 (web.token set and
-/// the header absent or wrong), 404 (not /settings), 405 (not GET/PUT/DELETE), 500 (config.json could not be
-/// written — nothing in that request was applied).
+/// the header absent or wrong), 403 (web.token empty and the request touches a fenced row — nothing applied),
+/// 404 (not /settings), 405 (not GET/PUT/DELETE), 421 (Host is not a loopback name — checked before anything
+/// else), 500 (config.json could not be written — nothing in that request was applied).
 /// </code>
+///
+/// <para>
+/// OPEN ON LOOPBACK MUST NOT MEAN "ANY CALLER CAN MAKE THE BRIDGE RUN A COMMAND" (ruling P32, 2026-09-23). D4
+/// keeps reading and editing open while <c>web.token</c> is empty, and two guards keep that from reaching
+/// further than the owner meant: every request must be addressed to a loopback NAME (<see cref="Is_LoopbackHost"/>
+/// — the DNS-rebinding defence, independent of how the listener registers its prefixes), and a token-less
+/// PUT or DELETE may not touch a row in <see cref="FENCED_PATHS"/>, whose values the bridge executes or which
+/// govern this door itself.
+/// </para>
 ///
 /// <para>
 /// AN OFFER CARRIES ITS VALUE, NOT ONLY ITS CAPTION. A Toggle's "on" is <c>true</c> and a nullable Choice's
@@ -108,6 +121,45 @@ public static class SettingsRequest_Handler
     /// <summary>The machine-wide log line, not one orchestration's — the same id the config loader's own warnings use.</summary>
     const string GLOBAL_ORCH_ID = "";
 
+    public const string HOST_HEADER = "Host";
+
+    /// <summary>
+    /// THE ONLY NAMES A REQUEST MAY BE ADDRESSED TO (ruling P32a), each with or without a port. A DNS-rebinding
+    /// page — a site whose name is made to resolve to 127.0.0.1 once the owner's browser has loaded it — is
+    /// SAME-ORIGIN to that browser, so neither CORS nor the refused OPTIONS stops its PUT; what it cannot change
+    /// is the Host header, which still carries its own name. Checked here rather than left to the listener's
+    /// prefix matching, so it holds however Task 7 registers its prefixes and is testable without a socket. The
+    /// PORT is deliberately not compared: an SSH tunnel's local end (<c>ssh -L 8080:127.0.0.1:7391</c>) arrives
+    /// as <c>localhost:8080</c>. Consequence, stated: a non-loopback <c>web.listen</c> serves nothing but 421s —
+    /// the page is reached from another machine through a tunnel whose far end is loopback, which is spec §8.3's
+    /// "deliberate limit".
+    /// </summary>
+    public static readonly IReadOnlyList<string> LOOPBACK_HOST_NAMES = ["127.0.0.1", "localhost", "[::1]"];
+
+    /// <summary>
+    /// THE ROWS A TOKEN-LESS EDIT MAY NOT TOUCH (ruling P32b, 2026-09-23) — ONE list, and the reason for each.
+    /// While <c>web.token</c> is empty an edit is open to anything that can reach the loopback port: on the
+    /// owner's brother's VPS that is every OS account on the machine, which config.json's own file permissions
+    /// keep out. For most rows that is D4's accepted cost; for these it would be handing over the machine:
+    /// <list type="bullet">
+    /// <item><c>voiceTranscribeCommand</c> — a command line the bridge SHELLS OUT to with every voice note
+    /// (<c>VoiceTranscriberModel</c>, through <c>ShellCommand_Builder</c>). Setting it is running a command as
+    /// the owner.</item>
+    /// <item><c>web.listen</c> — would move this listener off loopback onto a reachable interface.</item>
+    /// <item><c>web.token</c> — the first caller would pick the secret and lock the owner out of their own page.</item>
+    /// </list>
+    /// NOT FENCED, and why, from a read of <c>SettingsCatalog.cs</c> on 2026-09-23: the six <c>models.*</c> rows
+    /// reach the command line as an ARGUMENT and their validator (<c>SettingValidators.MODEL_WORD</c>) admits
+    /// letters, digits, '-', '_' and '.' only; <c>runners.sessionMemoryMax</c> is one argv element to
+    /// <c>systemd-run</c>, and only after <c>MemorySize_Parser</c> has read it as a size; <c>repos</c> and
+    /// <c>planBackend</c> are ReadOnly, refused by the writer anyway; no row names an executable path (the
+    /// <c>claude</c> binary is hard-coded in <c>ClaudeInvocation_Resolver</c>). The owner-identity rows
+    /// (<c>telegramOwnerUserId</c>, <c>telegramSupergroupChatId</c>) execute nothing and are outside the
+    /// ruling's definition; whether they join this list is an open question in the task-6 fix-1 report.
+    /// Matched by the catalogue row a path RESOLVES to, so a legacy spelling cannot walk around the fence.
+    /// </summary>
+    public static readonly IReadOnlyList<string> FENCED_PATHS = ["voiceTranscribeCommand", "web.listen", "web.token"];
+
     /// <summary>
     /// A REPEATED KEY IS REFUSED, NOT LAST-WINS. <c>{"x":30,"x":45}</c> is two answers to one question, and
     /// which the owner meant is not this class's to guess; refusing it at the parse is also what keeps a
@@ -118,7 +170,10 @@ public static class SettingsRequest_Handler
     /// <summary>
     /// One request, one answer, and never a throw for anything a client can send. <paramref name="path"/> is the
     /// request target as it arrived — the path and an optional query, still percent-encoded
-    /// (<c>HttpListenerRequest.RawUrl</c>); <paramref name="header"/> looks a request header up by name.
+    /// (<c>HttpListenerRequest.RawUrl</c>); <paramref name="header"/> looks a request header up by name, and
+    /// <see cref="HOST_HEADER"/> is one of the headers it must answer. The checks run in this order, so a refusal
+    /// never follows a partial effect: Host (421), route (404), method (405), token (401), body (400), fence
+    /// (403), and only then the writer.
     ///
     /// <para>
     /// <paramref name="configuredToken"/> IS HANDED IN, NEVER READ HERE (ruling P30). The reading every renderer
@@ -136,6 +191,12 @@ public static class SettingsRequest_Handler
         string configuredToken,
         IOrchestrationLog? log)
     {
+        // FIRST, before the route: a request addressed to another name gets nothing from here, not even a 404.
+        var host = header(HOST_HEADER);
+
+        if (!Is_LoopbackHost(host))
+            return Answer_Error(HttpStatusCode.MisdirectedRequest, Describe_NotLoopback(host));
+
         var (route, query) = Split_Target(path);
 
         if (!string.Equals(route, SETTINGS_PATH, StringComparison.Ordinal))
@@ -144,8 +205,8 @@ public static class SettingsRequest_Handler
         return method switch
         {
             GET_METHOD => Answer_Get(paths, configuredToken, log),
-            PUT_METHOD => Refuse_Unauthorised_OrNull(header, configuredToken) ?? Answer_Put(body, paths, log),
-            DELETE_METHOD => Refuse_Unauthorised_OrNull(header, configuredToken) ?? Answer_Delete(query, paths, log),
+            PUT_METHOD => Refuse_Unauthorised_OrNull(header, configuredToken) ?? Answer_Put(body, paths, configuredToken, log),
+            DELETE_METHOD => Refuse_Unauthorised_OrNull(header, configuredToken) ?? Answer_Delete(query, paths, configuredToken, log),
 
             // OPTIONS lands here ON PURPOSE. A PUT or DELETE from a page on another origin is never a "simple"
             // request, so the browser sends a CORS preflight first; a 405 carrying no Access-Control-Allow-*
@@ -223,6 +284,10 @@ public static class SettingsRequest_Handler
             ["origin"] = reading.Origin.ToString(),
             ["originLabel"] = reading.OriginLabel,
             ["editable"] = reading.IsEditable,
+
+            // Read off the one list, so the page greys out what a token-less PUT would be refused rather than
+            // carrying a second copy of FENCED_PATHS in its script.
+            ["fenced"] = Is_Fenced(definition),
             ["sessionNote"] = reading.SessionNote_OrNull,
             ["offers"] = Build_OffersJson(reading),
         };
@@ -295,12 +360,91 @@ public static class SettingsRequest_Handler
         return CryptographicOperations.FixedTimeEquals(presentedDigest, configuredDigest);
     }
 
-    static (int Status, string ContentType, string Body) Answer_Put(string body, ISupervisionPaths paths, IOrchestrationLog? log)
+    /// <summary>
+    /// A TOKEN-LESS EDIT THAT TOUCHES A FENCED ROW IS REFUSED WHOLE (ruling P32b): 403, and nothing in the
+    /// request is applied — not even its unfenced edits, because a body that was half-written and half-refused
+    /// would leave the caller to work out which half landed, and "nothing" is the one answer that needs no
+    /// reading. Null when a token is set (the 401 check has already passed by then) or no edit is fenced.
+    /// </summary>
+    static (int Status, string ContentType, string Body)? Refuse_Fenced_OrNull(IEnumerable<string> editedPaths, string configuredToken)
+    {
+        if (SettingsSnapshot_Reader.Is_SecretSet(configuredToken))
+            return null;
+
+        var touched = editedPaths
+            .Select(Catalog.Find_OrNull)
+            .Where(definition => definition != null && Is_Fenced(definition))
+            .Select(definition => definition!.Path)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        return touched.Length == 0 ? null : Answer_Error(HttpStatusCode.Forbidden, Describe_Fenced(touched));
+    }
+
+    /// <summary>By the row's own path, whatever spelling the request used to reach it.</summary>
+    static bool Is_Fenced(ISettingDefinition definition)
+    {
+        return FENCED_PATHS.Contains(definition.Path, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Whether a Host header names this machine's loopback (<see cref="LOOPBACK_HOST_NAMES"/>, any case — a host
+    /// name is case-insensitive), with no port or a port of digits. Absent is refused: every browser sends Host,
+    /// and HTTP/1.1 requires it, so a request without one is not the page's. Public so Task 7 can hold <c>GET /</c>
+    /// to the same rule instead of writing a second copy of it.
+    /// </summary>
+    public static bool Is_LoopbackHost(string? hostHeader)
+    {
+        if (string.IsNullOrWhiteSpace(hostHeader))
+            return false;
+
+        var (name, port) = Split_HostHeader(hostHeader.Trim());
+
+        if (port != null && (port.Length is 0 or > 5 || !port.All(char.IsAsciiDigit)))
+            return false;
+
+        return LOOPBACK_HOST_NAMES.Contains(name, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// "name[:port]", where an IPv6 name keeps its brackets so its own colons are never read as the port's. Null
+    /// port when there is none; an empty one ("localhost:") is returned empty, for the caller to refuse.
+    /// </summary>
+    static (string Name, string? Port) Split_HostHeader(string host)
+    {
+        if (host.StartsWith('['))
+        {
+            var close = host.IndexOf(']');
+
+            if (close < 0)
+                return (host, null);
+
+            var bracketed = host[..(close + 1)];
+            var rest = host[(close + 1)..];
+
+            if (rest.Length == 0)
+                return (bracketed, null);
+
+            // Anything after ']' that is not ":port" ("[::1]7391") leaves the whole header as the name, which matches nothing.
+            return rest.StartsWith(':') ? (bracketed, rest[1..]) : (host, null);
+        }
+
+        var colon = host.LastIndexOf(':');
+
+        return colon < 0 ? (host, null) : (host[..colon], host[(colon + 1)..]);
+    }
+
+    static (int Status, string ContentType, string Body) Answer_Put(string body, ISupervisionPaths paths, string configuredToken, IOrchestrationLog? log)
     {
         var (edits, problem) = Parse_PutBody(body);
 
         if (edits == null)
             return Answer_Error(HttpStatusCode.BadRequest, problem ?? Describe_NotAnObject());
+
+        var fenced = Refuse_Fenced_OrNull(edits.Select(edit => edit.Path), configuredToken);
+
+        if (fenced != null)
+            return fenced.Value;
 
         try
         {
@@ -316,6 +460,16 @@ public static class SettingsRequest_Handler
     /// The body as edits, in the order sent, or the reason it is not a body this API reads. A parser of
     /// untrusted input: it swallows the parser's exception and returns the reason, because a client's bad
     /// body is an answer to give, not a fault to raise.
+    ///
+    /// <para>
+    /// EVERY KEY AND EVERY STRING IS DECODED HERE, INSIDE THE TRY (task-6 fix round 1, 2026-09-23). A JSON
+    /// escape can spell a lone surrogate — <c>{"\uD800":1}</c> is twelve plain-ASCII bytes — and System.Text.Json
+    /// accepts it at the parse and throws <see cref="InvalidOperationException"/> only when the text is
+    /// finally read as a .NET string: the key when the object is first enumerated, a string value when the
+    /// definition's validator asks for it, far from here and outside any catch. Verified against the built DLL
+    /// by the review of <c>649a38c</c>: the bridge host that Task 7 runs this in would have taken that throw
+    /// from one request. Reading everything once, now, makes the lazy throw an eager one, where it is a 400.
+    /// </para>
     /// </summary>
     static (IReadOnlyList<(string Path, JsonNode? Value)>? Edits_OrNull, string? Problem_OrNull) Parse_PutBody(string body)
     {
@@ -324,8 +478,9 @@ public static class SettingsRequest_Handler
         try
         {
             root = JsonNode.Parse(body, nodeOptions: null, PUT_BODY_OPTIONS);
+            Decode_EveryString(root);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or ArgumentException)
         {
             return (null, Describe_NotJson(ex.Message));
         }
@@ -339,12 +494,40 @@ public static class SettingsRequest_Handler
         return (edits.Select(edit => (edit.Key, edit.Value)).ToArray(), null);
     }
 
-    static (int Status, string ContentType, string Body) Answer_Delete(string query, ISupervisionPaths paths, IOrchestrationLog? log)
+    /// <summary>Reads every property name and every string value as a .NET string once, so any that cannot be one throws HERE.</summary>
+    static void Decode_EveryString(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (_, value) in obj)
+                    Decode_EveryString(value);
+
+                break;
+
+            case JsonArray array:
+                foreach (var element in array)
+                    Decode_EveryString(element);
+
+                break;
+
+            case JsonValue value when value.GetValueKind() == JsonValueKind.String:
+                _ = value.GetValue<string>();
+                break;
+        }
+    }
+
+    static (int Status, string ContentType, string Body) Answer_Delete(string query, ISupervisionPaths paths, string configuredToken, IOrchestrationLog? log)
     {
         var settingPath = Read_QueryValue_OrNull(query, RESET_QUERY_KEY);
 
         if (string.IsNullOrWhiteSpace(settingPath))
             return Answer_Error(HttpStatusCode.BadRequest, Describe_ResetNeedsAPath());
+
+        var fenced = Refuse_Fenced_OrNull([settingPath], configuredToken);
+
+        if (fenced != null)
+            return fenced.Value;
 
         try
         {
@@ -452,6 +635,9 @@ public static class SettingsRequest_Handler
 
     static (int Status, string ContentType, string Body) Answer(HttpStatusCode status, JsonObject body)
     {
+        // CLIENT TEXT IS ECHOED AS IT CAME (a route, a method, a Host, a DELETE's path): the default encoder writes
+        // a lone surrogate as U+FFFD rather than throwing — measured 2026-09-23, and pinned by
+        // AClientsText_WithALoneSurrogate_IsAnswered_NeverThrown, so a change of encoder here would go red there.
         // Indented: the page does not care, and the owner's brother reading it with curl through the tunnel does.
         return ((int)status, CONTENT_TYPE, body.ToJsonString(JsonWriting.INDENTED));
     }
@@ -459,6 +645,20 @@ public static class SettingsRequest_Handler
     static (int Status, string ContentType, string Body) Answer_Error(HttpStatusCode status, string message)
     {
         return Answer(status, new JsonObject { ["error"] = message });
+    }
+
+    static string Describe_NotLoopback(string? host)
+    {
+        var named = string.IsNullOrWhiteSpace(host) ? "no Host header" : $"Host '{host}'";
+
+        return $"This page answers only requests addressed to {string.Join(", ", LOOPBACK_HOST_NAMES)} (with any port) — "
+            + $"this one carried {named}. From another machine, reach it through an SSH tunnel to the loopback address.";
+    }
+
+    static string Describe_Fenced(IReadOnlyList<string> fencedPaths)
+    {
+        return $"{string.Join(", ", fencedPaths.Select(path => $"'{path}'"))} cannot be changed from this page while web.token is empty: "
+            + "set web.token first, or change this at the desktop / in config.json. Nothing in this request was applied.";
     }
 
     static string Describe_NotFound(string route)
