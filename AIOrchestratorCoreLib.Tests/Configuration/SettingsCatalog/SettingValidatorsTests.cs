@@ -7,9 +7,10 @@ using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.Sett
 namespace AIOrchestratorCoreLib.Tests.Configuration.SettingsCatalog;
 
 /// <summary>
-/// THE TWO LIST VALIDATORS, and the one that is still a name only. A refusal here is what turns a
-/// hand-edited typo into "that one key falls to the layer below" at the resolver — without it the
-/// typo was accepted as written and reached a builder.
+/// THE TWO LIST VALIDATORS. A refusal here is what turns a hand-edited typo into "that one key falls
+/// to the layer below" at the resolver — without it the typo was accepted as written and reached a
+/// builder. `web.listen`'s validator has its own file, <c>ListenAddressValidatorTests</c>, now that it
+/// is a real check rather than a registered name.
 /// </summary>
 public class SettingValidatorsTests
 {
@@ -78,17 +79,6 @@ public class SettingValidatorsTests
 
         Assert.NotNull(refusal);
         Assert.Contains("tail", refusal, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// PINS THE REMAINING GAP AS DELIBERATE. <c>web.listen</c> has no consumer until plan 04's listener,
-    /// so its check is not written yet and any value is accepted. When plan 04 implements it, this test
-    /// is the one that must change — which is the point of writing it down as a test.
-    /// </summary>
-    [Fact]
-    public void ListenAddress_IsStillARegisteredNameOnly()
-    {
-        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.LISTEN_ADDRESS, JsonValue.Create("not an address at all")));
     }
 
     static JsonArray List(params string[] words)

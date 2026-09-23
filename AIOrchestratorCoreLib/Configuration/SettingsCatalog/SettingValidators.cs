@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Web;
 
 namespace AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 
@@ -15,10 +16,10 @@ public static class SettingValidators
     public const string MODEL_WORD = "modelWord";
 
     /// <summary>
-    /// WILL check for `host:port`, or the literal `off`, for `web.listen`. NOT YET IMPLEMENTED — see
-    /// the fallthrough in <see cref="Validate_OrNull"/>: a definition may point at this name today
-    /// and it accepts any value until plan 04's listener wires the check in
-    /// (<c>SettingValidatorsTests.ListenAddress_IsStillARegisteredNameOnly</c> pins the gap).
+    /// `host:port` (an IPv6 literal takes brackets), or the literal `off`, for `web.listen`. The parse
+    /// and range rules live in <see cref="Web.ListenAddress"/>, which plan 04's listener (Task 7) reads
+    /// directly through <see cref="Web.ListenAddress.Parse_OrNull"/> / <see cref="Web.ListenAddress.Is_Off"/>;
+    /// this name only routes to the message-crafting case below.
     /// </summary>
     public const string LISTEN_ADDRESS = "listenAddress";
 
@@ -48,11 +49,13 @@ public static class SettingValidators
             MODEL_WORD => Validate_ModelWord_OrNull(value),
             PULSE_FIELDS => Validate_PulseFields_OrNull(value),
             BOT_COMMANDS => Validate_BotCommands_OrNull(value),
+            LISTEN_ADDRESS => Validate_ListenAddress_OrNull(value),
 
-            // LISTEN_ADDRESS is a registered name only — a definition may point at it before its check
-            // exists (a definition naming a not-yet-implemented validator is legitimate). Until plan 04
-            // adds a case above, any value is accepted; this is a real gap, not an oversight, and it
-            // must stay visible here rather than only in a report nobody reading this switch will see.
+            // Defensive only: every name this switch's own constants can produce has a case above. An
+            // unrecognised name here means a definition points at a validator that was never registered
+            // — a bug in the catalogue itself, not in the value being checked — so accepting rather than
+            // refusing keeps this switch a pure function of the value, not of whether the catalogue is
+            // well-formed.
             _ => null,
         };
     }
@@ -100,6 +103,20 @@ public static class SettingValidators
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Shape-checks first — same defensive re-check the two list validators above make, because this
+    /// switch is public and a caller may reach it directly, as the tests do — then delegates the actual
+    /// parsing to <see cref="Web.ListenAddress.Problem_OrNull"/> so there is one split routine, not one
+    /// per validator and one per listener.
+    /// </summary>
+    static string? Validate_ListenAddress_OrNull(JsonNode? value)
+    {
+        if (value is not JsonValue jsonValue || !jsonValue.TryGetValue<string>(out var text))
+            return "Expected a string";
+
+        return ListenAddress.Problem_OrNull(text);
     }
 
     /// <summary>False for anything that is not an array of strings — a definition checks the shape first, but this switch is public.</summary>
