@@ -89,7 +89,9 @@ public class PresetProbeTests
     [InlineData("phone.aggregationSeconds", "6")]
     [InlineData("phone.finishedMessageSeconds", "6")]
     [InlineData("pulse.holdToggle", "false")]
-    [InlineData("pulse.fields", """["supervisor","members","modelEffort","merged","updated"]""")]
+
+    // THE COUNT ON TOP, COMPACT (owner, 2026-09-23, plan 03 task 16): `progress` replaced `merged`.
+    [InlineData("pulse.fields", """["progress","supervisor","members","modelEffort","updated"]""")]
     [InlineData("general.buttons", "[]")]
     [InlineData("topic.onClose", "\"close\"")]
     [InlineData("topic.modeGlyphs", "\"name\"")]

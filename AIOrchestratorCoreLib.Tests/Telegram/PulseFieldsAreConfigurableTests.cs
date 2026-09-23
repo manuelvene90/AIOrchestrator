@@ -42,10 +42,13 @@ public class PulseFieldsAreConfigurableTests
         PulseField_Names.LAST_EVENT, PulseField_Names.MERGED, PulseField_Names.UPDATED,
     ];
 
-    /// <summary>kit/presets/classic.json's list — master's pulse, rendered through the same field builders.</summary>
+    /// <summary>
+    /// kit/presets/classic.json's list — master's pulse, rendered through the same field builders, with
+    /// the compact <c>progress</c> reading in place of <c>merged</c> and at the top (owner, 2026-09-23).
+    /// </summary>
     static readonly IReadOnlyList<string> CLASSIC =
     [
-        PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.MERGED, PulseField_Names.UPDATED,
+        PulseField_Names.PROGRESS, PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.UPDATED,
     ];
 
     /// <summary>
@@ -77,22 +80,129 @@ public class PulseFieldsAreConfigurableTests
     }
 
     /// <summary>
-    /// CLASSIC'S PHONE: no waiting-on-you row, no closed count, no `last`, and every session's model
-    /// and effort — the supervisor's on its own row, each member's after its duration. The model is a
-    /// FACT about the row and the context figure is an ALARM, so the fact comes first and the alarm
-    /// keeps the end of the row, where a glance lands (master's ModelOnTheStatusLineTests).
+    /// CLASSIC'S PHONE: the task count FIRST, no waiting-on-you row, no closed count, no `last`, and
+    /// every session's model and effort — the supervisor's on its own row, each member's after its
+    /// duration. The model is a FACT about the row and the context figure is an ALARM, so the fact comes
+    /// first and the alarm keeps the end of the row, where a glance lands (master's
+    /// ModelOnTheStatusLineTests). The count is `72/113 (63%)` and nothing else — owner, 2026-09-23:
+    /// *"I don't want to have useless words like 1/23 merged 4%. Just 1/23 (4%)."*
     /// </summary>
     [Fact]
-    public void ClassicsList_DropsWaitingOnYouAndClosedCount_AndAddsModelEffort()
+    public void ClassicsList_LeadsWithTheCount_DropsWaitingOnYouAndClosedCount_AndAddsModelEffort()
     {
         Assert.Equal(
+            "72/113 (63%)\n" +
             "PULSE\n" +
             "sup · waiting for the review · declared 12:12 · Fable 5.1 xhigh · ctx 41%\n" +
             "• imp-1 · committing the marker fix · working · 10 min · Opus 5 high\n" +
             "• rev-2 · standing by · Sonnet 5\n" +
-            "72/113 merged · 63 % · unchanged 25 min\n" +
             "updated 12:30",
             Build_Rich(pulseFields: CLASSIC));
+    }
+
+    /// <summary>
+    /// THE COMPACT READING, IN ITS LISTED PLACE — `72/113 (63%)`, with no label and NO "unchanged"
+    /// clause even though the fixture's ledger has stood still for 25 minutes. The clause is what
+    /// <c>merged</c> carries; on this field it would turn the owner's bare reading back into a
+    /// sentence. The percent is <c>PlanProgress_Formatter.Percent</c>'s, which truncates: 75 of 76 reads
+    /// 98%, never a rounded 99%, so this line and `/progress` cannot quote the ledger differently.
+    /// </summary>
+    [Fact]
+    public void TheProgressField_ReadsJustTheCountAndThePercent_InItsListedPlace()
+    {
+        Assert.Equal(
+            "PULSE\n" +
+            "sup · waiting for the review · declared 12:12 · ctx 41%\n" +
+            "72/113 (63%)\n" +
+            "updated 12:30",
+            Build_Rich(pulseFields: [PulseField_Names.SUPERVISOR, PulseField_Names.PROGRESS, PulseField_Names.UPDATED]));
+
+        Assert.Equal(
+            "PULSE\n75/76 (98%)",
+            TopicStatusLine_Builder.Build(
+                Progress(75, 76), [], null, NOW, aMessageIsAlreadyPosted: false,
+                pulseFields: [PulseField_Names.MEMBERS, PulseField_Names.PROGRESS]));
+    }
+
+    /// <summary>
+    /// FIRST IN THE LIST MEANS FIRST ON THE MESSAGE — above the header, mode glyphs and all. The first
+    /// line is what a Telegram notification preview shows, and the owner called the count "the most
+    /// important information". It is a LINE OF ITS OWN rather than a prefix spliced into the header, so
+    /// every line keeps one owner: the header still reads `🌙 PULSE` exactly, and the count reads
+    /// exactly what it reads anywhere else in the list.
+    /// </summary>
+    [Fact]
+    public void WhenProgressLeadsTheList_TheCountIsTheFirstLineOfTheMessage_AboveTheHeader()
+    {
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 12), [], null, NOW, aMessageIsAlreadyPosted: false,
+            fields: new TopicStatusFields(Mode: TelegramDeliveryModes.Deferred),
+            pulseFields: [PulseField_Names.PROGRESS, PulseField_Names.UPDATED]);
+
+        Assert.StartsWith("1/12 (8%)\n", line, StringComparison.Ordinal);
+        Assert.Equal("1/12 (8%)\n🌙 PULSE\nupdated 12:30", line);
+    }
+
+    /// <summary>
+    /// NO LEDGER, NO COUNT — `0/0 (0%)` would be the say-nothing message again, the same guard as
+    /// <c>merged</c>. And with nothing to draw above it, the header leads the message as it always did:
+    /// "first" is a place the count takes when it has something to say, never a blank line it leaves.
+    /// </summary>
+    [Fact]
+    public void AnEmptyLedger_DrawsNoCount_AndTheHeaderLeadsAgain()
+    {
+        var working = TopicStatusMember_Factory.Create("imp-1", Briefed("committing the marker fix", "2026-08-12 12:18"), isClosed: false);
+
+        Assert.Equal(
+            "PULSE\n• imp-1 · committing the marker fix · working · 10 min",
+            TopicStatusLine_Builder.Build(
+                Progress(0, 0), [working], null, NOW, aMessageIsAlreadyPosted: false,
+                pulseFields: [PulseField_Names.PROGRESS, PulseField_Names.MEMBERS]));
+
+        Assert.Equal(
+            "PULSE\n• imp-1 · committing the marker fix · working · 10 min",
+            TopicStatusLine_Builder.Build(
+                null, [working], null, NOW, aMessageIsAlreadyPosted: false,
+                pulseFields: [PulseField_Names.PROGRESS, PulseField_Names.MEMBERS]));
+    }
+
+    /// <summary>
+    /// <c>merged</c> IS UNTOUCHED BY THE NEW WORD: an owner who lists both reads the compact count on top
+    /// and the labelled reading, clause and all, where they put it. Two renderings of one ledger and ONE
+    /// arithmetic under both — the percents agree because they are the same call.
+    /// </summary>
+    [Fact]
+    public void TheMergedField_IsUnchanged_BesideTheProgressField()
+    {
+        Assert.Equal(
+            "72/113 (63%)\n" +
+            "PULSE\n" +
+            "72/113 merged · 63 % · unchanged 25 min",
+            Build_Rich(pulseFields: [PulseField_Names.PROGRESS, PulseField_Names.MERGED]));
+    }
+
+    /// <summary>
+    /// THE COUNT ON TOP DOES NOT MAKE A STILL ORCHESTRATION READ AS NEWS. The repost rule compares the
+    /// line with its heartbeat stripped, and <c>Strip_Heartbeat</c> matches whole lines by their opening:
+    /// the count opens with a digit, so it is never taken for the heartbeat and never stripped with it.
+    /// And because the field carries no "unchanged" clause, a ledger that stands still for another step
+    /// leaves its text identical — where the <c>merged</c> clause moves at every step.
+    /// </summary>
+    [Fact]
+    public void TheCountOnTop_IsNotTheHeartbeat_AndAStepLaterIsNotNews()
+    {
+        IReadOnlyList<string> countFirst = [PulseField_Names.PROGRESS, PulseField_Names.UPDATED];
+
+        var before = TopicStatusLine_Builder.Build(
+            Progress(1, 12), [], null, NOW, aMessageIsAlreadyPosted: false,
+            figuresUnchangedFor: TimeSpan.FromMinutes(25), pulseFields: countFirst);
+        var aStepLater = TopicStatusLine_Builder.Build(
+            Progress(1, 12), [], null, NOW.AddMinutes(5), aMessageIsAlreadyPosted: false,
+            figuresUnchangedFor: TimeSpan.FromMinutes(30), pulseFields: countFirst);
+
+        Assert.NotEqual(before, aStepLater);
+        Assert.Equal("1/12 (8%)\nPULSE", TopicStatusLine_Builder.Strip_Heartbeat(before));
+        Assert.Equal(TopicStatusLine_Builder.Strip_Heartbeat(before), TopicStatusLine_Builder.Strip_Heartbeat(aStepLater));
     }
 
     /// <summary>

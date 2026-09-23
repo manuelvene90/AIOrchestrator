@@ -853,7 +853,11 @@ public static class SettingsCatalog
                 description:
                     "Which fields the pulse line carries, in this order, under its header. 'modelEffort' is a legal field and " +
                     "is not shipped on the line — an owner who wants it adds it, and it rides the supervisor and member rows " +
-                    "rather than drawing a line of its own. Omitting 'updated' removes the heartbeat, which is what tells the " +
+                    "rather than drawing a line of its own. 'progress' is the task count alone, '1/12 (8%)' — the reading " +
+                    "'merged' carries without its label or its 'unchanged for' clause — and it is the one field with a place " +
+                    "outside this order: listed FIRST, it is drawn above the header, so it is the first line of the message and " +
+                    "of a notification preview; listed anywhere else, it sits in its place like any other field. " +
+                    "Omitting 'updated' removes the heartbeat, which is what tells the " +
                     "owner a quiet orchestration from a dead app — a frozen status line looks exactly like a correct one.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.PULSE_FIELDS),

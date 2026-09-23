@@ -41,6 +41,19 @@ public class SettingValidatorsTests
     }
 
     /// <summary>
+    /// `progress` IS A FIELD (owner, 2026-09-23) — spelled as the literal an owner types, not through the
+    /// constant, so a rename of the constant that forgot `ALL` cannot pass this by agreeing with itself.
+    /// Classic's own list leads with it, so a refusal here would cost every untouched machine its PULSE.
+    /// </summary>
+    [Fact]
+    public void PulseFields_AcceptsProgress_AndClassicsListLeadingWithIt()
+    {
+        Assert.Null(SettingValidators.Validate_OrNull(SettingValidators.PULSE_FIELDS, List("progress")));
+        Assert.Null(SettingValidators.Validate_OrNull(
+            SettingValidators.PULSE_FIELDS, List("progress", "supervisor", "members", "modelEffort", "updated")));
+    }
+
+    /// <summary>
     /// "tail sup" is a verb WITH ITS TARGET — a tap carries no text, so the target rides inside the
     /// verb — and <c>BotCommandMenu.ALL</c> holds only the bare "tail". Exact membership would refuse
     /// the catalogue's own default; only the first token is a verb.

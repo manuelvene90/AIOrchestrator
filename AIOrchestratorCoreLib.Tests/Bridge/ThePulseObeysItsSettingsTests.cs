@@ -78,7 +78,8 @@ public class ThePulseObeysItsSettingsTests : IDisposable
 
     /// <summary>
     /// A MACHINE THAT STATES NOTHING GETS CLASSIC'S PULSE — master's, with the model readings on — and
-    /// the shipped five-minute step. The merged row is the launcher's seeded PLAN.md (one open line).
+    /// the shipped five-minute step. The count on top is the launcher's seeded PLAN.md (one open line),
+    /// in classic's compact reading since 2026-09-23 — `0/1 (0%)`, ABOVE the header (plan 03 Task 16).
     /// The heartbeat's clock is the wall clock, so that line is asserted by its opening only.
     /// </summary>
     [Fact]
@@ -90,11 +91,11 @@ public class ThePulseObeysItsSettingsTests : IDisposable
         var lines = (await Run_UntilThePulseIsPosted_Async(engine)).Split('\n');
 
         Assert.Equal(6, lines.Length);
-        Assert.Equal("PULSE", lines[0]);
-        Assert.Equal("sup · Fable 5.1 xhigh", lines[1]);
-        Assert.Equal($"• imp-1 · {TASK} · working · 40 min · Opus 5 high", lines[2]);
-        Assert.Equal("• rev-1 · standing by", lines[3]);
-        Assert.Equal("0/1 merged · 0 %", lines[4]);
+        Assert.Equal("0/1 (0%)", lines[0]);
+        Assert.Equal("PULSE", lines[1]);
+        Assert.Equal("sup · Fable 5.1 xhigh", lines[2]);
+        Assert.Equal($"• imp-1 · {TASK} · working · 40 min · Opus 5 high", lines[3]);
+        Assert.Equal("• rev-1 · standing by", lines[4]);
         Assert.StartsWith("updated ", lines[5], StringComparison.Ordinal);
     }
 
@@ -163,7 +164,11 @@ public class ThePulseObeysItsSettingsTests : IDisposable
 
         for (var waited = 0; waited < 20_000 && pulse == null; waited += 100)
         {
-            pulse = _telegram.Sent_Texts().FirstOrDefault(text => text.StartsWith("PULSE", StringComparison.Ordinal));
+            // BY ITS HEADER LINE, NOT BY ITS FIRST CHARACTERS: since 2026-09-23 classic's count is drawn
+            // ABOVE the header (plan 03 Task 16), so PULSE no longer opens the message it names. The
+            // header is the lead word, with any mode glyphs before it, and nothing after.
+            pulse = _telegram.Sent_Texts().FirstOrDefault(
+                text => text.Split('\n').Any(line => line.EndsWith("PULSE", StringComparison.Ordinal)));
 
             if (pulse == null)
                 await Task.Delay(100);

@@ -40,6 +40,11 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// list, and classic — master's phone — is the preset that asks for it. PulseSettingsJsonTests pins that
 /// classic resolves to these five words.
 /// </para>
+/// <para>
+/// CLASSIC LEADS WITH THE COMPACT COUNT SINCE 2026-09-23 (plan 03 Task 16): `progress` replaced `merged`
+/// and moved above the header, so every whole-message expectation opens `N/M (P%)` and every member row
+/// sits one line lower than it did — the row itself is unchanged, which is this file's subject.
+/// </para>
 /// </summary>
 public class ModelOnTheStatusLineTests
 {
@@ -49,7 +54,7 @@ public class ModelOnTheStatusLineTests
     /// <summary>kit/presets/classic.json's `pulse.fields`, spelled out for the reason PresetProbeTests gives.</summary>
     static readonly IReadOnlyList<string> CLASSIC =
     [
-        PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.MERGED, PulseField_Names.UPDATED,
+        PulseField_Names.PROGRESS, PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.UPDATED,
     ];
 
     /// <summary>The reading rides after the duration — the row's state word, which this layout adds, sits before it.</summary>
@@ -60,7 +65,7 @@ public class ModelOnTheStatusLineTests
             Progress(1, 5), [Member("imp-1", Briefed(), model: Fable("xhigh"))], null, NOW,
             aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh", line.Split('\n')[1]);
+        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh", line.Split('\n')[2]);
     }
 
     /// <summary>A quiet member is still running SOMETHING, and the row says what.</summary>
@@ -70,7 +75,7 @@ public class ModelOnTheStatusLineTests
         var line = TopicStatusLine_Builder.Build(
             Progress(1, 5), [Member("imp-1", [], model: Fable("xhigh"))], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• imp-1 · standing by · Fable 5.1 xhigh", line.Split('\n')[1]);
+        Assert.Equal("• imp-1 · standing by · Fable 5.1 xhigh", line.Split('\n')[2]);
     }
 
     /// <summary>
@@ -85,7 +90,7 @@ public class ModelOnTheStatusLineTests
             Progress(1, 5), [Member("solo-1", Briefed(), Reading(52), Fable("xhigh"))], null, NOW,
             aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• solo-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh · ctx 52%", line.Split('\n')[1]);
+        Assert.Equal("• solo-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh · ctx 52%", line.Split('\n')[2]);
     }
 
     /// <summary>An older Claude Code reports no dial. Just the model, nothing trailing.</summary>
@@ -96,7 +101,7 @@ public class ModelOnTheStatusLineTests
             Progress(1, 5), [Member("imp-1", Briefed(), model: SessionModelReading_Factory.Create("Opus 5", null))], null, NOW,
             aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Opus 5", line.Split('\n')[1]);
+        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Opus 5", line.Split('\n')[2]);
     }
 
     /// <summary>
@@ -110,7 +115,7 @@ public class ModelOnTheStatusLineTests
         var line = TopicStatusLine_Builder.Build(
             Progress(1, 5), [Member("imp-1", Briefed())], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC);
 
-        Assert.Equal("• imp-1 · wiring the context field · working · 30 min", line.Split('\n')[1]);
+        Assert.Equal("• imp-1 · wiring the context field · working · 30 min", line.Split('\n')[2]);
     }
 
     /// <summary>
@@ -125,24 +130,25 @@ public class ModelOnTheStatusLineTests
             Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC,
             supervisorModel: Fable("xhigh"));
 
-        Assert.Equal("PULSE\nsup · Fable 5.1 xhigh\n72/113 merged · 63 %\nupdated 20:30", line);
+        Assert.Equal("72/113 (63%)\nPULSE\nsup · Fable 5.1 xhigh\nupdated 20:30", line);
     }
 
     /// <summary>
-    /// WAS TheLeadLineFieldOrderWithEverythingPresent. The field ORDER with all three optional fields
-    /// present: the ledger reading stays together (count, percent, how long unchanged) on its row, and
-    /// the supervisor's row carries its model then its context — the same facts-then-alarm order as a
-    /// member row, with `ctx` keeping its place at the very end so ContextOnTheStatusLineTests'
-    /// expectations still hold.
+    /// WAS TheLeadLineFieldOrderWithEverythingPresent, then TheSupAndMergedRowFieldOrderWithEverythingPresent
+    /// until classic swapped `merged` for `progress` (2026-09-23). The field ORDER with all three optional
+    /// fields present: the ledger reading stays together (count, percent) on its own line — the compact
+    /// one, which carries no "unchanged" clause by the owner's "just 1/23 (4%)" — and the supervisor's row
+    /// carries its model then its context: the same facts-then-alarm order as a member row, with `ctx`
+    /// keeping its place at the very end so ContextOnTheStatusLineTests' expectations still hold.
     /// </summary>
     [Fact]
-    public void TheSupAndMergedRowFieldOrderWithEverythingPresent()
+    public void TheSupRowAndProgressFieldOrderWithEverythingPresent()
     {
         var line = TopicStatusLine_Builder.Build(
             Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC,
             figuresUnchangedFor: TimeSpan.FromMinutes(25), supervisorContext: Reading(41), supervisorModel: Fable("xhigh"));
 
-        Assert.Equal("PULSE\nsup · Fable 5.1 xhigh · ctx 41%\n3/4 merged · 75 % · unchanged 25 min\nupdated 20:30", line);
+        Assert.Equal("3/4 (75%)\nPULSE\nsup · Fable 5.1 xhigh · ctx 41%\nupdated 20:30", line);
     }
 
     /// <summary>
@@ -226,9 +232,10 @@ public class ModelOnTheStatusLineTests
         var lines = plan.Text.Split('\n');
 
         Assert.Equal(TopicStatusActions.Post, plan.Action);
-        Assert.Equal("PULSE", lines[0]);
-        Assert.Equal("sup · Fable 5.1 xhigh", lines[1]);
-        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh", lines[2]);
+        Assert.Equal("72/113 (63%)", lines[0]);
+        Assert.Equal("PULSE", lines[1]);
+        Assert.Equal("sup · Fable 5.1 xhigh", lines[2]);
+        Assert.Equal("• imp-1 · wiring the context field · working · 30 min · Fable 5.1 xhigh", lines[3]);
     }
 
     /// <summary>

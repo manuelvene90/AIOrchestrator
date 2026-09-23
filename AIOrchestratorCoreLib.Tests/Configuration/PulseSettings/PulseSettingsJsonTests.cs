@@ -32,9 +32,10 @@ public class PulseSettingsJsonTests : IDisposable
     }
 
     /// <summary>
-    /// A MACHINE THAT SAYS NOTHING GETS classic, and classic is master's pulse: the lead line is the
-    /// supervisor and what merged, the model/effort reading rides it, and the hold toggle is on the
-    /// receipt rather than the bar. General gets no buttons at all.
+    /// A MACHINE THAT SAYS NOTHING GETS classic, and classic is master's pulse: the compact task count
+    /// first (owner, 2026-09-23 — it replaced `merged`), then the supervisor, the model/effort reading
+    /// riding the rows, and the hold toggle is on the receipt rather than the bar. General gets no
+    /// buttons at all.
     /// </summary>
     [Fact]
     public void WithNoConfigFileAtAll_ThePulseBlockIsClassics()
@@ -42,7 +43,7 @@ public class PulseSettingsJsonTests : IDisposable
         var pulse = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Pulse;
 
         Assert.Equal(
-            [PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.MERGED, PulseField_Names.UPDATED],
+            [PulseField_Names.PROGRESS, PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.UPDATED],
             pulse.Fields);
         Assert.False(pulse.HoldToggle);
         Assert.Equal(UnchangedFor_Formatter.STEP_MINUTES, pulse.StepMinutes);
@@ -114,7 +115,7 @@ public class PulseSettingsJsonTests : IDisposable
         var pulse = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Pulse;
 
         Assert.Equal(
-            [PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.MERGED, PulseField_Names.UPDATED],
+            [PulseField_Names.PROGRESS, PulseField_Names.SUPERVISOR, PulseField_Names.MEMBERS, PulseField_Names.MODEL_EFFORT, PulseField_Names.UPDATED],
             pulse.Fields);
         Assert.Equal(["screen", "show", "merge", "test", "pc", "close", "pause", "progress"], pulse.Buttons);
     }
