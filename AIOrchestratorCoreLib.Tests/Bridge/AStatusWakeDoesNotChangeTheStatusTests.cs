@@ -1,4 +1,7 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
+using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Configuration;
+using AIOrchestratorCoreLib.Mirroring;
 using AIOrchestratorCoreLib.Bridge.PeriodicStatus;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -83,8 +86,8 @@ public class AStatusWakeDoesNotChangeTheStatusTests : IDisposable
         Write_Usage(_paths.Get_ImplementerFolder("orch-sup", "imp-1"), 85);
         Write_MemberChannel("orch-sup", "imp-1");
 
-        var posted = _host.Build_MemberStatus(session, previous: null, withElapsedReadings: true);
-        var key = _host.Build_MemberStatus(session, previous: null, withElapsedReadings: false);
+        var posted = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: true);
+        var key = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: false);
 
         // The owner reads all of it.
         Assert.Contains("ctx 41%", posted, StringComparison.Ordinal);
@@ -108,13 +111,13 @@ public class AStatusWakeDoesNotChangeTheStatusTests : IDisposable
         var supervisorFolder = _paths.Get_OrchestrationFolder("orch-wake");
         Write_Usage(supervisorFolder, 41);
 
-        var postedBefore = _host.Build_MemberStatus(session, previous: null, withElapsedReadings: true);
-        var keyBefore = _host.Build_MemberStatus(session, previous: null, withElapsedReadings: false);
+        var postedBefore = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: true);
+        var keyBefore = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: false);
 
         Write_Usage(supervisorFolder, 47);
 
-        Assert.NotEqual(postedBefore, _host.Build_MemberStatus(session, previous: null, withElapsedReadings: true));
-        Assert.Equal(keyBefore, _host.Build_MemberStatus(session, previous: null, withElapsedReadings: false));
+        Assert.NotEqual(postedBefore, _host.Build_MemberStatus(session, previous: null, withVolatileReadings: true));
+        Assert.Equal(keyBefore, _host.Build_MemberStatus(session, previous: null, withVolatileReadings: false));
     }
 
     /// <summary>
@@ -129,14 +132,123 @@ public class AStatusWakeDoesNotChangeTheStatusTests : IDisposable
         var session = Create_Session("orch-solo", supervised: false, "solo-1");
         Write_Usage(_paths.Get_ImplementerFolder("orch-solo", "solo-1"), 33);
 
-        var posted = _host.Build_MemberStatus(session, previous: null, withElapsedReadings: true);
-        var key = _host.Build_MemberStatus(session, previous: null, withElapsedReadings: false);
+        var posted = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: true);
+        var key = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: false);
 
         Assert.Contains("- solo-1:", posted, StringComparison.Ordinal);
         Assert.Contains("ctx 33%", posted, StringComparison.Ordinal);
 
         Assert.Contains("- solo-1:", key, StringComparison.Ordinal);
         Assert.DoesNotContain("ctx 33%", key, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE WORKING STATE IS THE WAKE'S TOO (review of 8d548f0, 2026-09-23). A status wakes a terminal
+    /// supervisor or solo, and a wake whose turn is still running at the next boundary reads "working
+    /// now — editing X" where the last status read "idle — waiting". Easy at the 5-minute minimum
+    /// interval. With that state in the comparison form, the next status posts and wakes it again.
+    /// Working here is what the terminal probe reads: a status-line file written in the last two minutes.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnOwnerFacingSessionFlippingBetweenIdleAndWorking_LeavesTheComparisonFormAsItWas(bool supervised)
+    {
+        var (session, usageFolder) = Create_OwnerFacing(supervised ? "orch-flip-key-sup" : "orch-flip-key-solo", supervised);
+
+        Write_Usage(usageFolder, 40);
+        Set_Idle(usageFolder);
+
+        var postedIdle = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: true);
+        var keyIdle = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: false);
+
+        Write_Usage(usageFolder, 40);
+
+        var postedWorking = _host.Build_MemberStatus(session, previous: null, withVolatileReadings: true);
+
+        // The owner is told: the flip is real in the posted form, or this test proves nothing.
+        Assert.Contains("working now", postedWorking, StringComparison.Ordinal);
+        Assert.DoesNotContain("working now", postedIdle, StringComparison.Ordinal);
+
+        Assert.Equal(keyIdle, _host.Build_MemberStatus(session, previous: null, withVolatileReadings: false));
+    }
+
+    /// <summary>
+    /// THE SAME CLAIM THROUGH THE SWEEP, with the REAL engine as its host, so the posts are real appends
+    /// to a real owner channel. The owner-facing session flips idle, working, idle, working across four
+    /// boundaries, and its context grows on every wake: nothing is posted. Then a ledger line is
+    /// ticked, which is real news, and exactly one status goes out.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnOwnerFacingSessionFlippingBetweenIdleAndWorking_PostsNothingNew(bool supervised)
+    {
+        var orchId = supervised ? "orch-flip-sweep-sup" : "orch-flip-sweep-solo";
+        var (session, usageFolder) = Create_OwnerFacing(orchId, supervised);
+        var noon = new DateTime(2026, 9, 23, 12, 0, 0, DateTimeKind.Local);
+
+        File.WriteAllText(_paths.Get_PlanFile(orchId), "# PLAN\n\n- [x] 1. map\n- [>] 2. build\n- [ ] 3. ship\n");
+        Write_Usage(usageFolder, 40);
+        Set_Idle(usageFolder);
+
+        var phone = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone;
+        Assert.True(phone.PeriodicStatus);
+
+        var sweep = PeriodicStatusSweep_Factory.Create();
+
+        // First sight: sends nothing, remembers what it would have said.
+        await sweep.Push_Async(noon.AddMinutes(7), false, phone, [session], _host, CancellationToken.None);
+
+        var context = 40;
+
+        for (var boundary = 1; boundary <= 4; boundary++)
+        {
+            context += 3;
+            Write_Usage(usageFolder, context);
+
+            if (boundary % 2 == 0)
+                Set_Idle(usageFolder);
+
+            await sweep.Push_Async(noon.AddMinutes(30 * boundary), false, phone, [session], _host, CancellationToken.None);
+        }
+
+        Assert.Equal(0, Count_StatusEntries(orchId));
+
+        File.WriteAllText(_paths.Get_PlanFile(orchId), "# PLAN\n\n- [x] 1. map\n- [x] 2. build\n- [>] 3. ship\n");
+
+        await sweep.Push_Async(noon.AddMinutes(150), false, phone, [session], _host, CancellationToken.None);
+
+        Assert.Equal(1, Count_StatusEntries(orchId));
+    }
+
+    (IOrchestrationSession Session, string UsageFolder) Create_OwnerFacing(string orchId, bool supervised)
+    {
+        var memberId = supervised ? "imp-1" : "solo-1";
+        var session = Create_Session(orchId, supervised, memberId);
+
+        var usageFolder = supervised
+            ? _paths.Get_OrchestrationFolder(orchId)
+            : _paths.Get_ImplementerFolder(orchId, memberId);
+
+        return (session, usageFolder);
+    }
+
+    /// <summary>Older than the probe's two-minute mid-turn window, well inside the status interval.</summary>
+    static void Set_Idle(string usageFolder)
+    {
+        File.SetLastWriteTimeUtc(Path.Combine(usageFolder, UsageTotals_Reader.SESSION_USAGE_FILE), DateTime.UtcNow.AddMinutes(-10));
+    }
+
+    int Count_StatusEntries(string orchId)
+    {
+        var ownerChannel = _paths.Get_OwnerChannelFile(orchId);
+
+        if (!File.Exists(ownerChannel))
+            return 0;
+
+        return ChannelHistory_Counter.Read_AllEntries(ownerChannel)
+            .Count(entry => entry.Author == ChannelAuthors.App && MirrorText_Formatter.Is_StatusEntry(entry));
     }
 
     IOrchestrationSession Create_Session(string orchId, bool supervised, string memberId)

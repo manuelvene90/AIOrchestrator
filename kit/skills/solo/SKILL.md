@@ -115,6 +115,10 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   matters more to you than to anyone: this is the owner's channel, so an untagged app entry is
   something they have ALREADY seen and you should not repeat it back to them. The tag is set by the
   app where the entry is written, never inferred from wording, and you never write it yourself.
+- **A `FROM app — STATUS` entry is the owner's periodic digest** — the app posts one on its interval
+  when the owner's `phone.status.periodic` setting is on, and only when something changed. It is
+  already on their phone. **It needs no reply and no action**: read it as a log line and carry on —
+  answering it is exactly what would make the next one differ.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash

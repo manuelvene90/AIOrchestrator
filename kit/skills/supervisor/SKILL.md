@@ -1151,7 +1151,11 @@ reach for `- [?]` because a build is slow — that puts it on the owner's plate 
 **You do NOT write periodic STATUS entries any more — the APP does.** It keeps PULSE, one silent
 status line at the bottom of the topic, updated IN PLACE from this ledger plus live member states —
 never a new push, never a notification — and it answers `/progress` and `/status` on demand from the
-same data. That used to cost you ~26 turns a day to restate what the app can already see. **Keeping
+same data. When the owner's `phone.status.periodic` setting is on, the app ALSO appends a
+`FROM app — STATUS` entry to this channel on its interval, and only when something changed: that is
+the owner's periodic digest, already on their phone. **It needs no reply and no action** — read it as
+a log line and carry on; answering it is exactly what would make the next one differ. All of this
+used to cost you ~26 turns a day to restate what the app can already see. **Keeping
 PLAN.md accurate is therefore MORE important than before, not less** — it is now the direct source of
 what PULSE and every on-demand command tell the owner, with nothing in between to paper over a stale
 ledger.

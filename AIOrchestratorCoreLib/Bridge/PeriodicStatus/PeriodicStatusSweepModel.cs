@@ -26,7 +26,7 @@ namespace AIOrchestratorCoreLib.Bridge.PeriodicStatus;
 /// has its own record of the last slot it spent, so changing one can never shift the other's phase.
 /// </para>
 /// <para>
-/// WHY NEITHER CAN WAKE A SESSION IN A LOOP — the hazard this task was warned about. Both posts go
+/// WHY THE STATUS DOES NOT FEED ITS OWN WAKES — the hazard this task was warned about. Both posts go
 /// through <see cref="IPeriodicStatusHost.Post_StatusEntry"/>: an APP entry appended to the
 /// orchestration's OWNER channel (subject STATUS, audience Owner), which the mirror then delivers —
 /// never straight to Telegram, so Normal mirrors it, Deferred keeps only the newest, Silenced drops it.
@@ -36,12 +36,19 @@ namespace AIOrchestratorCoreLib.Bridge.PeriodicStatus;
 /// the 2026-08-18/19 away-digest loop (append → wake → STANDING BY → next slot → append …), and what
 /// breaks it here is the same thing that broke it there — a post goes out ONLY WHEN IT SAYS SOMETHING
 /// THE LAST ONE DID NOT (ruling R6). The status is compared WITHOUT the readings the wake itself moves
-/// (the context figure of the supervisor and of a solo, the two sessions that read the owner
-/// channel) and without the ones time moves ("last wrote N min ago"); see
-/// <see cref="IPeriodicStatusHost.Build_MemberStatus"/>. So a session woken by a status that has
-/// nothing new for it wakes the next status into silence: at most one wake per real change, and zero
-/// on a quiet orchestration. Members are never reached: the status is written to the owner channel
-/// only, and a member's watcher reads its own channel.
+/// — the context figure AND the working state ("working now — editing X" against "idle — waiting")
+/// of the supervisor and of a solo, the two sessions that read the owner channel — and without the
+/// ones time moves ("last wrote N min ago"); see <see cref="IPeriodicStatusHost.Build_MemberStatus"/>.
+/// The working state was left in by the first cut and a review caught it (2026-09-23): a wake whose
+/// turn outlasts the interval — easy at the 5-minute minimum — made the next status differ, post, and
+/// wake again.
+/// </para>
+/// <para>
+/// WHAT THAT GUARANTEES, and no more: nothing the WAKE does can make the next status post. A wake
+/// that leads to real work — a ledger line ticked, a member briefed, a question asked — changes the
+/// status, and the next one reports it; that is the status doing its job, one wake per real change,
+/// and zero on an orchestration where nothing moves. Members are never reached: the status is written
+/// to the owner channel only, and a member's watcher reads its own channel.
 /// </para>
 /// </summary>
 internal sealed class PeriodicStatusSweepModel : IPeriodicStatusSweep
@@ -133,8 +140,18 @@ internal sealed class PeriodicStatusSweepModel : IPeriodicStatusSweep
             // once here is why none of them can fire twice in a slot.
             Record(_lastStatusSlotByOrchId, session.OrchId, statusPlan.SlotStart);
 
+            // FIRST SIGHT SENDS NOTHING AND REMEMBERS WHAT IT WOULD HAVE SAID. First sight is every
+            // orchestration after an app restart (these stores live in process), and with an empty key
+            // store the first boundary after a restart always read as changed — one status per topic
+            // per restart, saying what the owner was last told (review of 8d548f0, 2026-09-23). Seeding
+            // the key here makes the restart invisible: the next boundary posts only if something
+            // moved. The BASELINE is not seeded — the deltas are "since the owner was last told", and
+            // after a restart that is unknown, so the first status shows none rather than invent one.
             if (statusPlan.Action == PeriodicStatusSlotActions.Adopt)
+            {
+                Record(_lastStatusKeyByOrchId, session.OrchId, Build_StatusKey(session, host, host.Read_PlanProgress_OrNull(session.OrchId)?.CurrentTaskText));
                 continue;
+            }
 
             await Push_Status_Async(session, host, phone.PeriodicStatusIntervalMinutes, cancellationToken);
         }
@@ -188,12 +205,7 @@ internal sealed class PeriodicStatusSweepModel : IPeriodicStatusSweep
 
         var currentTask = progress?.CurrentTaskText;
 
-        // THE COMPARISON FORM: no deltas (a "(+2)" against the last message would make the very next
-        // unchanged status look different from the one that carried it) and none of the readings that
-        // move by themselves. Built by the same builder as the posted text — a second formatter for
-        // the key would drift from the first (CLAUDE.md decision 12), and the away digest's decider
-        // compares as text for the same reason.
-        var key = PeriodicStatus_Builder.Build(host.Build_MemberStatus(session, previous: null, withElapsedReadings: false), currentTask);
+        var key = Build_StatusKey(session, host, currentTask);
 
         if (!AwayDigest_Decider.Should_Send(Find_Text_OrNull(_lastStatusKeyByOrchId, session.OrchId), key))
             return;
@@ -202,7 +214,7 @@ internal sealed class PeriodicStatusSweepModel : IPeriodicStatusSweep
 
         // THE PICTURE RIDES THE ENTRY, as an IMAGE: line, exactly as it did in master: the mirror turns
         // it into a photo and strips the line. Outside the key, for the digest's reason.
-        var text = PeriodicStatus_Builder.Build(host.Build_MemberStatus(session, previous, withElapsedReadings: true), currentTask)
+        var text = PeriodicStatus_Builder.Build(host.Build_MemberStatus(session, previous, withVolatileReadings: true), currentTask)
             + await host.Build_ScreenshotMarker_OrEmpty_Async(session, cancellationToken);
 
         if (!host.Post_StatusEntry(session.OrchId, text, session.OwnerPresence))
@@ -217,6 +229,19 @@ internal sealed class PeriodicStatusSweepModel : IPeriodicStatusSweep
 
         if (posted != null)
             Record(_lastPostedProgressByOrchId, session.OrchId, new PlanProgressSnapshot(posted.Done, posted.Total));
+    }
+
+    /// <summary>
+    /// THE COMPARISON FORM: no deltas (a "(+2)" against the last message would make the very next
+    /// unchanged status look different from the one that carried it) and none of the readings that move
+    /// by themselves. Built by the same builder as the posted text — a second formatter for the key
+    /// would drift from the first (CLAUDE.md decision 12), and the away digest's decider compares as
+    /// text for the same reason. One method, so the seed on first sight and the check at a boundary
+    /// cannot build two different keys.
+    /// </summary>
+    static string Build_StatusKey(IOrchestrationSession session, IPeriodicStatusHost host, string? currentTask)
+    {
+        return PeriodicStatus_Builder.Build(host.Build_MemberStatus(session, previous: null, withVolatileReadings: false), currentTask);
     }
 
     /// <summary>

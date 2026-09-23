@@ -31,13 +31,13 @@ public interface IPeriodicStatusHost
     /// cannot disagree.
     /// </summary>
     /// <param name="previous">The figures of the last status POSTED, for the "17(+1)/30" deltas; null for none.</param>
-    /// <param name="withElapsedReadings">
+    /// <param name="withVolatileReadings">
     /// False leaves out the readings that change by the passing of time or by the status's OWN wake —
-    /// each member's "last wrote N min ago", and the context figure of the supervisor and of a solo
-    /// (the two sessions whose channel is the owner channel, so the two a status can wake). The no-change guard
-    /// compares that version; see <see cref="PeriodicStatusSweepModel"/>.
+    /// each member's "last wrote N min ago", and the context figure and working state of the supervisor
+    /// and of a solo (the two sessions whose channel is the owner channel, so the two a status can
+    /// wake). The no-change guard compares that version; see <see cref="PeriodicStatusSweepModel"/>.
     /// </param>
-    string Build_MemberStatus(IOrchestrationSession session, PlanProgressSnapshot? previous, bool withElapsedReadings);
+    string Build_MemberStatus(IOrchestrationSession session, PlanProgressSnapshot? previous, bool withVolatileReadings);
 
     /// <summary>The orchestration's PLAN.md as the ledger parser reads it, or null when there is none.</summary>
     IPlanProgress? Read_PlanProgress_OrNull(string orchId);

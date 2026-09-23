@@ -164,6 +164,8 @@ public class PeriodicStatusSweepTests : IDisposable
     /// does), while what the guard compares stays put. So one post and then silence proves the guard
     /// compares the stable reading — compared on the posted text it would post at every slot, which is
     /// the fork's 19:00/19:30/20:00. The second half proves it is a guard and not a stopped cadence.
+    /// The roster changes once at 12:15 so the 12:30 boundary has something to say: first sight at
+    /// 12:07 remembers the status it did not send (<see cref="AnAppRestart_DoesNotRepostAnUnchangedStatus"/>).
     /// </para>
     /// </summary>
     [Fact]
@@ -172,7 +174,11 @@ public class PeriodicStatusSweepTests : IDisposable
         var phone = Load_Phone();
         var host = new StubHost();
 
-        await Drive_Async(phone, host, NOON.AddMinutes(7), NOON.AddHours(3).AddMinutes(10), isAway: false);
+        await Drive_Async(phone, host, NOON.AddMinutes(7), NOON.AddMinutes(15), isAway: false);
+
+        host.StableRoster = "orch: 1/3 done (33%) · 1 running\n- supervisor: idle — waiting\n- imp-1: report filed";
+
+        await Drive_Async(phone, host, NOON.AddMinutes(15), NOON.AddHours(3).AddMinutes(10), isAway: false, sweep: host.Sweep);
 
         Assert.Equal([NOON.AddMinutes(30)], [.. host.Posts.Select(post => post.At)]);
 
@@ -194,14 +200,50 @@ public class PeriodicStatusSweepTests : IDisposable
         var phone = Load_Phone();
         var host = new StubHost { PostSucceeds = false };
 
-        await Drive_Async(phone, host, NOON.AddMinutes(7), NOON.AddMinutes(40), isAway: false);
+        await Drive_Async(phone, host, NOON.AddMinutes(7), NOON.AddMinutes(15), isAway: false);
+
+        // Something to say at 12:30, and nothing more after it, so 13:00 re-sends THE SAME status.
+        host.StableRoster = "orch: 2/3 done (66%)\n- supervisor: idle — waiting\n- imp-1: standing by";
+
+        await Drive_Async(phone, host, NOON.AddMinutes(15), NOON.AddMinutes(40), isAway: false, sweep: host.Sweep);
 
         host.PostSucceeds = true;
 
-        await Drive_Async(phone, host, NOON.AddMinutes(40), NOON.AddMinutes(70), isAway: false, sweep: host.Sweep);
+        await Drive_Async(phone, host, NOON.AddMinutes(40), NOON.AddMinutes(100), isAway: false, sweep: host.Sweep);
 
+        // 13:30 finds it written and unchanged, and stays silent.
         Assert.Equal([NOON.AddMinutes(30), NOON.AddMinutes(60)], [.. host.Posts.Select(post => post.At)]);
         Assert.Equal([false, true], [.. host.Posts.Select(post => post.Landed)]);
+    }
+
+    /// <summary>
+    /// AN APP RESTART IS INVISIBLE ON THE PHONE (review of 8d548f0, 2026-09-23). The sweep's memories
+    /// live in process, so every restart is first sight for every orchestration; with an empty key store
+    /// the first boundary after it always read as changed, and each topic got one status repeating what
+    /// the owner was last told. First sight now remembers the status it does not send, so the next
+    /// boundary posts only if something moved, and the second half proves a change still gets through.
+    /// </summary>
+    [Fact]
+    public async Task AnAppRestart_DoesNotRepostAnUnchangedStatus()
+    {
+        var phone = Load_Phone();
+        var host = new StubHost();
+
+        await Drive_Async(phone, host, NOON.AddMinutes(7), NOON.AddMinutes(15), isAway: false);
+        host.StableRoster = "orch: 2/3 done (66%)\n- supervisor: idle — waiting\n- imp-1: standing by";
+        await Drive_Async(phone, host, NOON.AddMinutes(15), NOON.AddMinutes(40), isAway: false, sweep: host.Sweep);
+
+        Assert.Equal([NOON.AddMinutes(30)], [.. host.Posts.Select(post => post.At)]);
+
+        // THE RESTART: a fresh sweep, nothing remembered, the same status on disk.
+        await Drive_Async(phone, host, NOON.AddMinutes(40), NOON.AddMinutes(100), isAway: false);
+
+        Assert.Equal([NOON.AddMinutes(30)], [.. host.Posts.Select(post => post.At)]);
+
+        host.StableRoster = "orch: 3/3 done (100%)\n- supervisor: idle — waiting\n- imp-1: standing by";
+        await Drive_Async(phone, host, NOON.AddMinutes(100), NOON.AddMinutes(130), isAway: false, sweep: host.Sweep);
+
+        Assert.Equal([NOON.AddMinutes(30), NOON.AddMinutes(120)], [.. host.Posts.Select(post => post.At)]);
     }
 
     /// <summary>
@@ -359,14 +401,14 @@ public class PeriodicStatusSweepTests : IDisposable
             return AwayDigestChangesOnEveryRead ? $"🌙 imp-1: working ({Now:HH:mm:ss})" : "🌙 imp-1: working";
         }
 
-        public string Build_MemberStatus(IOrchestrationSession session, PlanProgressSnapshot? previous, bool withElapsedReadings)
+        public string Build_MemberStatus(IOrchestrationSession session, PlanProgressSnapshot? previous, bool withVolatileReadings)
         {
             MemberStatusBuilds++;
             _reads++;
 
             var stable = StatusChangesOnEveryRead ? $"{StableRoster} ({Now:HH:mm:ss})" : StableRoster;
 
-            return withElapsedReadings ? $"{stable} · last wrote {_reads} min ago" : stable;
+            return withVolatileReadings ? $"{stable} · last wrote {_reads} min ago" : stable;
         }
 
         public IPlanProgress? Read_PlanProgress_OrNull(string orchId)

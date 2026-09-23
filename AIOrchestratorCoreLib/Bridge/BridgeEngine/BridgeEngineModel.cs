@@ -11030,17 +11030,23 @@ internal sealed class BridgeEngineModel(
     }
 
 
-    /// <param name="withElapsedReadings">
+    /// <param name="withVolatileReadings">
     /// FALSE ONLY FOR THE PERIODIC STATUS'S NO-CHANGE GUARD (plan 03 Task 8), which compares this text
-    /// against the last one posted. Two readings on it move without anything happening: each member's
-    /// "last wrote N min ago" changes every time it is read, and the context figure of whichever
-    /// session reads the OWNER channel — the supervisor, or a solo — grows because the status itself
-    /// woke it: a terminal session's watcher fires on the append. Compared
-    /// with them in, no two statuses would ever match and the guard would guard nothing; the
-    /// supervisor's figure alone would rebuild the 30-minute limit cycle AwayDigest_Decider records.
-    /// The owner still READS both: the posted text is built with them.
+    /// against the last one posted. Some readings on it move without anything happening:
+    /// <list type="bullet">
+    /// <item>each member's "last wrote N min ago" changes every time it is read;</item>
+    /// <item>the session that reads the OWNER channel — the supervisor, or a solo — is woken by the
+    /// status itself (a terminal session's watcher fires on the append), and the wake moves its
+    /// context figure AND its working state: "working now — editing X" against "idle — waiting".</item>
+    /// </list>
+    /// Compared with them in, no two statuses would ever match, or the status's own wake would make the
+    /// next one differ — the 30-minute limit cycle AwayDigest_Decider records, and at the 5-minute
+    /// minimum interval a wake's turn easily outlasts a slot (review of 8d548f0, 2026-09-23). Whether
+    /// the supervisor is WAITING ON THE OWNER stays in: a question is news. An implementer's working
+    /// state and figure stay in too — a status never wakes it, so only its own work moves them. The
+    /// owner still READS everything: the posted text is built with it all.
     /// </param>
-    string Build_MemberStatusText_ForSession(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous = null, bool withElapsedReadings = true)
+    string Build_MemberStatusText_ForSession(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous = null, bool withVolatileReadings = true)
     {
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
         var supervisorUsage = Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE);
@@ -11050,12 +11056,15 @@ internal sealed class BridgeEngineModel(
         var ownerOwesReply = Status.OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
             ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId))) != null;
 
-        var supervisorContextSuffix = withElapsedReadings ? Build_ContextSuffix_ForSupervisor(supervisorUsage) : "";
-        var supervisorLine = Is_Working(
-            Running.SessionRoles.Supervisor, session.OrchId,
-            Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsage)
-            ? $"working now{Describe_Activity_Suffix(supervisorUsage)}{supervisorContextSuffix}"
-            : ownerOwesReply ? $"{MemberState_Descriptor.WAITING_ON_OWNER}{supervisorContextSuffix}" : $"idle — waiting{supervisorContextSuffix}";
+        var supervisorContextSuffix = withVolatileReadings ? Build_ContextSuffix_ForSupervisor(supervisorUsage) : "";
+        var supervisorLine = !withVolatileReadings
+            // The comparison form: whether it owes the owner is news, working-or-idle is the wake's.
+            ? (ownerOwesReply ? MemberState_Descriptor.WAITING_ON_OWNER : "")
+            : Is_Working(
+                Running.SessionRoles.Supervisor, session.OrchId,
+                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsage)
+                ? $"working now{Describe_Activity_Suffix(supervisorUsage)}{supervisorContextSuffix}"
+                : ownerOwesReply ? $"{MemberState_Descriptor.WAITING_ON_OWNER}{supervisorContextSuffix}" : $"idle — waiting{supervisorContextSuffix}";
 
         // WHICH ROWS this carries is StatusRoster_Builder's — including the one that must NOT be
         // here for a basic orchestration. See that class for why the decision moved out.
@@ -11081,7 +11090,7 @@ internal sealed class BridgeEngineModel(
                 Running.SessionRoles.Implementer, session.OrchId, member.MemberId,
                 Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
 
-            var lastWrite = withElapsedReadings && File.Exists(channelFile)
+            var lastWrite = withVolatileReadings && File.Exists(channelFile)
                 ? $" · last wrote {SessionDuration_Formatter.Describe(DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile))} ago"
                 : "";
 
@@ -11102,12 +11111,16 @@ internal sealed class BridgeEngineModel(
             // solo's channel IS the owner channel (MemberChannel_Locator), so the status append wakes a
             // terminal solo and its context grows by the wake. An implementer's never does — its
             // watcher reads its own channel — so its figure only moves when it worked, and stays in.
-            var memberContextSuffix = (withElapsedReadings || !memberIsSolo)
+            var memberContextSuffix = (withVolatileReadings || !memberIsSolo)
                 && Status.ContextVisibility_Policy.Show_Member_InPeriodicDigest(member.MemberId, memberContext)
                 ? $" · {Formatting.ContextUsage_Formatter.Describe_OrNull(memberContext)}"
                 : "";
 
-            memberLines.Add($"- {member.MemberId}: {MemberState_Descriptor.Describe_ForOwner(declared, workingNow, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
+            // A solo's working state leaves the comparison form with the supervisor's, for the same
+            // reason: the status wakes it, so the wake — not the work — would move it.
+            var workingNowInThisForm = workingNow && (withVolatileReadings || !memberIsSolo);
+
+            memberLines.Add($"- {member.MemberId}: {MemberState_Descriptor.Describe_ForOwner(declared, workingNowInThisForm, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
         }
 
         // The header carries the ledger counts, so "who is doing what" and "how far along are we"
@@ -14294,8 +14307,8 @@ internal sealed class BridgeEngineModel(
 
     string IPeriodicStatusHost.Build_AwayDigest(IOrchestrationSession session) => Build_AwayUpdateText(session);
 
-    string IPeriodicStatusHost.Build_MemberStatus(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous, bool withElapsedReadings) =>
-        Build_MemberStatusText_ForSession(session, previous, withElapsedReadings);
+    string IPeriodicStatusHost.Build_MemberStatus(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous, bool withVolatileReadings) =>
+        Build_MemberStatusText_ForSession(session, previous, withVolatileReadings);
 
     Planning.PlanProgress.IPlanProgress? IPeriodicStatusHost.Read_PlanProgress_OrNull(string orchId) =>
         Planning.PlanLedger_Parser.Parse_OrNull(UsageTotals_Reader.Read_Text_Safe(_paths.Get_PlanFile(orchId)));
@@ -15173,8 +15186,8 @@ internal sealed class BridgeEngineModel(
         // channel would then go silent ENTIRELY rather than merely late. The old comment here ended
         // "nothing records it as done, so nothing is left claiming work that did not happen"; that
         // invariant is exactly what a remembered-but-unwritten digest would break, so the away caller
-        // records its delivery only on a true. The periodic caller still discards it, for the
-        // original reason.
+        // records its delivery only on a true. The periodic status, re-ported change-gated in plan 03
+        // Task 8, is under the same premise now and records its delivery only on a true as well.
         return Append_SupervisorAttention_UnlessMeeting(orchId, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, text, presence, Channels.AppEntryAudiences.Owner);
     }
 
