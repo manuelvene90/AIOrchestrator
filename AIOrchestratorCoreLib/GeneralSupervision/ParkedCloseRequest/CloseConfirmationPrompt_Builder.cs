@@ -350,11 +350,18 @@ public static class CloseConfirmationPrompt_Builder
     /// the request is still parked and the owner is simply asked again. Saying so here is what keeps this
     /// line true on the one path where it would otherwise be stale.
     /// </para>
+    /// <para>
+    /// AND THE RE-ASK IS NOT UNCONDITIONAL (Task 9 review, fixed 2026-09-23). A restarted app finds the
+    /// file by its age: past <see cref="CloseConfirmation_Parking.EXPIRY_HOURS"/> it LAPSES rather than
+    /// being asked again, and a seven-day limit's pause outlasts that easily. So the promise carries its
+    /// exception instead of being false on exactly the long pause it was written for.
+    /// </para>
     /// </summary>
     public static string Describe_SiblingHeldForPause(IParkedCloseRequest request)
     {
         return $"{Describe_SiblingHeader(request, request.OrchId)}\n\n"
-            + "⏸ You confirmed — it starts when the usage-limit pause lifts. Nothing has started yet. If the app restarts before then, you will be asked again.";
+            + "⏸ You confirmed — it starts when the usage-limit pause lifts. Nothing has started yet. "
+            + $"If the app restarts before then, you will be asked again — unless the request has lapsed by then (requests lapse {CloseConfirmation_Parking.EXPIRY_HOURS} hours after they were made).";
     }
 
     /// <summary>One spelling of the sibling decision's header, for the held line and the outcome that replaces it (decision 12).</summary>

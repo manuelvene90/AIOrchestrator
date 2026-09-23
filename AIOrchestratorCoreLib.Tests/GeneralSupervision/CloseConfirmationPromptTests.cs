@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SpawnSiblingRequest;
 using Xunit;
@@ -359,7 +360,12 @@ public class CloseConfirmationPromptTests
             Assert.Contains(archiveLabel, text);
     }
 
-    /// <summary>§7.3: a yes tapped during a usage-limit pause is HELD — the prompt says when it starts, and claims nothing yet.</summary>
+    /// <summary>
+    /// §7.3: a yes tapped during a usage-limit pause is HELD — the prompt says when it starts, and claims
+    /// nothing yet. THE RE-ASK IS CONDITIONAL (Task 9 review, 2026-09-23): after a restart a request past
+    /// its expiry LAPSES instead of being asked again, and a pause can outlast the expiry — so the line
+    /// names the lapse and its hours rather than promising the re-ask unconditionally.
+    /// </summary>
     [Fact]
     public void TheSiblingHeldForAPause_SaysWhenItStarts_AndClaimsNothing()
     {
@@ -368,6 +374,8 @@ public class CloseConfirmationPromptTests
         Assert.StartsWith("🔗 Start sibling 'AI-Orch · limits rework'?", text);
         Assert.Contains("usage-limit pause", text);
         Assert.Contains("asked again", text);
+        Assert.Contains("lapse", text);
+        Assert.Contains($"{CloseConfirmation_Parking.EXPIRY_HOURS} hours", text);
         Assert.DoesNotContain("✅", text);
         Assert.DoesNotContain("close", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("usage-limit pause", CloseConfirmationPrompt_Builder.SIBLING_HELD_FOR_PAUSE_TOAST);
