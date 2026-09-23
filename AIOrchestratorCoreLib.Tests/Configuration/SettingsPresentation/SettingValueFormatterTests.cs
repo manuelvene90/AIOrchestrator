@@ -112,6 +112,25 @@ public class SettingValueFormatterTests
     }
 
     /// <summary>
+    /// A BLANK WORD IN A LIST IS SHOWN, NOT SWALLOWED (fix round 1, 2026-09-23). highRiskPatterns has no
+    /// validator and the resolver treats only a blank STRING as absent, so <c>[""]</c> and <c>["  "]</c> are
+    /// accepted values — and joined as-is they read as a blank line, which the reading factory refuses, so one
+    /// hand-edit took the whole snapshot down for every renderer at once. Every blank or whitespace-only word
+    /// reads as <see cref="SettingValue_Formatter.BLANK_WORD"/>, one representation whatever whitespace it holds.
+    /// </summary>
+    [Fact]
+    public void ABlankWordInAList_ReadsAsTwoQuotes_SoTheListNeverReadsBlank()
+    {
+        var definition = Definition("highRiskPatterns");
+
+        Assert.Equal("\"\"", SettingValue_Formatter.BLANK_WORD);
+        Assert.Equal(SettingValue_Formatter.BLANK_WORD, SettingValue_Formatter.Describe(definition, Parsed("""[""]""")));
+        Assert.Equal(SettingValue_Formatter.BLANK_WORD, SettingValue_Formatter.Describe(definition, Parsed("""["  "]""")));
+        Assert.Equal("\"\", \"\"", SettingValue_Formatter.Describe(definition, Parsed("""["", "\t"]""")));
+        Assert.Equal("push, \"\", deploy", SettingValue_Formatter.Describe(definition, Parsed("""["push", "   ", "deploy"]""")));
+    }
+
+    /// <summary>
     /// repos and planBackend are STRUCTURES, and their raw JSON is as long as the owner's repo list — which
     /// on a Telegram button caption is a message that grows with every repo added.
     /// </summary>

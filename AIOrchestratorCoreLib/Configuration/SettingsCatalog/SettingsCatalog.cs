@@ -538,7 +538,9 @@ public static class SettingsCatalog
             label: "Repositories",
             description:
                 "The repo list, a structure rather than a value — name, path and topic colour per entry. Shown read-only " +
-                "here because its own editor already exists; the named parser is the authority on its shape.",
+                "here because it is changed elsewhere: in the desktop app's main window, whose REPOSITORIES list is dragged " +
+                "to reorder, with entries added by the installer or by hand in config.json. The named parser is the " +
+                "authority on its shape.",
             restart: RestartKinds.Host));
 
         kernel.Add(SettingDefinition_Factory.Create_Composite(
@@ -548,8 +550,9 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Plan backend",
             description:
-                "Where the task ledger lives — a structure with its own kind and per-kind fields. Read-only here; the " +
-                "named parser is the authority, and a mistyped kind stays LOUD there rather than quietly becoming a default.",
+                "Where the task ledger lives — a structure with its own kind and per-kind fields. Read-only here: it is " +
+                "hand-edited in config.json, and no window or command writes it. The named parser is the authority, and a " +
+                "mistyped kind stays LOUD there rather than quietly becoming a default.",
             restart: RestartKinds.Host));
 
         kernel.AddRange(Build_SessionState());

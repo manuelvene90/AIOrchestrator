@@ -35,6 +35,16 @@ public static class SettingValue_Formatter
     /// <summary>An empty list — classic's <c>general.buttons</c>, an owner's "nothing is high risk".</summary>
     public const string NONE = "none";
 
+    /// <summary>
+    /// A blank or whitespace-only word inside a list — one representation, whatever whitespace it holds.
+    /// highRiskPatterns has no validator and the resolver treats only a blank STRING as absent, so
+    /// <c>[""]</c> and <c>["  "]</c> are accepted values; joined as-is they read as a blank line, which the
+    /// reading factory refuses, and one hand-edit took the whole snapshot down for every renderer at once
+    /// (review of b8df0dc, 2026-09-23). Two quotes say "a word is here and it is empty", which is what the
+    /// owner needs to see to go and remove it; how many spaces it held is not.
+    /// </summary>
+    public const string BLANK_WORD = "\"\"";
+
     public const string ON = "on";
 
     public const string OFF = "off";
@@ -99,7 +109,7 @@ public static class SettingValue_Formatter
         foreach (var element in array)
         {
             if (element is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var word))
-                words.Add(word);
+                words.Add(string.IsNullOrWhiteSpace(word) ? BLANK_WORD : word);
             else
                 words.Add(element?.ToJsonString() ?? "null");
         }

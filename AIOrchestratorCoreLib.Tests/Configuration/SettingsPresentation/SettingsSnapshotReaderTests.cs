@@ -156,6 +156,13 @@ public class SettingsSnapshotReaderTests : IDisposable
     /// sentence lives — the reading hands the definition over whole, so no renderer invents a second one.
     /// The five are named here on purpose: a new ReadOnly row turns this red until someone says where IT
     /// is changed, which is the question a greyed-out control makes the owner ask.
+    ///
+    /// <para>
+    /// EACH FRAGMENT NAMES A PLACE, NOT A PHRASE THAT MERELY EXISTS (ruling P31, fix round 1). The first
+    /// version pinned "its own editor" and "named parser is the authority" — sentences that were really in
+    /// the descriptions and named nowhere the owner could go, so the test was green over the very gap D12
+    /// describes. The place is a window, a file, or the command that toggles the state.
+    /// </para>
     /// </summary>
     [Fact]
     public void AReadOnlyRow_IsNotEditable_AndSaysWhereItIsChangedInstead()
@@ -164,8 +171,8 @@ public class SettingsSnapshotReaderTests : IDisposable
 
         var whereEachIsChanged = new Dictionary<string, string>
         {
-            ["repos"] = "its own editor",
-            ["planBackend"] = "named parser is the authority",
+            ["repos"] = "desktop app's main window",
+            ["planBackend"] = "hand-edited in config.json",
             ["session.paused"] = "/pause",
             ["session.telegramMode"] = "/dnd and /mute",
             ["session.ownerPresence"] = "/pc",
@@ -417,6 +424,30 @@ public class SettingsSnapshotReaderTests : IDisposable
         Assert.Equal(nobodySaid.Select(reading => reading.DisplayValue), readings.Select(reading => reading.DisplayValue));
         Assert.Single(log.Warnings);
         Assert.Contains(_paths.ConfigFile, log.Warnings[0]);
+    }
+
+    /// <summary>
+    /// A VALUE THE CATALOGUE ACCEPTS NEVER TAKES THE SNAPSHOT DOWN (fix round 1, 2026-09-23). highRiskPatterns
+    /// has no validator, so a list holding a blank word resolves as the owner's own value — and reproduced
+    /// against the built DLL, <c>{"highRiskPatterns":[""]}</c> made Read_All throw "has a blank display value"
+    /// for every renderer at once. Each shape is read through the whole snapshot, from disk as a renderer
+    /// would, and every reading in it must carry words.
+    /// </summary>
+    [Theory]
+    [InlineData("""[""]""", "\"\"")]
+    [InlineData("""["  "]""", "\"\"")]
+    [InlineData("""["push", "", "deploy", " "]""", "push, \"\", deploy, \"\"")]
+    public void AListWithABlankWord_StillReads_AndEveryDisplayCarriesWords(string patterns, string expected)
+    {
+        File.WriteAllText(_paths.ConfigFile, $$"""{"highRiskPatterns": {{patterns}}}""");
+
+        var (readings, _) = SettingsSnapshot_Reader.Read_All_FromDisk(_paths, session: null, log: null);
+
+        var reading = Reading(readings, "highRiskPatterns");
+
+        Assert.Equal(SettingOrigins.ConfigFile, reading.Origin);
+        Assert.Equal(expected, reading.DisplayValue);
+        Assert.All(readings, each => Assert.False(string.IsNullOrWhiteSpace(each.DisplayValue), $"'{each.Definition.Path}' reads blank"));
     }
 
     [Fact]
