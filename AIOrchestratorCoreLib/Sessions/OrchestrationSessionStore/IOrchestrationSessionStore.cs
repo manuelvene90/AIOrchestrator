@@ -78,6 +78,9 @@ public interface IOrchestrationSessionStore
     /// <summary>The owner has been told once that this topic will not delete; never unset.</summary>
     void Mark_TopicDeleteFailureReported(string orchId);
 
+    /// <summary>A closed orchestration's topic carries its final name; the name sync stops for good. Never unset.</summary>
+    void Mark_TopicFinalName(string orchId);
+
     void Close_Member(string orchId, string memberId);
     void Close_Orchestration(string orchId);
 }

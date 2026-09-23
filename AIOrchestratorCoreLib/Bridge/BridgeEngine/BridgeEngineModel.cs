@@ -10064,7 +10064,11 @@ internal sealed class BridgeEngineModel(
         return TelegramDeliveryMode_Glyphs.Compose_TopicName(
             baseName,
             new TelegramDeliveryMode_Glyphs.TopicNameFlags(
-                OwnerReply: Last_OwnerReplyState(session.OrchId),
+                // NOBODY WAITS ON THE OWNER IN AN ORCHESTRATION THAT IS OVER (fix round 1): its sessions
+                // are killed, and the reply state held for it is the last one read before the close,
+                // which the refresh loop — it skips closed sessions — never updates again. A final name
+                // must not freeze a ❓ onto a finished thread.
+                OwnerReply: session.ClosedUtc != null ? OwnerReplyStates.None : Last_OwnerReplyState(session.OrchId),
                 IsPausedByOwner: session.Paused,
                 IsPausedForUsageLimit: Is_SupervisorPausedForUsageLimit(session),
                 IsClosed: session.ClosedUtc != null,
@@ -10075,6 +10079,22 @@ internal sealed class BridgeEngineModel(
                 IsQuiet: Is_Quiet(session.OrchId),
                 Presence: session.OwnerPresence),
             _configProvider.Get_Current().Phone.TopicModeGlyphs);
+    }
+
+    /// <summary>
+    /// Records a name as applied — the memo the sync skips on — and, for a CLOSED orchestration, marks
+    /// its topic's name FINAL in session.json, which ends the sync for it for good (the skip above).
+    /// A closed orchestration's name cannot change again: 🏁 outranks every state glyph, it draws no
+    /// mode glyph, and nobody waits on the owner in it (Build_WantedTopicName). Written on every path
+    /// that writes the memo — applied, already current, or genuinely refused — because each of them
+    /// is a name that will not be sent again.
+    /// </summary>
+    void Remember_AppliedTopicName(IOrchestrationSession session, string wantedName)
+    {
+        _appliedTopicNames[session.OrchId] = wantedName;
+
+        if (session.ClosedUtc != null && session.TelegramTopicFinalNameUtc == null)
+            _store.Mark_TopicFinalName(session.OrchId);
     }
 
     async Task Sync_TopicNames_Inside_Gate_Async(CancellationToken cancellationToken)
@@ -10100,7 +10120,14 @@ internal sealed class BridgeEngineModel(
             // out of attempts. In that window the endeavour is over and its topic still wears a
             // working name, which the owner cannot tell from a live one. `TelegramTopicDeletedUtc` is
             // the fact that says which case this is.
-            if (session.ClosedUtc != null && session.TelegramTopicDeletedUtc != null)
+            //
+            // AND ONCE ITS FINAL NAME IS ON IT (plan 03 Task 10, fix round 1). Under
+            // `topic.onClose = close` the topic is KEPT, so the delete marker never comes — and a kept
+            // topic stayed in this loop for good: re-sent at every revalidation, re-pushed at every
+            // start, renamed by /dnd_all under `topic.modeGlyphs = name`. `TelegramTopicFinalNameUtc`
+            // is written the first time its `🏁 name` is applied (Remember_AppliedTopicName) and is
+            // persisted, because /dnd_all drops every memo on purpose and a restart starts with none.
+            if (session.ClosedUtc != null && (session.TelegramTopicDeletedUtc != null || session.TelegramTopicFinalNameUtc != null))
                 continue;
 
             var wantedName = Build_WantedTopicName(session);
@@ -10132,7 +10159,7 @@ internal sealed class BridgeEngineModel(
             try
             {
                 await _telegramClient.Edit_ForumTopic_Async(session.TelegramTopicId.Value, wantedName, cancellationToken);
-                _appliedTopicNames[session.OrchId] = wantedName;
+                Remember_AppliedTopicName(session, wantedName);
                 _topicNameRetryAfterUtc.Remove(session.OrchId);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
@@ -10176,7 +10203,7 @@ internal sealed class BridgeEngineModel(
                 // logged 28 identical errors in minutes and would have done so for as long as the
                 // app ran. It happens on every restart, because the cache starts empty while
                 // Telegram already holds the correct names.
-                _appliedTopicNames[session.OrchId] = wantedName;
+                Remember_AppliedTopicName(session, wantedName);
             }
             catch (Exception ex)
             {
@@ -10224,7 +10251,7 @@ internal sealed class BridgeEngineModel(
                 if (TelegramAttempt_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown)
                     _topicNameRetryAfterUtc[session.OrchId] = TelegramAttempt_Gate.Build_RetryAfterUtc(DateTime.UtcNow, _timing.MirrorRetryBackoffSeconds);
                 else
-                    _appliedTopicNames[session.OrchId] = wantedName;
+                    Remember_AppliedTopicName(session, wantedName);
 
                 _log.Log_Warning(session.OrchId, $"Topic name sync failed: {ex.Message}");
             }

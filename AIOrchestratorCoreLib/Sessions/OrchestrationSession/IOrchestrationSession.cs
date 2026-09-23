@@ -155,6 +155,24 @@ public interface IOrchestrationSession
     /// </summary>
     bool TelegramTopicDeleteFailureReported { get; }
 
+    /// <summary>
+    /// A CLOSED orchestration's topic carries its FINAL name (`🏁 name`), and the name sync never
+    /// touches it again. The sibling of <see cref="TelegramTopicDeletedUtc"/>: that one ends the sync
+    /// because the topic is gone, this one because the topic is KEPT and has nothing more to say.
+    ///
+    /// <para>
+    /// WHY IT IS PERSISTED (plan 03 Task 10, fix round 1). Under <c>topic.onClose = close</c> every
+    /// closed topic stays in the list, and the sync skipped a closed orchestration only once its topic
+    /// was recorded deleted — so every kept topic was re-sent at each 5-minute revalidation for as long
+    /// as the app ran (thousands of calls with thousands of topics), re-pushed at every start, and
+    /// under <c>topic.modeGlyphs = name</c> renamed by an app-wide toggle with a service message into a
+    /// finished thread. An in-memory memo cannot end that: /dnd_all drops every memo on purpose and a
+    /// restart starts with none. Null in every session written before this field, which is right: a
+    /// closed topic with no marker is renamed once more, to its final name, and then marked.
+    /// </para>
+    /// </summary>
+    DateTime? TelegramTopicFinalNameUtc { get; }
+
     /// <summary>Set when the general supervisor closed this orchestration. Folder stays as audit trail.</summary>
     DateTime? ClosedUtc { get; }
 }

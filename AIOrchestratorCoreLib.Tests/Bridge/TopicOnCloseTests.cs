@@ -209,7 +209,18 @@ public class TopicOnCloseTests : IDisposable
         Assert.Equal(0, _telegram.DeleteAttempts);
         Assert.True(_log.Has_Line_Containing("was NOT closed"), $"a failed close said nothing in the log.{Environment.NewLine}{_log.Dump()}");
         Assert.Null(_store.Get_Session(ORCH_ID).TelegramTopicDeletePendingUtc);
-        Assert.DoesNotContain("would not close", Read_General());
+
+        // THE OWNER HEARS ONLY THE CLOSE ITSELF. Asserted on what General actually holds — every
+        // entry header that names this orchestration — rather than on the absence of a phrase no code
+        // writes, which could never fail (fix round 1, finding 3).
+        var aboutThisOrchestration = Read_General()
+            .Split('\n')
+            .Where(line => line.StartsWith("## [", StringComparison.Ordinal) && line.Contains($"'{ORCH_ID}'", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.True(aboutThisOrchestration.Count == 1, $"General carries more than the close about '{ORCH_ID}':{Environment.NewLine}{Read_General()}");
+        Assert.Contains($"orchestration '{ORCH_ID}' closed", aboutThisOrchestration[0]);
+        Assert.Contains("Telegram topic closed and kept in the list.", Read_General());
     }
 
     /// <summary>

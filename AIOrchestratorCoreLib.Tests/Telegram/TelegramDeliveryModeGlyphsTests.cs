@@ -485,16 +485,16 @@ public class TelegramDeliveryModeGlyphsTests
     /// ❓ STAYS OUTERMOST AND THE STATE GLYPH STAYS BESIDE THE NAME — the mode glyphs go between them.
     /// ❓ is the one glyph that asks something of the owner, so nothing displaces it from the front
     /// (their own wording: "at the beginning of the topic name"); master drew ✈ ahead of 🧪 and ✅, and
-    /// this keeps that order.
+    /// this keeps that order. Pinned with ⏸, which replaces nothing, so every slot is visible.
     /// </summary>
     [Fact]
     public void UnderName_TheModeGlyphsSitBetweenTheReplyGlyphAndTheStateGlyph()
     {
         Assert.Equal(
-            "❓ ✈ 🔕 🧪 crm bug",
+            "❓ ✈ 🔕 ⏸ crm bug",
             Name(ModeGlyphPlacements.Name, new(
                 OwnerReply: OwnerReplyStates.Wanted,
-                IsAwaitingTest: true,
+                IsPausedForUsageLimit: true,
                 IsAway: true,
                 Mode: TelegramDeliveryModes.Silenced)));
 
@@ -508,11 +508,61 @@ public class TelegramDeliveryModeGlyphsTests
     }
 
     /// <summary>
+    /// ✅ AND 🧪 REPLACE THE DELIVERY GLYPH ON THE NAME (ruling R23, fix round 1), as their own
+    /// constants say and as master drew it: /test and /done ARE mute underneath, so `🔕 🧪` states one
+    /// fact twice — the reasoning that makes 💻 replace the delivery glyph. Only the DELIVERY glyph
+    /// goes: ✈ 🤐 and 💻 are other facts (the owner's phone, their chair) and stay, as ✈ did on master.
+    /// A DRAWN ✅ or 🧪 is what replaces — one outranked by 🏁 or 💤 replaces nothing.
+    /// </summary>
+    [Fact]
+    public void UnderName_DoneAndTest_ReplaceTheDeliveryGlyph()
+    {
+        Assert.Equal("✅ crm bug", Name(ModeGlyphPlacements.Name, new(IsDone: true, Mode: TelegramDeliveryModes.Silenced)));
+        Assert.Equal("🧪 crm bug", Name(ModeGlyphPlacements.Name, new(IsAwaitingTest: true, Mode: TelegramDeliveryModes.Silenced)));
+        Assert.Equal("✅ crm bug", Name(ModeGlyphPlacements.Name, new(IsDone: true, Mode: TelegramDeliveryModes.Deferred)));
+        Assert.Equal("❓ ✈ ✅ crm bug", Name(ModeGlyphPlacements.Name, new(OwnerReply: OwnerReplyStates.Wanted, IsDone: true, IsAway: true, Mode: TelegramDeliveryModes.Silenced)));
+        Assert.Equal("💻 🧪 crm bug", Name(ModeGlyphPlacements.Name, new(IsAwaitingTest: true, Presence: OwnerPresenceModes.Terminal)));
+
+        // 💤 outranks ✅ in the state slot, so no ✅ is drawn and nothing is replaced.
+        Assert.Equal("🌙 💤 crm bug", Name(ModeGlyphPlacements.Name, new(IsPausedByOwner: true, IsDone: true, Mode: TelegramDeliveryModes.Deferred)));
+    }
+
+    /// <summary>
+    /// UNDER THE SHIPPED PLACEMENT the rule has nothing to do on the name, which draws no mode glyph at
+    /// all — and PULSE's header, which draws no state glyph, keeps the bell: it is the only place the
+    /// mute is written, so there is no second statement for it to repeat.
+    /// </summary>
+    [Fact]
+    public void UnderPulseHeader_ADoneTopicsNameIsTheTick_AndTheHeaderKeepsTheBell()
+    {
+        var flags = new TelegramDeliveryMode_Glyphs.TopicNameFlags(IsDone: true, Mode: TelegramDeliveryModes.Silenced);
+
+        Assert.Equal("✅ crm bug", Name(ModeGlyphPlacements.PulseHeader, flags));
+        Assert.Equal("🔕 PULSE", Header(ModeGlyphPlacements.PulseHeader, flags));
+    }
+
+    /// <summary>
+    /// A CLOSED TOPIC'S NAME CARRIES NO MODE GLYPH (fix round 1). The orchestration is over: nothing is
+    /// delivered in it, nobody sits at its terminal, and under <c>topic.onClose = close</c> the topic
+    /// stays in the list — so a delivery glyph on it would be renamed by every app-wide toggle, a
+    /// service message into a finished thread. Its name is `🏁 crm bug` and stays that.
+    /// </summary>
+    [Fact]
+    public void UnderName_AClosedTopicCarriesNoModeGlyph()
+    {
+        Assert.Equal(
+            "🏁 crm bug",
+            Name(ModeGlyphPlacements.Name, new(IsClosed: true, Mode: TelegramDeliveryModes.Deferred, IsAway: true, IsQuiet: true, Presence: OwnerPresenceModes.Terminal)));
+    }
+
+    /// <summary>
     /// NEVER BOTH, AND NEVER NEITHER — the placement's whole contract, swept over every combination of
     /// every input under both placements. For each one the topic name and PULSE's header are drawn from
     /// the SAME inputs, and: no mode glyph is on both; under <c>name</c> the header has none, under
     /// <c>pulseHeader</c> the name has none; and the set drawn is the same set whichever surface drew
-    /// it, so a placement cannot lose a fact in transit.
+    /// it, so a placement cannot lose a fact in transit — EXCEPT where the name's own rules take a
+    /// glyph off, which the oracle below states separately: a closed topic's name draws none, and a
+    /// drawn ✅ or 🧪 replaces the delivery glyph (ruling R23).
     ///
     /// <para>
     /// The same contract as the hold toggle's never-both test (ConfigurableCommandButtonsTests, plan 03
@@ -527,10 +577,10 @@ public class TelegramDeliveryModeGlyphsTests
         foreach (var flags in All_FlagCombinations())
         {
             var drawnOnTheName = Mode_GlyphsIn(Name(ModeGlyphPlacements.Name, flags));
-            var drawnOnTheHeader = Mode_GlyphsIn(Header(ModeGlyphPlacements.PulseHeader, flags));
+            var expectedOnTheName = Expected_OnTheName(flags, Mode_GlyphsIn(Header(ModeGlyphPlacements.PulseHeader, flags)));
 
-            if (!drawnOnTheName.SequenceEqual(drawnOnTheHeader))
-                offenders.Add($"name drew [{string.Join(" ", drawnOnTheName)}], header drew [{string.Join(" ", drawnOnTheHeader)}] for {flags}");
+            if (!drawnOnTheName.SequenceEqual(expectedOnTheName))
+                offenders.Add($"name drew [{string.Join(" ", drawnOnTheName)}], expected [{string.Join(" ", expectedOnTheName)}] for {flags}");
 
             foreach (var placement in Enum.GetValues<ModeGlyphPlacements>())
             {
@@ -634,6 +684,24 @@ public class TelegramDeliveryModeGlyphsTests
             modeGlyphs: placement);
 
         return line.Split('\n')[0];
+    }
+
+    /// <summary>
+    /// The oracle for the name under <c>name</c>: what the header would draw under <c>pulseHeader</c>,
+    /// minus what the name's own rules take off — everything when closed, the delivery glyph when a
+    /// ✅ or 🧪 is the state glyph drawn (🏁 and 💤 outrank both).
+    /// </summary>
+    static List<string> Expected_OnTheName(TelegramDeliveryMode_Glyphs.TopicNameFlags flags, List<string> onTheHeader)
+    {
+        if (flags.IsClosed)
+            return [];
+
+        var doneOrTestDrawn = !flags.IsPausedByOwner && (flags.IsDone || flags.IsAwaitingTest);
+
+        if (!doneOrTestDrawn)
+            return onTheHeader;
+
+        return [.. onTheHeader.Where(glyph => glyph != TelegramDeliveryMode_Glyphs.DEFERRED && glyph != TelegramDeliveryMode_Glyphs.SILENCED)];
     }
 
     /// <summary>The mode glyphs a surface carries, in <see cref="MODE_GLYPHS"/> order.</summary>

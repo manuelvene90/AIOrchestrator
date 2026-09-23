@@ -41,7 +41,8 @@ public static class OrchestrationSession_Factory
         bool telegramTopicDeleteFailureReported = false,
         string? supervisorEffortOverride = null,
         string? implementerEffortOverride = null,
-        bool paused = false)
+        bool paused = false,
+        DateTime? telegramTopicFinalNameUtc = null)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -51,7 +52,7 @@ public static class OrchestrationSession_Factory
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
             telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done,
             telegramTopicDeletePendingUtc, telegramTopicDeletedUtc, telegramTopicDeleteFailureReported,
-            supervisorEffortOverride, implementerEffortOverride, paused);
+            supervisorEffortOverride, implementerEffortOverride, paused, telegramTopicFinalNameUtc);
     }
 
     /// <summary>
@@ -214,6 +215,12 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, telegramTopicDeletedUtc: deletedUtc);
     }
 
+    /// <summary>A closed orchestration's topic carries its final name; the name sync never touches it again. Never unset.</summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithTopicFinalName(IOrchestrationSession existing, DateTime finalNameUtc)
+    {
+        return CreateFrom_Existing(existing, telegramTopicFinalNameUtc: finalNameUtc);
+    }
+
     /// <summary>The owner has been told once that this topic will not delete. Never unset.</summary>
     public static IOrchestrationSession CreateFrom_Existing_WithTopicDeleteFailureReported(IOrchestrationSession existing)
     {
@@ -285,7 +292,10 @@ public static class OrchestrationSession_Factory
         // The delete-failure alert is a bool that must be settable to TRUE and never silently back
         // to false, and the two stamps beside it are set once and never cleared — so only this one
         // needs the wasSet dance, and it needs it for the same reason `done` does.
-        bool telegramTopicDeleteFailureReportedWasSet = false)
+        bool telegramTopicDeleteFailureReportedWasSet = false,
+
+        // Set once and never cleared, like the two delete stamps — so no wasSet dance.
+        DateTime? telegramTopicFinalNameUtc = null)
     {
         return Create(
             existing.OrchId,
@@ -311,6 +321,7 @@ public static class OrchestrationSession_Factory
             telegramTopicDeleteFailureReportedWasSet ? telegramTopicDeleteFailureReported : existing.TelegramTopicDeleteFailureReported,
             supervisorEffortWasSet ? supervisorEffortOverride : existing.SupervisorEffortOverride,
             implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride,
-            pausedWasSet ? paused : existing.Paused);
+            pausedWasSet ? paused : existing.Paused,
+            telegramTopicFinalNameUtc ?? existing.TelegramTopicFinalNameUtc);
     }
 }

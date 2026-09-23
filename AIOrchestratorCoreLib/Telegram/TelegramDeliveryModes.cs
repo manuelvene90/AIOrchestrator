@@ -307,9 +307,22 @@ public static class TelegramDeliveryMode_Glyphs
 
         var placement = modeGlyphs ?? PhoneSettings_Json.Parse(configRoot: null, presetTree: null).TopicModeGlyphs;
 
+        // A DRAWN ✅ OR 🧪 REPLACES THE DELIVERY GLYPH — ruling R23 (fix round 1), restoring what
+        // `DONE` and `AWAITING_TEST` above say and master drew: /done and /test ARE mute underneath,
+        // so `🔕 ✅` states one fact twice. "Drawn" is the point: one outranked by 🏁 or 💤 replaces
+        // nothing. 💤 does not replace either — its own summary claims the title's STATE slot, not
+        // the delivery glyph.
+        var stateReplacesDeliveryGlyph = stateGlyph == $"{DONE} " || stateGlyph == $"{AWAITING_TEST} ";
+
         var modePrefix = placement switch
         {
-            ModeGlyphPlacements.Name => Compose_ModeGlyphs(flags.Mode, flags.IsAway, flags.IsQuiet, flags.Presence),
+            // A CLOSED TOPIC DRAWS NO MODE GLYPH (fix round 1). The orchestration is over — nothing is
+            // delivered in it and nobody sits at its terminal — and under `topic.onClose = close` the
+            // topic stays in the list, where a delivery glyph would be renamed by every app-wide toggle
+            // into a thread that has finished. Its final name is `🏁 name`, which the engine then stops
+            // syncing (IOrchestrationSession.TelegramTopicFinalNameUtc).
+            ModeGlyphPlacements.Name when flags.IsClosed => "",
+            ModeGlyphPlacements.Name => Compose_ModeGlyphs(flags.Mode, flags.IsAway, flags.IsQuiet, flags.Presence, stateReplacesDeliveryGlyph),
             ModeGlyphPlacements.PulseHeader => "",
             _ => throw new Exception($"Unhandled ModeGlyphPlacements: {placement}"),
         };
@@ -339,17 +352,25 @@ public static class TelegramDeliveryMode_Glyphs
     /// sitting for this one endeavour.
     /// </para>
     /// </summary>
-    public static string Compose_ModeGlyphs(TelegramDeliveryModes mode, bool isAway, bool isQuiet, OwnerPresenceModes presence)
+    /// <param name="deliveryGlyphReplacedByState">
+    /// The surface draws a state glyph that already says the delivery mode — the name's ✅ or 🧪, which
+    /// are mute underneath (ruling R23) — so 🌙/🔕 is left off, exactly as 💻 leaves it off below. Only
+    /// the delivery glyph: away, quiet and terminal are other facts. PULSE's header draws no state
+    /// glyph and always passes false. REQUIRED, so neither caller can forget which surface it is.
+    /// </param>
+    public static string Compose_ModeGlyphs(TelegramDeliveryModes mode, bool isAway, bool isQuiet, OwnerPresenceModes presence, bool deliveryGlyphReplacedByState)
     {
         var presenceOrMode = presence == OwnerPresenceModes.Terminal
             ? $"{TERMINAL} "
-            : mode switch
-            {
-                TelegramDeliveryModes.Normal => "",
-                TelegramDeliveryModes.Deferred => $"{DEFERRED} ",
-                TelegramDeliveryModes.Silenced => $"{SILENCED} ",
-                _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
-            };
+            : deliveryGlyphReplacedByState
+                ? ""
+                : mode switch
+                {
+                    TelegramDeliveryModes.Normal => "",
+                    TelegramDeliveryModes.Deferred => $"{DEFERRED} ",
+                    TelegramDeliveryModes.Silenced => $"{SILENCED} ",
+                    _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
+                };
 
         var ownerAttention = (isAway, isQuiet) switch
         {

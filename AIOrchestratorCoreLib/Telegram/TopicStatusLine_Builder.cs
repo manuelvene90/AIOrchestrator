@@ -380,7 +380,7 @@ public static class TopicStatusLine_Builder
     {
         var modePrefix = modeGlyphs switch
         {
-            ModeGlyphPlacements.PulseHeader => TelegramDeliveryMode_Glyphs.Compose_ModeGlyphs(fields.Mode, fields.IsAway, fields.IsQuiet, fields.Presence),
+            ModeGlyphPlacements.PulseHeader => TelegramDeliveryMode_Glyphs.Compose_ModeGlyphs(fields.Mode, fields.IsAway, fields.IsQuiet, fields.Presence, deliveryGlyphReplacedByState: false),
             ModeGlyphPlacements.Name => "",
             _ => throw new Exception($"Unhandled ModeGlyphPlacements: {modeGlyphs}"),
         };
