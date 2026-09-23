@@ -59,7 +59,12 @@ public static class GitSnapshot_Reader
         return snapshots;
     }
 
-    static IReadOnlyList<string> Find_WorktreePaths(string repoPath)
+    /// <summary>
+    /// `git worktree list --porcelain`, as git spells the paths (<c>C:/Users/...</c> on Windows) — the
+    /// repo itself first. Empty on any failure. Public for the sibling validator's "is this a worktree of
+    /// the requester's repo" (spec 2026-09-23 §4.2), which must ask git rather than guess from folders.
+    /// </summary>
+    public static IReadOnlyList<string> Find_WorktreePaths(string repoPath)
     {
         List<string> paths = [];
 
