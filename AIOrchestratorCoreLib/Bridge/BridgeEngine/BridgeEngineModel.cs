@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 using AIOrchestratorCoreLib.Bridge.ChannelChangeWaker;
+using AIOrchestratorCoreLib.Bridge.CommandBars;
 using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
@@ -3638,8 +3639,9 @@ internal sealed class BridgeEngineModel(
             // THE ROW-AWARE CALLS, NOT THE PLAIN ONES. A plain edit sends no reply_markup and
             // Telegram reads the absence as "remove the keyboard", so editing this message the old
             // way would strip the bar off it on the very next tick — the same trap the per-topic
-            // line documents at its own edit.
-            var commandButtonRows = Build_GeneralCommandButtonRows();
+            // line documents at its own edit. `general.buttons` is read here, at the point of effect;
+            // an empty list is no rows, which the client sends as no reply_markup at all (D4).
+            var commandButtonRows = _commandBars.Build_GeneralRows(_configProvider.Get_Current().Pulse);
 
             if (action == Telegram.TopicStatusActions.Edit && _generalDashboardMessageId != null)
             {
@@ -8583,10 +8585,10 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Two buttons per row. Six commands stacked one-per-row — the shape every other keyboard here
-    /// uses — would put a slab of buttons under the one message in the topic the owner reads all day.
+    /// The bars' rows, General's thread id, the hold toggle's placement and the once-only refusal lines
+    /// live in their own component, not in this file (plan 03 Task 5) — see <see cref="ICommandBars"/>.
     /// </summary>
-    const int COMMAND_BUTTONS_PER_ROW = 2;
+    readonly ICommandBars _commandBars = CommandBars_Factory.Create(log);
 
     IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_CommandButtonRows(long messageThreadId)
     {
@@ -8594,7 +8596,23 @@ internal sealed class BridgeEngineModel(
         // buttons class knows the shape of a toggle and nothing about the delivery buffer.
         var (isHolding, heldCount) = Read_HoldState(messageThreadId);
 
-        return Chunk_IntoRows(Telegram.TopicCommandButtons.Build_ForTopic(messageThreadId, isHolding, heldCount));
+        // `pulse.buttons`, `pulse.holdToggle` and `phone.receipts`, read HERE at the point of effect and
+        // never cached — the provider re-reads config.json on its write stamp.
+        var current = _configProvider.Get_Current();
+
+        return _commandBars.Build_TopicRows(current.Pulse, current.Phone.Receipts, messageThreadId, isHolding, heldCount);
+    }
+
+    /// <summary>
+    /// The hold toggle's placement for a RECEIPT, read at the point of effect — the same one value
+    /// <see cref="Build_CommandButtonRows"/> hands the bar, so the toggle is drawn in exactly one of the
+    /// two homes (<see cref="Telegram.ReceiptButtons_Builder"/>).
+    /// </summary>
+    bool Is_HoldToggleOnTheBar()
+    {
+        var current = _configProvider.Get_Current();
+
+        return _commandBars.Is_HoldToggleOnTheBar(current.Pulse, current.Phone.Receipts);
     }
 
     /// <summary>
@@ -8633,43 +8651,6 @@ internal sealed class BridgeEngineModel(
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not read the hold state for topic {messageThreadId} ({ex.Message}) — the bar shows ⏸");
             return (false, 0);
         }
-    }
-
-    /// <summary>
-    /// GENERAL's own bar — `/summary /pending /limits /resume /dnd_all`, the owner's list of
-    /// 2026-09-09.
-    ///
-    /// <para>
-    /// THREAD ID ZERO IS DELIBERATE and is what the parser round-trips for General. General is not a
-    /// topic, so there is no thread to name; the tap handler reads a zero as "use the tap's own
-    /// thread", which in General is null, which every command below already treats as General. A
-    /// sentinel would be a second spelling of the same nothing.
-    /// </para>
-    /// <para>
-    /// The bar was BUILT AND UNIT-TESTED SINCE 2026-09-09 AND NEVER RENDERED: `Build_ForGeneral` had
-    /// no production caller at all, and the wiring guard that would have caught the three unhandled
-    /// buttons walked `Commands` only, never `GeneralCommands`. Both halves are fixed here — this
-    /// call site, and the guard.
-    /// </para>
-    /// </summary>
-    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_GeneralCommandButtonRows()
-    {
-        return Chunk_IntoRows(Telegram.TopicCommandButtons.Build_ForGeneral(0));
-    }
-
-    /// <summary>
-    /// ONE chunker for both bars. The loop existed once per caller for as long as there was one
-    /// caller; a second copy of it is how the two bars come to wrap differently for no reason anybody
-    /// decided.
-    /// </summary>
-    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Chunk_IntoRows(IReadOnlyList<(string Data, string Label)> buttons)
-    {
-        List<IReadOnlyList<(string Data, string Label)>> rows = [];
-
-        for (var index = 0; index < buttons.Count; index += COMMAND_BUTTONS_PER_ROW)
-            rows.Add([.. buttons.Skip(index).Take(COMMAND_BUTTONS_PER_ROW)]);
-
-        return rows;
     }
 
     /// <summary>
@@ -12333,9 +12314,9 @@ internal sealed class BridgeEngineModel(
 
                 // The typed WAIT gets the same ▶ GO button the tapped one does. Two ways in, one way
                 // out: an owner who typed WAIT should not have to type GO because the button only
-                // appears on the path they did not take.
-                (string Data, string Label)[] releaseButton =
-                    [(HoldButton_Data.Build(HoldButtonActions.Go, message.MessageThreadId), HoldButton_Data.GO_LABEL)];
+                // appears on the path they did not take. With the toggle on PULSE, that way out is
+                // PULSE's own ▶ GO, and this acknowledgement carries none (plan 03 Task 5).
+                var releaseButton = ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, message.MessageThreadId, Is_HoldToggleOnTheBar());
 
                 if (existingTickId != null)
                 {
@@ -13316,13 +13297,14 @@ internal sealed class BridgeEngineModel(
         // After a HOLD the button becomes the release; after a GO it goes back to offering a hold,
         // because the next message is already on its way and they may want to stop that one too.
         var nextAction = action == HoldButtonActions.Hold ? HoldButtonActions.Go : HoldButtonActions.Hold;
-        var nextLabel = action == HoldButtonActions.Hold ? HoldButton_Data.GO_LABEL : HoldButton_Data.HOLD_LABEL;
         var text = action == HoldButtonActions.Hold ? Build_HoldReceiptText(heldCount) : "✓";
 
         try
         {
+            // Through the one placement, like every receipt-side hold button (plan 03 Task 5): a receipt
+            // drawn before the toggle moved to PULSE loses its button here rather than keep a second copy.
             await client.Edit_MessageTextWithButtons_Async(
-                messageId, text, [(HoldButton_Data.Build(nextAction, threadId), nextLabel)], cancellationToken);
+                messageId, text, ReceiptButtons_Builder.Build_ForHoldReceipt(nextAction, threadId, Is_HoldToggleOnTheBar()), cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -13380,8 +13362,8 @@ internal sealed class BridgeEngineModel(
 
             // THE FOUR THE OWNER PUT ON THE BAR (2026-09-09). Each already existed as a TYPED
             // command; what was missing was a tap route to it, and EveryTopicButtonIsWiredTests is
-            // the thing that noticed — it walks TopicCommandButtons.Commands and demands a case here
-            // for every button the bar renders.
+            // the thing that noticed — it walks every verb an owner may configure (plan 03 Task 5)
+            // and holds this switch to TopicCommandButtons' tap-routed set in both directions.
             case "pending":
                 await Send_PendingDecisions_Async(client, threadId, cancellationToken);
                 return true;
@@ -13450,6 +13432,24 @@ internal sealed class BridgeEngineModel(
                 // racing the ✓ acks of the batch it arrived in — this tap was acknowledged above,
                 // before the switch, so there is nothing left to race. Same reasoning as /pc.
                 await Apply_ModeCommand_Async(client, "dnd_all", threadId, cancellationToken);
+                return true;
+
+            // /pause AND /progress ARE CLASSIC'S LAST ROW — master's buttons of 2026-09-09 (a2c9a3d, the
+            // owner's request), whose cases the fork merge dropped with the bar they belonged to. Once
+            // `pulse.buttons` made classic's bar drawable again, the widened wiring guard found both
+            // missing (plan 03 Task 5); they are re-ported here verbatim in behaviour.
+            case "pause":
+                // The button and the typed command are the same act, so they share the method —
+                // including its re-assert window, which is what makes a mistap here cheap: tapping
+                // 💤 twice leaves the topic paused rather than silently waking it.
+                await Toggle_Paused_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "progress":
+                // READ-ONLY, and the reason it is the pause button's partner rather than a second
+                // thing that changes state next to /close. The command already existed; this is the
+                // wiring, and it answers the question the owner asks most often.
+                await Send_ProgressReport_Async(client, threadId, "progress", cancellationToken);
                 return true;
 
             case "close":
@@ -13529,11 +13529,11 @@ internal sealed class BridgeEngineModel(
         {
             // WITH the release button: a plain edit sends no reply_markup, which Telegram reads as
             // "remove the keyboard" — so counting up the held messages would silently take away the
-            // ▶ GO the owner is meant to press.
+            // ▶ GO the owner is meant to press. Unless the toggle lives on PULSE (plan 03 Task 5).
             await client.Edit_MessageTextWithButtons_Async(
                 receipt.MessageId.Value,
                 Build_HoldReceiptText(receipt.HeldCount),
-                [(HoldButton_Data.Build(HoldButtonActions.Go, message.MessageThreadId), HoldButton_Data.GO_LABEL)],
+                ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, message.MessageThreadId, Is_HoldToggleOnTheBar()),
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -14030,14 +14030,15 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            // THE TICK CARRIES THE HOLD BUTTON, because it lands exactly where the owner is already
-            // looking — directly under what they just sent — and a tap beats typing WAIT by the
-            // seconds that decide whether the hold catches the message at all. Their words:
-            // "clicking a button is faster than typing wait."
+            // THE TICK CARRIES THE HOLD BUTTON WHEN THE TOGGLE LIVES ON THE RECEIPT, because it lands
+            // exactly where the owner is already looking — directly under what they just sent — and a
+            // tap beats typing WAIT by the seconds that decide whether the hold catches the message at
+            // all. Their words: "clicking a button is faster than typing wait." When the toggle lives on
+            // PULSE the tick carries none: one toggle in two places is decision 12 (plan 03 Task 5).
             var messageId = await client.Send_MessageWithButtons_Async(
                 messageThreadId,
                 "✓",
-                [(HoldButton_Data.Build(HoldButtonActions.Hold, messageThreadId), HoldButton_Data.HOLD_LABEL)],
+                ReceiptButtons_Builder.Build_ForTick(messageThreadId, Is_HoldToggleOnTheBar()),
 
                 // A RECEIPT NEVER RINGS. They sent the message it acknowledges a second ago — they
                 // are holding the phone. "I got it" as a notification is the purest form of the

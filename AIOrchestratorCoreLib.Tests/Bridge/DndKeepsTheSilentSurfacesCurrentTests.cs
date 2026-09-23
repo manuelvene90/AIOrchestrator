@@ -32,7 +32,8 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// engine returned before calling it. A unit test of the decision would have been green throughout.
 /// </para>
 /// <para>
-/// AND THE SAME FIXTURE PINS THE OTHER HALF: the dashboard message carries General's command bar.
+/// AND THE SAME FIXTURE PINS THE OTHER HALF: the dashboard message carries General's command bar —
+/// which, under the classic preset this fixture runs on, is no bar at all (plan 03 Task 5, D4).
 /// That bar was built and unit-tested on 2026-09-09 and never rendered — `Build_ForGeneral` had no
 /// production caller — so a test that only asked "is the bar correct?" passed for eight months of
 /// nothing being drawn. This asks what reached the client.
@@ -198,29 +199,29 @@ public class DndKeepsTheSilentSurfacesCurrentTests : IDisposable
     }
 
     /// <summary>
-    /// GENERAL'S BAR IS ACTUALLY ON THE DASHBOARD MESSAGE — nothing to do with DND, which is why it
-    /// is its own test. The bar was built and unit-tested on 2026-09-09 and never rendered:
-    /// `Build_ForGeneral` had no production caller, so a test that only asked "is the bar correct?"
-    /// was green over eight months of nothing being drawn. This asks what reached the client.
+    /// GENERAL'S BAR IS WHAT <c>general.buttons</c> SAYS, AND UNDER CLASSIC THAT IS NO BAR (plan 03
+    /// Task 5, D4) — nothing to do with DND, which is why it is its own test. This fixture names no
+    /// preset, so it runs under classic, whose list is empty: the dashboard must reach the client with
+    /// no buttons at all, which the client sends as no <c>reply_markup</c> (TelegramApiClientWireTests)
+    /// because Telegram will not take an empty keyboard. A configured list reaching the dashboard is
+    /// pinned in ConfigurableCommandButtonsTests.
     ///
-    /// ASSERTED ON THE CALLBACK DATA, not the labels: the label is what the owner reads and the data
-    /// is what a tap sends back, so a bar with the right captions and the wrong payloads looks
-    /// perfect and does nothing. The payloads are also what the tap handler's switch matches on.
+    /// IT STILL ASKS WHAT REACHED THE CLIENT. The bar was built and unit-tested on 2026-09-09 and never
+    /// rendered: `Build_ForGeneral` had no production caller, so a test that only asked "is the bar
+    /// correct?" was green over eight months of nothing being drawn.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task TheDashboardCarriesGeneralsOwnBar()
+    public async Task UnderClassic_TheDashboardReachesTheClientWithNoBar()
     {
         await Start_WithChannelAlreadySeen_Async();
 
-        var barArrived = await Run_Until_Async(
+        var dashboardArrived = await Run_Until_Async(
             () => _telegram.Find_ButtonDataFor(GeneralDashboard_Composer.HEADING) != null, 25_000);
 
-        Assert.True(barArrived, $"the General dashboard reached the client with no command bar on it.\n{_telegram.Dump()}");
+        Assert.True(dashboardArrived, $"the General dashboard never reached the client.\n{_telegram.Dump()}");
 
-        Assert.Equal(
-            TopicCommandButtons.GeneralCommands.Select(command => $"cmd:{command}:0"),
-            _telegram.Find_ButtonDataFor(GeneralDashboard_Composer.HEADING)!);
+        Assert.Empty(_telegram.Find_ButtonDataFor(GeneralDashboard_Composer.HEADING)!);
     }
 
     async Task<string> Start_WithChannelAlreadySeen_Async()
@@ -293,6 +294,8 @@ internal sealed class SurfaceRecordingTelegram_Fake : ITelegramApiClient
     readonly object _lock = new();
     readonly List<(string Text, TelegramSendSounds? Sound, IReadOnlyList<string> ButtonData)> _written = [];
     long _nextMessageId = 6100;
+    string? _queuedUpdatesJson;
+    string? _refuseReactionsReason;
 
     public Task<string> Get_BotUsername_Async(CancellationToken cancellationToken) => Task.FromResult("test_bot");
 
@@ -336,6 +339,41 @@ internal sealed class SurfaceRecordingTelegram_Fake : ITelegramApiClient
 
             return null;
         }
+    }
+
+    /// <summary>
+    /// The payloads on the LAST write whose text IS this text, or null if none was — for a message
+    /// whose whole text is a fragment of others, like the ✓ receipt.
+    /// </summary>
+    public IReadOnlyList<string>? Find_ButtonDataForText(string exactText)
+    {
+        lock (_lock)
+        {
+            for (var index = _written.Count - 1; index >= 0; index--)
+            {
+                if (string.Equals(_written[index].Text, exactText, StringComparison.Ordinal))
+                    return _written[index].ButtonData;
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>The next getUpdates answers with this batch, once — how a probe puts an owner message in front of the inbound loop.</summary>
+    public void Queue_Updates(string updatesJson)
+    {
+        lock (_lock)
+            _queuedUpdatesJson = updatesJson;
+    }
+
+    /// <summary>
+    /// Every reaction is refused, the way Telegram refuses one it will not allow — which sends the ✓
+    /// tick instead, the one receipt message buttons can ride.
+    /// </summary>
+    public void Refuse_Reactions(string reason)
+    {
+        lock (_lock)
+            _refuseReactionsReason = reason;
     }
 
     public string Dump()
@@ -406,6 +444,17 @@ internal sealed class SurfaceRecordingTelegram_Fake : ITelegramApiClient
 
     public async Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken)
     {
+        string? queued;
+
+        lock (_lock)
+        {
+            queued = _queuedUpdatesJson;
+            _queuedUpdatesJson = null;
+        }
+
+        if (queued != null)
+            return queued;
+
         // THE DELAY IS NOT OPTIONAL. A fake that answers instantly spins the inbound loop as fast as
         // the scheduler allows and starves the machine — it cost 95 minutes of a hung suite once.
         await Task.Delay(50, cancellationToken);
@@ -439,8 +488,15 @@ internal sealed class SurfaceRecordingTelegram_Fake : ITelegramApiClient
 
     public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken) => Task.CompletedTask;
-
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            return _refuseReactionsReason == null
+                ? Task.CompletedTask
+                : Task.FromException(new Exception(_refuseReactionsReason));
+        }
+    }
 
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken) => Task.FromResult<byte[]>([]);
 }
