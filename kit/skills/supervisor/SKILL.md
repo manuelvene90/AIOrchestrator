@@ -475,8 +475,9 @@ belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which
   `--option` — repeatable, two to four, spelled out; one option is not a choice and a fifth makes it
   a list. `--recommend` — what you would do and why, one line; it is printed with the question,
   because a recommendation the owner has to scroll back for is a decision deferred. `--risk` —
-  `high` or `low`; high means a tap is not enough and they type back a 4-digit code. `--row` — the
-  plan row this decision belongs to, or the word `none`, written out.
+  `high` or `low`; high means the owner must answer with a tap — it never takes a default — and,
+  if their settings keep it on, also type back a 4-digit code. `--row` — the plan row this decision
+  belongs to, or the word `none`, written out.
 
   **Missing a line? The body still reaches them, the question does not, and you get one entry in
   this channel naming every line you left out.** Nobody will answer a question that was never sent,
@@ -484,9 +485,9 @@ belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which
   mine your last sentence ending in "?" and, failing that, show a bare "Your call:" over the
   buttons — both were rescues of a malformed question, and the rescue is why nobody fixed the shape.
 
-  **`RISK: low` does not unlock anything.** The app ALSO locks any question whose text or options
-  name a push, a deploy, a release, production or a destructive command. Your declaration can only
-  ever ADD a lock.
+  **`RISK: low` does not unlock anything.** The app ALSO treats as high risk any question whose
+  text or options name a push, a deploy, a release, production or a destructive command. Your
+  declaration can only ever ADD high risk.
 - **Every turn that writes to this channel ends with a `STATE:` line, at the END of the entry.** The
   app reads it for the topic's status line (PULSE), field 2: `sup · <what you declared> · declared
   HH:MM`. One line, your own words — a STATE, not a summary of what the entry just reported:

@@ -4549,22 +4549,20 @@ internal sealed class BridgeEngineModel(
             Compose_RiskSurface(questionPrompt, optionLabels),
             guardrails.HighRiskPatterns);
 
-        // THE CODE ITSELF IS A SETTING (plan 03 task 15; owner, 2026-09-23: "I don't want that").
-        // Off, a question that classifies high risk is an ordinary one for every use below — default
-        // kept, no code terms, buttons that act on a tap — and only the log records it would have locked.
-        var isHighRisk = HighRiskLock_Policy.Is_Locked(matchedPattern, question.DeclaredHighRisk, guardrails.HighRiskConfirmation);
-
-        // A HIGH-RISK QUESTION LOSES ITS DEFAULT HERE, at the point of asking, rather than being
-        // trusted not to have one. The agent may well have written DEFAULT: 1 on a push question in
-        // good faith; nothing downstream may act on it.
-        var effectiveDefaultIndex = isHighRisk ? null : defaultOptionIndex;
+        // TWO FACTS (plan 03 task 15, ruling R21): what the question IS — high risk, so it takes no
+        // default and lapses as a deny — and whether a tap on it also costs the read-back CODE, which
+        // the owner turned off under classic ("I don't want that", 2026-09-23). The tap always stays.
+        // HighRiskLock_Policy holds all three answers; nothing here decides them.
+        var isHighRisk = HighRiskLock_Policy.Is_HighRisk(matchedPattern, question.DeclaredHighRisk);
+        var needsCode = HighRiskLock_Policy.Needs_Code(matchedPattern, question.DeclaredHighRisk, guardrails.HighRiskConfirmation);
+        var effectiveDefaultIndex = HighRiskLock_Policy.Resolve_DefaultIndex_OrNull(defaultOptionIndex, matchedPattern, question.DeclaredHighRisk);
 
         var askedUtc = _clock.UtcNow;
         var deadlineUtc = deadline == null ? (DateTime?)null : askedUtc + deadline.Value;
 
-        var promptWithTerms = Compose_QuestionTerms(promptWithGuidance, optionLabels, isHighRisk, deadlineUtc, effectiveDefaultIndex);
+        var promptWithTerms = Compose_QuestionTerms(promptWithGuidance, optionLabels, needsCode, deadlineUtc, effectiveDefaultIndex);
 
-        var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithTerms, isHighRisk, out var buttonGroupId);
+        var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithTerms, needsCode, out var buttonGroupId);
 
         // THROUGH THE RENDERER like the mirrored body above it, and for the same reason: this text is
         // the agent's QUESTION: line and their OPTION: wording, so it carries their Markdown. The
@@ -4664,13 +4662,13 @@ internal sealed class BridgeEngineModel(
     static string Compose_QuestionTerms(
         string promptWithOptions,
         IReadOnlyList<string> optionLabels,
-        bool isHighRisk,
+        bool needsCode,
         DateTime? deadlineUtc,
         int? defaultOptionIndex)
     {
         List<string> terms = [];
 
-        if (isHighRisk)
+        if (needsCode)
             terms.Add("🔐 High risk — a tap is not enough: you will be asked to type a 4-digit code shown here.");
 
         if (deadlineUtc != null)
@@ -4704,7 +4702,7 @@ internal sealed class BridgeEngineModel(
         IReadOnlyList<string> optionTexts,
         IReadOnlyList<string> buttonLabels,
         string questionText,
-        bool isHighRisk,
+        bool needsCode,
         out long groupId)
     {
         if (buttonLabels.Count != optionTexts.Count)
@@ -4737,7 +4735,10 @@ internal sealed class BridgeEngineModel(
                     GroupId = _buttonGroupSequence,
                     QuestionText = questionText,
                     ExpiresUtc = expiresUtc,
-                    IsHighRisk = isHighRisk,
+
+                    // A BUTTON'S flag means "a tap opens the read-back code" — the question's own
+                    // classification lives on OpenQuestionRecord (plan 03 task 15).
+                    IsHighRisk = needsCode,
                 };
 
                 _buttonOrder.Enqueue(data);

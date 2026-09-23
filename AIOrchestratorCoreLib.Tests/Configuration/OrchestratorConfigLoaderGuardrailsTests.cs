@@ -264,8 +264,8 @@ public class OrchestratorConfigLoaderGuardrailsTests : IDisposable
     }
 
     /// <summary>
-    /// A CONFIG ASSEMBLED IN MEMORY HAS NO PRESET RUNG, and gets the shipped default — the guarded
-    /// behaviour, per <see cref="IGuardrailSettings"/>' own rule that an unconfigured guard is on.
+    /// A CONFIG ASSEMBLED IN MEMORY HAS NO PRESET RUNG, and gets the catalogue's shipped default — the
+    /// code on. A LOADED config stating nothing is classic, and off (<see cref="AConfigStatingNothing_IsClassic_AndClassicAsksForNoCode"/>).
     /// </summary>
     [Fact]
     public void TheShippedDefault_KeepsTheCode()

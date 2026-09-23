@@ -43,9 +43,10 @@ public static class GuardrailSettings_Factory
     public const int DEFAULT_BUTTON_EXPIRY_MINUTES = 720;
 
     /// <summary>
-    /// On: today's behaviour, and the guarded one — an absent config must never be the unguarded
-    /// answer. The owner's off lives in <c>kit/presets/classic.json</c> (2026-09-23), not here, so a
-    /// machine that picks another preset or none at the catalogue layer still gets the code.
+    /// On: the catalogue's shipped default — today's behaviour, and what <see cref="Create_Default"/>
+    /// and quiet get. It is NOT what a machine stating nothing gets: the loader resolves an absent or
+    /// preset-less config.json to classic, and <c>kit/presets/classic.json</c> states the owner's off
+    /// (2026-09-23). Only quiet, or the key stated in config.json, gives the code on a loaded machine.
     /// </summary>
     public const bool DEFAULT_HIGH_RISK_CONFIRMATION = true;
 

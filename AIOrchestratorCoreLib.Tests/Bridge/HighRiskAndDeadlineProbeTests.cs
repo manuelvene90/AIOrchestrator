@@ -432,7 +432,7 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     }
 
     /// <summary>
-    /// UNDER CLASSIC THE ASKER'S <c>RISK: high</c> LOCKS NOTHING (plan 03 task 15). Owner, 2026-09-23:
+    /// UNDER CLASSIC THE ASKER'S <c>RISK: high</c> COSTS NO CODE (plan 03 task 15). Owner, 2026-09-23:
     /// <i>"He added an annoying feature where I'm asked to enter a code when a requested change is
     /// impactful, I don't want that."</i> Classic states <c>highRiskConfirmation: false</c>, so a question
     /// the asker declared high risk reaches the phone with no 🔐 terms and a tap on it DELIVERS — the
@@ -441,9 +441,9 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     /// only what the app does with it changes.
     ///
     /// <para>
-    /// The log still says what WOULD have locked, because the owner who later turns the code back on
-    /// needs to know which questions it would have caught — and that line is the log's, never Telegram's
-    /// (decision 15).
+    /// The log still names the question as high risk and says the code is off, because the owner who
+    /// later turns the code back on needs to know which questions it would have caught — and that line is
+    /// the log's, never Telegram's (decision 15).
     /// </para>
     /// </summary>
     [Fact]
@@ -476,15 +476,17 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     }
 
     /// <summary>
-    /// UNDER CLASSIC A PATTERN MATCH LOCKS NOTHING EITHER, AND THE DEFAULT SURVIVES. "merge and push"
-    /// matches <c>push</c> on the shipped list; with the code on that question would lose its declared
-    /// default and lapse as DENIED (<see cref="AHighRiskQuestionThatLapses_IsDenied_EvenThoughItsAgentDeclaredADefault"/>).
-    /// With the code off it is an ordinary question in every downstream use: its message names the
-    /// default it will take, and a tap decides it.
+    /// UNDER CLASSIC A PATTERN MATCH COSTS NO CODE EITHER — AND STILL TAKES NO DEFAULT (ruling R21).
+    /// "merge and push" matches <c>push</c> on the shipped list. The first cut of the switch made it an
+    /// ordinary question, so its message promised "option 1 (Merge and push) is taken" and the timeout
+    /// would have merged and pushed with nobody at the phone. The owner asked to stop TYPING, not to
+    /// lose the decision: the message says DENIED on timeout, exactly as with the code on
+    /// (<see cref="AHighRiskQuestionThatLapses_IsDenied_EvenThoughItsAgentDeclaredADefault"/>), and one
+    /// tap — no code — decides it.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task UnderClassic_AMergeAndPushQuestion_KeepsItsDefault_AndIsDecidedByATap()
+    public async Task UnderClassic_AMergeAndPushQuestion_DropsItsDefault_AndIsDecidedByOneTap()
     {
         Write_Config(highRiskConfirmation: null);
 
@@ -493,10 +495,10 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
             MERGE_AND_PUSH_OPTION);
 
         Assert.False(_telegram.Has_Sent_Containing("🔐"), _telegram.Dump_Sent());
-        Assert.True(
+        Assert.False(
             _telegram.Has_Sent_Containing($"option 1 ({MERGE_AND_PUSH_OPTION}) is taken"),
-            $"the declared default was dropped although the code is off.{Environment.NewLine}{_telegram.Dump_Sent()}");
-        Assert.False(_telegram.Has_Sent_Containing("this is DENIED"), _telegram.Dump_Sent());
+            $"THE DEFECT (R21): a high-risk question promises its default because the code is off.{Environment.NewLine}{_telegram.Dump_Sent()}");
+        Assert.True(_telegram.Has_Sent_Containing("this is DENIED"), _telegram.Dump_Sent());
 
         Tap_Option(MERGE_AND_PUSH_OPTION);
 
@@ -509,6 +511,34 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
         Assert.True(
             _log.Has_Info_Containing("matched 'push'"),
             $"the log does not name the pattern that would have locked the question.{Environment.NewLine}{_log.Dump()}");
+    }
+
+    /// <summary>
+    /// RULING R21, THE HALF THE TAP CANNOT SHOW: under classic an UNANSWERED high-risk question with a
+    /// declared default lapses as a deny and its default is NEVER applied. The code being off changes
+    /// what a tap costs, never whether a decision can be taken with nobody at the phone.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_AnUnansweredHighRiskQuestion_NeverTakesItsDefault()
+    {
+        Write_Config(highRiskConfirmation: null);
+
+        var session = await Start_WithQuestion_Async(
+            $"QUESTION: Shall I merge and push the branch?\nOPTION: {MERGE_AND_PUSH_OPTION}\nOPTION: Hold\nDEADLINE: 30m\nDEFAULT: 1{CONTRACT_LINES}",
+            MERGE_AND_PUSH_OPTION);
+
+        _clock.Advance(TimeSpan.FromMinutes(31));
+
+        Assert.True(
+            await Run_Until_Async(() => Read_OwnerChannel(session.OrchId).Contains("DENIED on timeout", StringComparison.Ordinal), 20_000),
+            "the lapsed high-risk question was never resolved under classic."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.DoesNotContain("DEFAULTED on timeout", Read_OwnerChannel(session.OrchId), StringComparison.Ordinal);
+
+        // Still exactly once — the supervisor's own OPTION: line, nothing delivered.
+        Assert.Equal(1, Count_Occurrences(Read_OwnerChannel(session.OrchId), MERGE_AND_PUSH_OPTION));
     }
 
     const string MERGE_AND_PUSH_OPTION = "Merge and push";

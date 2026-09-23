@@ -479,11 +479,12 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "High-risk confirmation code",
             description:
-                "Whether a high-risk question — declared RISK: high by the asker, or matching a high-risk pattern — costs a " +
-                "typed 4-digit code. OFF, it behaves like any other question: it keeps its declared default, and a tap " +
-                "decides it. The question contract does not change: every question still carries its RISK: line, and the " +
-                "log still records which questions would have locked. highRiskPatterns: [] only silences the pattern half; " +
-                "this is the switch for both.",
+                "Whether a tap on a high-risk question — declared RISK: high by the asker, or matching a high-risk pattern — " +
+                "also costs a typed 4-digit code. OFF, one tap decides it, but it is still high risk: it never takes a " +
+                "default and lapses as a deny. The question contract does not change: every question still carries its " +
+                "RISK: line, and the log still records which questions are high risk. A question asked while the code was " +
+                "ON keeps its lock after the setting is turned off — the lock is fixed when the question is asked. " +
+                "highRiskPatterns: [] only silences the pattern half; this is the switch for both.",
             restart: RestartKinds.None));
 
         kernel.Add(SettingDefinition_Factory.Create_Int(
