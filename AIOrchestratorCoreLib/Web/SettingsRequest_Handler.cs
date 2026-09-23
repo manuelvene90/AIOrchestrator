@@ -37,7 +37,8 @@ namespace AIOrchestratorCoreLib.Web;
 /// {
 ///   "preset":  "classic",                          // the preset the snapshot resolved under (D13: shown, never a row)
 ///   "editing": { "tokenRequired": false,           // true once web.token is set (D4)
-///                "tokenHeader": "X-Aiorch-Token" },
+///                "tokenHeader": "X-Aiorch-Token",
+///                "tokenPath": "web.token" },               // the row holding the token — the page's banner says how to set it by hand
 ///   "sections": [                                  // SettingsRow_Builder order; every category, Kit included even empty
 ///     { "category": "Models", "title": "Models and effort",
 ///       "rows": [
@@ -251,6 +252,10 @@ public static class SettingsRequest_Handler
             {
                 ["tokenRequired"] = SettingsSnapshot_Reader.Is_SecretSet(configuredToken),
                 ["tokenHeader"] = TOKEN_HEADER,
+
+                // Named here so the page can tell a headless owner which config.json key to set by hand (the row
+                // is fenced, so the first token cannot be set from the page) without the page spelling a path.
+                ["tokenPath"] = SettingsSnapshot_Reader.MASKED_SECRET_PATH,
             },
             ["sections"] = sections,
         });

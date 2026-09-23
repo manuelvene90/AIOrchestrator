@@ -356,6 +356,10 @@ public class SettingsRequestHandlerTests : IDisposable
         Assert.True((bool)editing["tokenRequired"]!);
         Assert.Equal(SettingsRequest_Handler.TOKEN_HEADER, (string?)editing["tokenHeader"]);
 
+        // The page names no path (SettingsPageAssetTests), so the row it tells a headless owner to set by hand comes from here.
+        Assert.Equal(SettingsSnapshot_Reader.MASKED_SECRET_PATH, (string?)editing["tokenPath"]);
+        Assert.NotNull(Catalog.Find_OrNull((string)editing["tokenPath"]!));
+
         Assert.False((bool)Json(Get(configuredToken: "").Body)["editing"]!["tokenRequired"]!);
     }
 
