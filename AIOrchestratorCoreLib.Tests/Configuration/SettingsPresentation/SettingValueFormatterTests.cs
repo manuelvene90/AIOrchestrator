@@ -131,6 +131,24 @@ public class SettingValueFormatterTests
     }
 
     /// <summary>
+    /// ONE WORD, CAPTIONED AS THE JOINED READING SPELLS IT — the WPF list editor draws each element through this,
+    /// so its items and the row's one-line reading cannot disagree (decision 12). Not cut: an editor listing a
+    /// long pattern on its own line must show which pattern it is.
+    /// </summary>
+    [Fact]
+    public void AListWord_IsCaptionedAsTheJoinedReadingSpellsIt_AndIsNotCut()
+    {
+        var longPattern = new string('x', SettingValue_Formatter.MAX_LENGTH + 10);
+
+        Assert.Equal("push", SettingValue_Formatter.Describe_ListWord(JsonValue.Create("push")));
+        Assert.Equal(SettingValue_Formatter.BLANK_WORD, SettingValue_Formatter.Describe_ListWord(JsonValue.Create("  ")));
+        Assert.Equal("3", SettingValue_Formatter.Describe_ListWord(JsonValue.Create(3)));
+        Assert.Equal("null", SettingValue_Formatter.Describe_ListWord(null));
+        Assert.Equal(longPattern, SettingValue_Formatter.Describe_ListWord(JsonValue.Create(longPattern)));
+        Assert.Equal("a b", SettingValue_Formatter.Describe_ListWord(JsonValue.Create("a\nb")));
+    }
+
+    /// <summary>
     /// repos and planBackend are STRUCTURES, and their raw JSON is as long as the owner's repo list — which
     /// on a Telegram button caption is a message that grows with every repo added.
     /// </summary>

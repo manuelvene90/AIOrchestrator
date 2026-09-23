@@ -97,4 +97,62 @@ public class SettingsRowBuilderTests
         Assert.Equal(subset, sections.SelectMany(section => section.Rows).OrderBy(row => Array.IndexOf(subset, row)));
         Assert.Empty(sections.Single(section => section.Category == SettingCategories.Phone).Rows);
     }
+
+    /// <summary>
+    /// THE CONNECTION TAB'S TWO IDS ARE CATALOGUE ROWS (D11): each path is a real Kernel Int row, the selection
+    /// returns exactly their readings in order, and they stay in the Kernel section too — the Connection tab
+    /// draws them a second time, it does not take them away from where the catalogue files them.
+    /// </summary>
+    [Fact]
+    public void TheConnectionRows_AreTheTwoTelegramIds_DrawnFromTheSameReadings()
+    {
+        var readings = Readings();
+
+        foreach (var path in SettingsRow_Builder.CONNECTION_PATHS)
+        {
+            var definition = Catalog.Find_OrNull(path);
+
+            Assert.NotNull(definition);
+            Assert.Equal(SettingCategories.Kernel, definition!.Category);
+            Assert.Equal(SettingKinds.Int, definition.Kind);
+        }
+
+        var connection = SettingsRow_Builder.Select_ConnectionRows(readings);
+        var kernel = SettingsRow_Builder.Build_Sections(readings).Single(section => section.Category == SettingCategories.Kernel).Rows;
+
+        Assert.Equal(new[] { "telegramSupergroupChatId", "telegramOwnerUserId" }, connection.Select(reading => reading.Definition.Path));
+        Assert.All(connection, reading => Assert.Contains(reading, readings));
+        Assert.All(connection, reading => Assert.Contains(reading, kernel));
+    }
+
+    /// <summary>
+    /// THE KIT SECTION IS EMPTY AND SAYS SO (checklist item 2): it is always a section, it has no rows until plan
+    /// 05, and the window draws <see cref="SettingsRow_Builder.EMPTY_SECTION_NOTE"/> in it rather than a blank tab.
+    /// </summary>
+    [Fact]
+    public void TheKitSection_IsEmpty_AndTheEmptySectionNoteIsWords()
+    {
+        var kit = SettingsRow_Builder.Build_Sections(Readings()).Single(section => section.Category == SettingCategories.Kit);
+
+        Assert.Empty(Catalog.In_Category(SettingCategories.Kit));
+        Assert.Empty(kit.Rows);
+        Assert.Equal("Kit", kit.Title);
+        Assert.False(string.IsNullOrWhiteSpace(SettingsRow_Builder.EMPTY_SECTION_NOTE));
+    }
+
+    /// <summary>D13: the preset is named in the header in the web page's own words, never offered as a row.</summary>
+    [Fact]
+    public void ThePresetHeader_NamesThePreset()
+    {
+        Assert.Equal("preset: classic", SettingsRow_Builder.Describe_PresetHeader(Presets_Loader.CLASSIC));
+        Assert.Equal("preset: quiet", SettingsRow_Builder.Describe_PresetHeader(Presets_Loader.QUIET));
+    }
+
+    /// <summary>Checklist item 3: every tab holds exactly its category's catalogue rows — counted from the catalogue, never a literal.</summary>
+    [Fact]
+    public void EverySection_HoldsExactlyItsCategorysCatalogueRows()
+    {
+        foreach (var (category, _, rows) in SettingsRow_Builder.Build_Sections(Readings()))
+            Assert.Equal(Catalog.In_Category(category).Select(definition => definition.Path), rows.Select(row => row.Definition.Path));
+    }
 }

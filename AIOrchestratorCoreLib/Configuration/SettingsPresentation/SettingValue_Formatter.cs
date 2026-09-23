@@ -107,14 +107,25 @@ public static class SettingValue_Formatter
         List<string> words = [];
 
         foreach (var element in array)
-        {
-            if (element is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var word))
-                words.Add(string.IsNullOrWhiteSpace(word) ? BLANK_WORD : word);
-            else
-                words.Add(element?.ToJsonString() ?? "null");
-        }
+            words.Add(Describe_ListWord(element));
 
         return Describe_Words(words);
+    }
+
+    /// <summary>
+    /// ONE ELEMENT OF A LIST, as a list editor captions it and as the joined reading above spells it — so the
+    /// WPF window's item list and the one-line reading can never disagree about a word (decision 12). A blank
+    /// word reads <see cref="BLANK_WORD"/>, a non-string element its JSON text. NOT CUT: an editor that lists
+    /// the words one per line has room for a long pattern, and the owner deleting it must see which it is.
+    /// A CAPTION, NEVER A VALUE: an editor edits the element itself (<c>ISettingReading.Value_OrNull</c>), because
+    /// <see cref="BLANK_WORD"/> read back as text would be a real two-quote word (plan 04 Task 9 carry).
+    /// </summary>
+    public static string Describe_ListWord(JsonNode? element)
+    {
+        if (element is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var word))
+            return string.IsNullOrWhiteSpace(word) ? BLANK_WORD : One_Line(word);
+
+        return element?.ToJsonString() ?? "null";
     }
 
     /// <summary>

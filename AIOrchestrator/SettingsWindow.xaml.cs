@@ -1,103 +1,241 @@
+using System.IO;
+using System.Text.Json.Nodes;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using AIOrchestrator.Views;
 using AIOrchestratorCoreLib.Configuration;
-using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Configuration.SettingsPresentation;
+using AIOrchestratorCoreLib.Configuration.SettingsPresentation.SettingEditor;
+using AIOrchestratorCoreLib.Configuration.SettingsPresentation.SettingReading;
+using AIOrchestratorCoreLib.Configuration.SettingsWriting;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestrator;
 
-/// <summary>Manages the Telegram credentials and model choices (config.json + secrets.json).</summary>
+/// <summary>
+/// THE SETTINGS WINDOW, GENERIC OVER THE CATALOGUE (plan 04 Task 9). One tab per catalogue category plus
+/// Connection; every row is a CoreLib reading drawn through a CoreLib editor, and every edit is written the
+/// moment it is made through <see cref="Settings_Writer"/> (D5 — immediate-apply, no Cancel), then the row is
+/// re-read from disk so its value and origin label show what the file now says.
+///
+/// <para>
+/// PLUMBING ONLY. This project is untestable by the suite, so this file forwards: a click becomes the editor's
+/// value, the value goes to the writer, the writer's answer goes to <see cref="SettingWriteNote_Formatter"/>, and
+/// the fresh reading goes back to the row. It never rebuilds a config object to change a setting — the old
+/// 13-argument <c>OrchestratorConfig_Factory.Create</c> + <c>Save</c> is gone, because that shape rewrote every
+/// key it owned at its resolved value and turned presets into "set here" (P11, spec §6.2).
+/// </para>
+/// <para>
+/// THE TOKEN IS THE ONE HAND-WRITTEN FIELD (D11): it is deliberately not a catalogue row, it lives in
+/// secrets.json, and it is written by <see cref="OrchestratorConfig_Loader.Save_BotToken"/> alone — never the
+/// full Save — behind its own explicit button, so half a pasted token is never written keystroke by keystroke.
+/// </para>
+/// </summary>
 public partial class SettingsWindow : Window
 {
     readonly ISupervisionPaths _paths;
-    readonly IOrchestratorConfig _config;
+    readonly IOrchestrationLog? _log;
+    readonly List<SettingRowView> _rows = [];
 
-    public SettingsWindow(ISupervisionPaths paths, IOrchestratorConfig config)
+    public SettingsWindow(ISupervisionPaths paths, IOrchestratorConfigProvider configProvider, IOrchestrationLog? log)
     {
         _paths = paths;
-        _config = config;
+        _log = log;
 
         InitializeComponent();
         Views.DarkTitleBar_Enabler.Apply(this);
 
-        BotTokenTextBox.Text = config.TelegramBotToken ?? "";
-        ChatIdTextBox.Text = config.TelegramSupergroupChatId?.ToString() ?? "";
-        OwnerIdTextBox.Text = config.TelegramOwnerUserId?.ToString() ?? "";
-        SupervisorModelTextBox.Text = config.SupervisorModel ?? "";
-        ImplementerModelTextBox.Text = config.ImplementerModel ?? "";
-        GeneralModelTextBox.Text = config.GeneralSupervisorModel ?? "";
-        CommunicatorModelTextBox.Text = config.CommunicatorModel ?? "";
+        var (readings, presetName) = SettingsSnapshot_Reader.Read_All_FromDisk(paths, session: null, log);
+
+        PresetText.Text = SettingsRow_Builder.Describe_PresetHeader(presetName);
+        BotTokenTextBox.Text = configProvider.Get_Current().TelegramBotToken ?? string.Empty;
+        ConnectionRowsList.ItemsSource = Create_Rows(SettingsRow_Builder.Select_ConnectionRows(readings));
+
+        var sectionTemplate = (DataTemplate)FindResource("SectionTemplate");
+
+        foreach (var (_, title, rows) in SettingsRow_Builder.Build_Sections(readings))
+            SettingsTabs.Items.Add(new TabItem { Header = title, Content = Create_Rows(rows), ContentTemplate = sectionTemplate });
     }
 
-    void SaveButton_Click(object sender, RoutedEventArgs e)
+    IReadOnlyList<SettingRowView> Create_Rows(IReadOnlyList<ISettingReading> readings)
     {
-        long? chatId = null;
-        long? ownerId = null;
+        var rows = readings.Select(reading => new SettingRowView(SettingEditor_Factory.Create_ForReading(reading))).ToArray();
 
-        if (ChatIdTextBox.Text.Trim().Length > 0)
-        {
-            if (!long.TryParse(ChatIdTextBox.Text.Trim(), out var parsedChatId))
-            {
-                MessageBox.Show("Supergroup chat id must be a number (like -1001234567890).", "Settings");
-                return;
-            }
+        _rows.AddRange(rows);
 
-            chatId = parsedChatId;
-        }
+        return rows;
+    }
 
-        if (OwnerIdTextBox.Text.Trim().Length > 0)
-        {
-            if (!long.TryParse(OwnerIdTextBox.Text.Trim(), out var parsedOwnerId))
-            {
-                MessageBox.Show("Your Telegram user id must be a number.", "Settings");
-                return;
-            }
+    // ── Row edits: the editor builds the value, the writer judges and writes it ──
 
-            ownerId = parsedOwnerId;
-        }
+    void Toggle_Click(object sender, RoutedEventArgs e)
+    {
+        var row = Row_Of(sender);
 
-        var updated = OrchestratorConfig_Factory.Create(
-            _config.Repos,
-            Null_IfEmpty(SupervisorModelTextBox.Text),
-            Null_IfEmpty(ImplementerModelTextBox.Text),
+        Commit(row, row.Editor.Build_FromToggle(((CheckBox)sender).IsChecked == true));
+    }
 
-            // NO FIELD FOR THESE TWO, and none is wanted: reviewerModel/soloModel are hand-edited
-            // keys the loader reads and never writes, so the window carries whatever the config it
-            // was opened with resolved to and Save leaves the file's own value alone.
-            _config.ReviewerModel,
-            _config.SoloModel,
-            Null_IfEmpty(GeneralModelTextBox.Text),
-            Null_IfEmpty(CommunicatorModelTextBox.Text),
-            chatId,
-            ownerId,
-            Null_IfEmpty(BotTokenTextBox.Text),
-            _config.TelegramStatusScreenshots,
-            _config.VoiceTranscribeCommand,
-            _config.OrchestrationTokenBudget,
-            _config.Runners);
+    void Choice_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Only a pick the owner made: drawing the row (or redrawing it after an edit) selects the current
+        // offer, which is not an edit and must not be written back.
+        if (e.AddedItems.Count != 1 || e.AddedItems[0] is not string caption)
+            return;
 
-        // A refused or failed save leaves the window open with the loader's own reason (plan 04 Task 2c, P35):
-        // a refused save wrote nothing, and the owner can press Save again once the file is free.
+        var row = Row_Of(sender);
+
+        if (caption == row.SelectedOffer)
+            return;
+
+        Commit(row, row.Editor.Build_FromText(caption));
+    }
+
+    void ApplyText_Click(object sender, RoutedEventArgs e)
+    {
+        var row = Row_Of(sender);
+
+        Commit(row, row.Editor.Build_FromText(row.EditText));
+    }
+
+    void Box_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+            return;
+
+        var row = Row_Of(sender);
+
+        Commit(row, row.Editor.Build_FromText(row.EditText));
+    }
+
+    void MoveItemUp_Click(object sender, RoutedEventArgs e)
+    {
+        var item = Item_Of(sender);
+
+        Commit(item.Row, item.Row.Editor.Build_Moved(item.Index, -1));
+    }
+
+    void MoveItemDown_Click(object sender, RoutedEventArgs e)
+    {
+        var item = Item_Of(sender);
+
+        Commit(item.Row, item.Row.Editor.Build_Moved(item.Index, 1));
+    }
+
+    void RemoveItem_Click(object sender, RoutedEventArgs e)
+    {
+        var item = Item_Of(sender);
+
+        Commit(item.Row, item.Row.Editor.Build_Removed(item.Index));
+    }
+
+    void AddOffer_Click(object sender, RoutedEventArgs e)
+    {
+        var row = Row_Of(sender);
+
+        if (row.PickedOffer != null)
+            Commit_Addition(row, row.PickedOffer);
+    }
+
+    void AddWord_Click(object sender, RoutedEventArgs e)
+    {
+        var row = Row_Of(sender);
+
+        Commit_Addition(row, row.NewWord);
+    }
+
+    void NewWord_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+            return;
+
+        var row = Row_Of(sender);
+
+        Commit_Addition(row, row.NewWord);
+    }
+
+    void Reset_Click(object sender, RoutedEventArgs e)
+    {
+        var row = Row_Of(sender);
+
+        Write_AndRedraw(row.Path, () => Settings_Writer.Reset(_paths, row.Path, _log));
+    }
+
+    /// <summary>The editor answers null when the text holds no word to add — nothing to write, so nothing is.</summary>
+    void Commit_Addition(SettingRowView row, string text)
+    {
+        var added = row.Editor.Build_Added_OrNull(text);
+
+        if (added != null)
+            Commit(row, added);
+    }
+
+    void Commit(SettingRowView row, JsonNode? value)
+    {
+        Write_AndRedraw(row.Path, () => Settings_Writer.Apply(_paths, row.Path, value, _log));
+    }
+
+    /// <summary>
+    /// One write, then every row showing that path redrawn from disk (the two ids appear on Connection AND
+    /// Kernel), with the note beside it. A write that threw wrote nothing (Task 2's rule) and says so; a
+    /// refusal — the definition's or the file's (P33) — is the writer's own message (decision 21).
+    /// </summary>
+    void Write_AndRedraw(string path, Func<(SettingsWriteOutcomes Outcome, string? Message_OrNull)> write)
+    {
+        (string Text, bool IsRefusal) note;
+
         try
         {
-            OrchestratorConfig_Loader.Save(updated, _paths);
+            var (outcome, message) = write();
+            note = SettingWriteNote_Formatter.Describe(outcome, message);
         }
-        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            MessageBox.Show(ex.Message, "Settings were not saved");
-            return;
+            note = (SettingWriteNote_Formatter.Describe_WriteThrew(ex.Message), true);
         }
 
-        Close();
+        var reading = SettingsSnapshot_Reader.Read_One_FromDisk_OrNull(path, _paths, session: null, _log);
+
+        foreach (var row in _rows.Where(candidate => candidate.Path == path))
+        {
+            if (reading != null)
+                row.Show(SettingEditor_Factory.Create_ForReading(reading));
+
+            row.Show_Note(note);
+        }
     }
 
-    void CancelButton_Click(object sender, RoutedEventArgs e)
+    // ── Connection: the token's own Save (D11, P11) ──
+
+    void SaveTokenButton_Click(object sender, RoutedEventArgs e)
+    {
+        // secrets.json ONLY, through the token's own door; an unreadable or corrupt secrets.json is refused
+        // with an IOException naming the file (Task 2c, P35/P36), and nothing was written.
+        try
+        {
+            OrchestratorConfig_Loader.Save_BotToken(_paths, BotTokenTextBox.Text);
+            TokenNoteText.Text = SettingWriteNote_Formatter.SAVED;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            TokenNoteText.Text = SettingWriteNote_Formatter.Describe_WriteThrew(ex.Message);
+        }
+    }
+
+    void CloseButton_Click(object sender, RoutedEventArgs e)
     {
         Close();
     }
 
-    static string? Null_IfEmpty(string text)
+    static SettingRowView Row_Of(object sender)
     {
-        var trimmed = text.Trim();
-        return trimmed.Length == 0 ? null : trimmed;
+        return (SettingRowView)((FrameworkElement)sender).DataContext;
+    }
+
+    static SettingListItemView Item_Of(object sender)
+    {
+        return (SettingListItemView)((FrameworkElement)sender).DataContext;
     }
 }

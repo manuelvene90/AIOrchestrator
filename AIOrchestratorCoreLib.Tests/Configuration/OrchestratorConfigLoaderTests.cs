@@ -146,6 +146,24 @@ public class OrchestratorConfigLoaderTests : IDisposable
     }
 
     /// <summary>
+    /// THE TOKEN'S DOOR TIDIES WHAT A BOX HANDS IT (plan 04 Task 9): the WPF window may hold no logic, so the
+    /// trim of a pasted token and "blank is no token" — what the old window's own Save did — live here.
+    /// </summary>
+    [Fact]
+    public void SaveBotToken_TrimsAPastedToken_AndABlankOneIsNoToken()
+    {
+        OrchestratorConfig_Loader.Save_BotToken(_paths, "  123:abc \t");
+        Assert.Equal("123:abc", OrchestratorConfig_Loader.Load_OrEmpty(_paths).TelegramBotToken);
+
+        OrchestratorConfig_Loader.Save_BotToken(_paths, "   ");
+        var secrets = JsonNode.Parse(File.ReadAllText(_paths.SecretsFile))!.AsObject();
+
+        Assert.True(secrets.ContainsKey("telegramBotToken"));
+        Assert.Null(secrets["telegramBotToken"]);
+        Assert.Null(OrchestratorConfig_Loader.Load_OrEmpty(_paths).TelegramBotToken);
+    }
+
+    /// <summary>
     /// A config.json carrying every kind of key <see cref="OrchestratorConfig_Loader.Save"/> does NOT own — the
     /// ones a lenient read of a held file used to erase (plan 04 Task 2c, ruling P35): <c>planBackend</c>, the
     /// <c>effort</c>/<c>phone</c>/<c>pulse</c>/<c>web</c> blocks, a model key, a guardrail and a key no build knows.

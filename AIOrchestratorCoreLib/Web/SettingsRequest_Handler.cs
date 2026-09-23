@@ -583,25 +583,14 @@ public static class SettingsRequest_Handler
                 ["message"] = message,
             });
 
-            everyEditTookEffect &= Took_Effect(outcome);
+            // WriteFailed never reaches here — Refuse_WriteFailed_OrNull answers it as a 500 first — and is
+            // honest if it ever did: the one predicate classifies it as not having taken effect.
+            everyEditTookEffect &= Settings_Writer.Took_Effect(outcome);
         }
 
         var status = everyEditTookEffect ? HttpStatusCode.OK : HttpStatusCode.UnprocessableContent;
 
         return Answer(status, new JsonObject { ["results"] = resultsJson });
-    }
-
-    static bool Took_Effect(SettingsWriteOutcomes outcome)
-    {
-        return outcome switch
-        {
-            SettingsWriteOutcomes.Applied or SettingsWriteOutcomes.Reset => true,
-            SettingsWriteOutcomes.RefusedUnknownPath or SettingsWriteOutcomes.RefusedReadOnly or SettingsWriteOutcomes.RefusedInvalid => false,
-
-            // Never reached — Refuse_WriteFailed_OrNull answers it as a 500 first — and honest if it ever were.
-            SettingsWriteOutcomes.WriteFailed => false,
-            _ => throw new InvalidOperationException($"Unhandled SettingsWriteOutcomes: {outcome}"),
-        };
     }
 
     /// <summary>

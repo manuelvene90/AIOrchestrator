@@ -381,10 +381,21 @@ public static class OrchestratorConfig_Loader
         {
             var secretsRoot = Read_TreeForEditing_OrThrow(paths.SecretsFile, corruptReadsAsEmpty: false);
 
-            secretsRoot["telegramBotToken"] = token;
+            secretsRoot["telegramBotToken"] = Normalise_BotToken_OrNull(token);
 
             Atomic_FileWriter.Write_AllText(paths.SecretsFile, secretsRoot.ToJsonString(JsonWriting.INDENTED));
         }
+    }
+
+    /// <summary>
+    /// A TOKEN AS A BOX HANDS IT OVER, TIDIED HERE AND NOT IN THE WINDOW (plan 04 Task 9): a pasted token carries a
+    /// stray space more often than not, and a token with one is a token Telegram refuses at the next start with no
+    /// sign of why. Blank is "no token" (JSON null), exactly what the window's old Save wrote for an empty box. The
+    /// WPF project may hold no logic, so this rule lives with the one door that writes the token.
+    /// </summary>
+    static string? Normalise_BotToken_OrNull(string? token)
+    {
+        return string.IsNullOrWhiteSpace(token) ? null : token.Trim();
     }
 
     /// <summary>

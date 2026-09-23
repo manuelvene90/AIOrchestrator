@@ -30,6 +30,50 @@ public static class SettingsRow_Builder
 {
     static readonly IReadOnlyList<SettingCategories> SECTION_ORDER = Build_SectionOrder();
 
+    /// <summary>
+    /// THE CATALOGUE ROWS THE WPF WINDOW'S CONNECTION TAB DRAWS BESIDE THE BOT TOKEN (D11, 2026-09-14). §8.1 keeps
+    /// "connection settings (token, chat id, owner id)" on their own tab; the token is deliberately not a
+    /// catalogue row, but the two ids ARE (Kernel, nullable Int), so they are drawn through the same readings
+    /// and the same editor as every other row — one validator, one origin label — and stay in Kernel as well,
+    /// where the catalogue files them. A hand-written second id field is the drift §12 names.
+    /// </summary>
+    public static readonly IReadOnlyList<string> CONNECTION_PATHS = ["telegramSupergroupChatId", "telegramOwnerUserId"];
+
+    /// <summary>
+    /// What a section with no rows says — Kit today, which plan 05 fills. Said, not left blank, so an empty tab
+    /// reads as "nothing yet" rather than as a window that failed to load.
+    /// </summary>
+    public const string EMPTY_SECTION_NOTE = "Nothing to set here yet — this section fills in with a later plan.";
+
+    /// <summary>
+    /// The readings for <see cref="CONNECTION_PATHS"/>, in that order. A path with no reading is simply absent —
+    /// a partial snapshot draws what it has — and a catalogue that renamed one of them is caught by the test that
+    /// asserts each path is a catalogue row.
+    /// </summary>
+    public static IReadOnlyList<ISettingReading> Select_ConnectionRows(IReadOnlyList<ISettingReading> readings)
+    {
+        List<ISettingReading> rows = [];
+
+        foreach (var path in CONNECTION_PATHS)
+        {
+            var reading = readings.FirstOrDefault(candidate => candidate.Definition.Path == path);
+
+            if (reading != null)
+                rows.Add(reading);
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// The header line naming the active preset (D13: shown in every renderer's header, never offered as a row) —
+    /// the web page's own words, "preset: classic".
+    /// </summary>
+    public static string Describe_PresetHeader(string presetName)
+    {
+        return $"preset: {presetName}";
+    }
+
     public static IReadOnlyList<(SettingCategories Category, string Title, IReadOnlyList<ISettingReading> Rows)> Build_Sections(
         IReadOnlyList<ISettingReading> readings)
     {

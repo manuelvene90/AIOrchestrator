@@ -94,6 +94,23 @@ public static class Settings_Writer
     /// </summary>
     public static readonly Lock CONFIG_WRITE_LOCK = new();
 
+    /// <summary>
+    /// WHETHER AN OUTCOME CHANGED WHAT THE ROW READS — <c>Applied</c> and <c>Reset</c>, and nothing else. ONE
+    /// predicate for every renderer that answers an edit (the web handler's 200-vs-422, the WPF window's note),
+    /// moved here from the handler in plan 04 Task 9 so a seventh outcome is classified once, not once per
+    /// renderer (decision 12). An outcome it does not know throws, naming it, rather than guessing.
+    /// </summary>
+    public static bool Took_Effect(SettingsWriteOutcomes outcome)
+    {
+        return outcome switch
+        {
+            SettingsWriteOutcomes.Applied or SettingsWriteOutcomes.Reset => true,
+            SettingsWriteOutcomes.RefusedUnknownPath or SettingsWriteOutcomes.RefusedReadOnly or SettingsWriteOutcomes.RefusedInvalid => false,
+            SettingsWriteOutcomes.WriteFailed => false,
+            _ => throw new InvalidOperationException($"Unhandled SettingsWriteOutcomes: {outcome}"),
+        };
+    }
+
     /// <summary>One edit — the same rules and the same single write as <c>Apply_Many</c>, because it IS a one-edit <c>Apply_Many</c>.</summary>
     public static (SettingsWriteOutcomes Outcome, string? Message_OrNull) Apply(ISupervisionPaths paths, string path, JsonNode? value, IOrchestrationLog? log)
     {
