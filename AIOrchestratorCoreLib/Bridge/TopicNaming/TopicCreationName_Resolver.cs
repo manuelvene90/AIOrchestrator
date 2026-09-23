@@ -42,4 +42,23 @@ public static class TopicCreationName_Resolver
 
         return trimmed.Length > MAX_TOPIC_NAME_LENGTH ? orchId : trimmed;
     }
+
+    /// <summary>
+    /// Whether a failed NAMED creation may be retried with the orch id: only when Telegram itself
+    /// answered with a non-retryable refusal, which proves no topic was created.
+    ///
+    /// <para>
+    /// NOT <see cref="Telegram.TelegramAttempt_Gate.Classify_Failure"/>'s Rejected, which the first
+    /// version used (review, 2026-09-23): that bucket also holds any plain <see cref="Exception"/>,
+    /// and the client throws exactly that after an HTTP 200 whose body it cannot read — a creation that
+    /// may well have happened, where a second create would make two topics. A 429/5xx, a timeout or a
+    /// dropped connection are likewise "we do not know", so they keep the old behaviour: no second
+    /// create, the caller's General fallback, a new attempt on a later mirror.
+    /// </para>
+    /// </summary>
+    public static bool Is_NameRefused(Exception failure)
+    {
+        return failure is Telegram.TelegramApiClient.TelegramApiException { Is_Retryable: false }
+            && Telegram.TelegramAttempt_Gate.Classify_Failure(failure) == Telegram.TopicNameAttemptOutcomes.Rejected;
+    }
 }

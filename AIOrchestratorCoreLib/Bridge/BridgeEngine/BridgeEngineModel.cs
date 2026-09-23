@@ -5009,8 +5009,11 @@ internal sealed class BridgeEngineModel(
         {
             topicId = await client.Create_ForumTopic_Async(topicName, colour, cancellationToken);
         }
+        // NARROWED after review (2026-09-23): the gate's Rejected also covers a plain Exception — the one
+        // the client throws after an HTTP 200 whose body it cannot read, when the topic may already
+        // EXIST. Only Telegram's own refusal proves nothing was created.
         catch (Exception ex) when (topicName != session.OrchId
-            && TelegramAttempt_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.Rejected)
+            && TopicNaming.TopicCreationName_Resolver.Is_NameRefused(ex))
         {
             _log.Log_Warning(session.OrchId, $"Telegram refused to create the topic as '{topicName}' ({ex.Message}) — creating it as '{session.OrchId}' instead");
 

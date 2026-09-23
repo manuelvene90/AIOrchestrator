@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Bridge.TopicNaming;
+using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge.TopicNaming;
@@ -34,6 +35,43 @@ public class TopicCreationNameResolverTests
         var atCap = new string('x', TopicCreationName_Resolver.MAX_TOPIC_NAME_LENGTH);
 
         Assert.Equal(atCap, TopicCreationName_Resolver.Resolve("dvfs-33", atCap));
+    }
+
+    [Fact]
+    public void IsNameRefused_ATelegram400_IsARefusal()
+    {
+        Assert.True(TopicCreationName_Resolver.Is_NameRefused(
+            new TelegramApiException(400, "Telegram 'createForumTopic' failed with HTTP 400: Bad Request: TOPIC_NAME_INVALID")));
+    }
+
+    [Theory]
+    [InlineData(429)]
+    [InlineData(500)]
+    [InlineData(502)]
+    public void IsNameRefused_ARetryableTelegramAnswer_IsNot(int statusCode)
+    {
+        Assert.False(TopicCreationName_Resolver.Is_NameRefused(new TelegramApiException(statusCode, $"HTTP {statusCode}")));
+    }
+
+    [Fact]
+    public void IsNameRefused_TopicNotModified_IsNot()
+    {
+        Assert.False(TopicCreationName_Resolver.Is_NameRefused(
+            new TelegramApiException(400, "Telegram failed with HTTP 400: {\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: TOPIC_NOT_MODIFIED\"}")));
+    }
+
+    /// <summary>The review's case: the client's plain Exception after a 200 it could not read — the topic may exist.</summary>
+    [Fact]
+    public void IsNameRefused_APlainException_IsNot()
+    {
+        Assert.False(TopicCreationName_Resolver.Is_NameRefused(new Exception("createForumTopic response has no result.message_thread_id: {}")));
+    }
+
+    [Fact]
+    public void IsNameRefused_ATimeoutOrADroppedConnection_IsNot()
+    {
+        Assert.False(TopicCreationName_Resolver.Is_NameRefused(new TaskCanceledException("timeout")));
+        Assert.False(TopicCreationName_Resolver.Is_NameRefused(new HttpRequestException("connection reset")));
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
@@ -115,6 +116,57 @@ public class TopicNamingEngineTests : IDisposable
 
         Assert.Equal([orchId], _telegram.Created_TopicNames());
         Assert.Empty(_telegram.Renamed_TopicNames());
+    }
+
+    /// <summary>
+    /// TELEGRAM REFUSES THE NAME, SO THE TOPIC IS STILL BORN — as the orch id, in the same call. A
+    /// refused creation would otherwise mirror to General on every tick. The refusal is logged, and the
+    /// name sync still pushes the real name afterwards: the fallback is a birth name, not a verdict.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ARefusedNamedCreate_FallsBackToTheOrchId_AndTheSyncStillTriesTheName()
+    {
+        var orchId = await Start_Untopiced_WithChannelAlreadySeen_Async(DISPLAY_NAME);
+
+        _telegram.Fail_NextCreate_With(new TelegramApiException(
+            400, "Telegram 'createForumTopic' failed with HTTP 400: {\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: TOPIC_NAME_INVALID\"}", null));
+
+        Append_SupervisorEntry(orchId, 1, "progress", "The build is green.");
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Renamed_TopicNames().Contains(DISPLAY_NAME), 20_000),
+            $"the sync never tried the real name after the fallback.{Environment.NewLine}"
+            + $"creates: {string.Join(" | ", _telegram.Created_TopicNames())}{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal([DISPLAY_NAME, orchId], _telegram.Created_TopicNames());
+        Assert.True(
+            _log.Has_Line_Containing($"WARN  [{orchId}] Telegram refused to create the topic as '{DISPLAY_NAME}'"),
+            $"the refusal was not logged as a warning.{Environment.NewLine}{_log.Dump()}");
+    }
+
+    /// <summary>
+    /// A FAILURE THAT IS NOT TELEGRAM'S REFUSAL NEVER BUYS A SECOND CREATE. The client throws a plain
+    /// Exception after an HTTP 200 whose body it cannot read — the topic may already exist, so creating
+    /// again in the same call would make two. Today's behaviour stands: no orch-id retry.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ANonTelegramFailureAfterACreate_DoesNotTriggerASecondCreate()
+    {
+        var orchId = await Start_Untopiced_WithChannelAlreadySeen_Async(DISPLAY_NAME);
+
+        _telegram.Fail_NextCreate_With(new Exception("createForumTopic response has no result.message_thread_id: {\"ok\":true}"));
+
+        Append_SupervisorEntry(orchId, 1, "progress", "The build is green.");
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Created_TopicNames().Count > 0, 20_000),
+            $"no create was ever attempted, so this test reached nothing.{Environment.NewLine}{_log.Dump()}");
+
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(6));
+
+        Assert.DoesNotContain(orchId, _telegram.Created_TopicNames());
     }
 
     /// <summary>

@@ -562,9 +562,29 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
     public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
         lock (_lock)
+        {
             _createdTopicNames.Add(topicName);
 
+            var failure = _nextCreateFailure;
+            _nextCreateFailure = null;
+
+            if (failure != null)
+                throw failure;
+        }
+
         return Task.FromResult(CREATED_TOPIC_ID);
+    }
+
+    Exception? _nextCreateFailure;
+
+    /// <summary>
+    /// The NEXT create throws this, once — the attempt is still recorded, so a test sees both the
+    /// failed create and whatever the engine does next.
+    /// </summary>
+    public void Fail_NextCreate_With(Exception failure)
+    {
+        lock (_lock)
+            _nextCreateFailure = failure;
     }
 
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken)
