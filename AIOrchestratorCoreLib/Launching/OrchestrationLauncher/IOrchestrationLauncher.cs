@@ -14,6 +14,14 @@ public interface IOrchestrationLauncher
 
     /// <summary>ONE session talking straight to the owner — no supervisor, reviewer or gates.</summary>
     IOrchestrationSession Start_BasicOrchestration(string repoName, string repoPath);
+
+    /// <summary>
+    /// A SIBLING of <paramref name="parentOrchId"/>: a basic orchestration of the same repo, linked into
+    /// the parent's endeavour and spawned in its own worktree (spec 2026-09-23 §4.3 step 3). Throws,
+    /// creating nothing, when <paramref name="workingPath"/> is not an existing absolute directory.
+    /// It never writes the PARENT — stamping the parent's endeavour id is the birth step's job.
+    /// </summary>
+    IOrchestrationSession Start_SiblingOrchestration(string parentOrchId, string displayName, string workingPath, string bornFromHandover);
     IOrchestrationSession Add_Implementer(string orchId);
 
     /// <summary>A basic orchestration becomes a full crew: the solo ends, a supervisor takes over its channel, imp-1 spawns empty.</summary>
