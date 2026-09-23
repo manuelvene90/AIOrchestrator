@@ -237,5 +237,12 @@ public sealed record EngineStateSnapshot
     /// <summary>Why it paused, in the words the owner was told — so the resume can name the same thing.</summary>
     public string? DispatchPauseReason { get; init; }
 
+    /// <summary>
+    /// The instant the pause the owner LIFTED would have ended, or null. Persisted for the reason the
+    /// pause is: the probes still read over the threshold after a lift, so a restart that forgot it
+    /// would pause again on its first tick. See <see cref="Limits.DispatchPause_Gate.Is_CoveredByLift"/>.
+    /// </summary>
+    public DateTime? DispatchPauseLiftedUntilUtc { get; init; }
+
     public static EngineStateSnapshot Empty => new();
 }
