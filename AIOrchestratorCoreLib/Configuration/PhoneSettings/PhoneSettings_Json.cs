@@ -44,7 +44,9 @@ public static class PhoneSettings_Json
     const string PERIODIC_STATUS_INTERVAL_MINUTES_PATH = "phone.status.intervalMinutes";
     const string APP_MESSAGES_RING_PATH = "phone.appMessagesRing";
     const string REPLY_KEYBOARD_PATH = "phone.replyKeyboard";
-    const string RECEIPTS_PATH = "phone.receipts";
+
+    /// <summary>Public so a line that names this key — the hold toggle's D10 fallback warning — spells it from here, not from a second copy.</summary>
+    public const string RECEIPTS_PATH = "phone.receipts";
     const string TOPIC_ON_CLOSE_PATH = "topic.onClose";
     const string TOPIC_MODE_GLYPHS_PATH = "topic.modeGlyphs";
 

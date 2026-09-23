@@ -776,7 +776,8 @@ public static class SettingsCatalog
                 description:
                     "WHERE the ⏸/▶ hold toggle is drawn: true puts it on the PULSE bar, false on the receipt. NEVER BOTH — " +
                     "one toggle in two places is CLAUDE.md decision 12's drift, and this key is the single fact that says " +
-                    $"which place. {INERT_NOTE}",
+                    "which place. False with phone.receipts = 'reactions' has no receipt message to carry it, so the toggle " +
+                    "falls back to the PULSE bar and the log says so once.",
                 restart: RestartKinds.None),
         ];
     }
@@ -838,11 +839,8 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Orchestration topic buttons",
                 description:
-                    "The verbs on an orchestration topic's button bar, in display order. NOTE FOR WHOEVER IMPLEMENTS THE " +
-                    "botCommands VALIDATOR: 'tail sup' is a verb WITH ITS TARGET, by deliberate design — a tap carries no " +
-                    "text, so the target rides inside the verb — and it is therefore NOT a member of BotCommandMenu.ALL, " +
-                    "which holds the bare 'tail'. A validator that tests exact membership would refuse the shipped default. " +
-                    $"{INERT_NOTE}",
+                    "The verbs on an orchestration topic's button bar, in display order. A verb no tap can run yet is left " +
+                    "off the bar and named once in the log — it stays a typed command.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.BOT_COMMANDS),
 
@@ -854,7 +852,8 @@ public static class SettingsCatalog
                 label: "General topic buttons",
                 description:
                     "The verbs on the GENERAL topic's button bar, in display order. All cross-cutting on purpose: General " +
-                    $"has no session of its own, so a /merge or a /close there would have nothing to act on. {INERT_NOTE}",
+                    "has no session of its own, so a /merge or a /close there would have nothing to act on. An empty list " +
+                    "is no bar at all.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.BOT_COMMANDS),
         ];

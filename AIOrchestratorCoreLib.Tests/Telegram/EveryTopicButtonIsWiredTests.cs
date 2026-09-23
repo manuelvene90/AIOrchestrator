@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using AIOrchestratorCoreLib.Telegram;
 using Xunit;
 
@@ -15,26 +16,72 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// The engine is `internal sealed` with no InternalsVisibleTo, so its switch cannot be called from
 /// here. This reads the SOURCE instead. That is a blunt instrument and it is the right one: the
 /// property is "these two files agree about a list of verbs", which is a fact about the text.
+///
+/// <para>
+/// EVERY VERB AN OWNER MAY CONFIGURE, SINCE 2026-09-23 (plan 03 Task 5). The bars became
+/// <c>pulse.buttons</c> and <c>general.buttons</c>, so walking the two shipped lists would certify only
+/// the defaults while an owner's own bar went unread. Widened, the guard found TWENTY-TWO menu verbs
+/// with no case in the tap handler — classic's own /pause and /progress among them. Those two were
+/// master's buttons (a2c9a3d, 2026-09-09) whose cases the fork merge dropped, and were re-wired so
+/// classic's bar can be drawn whole; the other TWENTY stay typed commands only. The builder refuses to
+/// draw a verb with no tap route (<see cref="TopicCommandButtons.Has_TapRoute"/>), and this guard holds
+/// that set to the switch in BOTH directions, so wiring one later is a case there and a word in the
+/// set, and forgetting either is red.
+/// </para>
 /// </summary>
 public class EveryTopicButtonIsWiredTests
 {
     const string ENGINE_RELATIVE_PATH = "AIOrchestratorCoreLib/Bridge/BridgeEngine/BridgeEngineModel.cs";
 
+    /// <summary>Where the tap handler starts — the one switch a tap is dispatched by.</summary>
+    const string TAP_HANDLER_SIGNATURE = "Task<bool> Try_HandleTopicCommandTap_Async(";
+
     /// <summary>
     /// The INLINE keyboard's tap handler. A tap carries callback_data and no text, so it never meets
-    /// the command lexer — it is dispatched by this switch alone.
+    /// the command lexer — it is dispatched by this switch alone. Every verb the builder is willing to
+    /// draw must have its case.
     /// </summary>
     [Fact]
     public void EveryButton_HasACaseInTheTapHandler()
     {
-        var engineSource = Read_EngineSource();
+        var tapHandler = Read_TapHandlerSource(Read_EngineSource());
 
-        foreach (var command in Every_RenderedCommand())
+        foreach (var command in Every_ConfigurableCommand().Where(TopicCommandButtons.Has_TapRoute))
         {
             Assert.True(
-                engineSource.Contains($"case \"{command}\":", StringComparison.Ordinal),
+                Has_TapCase(tapHandler, command),
                 $"the '/{command}' button renders but has no case in the tap handler's switch, so tapping "
                 + "it falls to the default arm and tells the owner their own button is from an older build.");
+        }
+    }
+
+    /// <summary>
+    /// THE OTHER DIRECTION, and the half that makes a configurable bar safe: a verb with no case is
+    /// never drawn, on either bar, whatever the owner configured. Asked of the BUILDERS rather than of
+    /// the set alone, because the set is only a claim about what they do.
+    ///
+    /// It also catches the opposite drift — a case added to the switch and not to the set, which would
+    /// leave a working command permanently refused from every bar.
+    /// </summary>
+    [Fact]
+    public void AVerbWithNoCaseInTheTapHandler_IsNeverDrawn_AndAVerbWithOneIsNeverRefused()
+    {
+        var tapHandler = Read_TapHandlerSource(Read_EngineSource());
+
+        foreach (var command in Every_ConfigurableCommand())
+        {
+            var hasCase = Has_TapCase(tapHandler, command);
+
+            Assert.True(
+                hasCase == TopicCommandButtons.Has_TapRoute(command),
+                hasCase
+                    ? $"'/{command}' has a case in the tap handler but TopicCommandButtons refuses to draw it — a working button no bar can show."
+                    : $"'/{command}' has NO case in the tap handler but TopicCommandButtons would draw it — a button that answers 'from an older version of the app'.");
+
+            var expectedButtons = hasCase ? 1 : 0;
+
+            Assert.Equal(expectedButtons, TopicCommandButtons.Build_ForTopic([command], 7L, isHolding: false, heldCount: 0, holdToggleOnTheBar: false).Count);
+            Assert.Equal(expectedButtons, TopicCommandButtons.Build_ForGeneral([command], 0L).Count);
         }
     }
 
@@ -49,7 +96,7 @@ public class EveryTopicButtonIsWiredTests
     {
         var engineSource = Read_EngineSource();
 
-        foreach (var command in Every_RenderedCommand())
+        foreach (var command in Every_ConfigurableCommand())
         {
             // A MULTI-WORD BAR VERB LEXES AS ITS FIRST WORD, and that is not a loophole — it is how a
             // typed command works. `Get_BotCommand_OrNull` reads the verb after the slash, so the
@@ -60,8 +107,7 @@ public class EveryTopicButtonIsWiredTests
             var lexedVerb = command.Split(' ')[0];
 
             Assert.True(
-                engineSource.Contains($"command == \"{lexedVerb}\"", StringComparison.Ordinal)
-                || engineSource.Contains($"command is \"{lexedVerb}\"", StringComparison.Ordinal),
+                Is_DispatchedByTheLexer(engineSource, lexedVerb),
                 $"'/{command}' can arrive as plain text (the \"/\" menu, or the owner typing it), but no "
                 + $"branch dispatches the verb '{lexedVerb}' — "
                 + "so the text is routed to the session as chat instead of running the command.");
@@ -69,26 +115,79 @@ public class EveryTopicButtonIsWiredTests
     }
 
     /// <summary>
-    /// BOTH BARS, and the omission of the second one is why this guard reported everything wired
-    /// while three buttons were not.
+    /// EVERY VERB AN OWNER MAY PUT ON A BAR: the whole "/" menu, plus "tail sup", the one verb that
+    /// carries its target (a tap has no text to carry one in). This is the set
+    /// <c>SettingValidators.BOT_COMMANDS</c> accepts the first word of.
     ///
     /// <para>
-    /// The guard walked <see cref="TopicCommandButtons.Commands"/> only. `GeneralCommands` — the
-    /// General topic's own bar — was never walked, so `/summary`, `/resume` and `/dnd_all` sat with
-    /// no case in the switch and a green suite above them from 2026-09-09 to 2026-09-10. The bar had
-    /// also never been rendered, which is what hid it: nobody could tap a button that was not drawn,
-    /// so the dead arm cost nothing until the bar landed. A guard that covers one of two lists is
-    /// decision 20's harness again — it certified the absence of what it never read.
-    /// </para>
-    /// <para>
-    /// CONCATENATED RATHER THAN A SECOND PAIR OF TESTS. The property is the same property for both
-    /// bars, and two copies of it would be the next thing to fall out of step when a third bar
-    /// appears.
+    /// IT USED TO BE THE TWO SHIPPED LISTS, and before that ONE of them — which is why this guard once
+    /// reported everything wired while three General buttons were not (2026-09-09 to 2026-09-10). A
+    /// guard that covers part of what can be drawn is decision 20's harness: it certifies the absence
+    /// of what it never read. With the bars configurable, "what can be drawn" is everything the
+    /// validator lets through.
     /// </para>
     /// </summary>
-    static IEnumerable<string> Every_RenderedCommand()
+    static IEnumerable<string> Every_ConfigurableCommand()
     {
-        return TopicCommandButtons.Commands.Concat(TopicCommandButtons.GeneralCommands).Distinct();
+        return BotCommandMenu.ALL.Select(command => command.Command).Append("tail sup").Distinct();
+    }
+
+    static bool Has_TapCase(string tapHandlerSource, string command)
+    {
+        return tapHandlerSource.Contains($"case \"{command}\":", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE TAP HANDLER'S OWN BODY, not the whole engine. With the guard walking every menu verb, a
+    /// <c>case "status":</c> in any other switch of a 13 000-line file would count as wiring — and under
+    /// the two-direction test above it would DEMAND the verb be drawn, putting a dead button on the
+    /// owner's phone on the strength of an unrelated line. The method ends at the first closing brace
+    /// back at member indentation. Fails loudly when it cannot be found, for the reason
+    /// <see cref="Read_EngineSource"/> does.
+    /// </summary>
+    static string Read_TapHandlerSource(string engineSource)
+    {
+        var start = engineSource.IndexOf(TAP_HANDLER_SIGNATURE, StringComparison.Ordinal);
+
+        if (start < 0)
+            throw new Exception($"'{TAP_HANDLER_SIGNATURE}' is not in the engine source — this guard would measure nothing, so it fails instead.");
+
+        var end = Regex.Match(engineSource[start..], "\r?\n    }\r?\n");
+
+        if (!end.Success)
+            throw new Exception($"Found '{TAP_HANDLER_SIGNATURE}' but not the end of its body — this guard would measure the rest of the file, so it fails instead.");
+
+        return engineSource.Substring(start, end.Index + end.Length);
+    }
+
+    /// <summary>
+    /// THE FOUR SHAPES THE LEXER CHAIN ACTUALLY USES, each matched as written in the engine. Walking the
+    /// whole menu reached verbs dispatched without a plain equality — `command is "tail" or "log"`,
+    /// `command.StartsWith("imp", …)` for a verb whose argument is glued on, and
+    /// `Is_Command(command, MODEL_COMMAND)` for a verb that takes a value — and matching only the first
+    /// shape would have reported those three commands broken when they are not.
+    /// </summary>
+    static bool Is_DispatchedByTheLexer(string engineSource, string verb)
+    {
+        if (engineSource.Contains($"command == \"{verb}\"", StringComparison.Ordinal))
+            return true;
+
+        foreach (Match pattern in Regex.Matches(engineSource, "command is (\"[a-z_]+\"(?: or \"[a-z_]+\")*)"))
+        {
+            if (pattern.Groups[1].Value.Split(" or ").Contains($"\"{verb}\""))
+                return true;
+        }
+
+        if (engineSource.Contains($"command.StartsWith(\"{verb}\"", StringComparison.Ordinal))
+            return true;
+
+        foreach (Match constant in Regex.Matches(engineSource, $"const string ([A-Z_]+) = \"{Regex.Escape(verb)}\";"))
+        {
+            if (engineSource.Contains($"Is_Command(command, {constant.Groups[1].Value})", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

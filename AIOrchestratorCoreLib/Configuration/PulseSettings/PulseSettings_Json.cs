@@ -32,9 +32,17 @@ public static class PulseSettings_Json
 {
     const string FIELDS_PATH = "pulse.fields";
     const string STEP_MINUTES_PATH = "pulse.stepMinutes";
-    const string BUTTONS_PATH = "pulse.buttons";
-    const string GENERAL_BUTTONS_PATH = "general.buttons";
-    const string HOLD_TOGGLE_PATH = "pulse.holdToggle";
+    /// <summary>
+    /// The three keys a log line names when the engine cannot draw what they ask for (plan 03 Task 5) —
+    /// public so that line spells each key from here, not from a second copy.
+    /// </summary>
+    public const string BUTTONS_PATH = "pulse.buttons";
+
+    /// <inheritdoc cref="BUTTONS_PATH"/>
+    public const string GENERAL_BUTTONS_PATH = "general.buttons";
+
+    /// <inheritdoc cref="BUTTONS_PATH"/>
+    public const string HOLD_TOGGLE_PATH = "pulse.holdToggle";
 
     /// <summary>Both trees null is the catalogue's own shipped defaults — see <c>PhoneSettings_Json.Parse</c>.</summary>
     public static IPulseSettings Parse(JsonObject? configRoot, JsonObject? presetTree)

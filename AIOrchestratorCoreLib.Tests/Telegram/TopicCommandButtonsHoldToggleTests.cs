@@ -4,14 +4,16 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Telegram;
 
 /// <summary>
-/// THE HOLD TOGGLE ON THE PULSE BAR — brief D.
+/// THE HOLD TOGGLE ON THE PULSE BAR — brief D, and since plan 03 Task 5 only when
+/// <c>pulse.holdToggle</c> puts it there.
 ///
 /// <para>
 /// ⏸ Wait used to ride the ✓ receipt, which landed under whatever the owner had just sent. Brief D
 /// replaces that receipt with a reaction, so the button has no message to hang on any more and
-/// moves to the one message that is always there. It is NOT also kept under the owner's messages:
-/// one toggle in two homes is CLAUDE.md decision 12, and the owner ruled the same way on
-/// 2026-09-10.
+/// moves to the one message that is always there. Classic (master's phone) keeps the receipt, and
+/// the toggle with it — so the placement is a setting, and whichever place it names is the ONLY
+/// place: one toggle in two homes is CLAUDE.md decision 12, and the owner ruled the same way on
+/// 2026-09-10. ConfigurableCommandButtonsTests pins "never both" across both presets.
 /// </para>
 /// </summary>
 public class TopicCommandButtonsHoldToggleTests
@@ -21,7 +23,7 @@ public class TopicCommandButtonsHoldToggleTests
     [Fact]
     public void TheBar_OffersWait_WhenNothingIsHeld()
     {
-        var buttons = TopicCommandButtons.Build_ForTopic(TOPIC, isHolding: false, heldCount: 0);
+        var buttons = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, TOPIC, isHolding: false, heldCount: 0, holdToggleOnTheBar: true);
 
         var toggle = buttons[^1];
 
@@ -38,7 +40,7 @@ public class TopicCommandButtonsHoldToggleTests
     [Fact]
     public void TheBar_OffersGoWithTheHeldCount_WhileHolding()
     {
-        var toggle = TopicCommandButtons.Build_ForTopic(TOPIC, isHolding: true, heldCount: 3)[^1];
+        var toggle = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, TOPIC, isHolding: true, heldCount: 3, holdToggleOnTheBar: true)[^1];
 
         Assert.Equal("⏸ 3 held · ▶ GO", toggle.Label);
         Assert.Equal((HoldButtonActions.Go, TOPIC), HoldButton_Data.Parse_OrNull(toggle.Data));
@@ -60,11 +62,25 @@ public class TopicCommandButtonsHoldToggleTests
     [Fact]
     public void TheToggleIsAddedToTheBar_NotSubstitutedForACommand()
     {
-        var plain = TopicCommandButtons.Build_ForTopic(TOPIC);
-        var withToggle = TopicCommandButtons.Build_ForTopic(TOPIC, isHolding: false, heldCount: 0);
+        var plain = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, TOPIC, isHolding: false, heldCount: 0, holdToggleOnTheBar: false);
+        var withToggle = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, TOPIC, isHolding: false, heldCount: 0, holdToggleOnTheBar: true);
 
         Assert.Equal(plain.Count + 1, withToggle.Count);
         Assert.Equal(plain, withToggle.Take(plain.Count));
+    }
+
+    /// <summary>
+    /// WITH THE TOGGLE ON THE RECEIPT, THE BAR CARRIES NO HOLD PAYLOAD AT ALL — not a disabled one, not
+    /// a label: the receipt is where the owner looks for it, and a second copy here is the drift the
+    /// setting exists to prevent.
+    /// </summary>
+    [Fact]
+    public void TheBarCarriesNoToggle_WhenTheToggleLivesOnTheReceipt()
+    {
+        var buttons = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, TOPIC, isHolding: true, heldCount: 3, holdToggleOnTheBar: false);
+
+        Assert.Equal(TopicCommandButtons.Commands.Count, buttons.Count);
+        Assert.All(buttons, button => Assert.Null(HoldButton_Data.Parse_OrNull(button.Data)));
     }
 
     /// <summary>
@@ -74,7 +90,7 @@ public class TopicCommandButtonsHoldToggleTests
     [Fact]
     public void TheTogglesPayload_BelongsToTheHoldFamily_NotTheCommandBar()
     {
-        var toggle = TopicCommandButtons.Build_ForTopic(TOPIC, isHolding: true, heldCount: 2)[^1];
+        var toggle = TopicCommandButtons.Build_ForTopic(TopicCommandButtons.Commands, TOPIC, isHolding: true, heldCount: 2, holdToggleOnTheBar: true)[^1];
 
         Assert.NotNull(HoldButton_Data.Parse_OrNull(toggle.Data));
         Assert.Null(TopicCommandButtons.Parse_OrNull(toggle.Data));
