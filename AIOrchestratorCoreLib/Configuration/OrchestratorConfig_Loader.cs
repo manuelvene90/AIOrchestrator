@@ -7,6 +7,7 @@ using AIOrchestratorCoreLib.Configuration.PhoneSettings;
 using AIOrchestratorCoreLib.Configuration.PulseSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
+using AIOrchestratorCoreLib.Configuration.SettingsWriting;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running;
@@ -247,8 +248,25 @@ public static class OrchestratorConfig_Loader
     /// repos, no chat id and no owner id — Telegram-blind, with the real settings gone rather than
     /// merely unsaved.
     /// </para>
+    /// <para>
+    /// UNDER <see cref="Settings_Writer.CONFIG_WRITE_LOCK"/> (plan 04 D10, 2026-09-23), because config.json
+    /// now has SEVEN writers in this process and a read-edit-write that interleaves with another loses one
+    /// of the two edits to the second rename: this method (the Settings window, and the /screenshots toggle
+    /// through <c>BridgeEngineModel.Set_StatusScreenshots</c>), <see cref="Save_BotToken"/> (secrets.json
+    /// only), <see cref="Settings_Writer"/>'s <c>Apply</c>, <c>Apply_Many</c> and <c>Reset</c> — all five
+    /// take the lock — and <see cref="ConfigRepos_Reorderer"/> and <see cref="ConfigRepoColor_Writer"/>,
+    /// which do NOT (PARKED: both operate on the raw tree already, and neither was asked of this plan).
+    /// THE LOCK IS IN-PROCESS ONLY: the WPF app and the daemon are two processes, an agent hand-editing the
+    /// file is a third, and a lock in one restrains nothing in the others.
+    /// </para>
     /// </summary>
     public static void Save(IOrchestratorConfig config, ISupervisionPaths paths)
+    {
+        lock (Settings_Writer.CONFIG_WRITE_LOCK)
+            Save_UnderWriteLock(config, paths);
+    }
+
+    static void Save_UnderWriteLock(IOrchestratorConfig config, ISupervisionPaths paths)
     {
         Directory.CreateDirectory(paths.Root);
 
@@ -272,10 +290,6 @@ public static class OrchestratorConfig_Loader
         var configRoot = Read_JsonObject_ForEditing(paths.ConfigFile);
 
         configRoot["repos"] = reposArray;
-        configRoot["supervisorModel"] = config.SupervisorModel;
-        configRoot["implementerModel"] = config.ImplementerModel;
-        configRoot["generalSupervisorModel"] = config.GeneralSupervisorModel;
-        configRoot["communicatorModel"] = config.CommunicatorModel;
         configRoot["telegramSupergroupChatId"] = config.TelegramSupergroupChatId;
         configRoot["telegramOwnerUserId"] = config.TelegramOwnerUserId;
         configRoot["telegramStatusScreenshots"] = config.TelegramStatusScreenshots;
@@ -286,14 +300,18 @@ public static class OrchestratorConfig_Loader
 
         Atomic_FileWriter.Write_AllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));
 
-        // reviewerModel AND soloModel ARE READ AND NEVER WRITTEN, and they belong to the paragraph
-        // below rather than beside their four siblings above. The four have a Settings field, so the
-        // value in the file is the owner's own; these two have none, and their default is one that is
-        // MEANT TO MOVE — an absent reviewerModel tracks implementerModel by design (owner
-        // 2026-09-09: implementer sonnet eventually, reviewer opus). Writing this build's answer
-        // would materialise it as if the owner had chosen it and cut that ladder for good, on the
-        // first button press, on every box that had never heard of the keys. A hand-edited value is
-        // safe either way: Save() merges, so keys it does not write survive untouched.
+        // NO MODEL KEY IS WRITTEN HERE — ALL SIX ARE READ AND NEVER WRITTEN (plan 04 D1, owner,
+        // 2026-09-14; until then only reviewerModel and soloModel were). A model's default is one that
+        // is MEANT TO MOVE: an absent reviewerModel tracks implementerModel by design (owner 2026-09-09:
+        // implementer sonnet eventually, reviewer opus), a preset states models for a whole machine,
+        // and the catalogue's shipped default changes when the app is updated. Writing whatever a model
+        // had RESOLVED to would materialise it as if the owner had chosen it, on the first button press,
+        // on every box — which is exactly how the owner's live config.json came to pin a stale model and
+        // defeat the Opus default they had asked for (CLAUDE.md, entry 216): the four supervisor,
+        // implementer, general and communicator lines here wrote a preset's value, and before plan 02 a
+        // shipped default, back as the owner's own. A model is now written when the owner edits THAT
+        // row, through Settings_Writer, and at no other time. A hand-edited value is safe either way:
+        // Save() merges, so keys it does not write survive untouched.
         //
         // planBackend, THE GUARDRAIL KEYS, defaults, telegram, effort, phone/topic AND pulse ARE DELIBERATELY ABSENT from the writes above,
         // for the same reason from two directions. planBackend is hand-edited, no window builds one,
@@ -317,6 +335,28 @@ public static class OrchestratorConfig_Loader
         secretsRoot["telegramBotToken"] = config.TelegramBotToken;
 
         Atomic_FileWriter.Write_AllText(paths.SecretsFile, secretsRoot.ToJsonString(JsonWriting.INDENTED));
+    }
+
+    /// <summary>
+    /// THE BOT TOKEN'S OWN DOOR: secrets.json, and nothing else (plan 04 ruling P11). The window's Connection
+    /// tab needs to save the token, and the full <see cref="Save"/> would also rewrite <c>runners.*</c>, <c>limits.*</c> and five
+    /// Kernel scalars at whatever they RESOLVED to — turning their origin into "set here" and undoing a Reset
+    /// the owner made a minute earlier from the phone (spec §6.2: a save never materialises a preset value).
+    /// The token is deliberately absent from the catalogue (a <c>/settings</c> menu that printed it would post
+    /// it into the chat it controls), so <see cref="Settings_Writer"/> cannot write it; this writes the token
+    /// and nothing beside it. Every other key of secrets.json is carried through; a null token is written as
+    /// JSON null, which reads back as no token — the same thing <see cref="Save"/> writes for an empty box.
+    /// </summary>
+    public static void Save_BotToken(ISupervisionPaths paths, string? token)
+    {
+        lock (Settings_Writer.CONFIG_WRITE_LOCK)
+        {
+            var secretsRoot = Read_JsonObject_ForEditing(paths.SecretsFile);
+
+            secretsRoot["telegramBotToken"] = token;
+
+            Atomic_FileWriter.Write_AllText(paths.SecretsFile, secretsRoot.ToJsonString(JsonWriting.INDENTED));
+        }
     }
 
     /// <summary>

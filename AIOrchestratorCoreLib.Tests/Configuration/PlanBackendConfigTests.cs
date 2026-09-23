@@ -67,8 +67,17 @@ public class PlanBackendConfigTests : IDisposable
     }
 
     /// <summary>
-    /// THE ONE THAT WOULD HAVE BITTEN. The owner hand-edits planBackend, then changes a model in the
+    /// THE ONE THAT WOULD HAVE BITTEN. The owner hand-edits planBackend, then presses Save in the
     /// Settings window; the save must leave their key exactly where it was.
+    ///
+    /// <para>
+    /// AND, SINCE plan 04 D1 (2026-09-23), IT LEAVES THEIR MODEL WHERE IT WAS TOO. This used to pin that
+    /// the window's "sonnet" replaced the file's supervisorModel; Save now writes no model key, so the
+    /// file's own value stands whatever the window's box held — a model reaches config.json only through
+    /// <c>Settings_Writer</c>, when its row is edited (the window's four model boxes are written by nothing
+    /// until plan 04 Task 9 rebuilds it, ruling P20). The file states "haiku", deliberately not a shipped
+    /// default, so "the file's value stood" cannot be confused with "nothing was there".
+    /// </para>
     /// </summary>
     [Fact]
     public void SavingFromAWindowDoesNotEraseTheHandEditedKey()
@@ -76,7 +85,7 @@ public class PlanBackendConfigTests : IDisposable
         File.WriteAllText(_paths.ConfigFile, """
             {
               "repos": [],
-              "supervisorModel": "opus",
+              "supervisorModel": "haiku",
               "planBackend": { "kind": "external", "assembly": "/opt/adapters/Adapter.dll", "type": "Adapter.PlanBackend" }
             }
             """);
@@ -89,7 +98,7 @@ public class PlanBackendConfigTests : IDisposable
 
         var reloaded = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
-        Assert.Equal("sonnet", reloaded.SupervisorModel);
+        Assert.Equal("haiku", reloaded.SupervisorModel);
         Assert.NotNull(reloaded.PlanBackend);
         Assert.Equal("Adapter.PlanBackend", reloaded.PlanBackend!.Value.TypeName);
     }

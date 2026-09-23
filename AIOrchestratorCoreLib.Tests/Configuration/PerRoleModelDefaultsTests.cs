@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
+using AIOrchestratorCoreLib.Configuration.SettingsPresentation;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
 using AIOrchestratorCoreLib.Running;
@@ -394,6 +395,63 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         Assert.Null(written![OrchestratorConfig_Loader.REVIEWER_MODEL_KEY]);
         Assert.Null(written[OrchestratorConfig_Loader.SOLO_MODEL_KEY]);
+    }
+
+    /// <summary>
+    /// SAVE STOPS MATERIALISING THE FOUR UI MODELS (D1, owner). Until 2026-09-12 pressing Save in the
+    /// Settings window wrote whatever the four models had RESOLVED to — including a preset's value and,
+    /// before plan 02, a shipped default — into config.json as the owner's own, which is how the owner's
+    /// live config.json came to pin a stale model and defeat the Opus default they had asked for (CLAUDE.md,
+    /// entry 216). With a renderer for every key, a model is written when the owner edits that row and at no
+    /// other time, exactly like reviewerModel and soloModel already were.
+    ///
+    /// <para>
+    /// A HAND-EDITED PRESET FILE STATES THE MODELS, because neither shipped preset states one any more — a
+    /// Save over classic would write nothing whether or not the lines were deleted, and this test would be
+    /// green for the wrong reason. Verified the other way round on 2026-09-23: with the four
+    /// <c>configRoot["…Model"]</c> lines still in Save, it is red on the first model key.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Save_NoLongerWritesAnyModelKey_SoAPresetValueStaysAPresetValue()
+    {
+        var presetFile = Path.Combine(_tempRoot, "hand-edited-preset-d1.json");
+        File.WriteAllText(presetFile, """{"models.supervisor":"haiku","models.implementer":"haiku","models.general":"haiku","models.communicator":"haiku"}""");
+        var presetPath = presetFile.Replace('\\', '/');
+
+        File.WriteAllText(_paths.ConfigFile, $$"""{"repos":[],"preset":"{{presetPath}}"}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        // The preset rung is live, so "stays a preset value" has a preset value to keep.
+        Assert.Equal("haiku", config.SupervisorModel);
+        Assert.Equal("haiku", config.ImplementerModel);
+        Assert.Equal("haiku", config.GeneralSupervisorModel);
+        Assert.Equal("haiku", config.CommunicatorModel);
+
+        OrchestratorConfig_Loader.Save(config, _paths);
+
+        var written = JsonNode.Parse(File.ReadAllText(_paths.ConfigFile))!.AsObject();
+
+        // Every role, both spellings — the catalogue's own, not a list kept here.
+        foreach (var role in SessionRole_Names.ALL)
+        {
+            var definition = Catalog.Find_OrNull(Catalog.Get_ModelPath(role))!;
+
+            Assert.False(written.ContainsKey(definition.LegacyPath_OrNull!), $"Save wrote '{definition.LegacyPath_OrNull}'");
+            Assert.False(written.ContainsKey(definition.Path), $"Save wrote the flat '{definition.Path}'");
+            Assert.Null(SettingsJson_Path.Read_OrNull(written, definition.Path));
+        }
+
+        // ...so every renderer still labels the value "from preset", and the next load still gets it.
+        foreach (var role in new[] { SessionRoles.Supervisor, SessionRoles.Implementer, SessionRoles.General, SessionRoles.Communicator })
+        {
+            var reading = SettingsSnapshot_Reader.Read_One_FromDisk_OrNull(Catalog.Get_ModelPath(role), _paths, session: null, log: null)!;
+
+            Assert.Equal(SettingOrigins.Preset, reading.Origin);
+        }
+
+        Assert.Equal("haiku", OrchestratorConfig_Loader.Load_OrEmpty(_paths).SupervisorModel);
     }
 
     /// <summary>
