@@ -60,24 +60,72 @@ public static class SettingsWebHost_Policy
 
     /// <summary>
     /// THE PREFIXES TO REGISTER — literal hosts only, never <c>+</c> or <c>*</c> (Task 7 carry). For the loopback
-    /// default this is BOTH <c>127.0.0.1</c> and <c>localhost</c>, the two names the handler accepts
-    /// (<see cref="SettingsRequest_Handler.LOOPBACK_HOST_NAMES"/>): the managed HttpListener (Linux, macOS — where the
-    /// headless daemon runs) routes a request on the NAME in its Host header, so with <c>127.0.0.1</c> alone a
-    /// browser that opened <c>localhost:&lt;port&gt;</c>, which is the ordinary way through an SSH tunnel
-    /// (<c>ssh -L 8080:127.0.0.1:7391</c>), is refused by the listener before the handler sees it. (http.sys on
-    /// Windows matches an IP-literal prefix by address and needs no second name — measured 2026-09-23 — and binds
-    /// it without complaint, so the pair is registered on every OS rather than behind an OS test.)
-    /// <c>127.0.0.1</c> comes first because the model's fallback drops the second prefix when it alone fails to
-    /// bind (the managed listener binds <c>localhost</c> to whatever the resolver lists first, which can be a
-    /// <c>::1</c> an IPv6-less kernel refuses). <c>[::1]</c>, another <c>127.x</c> address, or an interface is
-    /// registered exactly as written.
+    /// default this is <c>127.0.0.1</c> and, when <paramref name="includeLocalhost"/> (see
+    /// <see cref="Refuse_Localhost_OrNull"/>), <c>localhost</c> — the two names the handler accepts
+    /// (<see cref="SettingsRequest_Handler.LOOPBACK_HOST_NAMES"/>). The managed HttpListener (Linux, macOS — where the
+    /// headless daemon runs) routes a request on the NAME in its Host header, so without a <c>localhost</c> prefix a
+    /// browser that opened <c>localhost:&lt;port&gt;</c> through an SSH tunnel (<c>ssh -L 8080:127.0.0.1:7391</c>) is
+    /// refused by the listener before the handler sees it. <c>127.0.0.1</c> always comes first and is always there:
+    /// it is the one name that is never ambiguous, and the model's fallback keeps it when the pair fails to bind.
+    /// <c>[::1]</c>, another <c>127.x</c> address, or an interface is registered exactly as written.
     /// </summary>
-    public static IReadOnlyList<string> Build_Prefixes(string host, int port)
+    public static IReadOnlyList<string> Build_Prefixes(string host, int port, bool includeLocalhost)
     {
-        if (string.Equals(host, LOOPBACK_V4, StringComparison.Ordinal) || string.Equals(host, LOCALHOST, StringComparison.OrdinalIgnoreCase))
-            return [Build_Prefix(LOOPBACK_V4, port), Build_Prefix(LOCALHOST, port)];
+        if (!Wants_Localhost(host))
+            return [Build_Prefix(host, port)];
 
-        return [Build_Prefix(host, port)];
+        return includeLocalhost
+            ? [Build_Prefix(LOOPBACK_V4, port), Build_Prefix(LOCALHOST, port)]
+            : [Build_Prefix(LOOPBACK_V4, port)];
+    }
+
+    /// <summary>Whether <paramref name="host"/> is the loopback default this class widens to the 127.0.0.1 + localhost pair.</summary>
+    public static bool Wants_Localhost(string host)
+    {
+        return string.Equals(host, LOOPBACK_V4, StringComparison.Ordinal) || string.Equals(host, LOCALHOST, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// WHY <c>localhost</c> MUST NOT BE REGISTERED ON THIS MACHINE, or null to register it (fix round 1, ruling P38).
+    /// <list type="bullet">
+    /// <item><b>Windows</b> (http.sys): always registered. http.sys binds no socket per prefix; it matches the
+    /// <c>localhost</c> name on the port it already holds, and the caller check (<see cref="Is_LoopbackCaller"/>) is
+    /// the pinned defence against the LAN callers that makes reachable.</item>
+    /// <item><b>The managed listener</b> (Linux, macOS): it binds each prefix to
+    /// <c>Dns.GetHostAddresses(host)[0]</c>. Where <c>::1 localhost</c> comes first — Debian and Ubuntu ship it that
+    /// way — the <c>localhost</c> prefix binds <c>[::1]:port</c>, and a tunnel delivering to 127.0.0.1 with
+    /// <c>Host: localhost:8080</c> gets the listener's own 400/404. So it is registered only where
+    /// <paramref name="resolved"/> puts an IPv4 loopback address FIRST; otherwise the reason is returned, and the
+    /// model logs it as the instruction a tunnel user needs.</item>
+    /// </list>
+    /// </summary>
+    public static string? Refuse_Localhost_OrNull(bool isWindows, IReadOnlyList<IPAddress>? resolved)
+    {
+        if (isWindows)
+            return null;
+
+        var first = resolved is { Count: > 0 } ? resolved[0] : null;
+
+        if (first != null && first.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && IPAddress.IsLoopback(first))
+            return null;
+
+        var named = first == null ? "does not resolve" : $"resolves to {first} first";
+
+        return $"'{LOCALHOST}' is not registered — on this machine it {named}, which this listener would bind instead of "
+            + $"{LOOPBACK_V4}. Through an SSH tunnel, open http://{LOOPBACK_V4}:<local port>/ (not localhost).";
+    }
+
+    /// <summary>What this machine's resolver answers for <c>localhost</c>, in its order, or null when it cannot answer.</summary>
+    public static IReadOnlyList<IPAddress>? Resolve_Localhost_OrNull()
+    {
+        try
+        {
+            return Dns.GetHostAddresses(LOCALHOST);
+        }
+        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

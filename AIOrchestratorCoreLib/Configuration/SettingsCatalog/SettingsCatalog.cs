@@ -524,7 +524,10 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Web token",
             description: "The shared secret the settings web page requires.",
-            restart: RestartKinds.Host));
+
+            // NOT Host (ruling P37, 2026-09-23): the listener re-reads it whenever config.json changes, so a token set
+            // by hand is enforced on the next request — a restart label here would tell the owner to do a needless one.
+            restart: RestartKinds.None));
 
         kernel.Add(SettingDefinition_Factory.Create_Composite(
             path: "repos",

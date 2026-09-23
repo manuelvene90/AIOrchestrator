@@ -2,7 +2,10 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Configuration;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Configuration.SettingsPresentation;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
@@ -12,6 +15,8 @@ using AIOrchestratorCoreLib.Web;
 using AIOrchestratorCoreLib.Web.SettingsWebHost;
 using Xunit;
 using Xunit.Abstractions;
+
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
 
 namespace AIOrchestratorCoreLib.Tests.Web;
 
@@ -146,6 +151,79 @@ public class SettingsWebHostSmokeTests : IDisposable
 
         using (var accepted = await Put_Async(client, baseUrl, $"{{\"{INTERVAL_PATH}\": 42}}", token: "s3cret-by-hand"))
             Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+
+        // …which is why the row's restart label says it applies at once (ruling P37): this test is the behaviour that
+        // makes that label true, so it pins the label too.
+        Assert.Equal(RestartKinds.None, Catalog.Find_OrNull(SettingsSnapshot_Reader.MASKED_SECRET_PATH)!.Restart);
+    }
+
+    /// <summary>
+    /// A TOKEN THAT CANNOT BE READ FAILS CLOSED (fix round 1, 2026-09-23). The first version read config.json through
+    /// the tolerant read, which turns a garbage, empty (an editor truncating before it writes) or held file into
+    /// <c>{}</c> — token <c>""</c>, and token-less edits open on a machine whose owner had set one. Now every edit is
+    /// refused while the file does not read, with the right token too (nobody can know a token the host cannot
+    /// read), and the real token works again the moment it does.
+    /// </summary>
+    [RequiresLoopbackListenerFact]
+    public async Task AConfigJsonThatDoesNotParse_WhileATokenWasSet_RefusesEveryEdit_UntilItReadsAgain()
+    {
+        var (_, baseUrl) = await Start_Async(listen: $"127.0.0.1:{LoopbackListener.Find_FreePort()}");
+        using var client = new HttpClient();
+        var readable = File.ReadAllText(_paths.ConfigFile);
+        Write_Config(readable, token: "s3cret");
+        readable = File.ReadAllText(_paths.ConfigFile);
+
+        using (var accepted = await Put_Async(client, baseUrl, $"{{\"{INTERVAL_PATH}\": 40}}", token: "s3cret"))
+            Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+
+        readable = File.ReadAllText(_paths.ConfigFile);
+
+        foreach (var broken in new[] { "{ \"web\": { \"token\": ", "" })
+        {
+            Write_Raw(broken);
+
+            using (var tokenLess = await Put_Async(client, baseUrl, $"{{\"{INTERVAL_PATH}\": 41}}"))
+                Assert.Equal(HttpStatusCode.Unauthorized, tokenLess.StatusCode);
+
+            using (var withToken = await Put_Async(client, baseUrl, $"{{\"{INTERVAL_PATH}\": 41}}", token: "s3cret"))
+                Assert.Equal(HttpStatusCode.Unauthorized, withToken.StatusCode);
+        }
+
+        Write_Raw(readable);
+
+        using (var again = await Put_Async(client, baseUrl, $"{{\"{INTERVAL_PATH}\": 42}}", token: "s3cret"))
+            Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+
+        Assert.Single(_log.Warnings, line => line.Contains("web.token could not be read", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The same, for a config.json another process holds open exclusively just after it changed — an editor saving,
+    /// an antivirus scan. The failed read is NOT cached: the provider hands out ONE new instance, the host's read under
+    /// that instance fails, and the first request after the holder lets go — same instance, nothing told the host the
+    /// file changed — reads the real token. Caching the failure would keep every edit refused until the next write
+    /// of config.json.
+    /// </summary>
+    [RequiresExclusiveOpenEnforcementFact]
+    public async Task AConfigJsonHeldOpenExclusively_RefusesEveryEdit_AndTheRealTokenWorksOnceReleased()
+    {
+        var provider = new SteppedConfigProvider(_paths);
+        var (_, baseUrl) = await Start_Async(listen: $"127.0.0.1:{LoopbackListener.Find_FreePort()}", token: "s3cret", provider: provider);
+        using var client = new HttpClient();
+
+        provider.Step();
+
+        using (var holder = new FileStream(_paths.ConfigFile, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            using var tokenLess = await Put_Async(client, baseUrl, $"{{\"{INTERVAL_PATH}\": 41}}");
+            Assert.Equal(HttpStatusCode.Unauthorized, tokenLess.StatusCode);
+
+            using var withToken = await Put_Async(client, baseUrl, $"{{\"{INTERVAL_PATH}\": 41}}", token: "s3cret");
+            Assert.Equal(HttpStatusCode.Unauthorized, withToken.StatusCode);
+        }
+
+        using var released = await Put_Async(client, baseUrl, $"{{\"{INTERVAL_PATH}\": 42}}", token: "s3cret");
+        Assert.Equal(HttpStatusCode.OK, released.StatusCode);
     }
 
     /// <summary>
@@ -161,8 +239,24 @@ public class SettingsWebHostSmokeTests : IDisposable
     /// (Linux, macOS — the headless daemon this page exists for), which matches the Host NAME against its prefixes.
     /// </para>
     /// </summary>
-    [RequiresLoopbackListenerFact]
+    [RequiresLocalhostPrefixFact]
     public async Task ARequestThroughATunnel_NamedLocalhostOnAnotherPort_IsServed()
+    {
+        await Assert_TunnelServes_Async(tunnelHost: "localhost:8080");
+    }
+
+    /// <summary>
+    /// The tunnel that works EVERYWHERE, the localhost prefix or not: the browser opened <c>127.0.0.1:&lt;local port&gt;</c>.
+    /// This is the address the host's log tells a tunnel user to open on a machine where localhost is not registered
+    /// (<see cref="SettingsWebHost_Policy.Refuse_Localhost_OrNull"/>), so it must never depend on that prefix.
+    /// </summary>
+    [RequiresLoopbackListenerFact]
+    public async Task ARequestThroughATunnel_Named127001OnAnotherPort_IsServed()
+    {
+        await Assert_TunnelServes_Async(tunnelHost: "127.0.0.1:8080");
+    }
+
+    async Task Assert_TunnelServes_Async(string tunnelHost)
     {
         var (_, baseUrl) = await Start_Async(listen: $"127.0.0.1:{LoopbackListener.Find_FreePort()}");
         using var client = new HttpClient();
@@ -170,11 +264,11 @@ public class SettingsWebHostSmokeTests : IDisposable
         foreach (var target in new[] { baseUrl, baseUrl + SettingsRequest_Handler.SETTINGS_PATH.TrimStart('/') })
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, target);
-            request.Headers.Host = "localhost:8080";
+            request.Headers.Host = tunnelHost;
 
             using var response = await client.SendAsync(request);
 
-            Assert.True(response.StatusCode == HttpStatusCode.OK, $"{target} with Host localhost:8080 answered {(int)response.StatusCode}");
+            Assert.True(response.StatusCode == HttpStatusCode.OK, $"{target} with Host {tunnelHost} answered {(int)response.StatusCode}");
         }
     }
 
@@ -248,8 +342,15 @@ public class SettingsWebHostSmokeTests : IDisposable
             if (response != null)
             {
                 _output.WriteLine($"{lan}:{port} with Host localhost answered {(int)response.StatusCode}");
-                Assert.True(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.BadRequest or HttpStatusCode.NotFound,
-                    $"A caller on {lan} was answered {(int)response.StatusCode}");
+
+                // On Windows http.sys DOES route this request to the listener (measured 2026-09-23), so the caller
+                // check is the one answer — pinned exactly, per decision 20, not as one of three statuses. Elsewhere
+                // a connection that got through at all could only have met the listener's own refusal.
+                if (OperatingSystem.IsWindows())
+                    Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+                else
+                    Assert.True(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.BadRequest or HttpStatusCode.NotFound,
+                        $"A caller on {lan} was answered {(int)response.StatusCode}");
             }
         }
 
@@ -402,18 +503,30 @@ public class SettingsWebHostSmokeTests : IDisposable
 
     const string INTERVAL_PATH = "phone.status.intervalMinutes";
 
-    ISettingsWebHost Create_Host()
+    ISettingsWebHost Create_Host(IOrchestratorConfigProvider? provider = null)
     {
-        var provider = OrchestratorConfigProvider_Factory.Create(_paths, _log);
+        return SettingsWebHost_Factory.Create(_paths, provider ?? OrchestratorConfigProvider_Factory.Create(_paths, _log), _log);
+    }
 
-        return SettingsWebHost_Factory.Create(_paths, provider, _log);
+    /// <summary>
+    /// A provider whose instance changes ONLY when the test says so — the real one changes it only when config.json's
+    /// stamp moves. It is how a test separates "the file became readable again" from "the file changed".
+    /// </summary>
+    sealed class SteppedConfigProvider(ISupervisionPaths paths) : IOrchestratorConfigProvider
+    {
+        IOrchestratorConfig _current = OrchestratorConfig_Loader.Load_OrEmpty(paths);
+
+        public IOrchestratorConfig Get_Current() => _current;
+
+        /// <summary>A NEW instance, as the real provider hands out after a write — loaded now, while the file reads.</summary>
+        public void Step() => _current = OrchestratorConfig_Loader.Load_OrEmpty(paths);
     }
 
     /// <summary>Starts the host on a temp root and waits for it to report the bind, or fails naming what it logged.</summary>
-    async Task<(ISettingsWebHost Host, string BaseUrl)> Start_Async(string listen)
+    async Task<(ISettingsWebHost Host, string BaseUrl)> Start_Async(string listen, string? token = null, IOrchestratorConfigProvider? provider = null)
     {
-        Write_Config("{}", listen: listen);
-        var host = Create_Host();
+        Write_Config("{}", listen: listen, token: token);
+        var host = Create_Host(provider);
         _running = Task.Run(() => host.Run_Async(_stop.Token));
 
         var deadline = DateTime.UtcNow + RUN_BUDGET;
@@ -445,6 +558,13 @@ public class SettingsWebHostSmokeTests : IDisposable
     }
 
     int _stampBump;
+
+    /// <summary>Replaces config.json with exactly <paramref name="text"/>, stamped so the provider sees a new instance.</summary>
+    void Write_Raw(string text)
+    {
+        File.WriteAllText(_paths.ConfigFile, text);
+        File.SetLastWriteTimeUtc(_paths.ConfigFile, DateTime.UtcNow.AddSeconds(Interlocked.Increment(ref _stampBump)));
+    }
 
     static Task<HttpResponseMessage> Put_Async(HttpClient client, string baseUrl, string body, string? token = null)
     {
@@ -587,5 +707,21 @@ public sealed class RequiresLoopbackListenerAndLanAddressFactAttribute : FactAtt
             Skip = reason;
         else if (LoopbackListener.Find_LanAddress_OrNull() == null)
             Skip = "This machine has no up, non-loopback IPv4 address to call the listener from.";
+    }
+}
+
+/// <summary>
+/// Runs only where the host registers the <c>localhost</c> prefix; elsewhere SKIPS, by name, with the host's own
+/// reason — the managed listener on a machine whose resolver lists <c>::1 localhost</c> first (ruling P38), where the
+/// 127.0.0.1-named tunnel test is the one that covers the tunnel.
+/// </summary>
+public sealed class RequiresLocalhostPrefixFactAttribute : FactAttribute
+{
+    public RequiresLocalhostPrefixFactAttribute()
+    {
+        if (LoopbackListener.UNBINDABLE_REASON.Value is { } reason)
+            Skip = reason;
+        else if (SettingsWebHost_Policy.Refuse_Localhost_OrNull(OperatingSystem.IsWindows(), SettingsWebHost_Policy.Resolve_Localhost_OrNull()) is { } refusal)
+            Skip = refusal;
     }
 }

@@ -153,6 +153,12 @@ const API = '/settings';
 const RESET_KEY = 'path';
 const TOKEN_STORE_KEY = 'aiorch.settings.pageToken';
 
+// A Number box sends a JSON number ONLY for plain decimal digits (surrounding spaces trimmed). JavaScript's Number()
+// also reads "0x1F", "1e2", "1.5" and "Infinity"; turning those into numbers would be the page accepting a value
+// the catalogue never saw, so anything else goes RAW and the definition refuses it in its own words (decision 21,
+// ruling P13). Every Number row is a whole-number (Int) row.
+const WHOLE_NUMBER = /^-?[0-9]+$/;
+
 const state = {
   data: null,        // the last GET /settings answer
   token: readStoredToken(),
@@ -285,9 +291,11 @@ async function send(method, url, body, path) {
 let okTimer = null;
 function clearOkNotesLater() {
   if (okTimer) clearTimeout(okTimer);
+  // Only the "Saved." / "Reset." notes go, and only their own nodes: a whole re-render here would wipe whatever
+  // the viewer had started typing into another box in the meantime.
   okTimer = setTimeout(() => {
     for (const [path, note] of Object.entries(state.notes)) if (note.kind === 'ok') delete state.notes[path];
-    render();
+    for (const node of document.querySelectorAll('.note.ok')) node.remove();
   }, 4000);
 }
 
@@ -491,7 +499,7 @@ function renderBox(row, canEdit, numeric) {
     const text = box.value;
     let value;
     if (text.trim() === '') value = null;
-    else if (numeric) value = Number.isFinite(Number(text.trim())) ? Number(text.trim()) : text;
+    else if (numeric) value = WHOLE_NUMBER.test(text.trim()) ? Number(text.trim()) : text;
     else value = text;
     putValue(row.path, value);
   };

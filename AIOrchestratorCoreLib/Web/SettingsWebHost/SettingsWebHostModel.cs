@@ -22,10 +22,11 @@ namespace AIOrchestratorCoreLib.Web.SettingsWebHost;
 /// <para>
 /// THE TWO SETTINGS IT READS, AND WHEN (rulings P10, P30). <c>web.listen</c> is read ONCE, at
 /// <see cref="Run_Async"/>, through the shared reading — it is <c>Restart = Host</c>, so rebinding mid-run would
-/// make its restart label a lie. <c>web.token</c> is read through <see cref="SettingsSnapshot_Reader.Read_Trees_FromDisk"/>
-/// and <see cref="Settings_Resolver"/> — never through a reading, which MASKS it (P2) — and re-read whenever the
-/// config provider hands back a new instance, i.e. whenever config.json or secrets.json changed: an owner who sets
-/// a token by hand must not have to restart the bridge for the page to start demanding it.
+/// make its restart label a lie. <c>web.token</c> is read through the writers' classifier
+/// (<see cref="OrchestratorConfig_Loader.Read_TreeForEditing"/>, so an unreadable file FAILS CLOSED — see
+/// <see cref="Current_Token"/>) and <see cref="Settings_Resolver"/> — never through a reading, which MASKS it (P2) — and
+/// re-read whenever the config provider hands back a new instance, i.e. whenever config.json or secrets.json
+/// changed: an owner who sets a token by hand must not have to restart the bridge for the page to start demanding it.
 /// </para>
 /// <para>
 /// ONE REQUEST AT A TIME. The page is one person's settings form and every write goes through one file lock
@@ -128,7 +129,10 @@ internal sealed class SettingsWebHostModel(
             return null;
         }
 
-        var refusal = SettingsWebHost_Policy.Refuse_Bind_OrNull(address.Value.Host, SettingsSnapshot_Reader.Is_SecretSet(Current_Token()));
+        // Only a token that was actually READ counts as set: the fail-closed stand-in refuses edits, and must never be
+        // the reason an interface gets bound (fix round 1, 2026-09-23).
+        var (token, wasRead) = Current_Token();
+        var refusal = SettingsWebHost_Policy.Refuse_Bind_OrNull(address.Value.Host, wasRead && SettingsSnapshot_Reader.Is_SecretSet(token));
 
         if (refusal != null)
         {
@@ -155,7 +159,12 @@ internal sealed class SettingsWebHostModel(
     /// </summary>
     (HttpListener? Listener, IReadOnlyList<string> Prefixes) Start_OrNull(string host, int port, string listen)
     {
-        var prefixes = SettingsWebHost_Policy.Build_Prefixes(host, port);
+        var localhostRefusal = SettingsWebHost_Policy.Refuse_Localhost_OrNull(OperatingSystem.IsWindows(), SettingsWebHost_Policy.Resolve_Localhost_OrNull());
+        var prefixes = SettingsWebHost_Policy.Build_Prefixes(host, port, includeLocalhost: localhostRefusal == null);
+
+        if (localhostRefusal != null && SettingsWebHost_Policy.Wants_Localhost(host))
+            _log.Log_Info(GLOBAL_ORCH_ID, $"Settings page: {localhostRefusal}");
+
         var (listener, failure) = Try_Start(prefixes);
 
         if (listener != null)
@@ -229,8 +238,18 @@ internal sealed class SettingsWebHostModel(
     // Serving
     // ---------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// How many accept failures IN A ROW the loop absorbs before it gives up. A broken connection surfaces as one
+    /// <see cref="HttpListenerException"/> and the next accept succeeds; a listener that fails every accept would
+    /// otherwise spin a core and write a log line per turn (fix round 1). Each failure waits a little longer.
+    /// </summary>
+    const int MAX_CONSECUTIVE_ACCEPT_FAILURES = 10;
+    const int ACCEPT_BACKOFF_STEP_MILLISECONDS = 100;
+
     async Task Serve_Until_Async(HttpListener listener, CancellationToken cancellationToken)
     {
+        var consecutiveFailures = 0;
+
         while (!cancellationToken.IsCancellationRequested && listener.IsListening)
         {
             HttpListenerContext context;
@@ -238,6 +257,7 @@ internal sealed class SettingsWebHostModel(
             try
             {
                 context = await listener.GetContextAsync();
+                consecutiveFailures = 0;
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested || !listener.IsListening)
             {
@@ -245,8 +265,23 @@ internal sealed class SettingsWebHostModel(
             }
             catch (HttpListenerException ex)
             {
-                // A broken connection surfaces here on some platforms; the listener itself is still up.
-                _log.Log_Warning(GLOBAL_ORCH_ID, $"Settings page: a request could not be accepted ({Describe(ex)}).");
+                // A broken connection surfaces here on some platforms; the listener itself is still up. Silent while
+                // it is a blip; ONE warning, and the page stops, once it is plainly not.
+                if (++consecutiveFailures >= MAX_CONSECUTIVE_ACCEPT_FAILURES)
+                {
+                    _log.Log_Warning(GLOBAL_ORCH_ID, $"Settings page stopped: {consecutiveFailures} requests in a row could not be accepted (last: {Describe(ex)}). The bridge keeps running.");
+                    return;
+                }
+
+                try
+                {
+                    await Task.Delay(ACCEPT_BACKOFF_STEP_MILLISECONDS * consecutiveFailures, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
                 continue;
             }
             catch (Exception ex)
@@ -258,7 +293,7 @@ internal sealed class SettingsWebHostModel(
                 return;
             }
 
-            await Serve_Async(context);
+            await Serve_Async(context, cancellationToken);
         }
     }
 
@@ -268,13 +303,20 @@ internal sealed class SettingsWebHostModel(
     /// still makes that read throw (Task 1's reader, 2026-09-23): the last-resort catch turns it into a 500 and a
     /// log line, never a dead listener or an unobserved task in the bridge's process.
     /// </summary>
-    async Task Serve_Async(HttpListenerContext context)
+    async Task Serve_Async(HttpListenerContext context, CancellationToken cancellationToken)
     {
         (int Status, string ContentType, string Body) answer;
 
         try
         {
-            answer = await Answer_Async(context.Request);
+            answer = await Answer_Async(context.Request, cancellationToken);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // The host is stopping and closed the listener under an in-flight read: not a failure of the bridge, and
+            // nobody is left to answer (fix round 1 — this used to log an error on every ordinary shutdown mid-request).
+            Close_Quietly(context.Response);
+            return;
         }
         catch (Exception ex)
         {
@@ -294,18 +336,23 @@ internal sealed class SettingsWebHostModel(
         }
         finally
         {
-            try
-            {
-                context.Response.Close();
-            }
-            catch
-            {
-                // Already closed or aborted by the client.
-            }
+            Close_Quietly(context.Response);
         }
     }
 
-    async Task<(int Status, string ContentType, string Body)> Answer_Async(HttpListenerRequest request)
+    static void Close_Quietly(HttpListenerResponse response)
+    {
+        try
+        {
+            response.Close();
+        }
+        catch
+        {
+            // Already closed or aborted by the client, or the listener was closed under it.
+        }
+    }
+
+    async Task<(int Status, string ContentType, string Body)> Answer_Async(HttpListenerRequest request, CancellationToken cancellationToken)
     {
         if (!SettingsWebHost_Policy.Is_LoopbackCaller(request.RemoteEndPoint?.Address))
             return Answer_Error(HttpStatusCode.Forbidden, Describe_NotThisMachine(request.RemoteEndPoint?.Address));
@@ -317,12 +364,12 @@ internal sealed class SettingsWebHostModel(
         if (string.Equals(route, ROOT_PATH, StringComparison.Ordinal))
             return Answer_Page(request.HttpMethod, header);
 
-        var (body, tooLarge) = await Read_Body_Async(request);
+        var (body, tooLarge) = await Read_Body_Async(request, cancellationToken);
 
         if (tooLarge)
             return Answer_Error(HttpStatusCode.RequestEntityTooLarge, $"The body is larger than {SettingsWebHost_Policy.MAX_BODY_BYTES} bytes — nothing was read or changed. Send one setting at a time.");
 
-        return SettingsRequest_Handler.Handle(request.HttpMethod, target, header, body, _paths, Current_Token(), _log);
+        return SettingsRequest_Handler.Handle(request.HttpMethod, target, header, body, _paths, Current_Token().Token, _log);
     }
 
     /// <summary>
@@ -345,7 +392,7 @@ internal sealed class SettingsWebHostModel(
     /// The body as UTF-8 text, or "too large" without buffering it: a declared length over the cap is refused
     /// before a byte is read, and an undeclared (chunked) one is read only until it passes the cap.
     /// </summary>
-    static async Task<(string Body, bool TooLarge)> Read_Body_Async(HttpListenerRequest request)
+    static async Task<(string Body, bool TooLarge)> Read_Body_Async(HttpListenerRequest request, CancellationToken cancellationToken)
     {
         if (!request.HasEntityBody)
             return (string.Empty, false);
@@ -358,7 +405,7 @@ internal sealed class SettingsWebHostModel(
 
         while (true)
         {
-            var read = await request.InputStream.ReadAsync(chunk);
+            var read = await request.InputStream.ReadAsync(chunk, cancellationToken);
 
             if (read == 0)
                 break;
@@ -415,11 +462,20 @@ internal sealed class SettingsWebHostModel(
     // ---------------------------------------------------------------------------------------
 
     /// <summary>
-    /// The raw <c>web.token</c>, re-read only when the provider's instance changed (ruling P10). A token that
-    /// CANNOT BE READ FAILS CLOSED: the page must not open its editing because config.json was briefly unreadable,
-    /// so a random secret nobody holds stands in, and edits are refused (401) until the file reads again.
+    /// The raw <c>web.token</c> and whether it was actually READ. Re-read only when the provider's instance changed
+    /// (ruling P10) — and a FAILED read is never cached, so the next request tries again the moment the file reads.
+    ///
+    /// <para>
+    /// A TOKEN THAT CANNOT BE READ FAILS CLOSED (fix round 1, 2026-09-23). The first version read config.json through
+    /// the snapshot reader's tolerant read, which turns a held, half-rewritten, truncated or garbage file into
+    /// <c>{}</c> — a token of <c>""</c>, cached until the stamp moved, and token-less edits of every unfenced row open
+    /// meanwhile, on a machine whose owner HAD set a token. It now reads through the writers' own classifier,
+    /// <see cref="OrchestratorConfig_Loader.Read_TreeForEditing"/>: ABSENT is "no token" (a fresh machine, D4's open
+    /// editing); UNREADABLE or CORRUPT (empty included) stands in a random secret nobody holds, so every edit is a
+    /// 401 until the file reads again. secrets.json takes no part: <c>web.token</c> is a config.json key.
+    /// </para>
     /// </summary>
-    string Current_Token()
+    (string Token, bool WasRead) Current_Token()
     {
         IOrchestratorConfig? current = null;
 
@@ -435,23 +491,50 @@ internal sealed class SettingsWebHostModel(
         lock (_tokenLock)
         {
             if (current != null && ReferenceEquals(current, _tokenReadFor))
-                return _token;
+                return (_token, true);
 
-            _token = Read_Token_FailingClosed();
+            var token = Read_Token_OrNull();
+
+            if (token == null)
+            {
+                _tokenReadFor = null;
+                return (FAIL_CLOSED_TOKEN, false);
+            }
+
+            _tokenUnreadableReported = false;
+            _token = token;
             _tokenReadFor = current;
 
-            return _token;
+            return (_token, true);
         }
     }
 
-    string Read_Token_FailingClosed()
+    /// <summary>
+    /// A secret nobody holds, drawn once per process: what the handler is given while the token cannot be read. Never
+    /// logged, never shown, never compared except by the handler's fixed-time check, where nothing can match it.
+    /// </summary>
+    static readonly string FAIL_CLOSED_TOKEN = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
+    /// <summary>Set while the token is unreadable, so a failure is logged once and not once per request.</summary>
+    bool _tokenUnreadableReported;
+
+    /// <summary>The token (<c>""</c> when none is stated), or null when config.json is there and cannot be read or parsed.</summary>
+    string? Read_Token_OrNull()
     {
         try
         {
             var definition = Catalog.Find_OrNull(SettingsSnapshot_Reader.MASKED_SECRET_PATH)
                 ?? throw new InvalidOperationException($"The catalogue has no '{SettingsSnapshot_Reader.MASKED_SECRET_PATH}' row.");
 
-            var (configTree, presetTree, _) = SettingsSnapshot_Reader.Read_Trees_FromDisk(_paths, _log);
+            var (configTree, refusal) = OrchestratorConfig_Loader.Read_TreeForEditing(_paths.ConfigFile, log: null, corruptReadsAsEmpty: false);
+
+            if (configTree == null)
+            {
+                Report_Unreadable(refusal ?? "config.json could not be read");
+                return null;
+            }
+
+            var (presetTree, _) = OrchestratorConfig_Loader.Resolve_Preset_OrClassic(configTree, _log);
             var (value, _) = Settings_Resolver.Resolve(definition, presetTree, configTree, session: null);
 
             // A hand-written non-string ("token": 12345) is still a token the owner meant to set: its JSON text is
@@ -465,8 +548,17 @@ internal sealed class SettingsWebHostModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Warning(GLOBAL_ORCH_ID, $"Settings page: web.token could not be read ({Describe(ex)}) — editing is refused until it can be.");
-            return Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            Report_Unreadable(Describe(ex));
+            return null;
         }
+    }
+
+    void Report_Unreadable(string reason)
+    {
+        if (_tokenUnreadableReported)
+            return;
+
+        _tokenUnreadableReported = true;
+        _log.Log_Warning(GLOBAL_ORCH_ID, $"Settings page: web.token could not be read ({reason}) — every edit is refused until config.json reads again.");
     }
 }
