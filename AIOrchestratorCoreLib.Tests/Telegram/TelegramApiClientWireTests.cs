@@ -437,6 +437,41 @@ public class TelegramApiClientWireTests
             $"the multipart body carries no '{name}' part:{Environment.NewLine}{body}");
     }
 
+    /// <summary>
+    /// D7 THROUGH THE REAL CLIENT (ruling P14): no fake consults the budget on its own, so "five taps land"
+    /// is proved where the gate actually runs — <c>Hold_UnlessThisMessageMayBeEdited</c>, before the wire.
+    /// The exempt menu reaches the wire five times in a row; the message beside it reaches it once, and its
+    /// second edit is refused as HELD with no request made at all.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheLiveSettingsMenu_ReachesTheWireOnEveryEdit_AndAnotherMessagesSecondEditIsHeldBeforeIt()
+    {
+        const long LIVE_MENU_MESSAGE_ID = 81;
+        const long OTHER_MESSAGE_ID = 82;
+
+        var transport = new RecordingTransport_Fake();
+
+        for (var answer = 0; answer < 6; answer++)
+            transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":true}""");
+
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+        var client = TelegramApiClient_Factory.Create_WithTransport(TOKEN, CHAT_ID, budget, transport);
+
+        budget.Exempt_FromEditGap(LIVE_MENU_MESSAGE_ID);
+
+        for (var tap = 0; tap < 5; tap++)
+            await client.Edit_MessageTextWithButtonRows_Async(LIVE_MENU_MESSAGE_ID, $"Settings — page {tap}", [[("set:h::::0", "⬅ Back")]], CancellationToken.None);
+
+        await client.Edit_MessageTextWithButtonRows_Async(OTHER_MESSAGE_ID, "status line", [], CancellationToken.None);
+
+        await Assert.ThrowsAsync<TelegramHeldException>(
+            () => client.Edit_MessageTextWithButtonRows_Async(OTHER_MESSAGE_ID, "status line again", [], CancellationToken.None));
+
+        Assert.Equal(6, transport.Requests.Count);
+        Assert.Equal(5, transport.Requests.Count(request => request.Body.Contains($"\"message_id\":{LIVE_MENU_MESSAGE_ID}", StringComparison.Ordinal)));
+    }
+
     static ITelegramApiClient Build_Client(RecordingTransport_Fake transport)
     {
         return TelegramApiClient_Factory.Create_WithTransport(

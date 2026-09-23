@@ -50,6 +50,51 @@ internal sealed class TelegramSendBudgetModel : ITelegramSendBudget
         _editGap = editGap;
     }
 
+    /// <summary>
+    /// THE ONE MESSAGE THE PER-MESSAGE GAP DOES NOT HOLD — the live <c>/settings</c> menu (plan 04 D7,
+    /// 2026-09-23), or null.
+    ///
+    /// <para>
+    /// TWO TRAFFIC SHAPES, AND THE GAP WAS MEASURED AGAINST ONLY ONE. The 30 s floor
+    /// (<see cref="TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE"/>) comes from the 2026-09-10
+    /// 429 storm on the VPS: 376 of 388 HTTP 429 in one hour were two topic status lines re-edited by an
+    /// APP-DRIVEN loop at the 2 s tick against a <c>retry_after</c> of 20-34 s. That is a machine editing
+    /// every open topic's message on a timer, unbounded by anything but the tick. A settings menu is the
+    /// other shape: ONE message, edited only when a human taps it, bounded by human speed — category, page
+    /// two, a setting, a value, back is five edits in five seconds, and under the floor taps two to five
+    /// would each be refused (<see cref="MessageEditSlot_Gate"/> throws rather than sleeps), so the menu
+    /// could not work at all as the spec describes it.
+    /// </para>
+    /// <para>
+    /// WHAT STILL GOVERNS IT: the control bucket (<see cref="TokenBucket_Gate.CONTROL_CAPACITY"/>, 60 a
+    /// minute) is spent by every edit of this message exactly as by any other, and Telegram's own
+    /// <c>retry_after</c> for it is still honoured by the client's cooldown note, which is checked BEFORE
+    /// this gate. Only the per-message floor is lifted.
+    /// </para>
+    /// <para>
+    /// NARROW BY CONSTRUCTION: one id, not a set. Exempting the next menu releases the previous, the menu
+    /// releases it when it is closed or replaced, and an edit of the exempt message still stamps its time —
+    /// so the moment it is released it owes the gap from its last edit like any other message. Pinned by
+    /// <c>TelegramSendBudgetTests.TheLiveSettingsMenu_IsNeverHeld_ButAnyOtherMessageStillGetsTheThirtySecondGap</c>.
+    /// </para>
+    /// </summary>
+    long? _editGapExemptMessageId;
+
+    public void Exempt_FromEditGap(long messageId)
+    {
+        lock (_lock)
+            _editGapExemptMessageId = messageId;
+    }
+
+    public void Release_EditGapExemption(long messageId)
+    {
+        lock (_lock)
+        {
+            if (_editGapExemptMessageId == messageId)
+                _editGapExemptMessageId = null;
+        }
+    }
+
     public TimeSpan Reserve_MessageEdit(long messageId, DateTime nowUtc)
     {
         lock (_lock)
@@ -57,6 +102,15 @@ internal sealed class TelegramSendBudgetModel : ITelegramSendBudget
             var gap = _editGap;
 
             Prune_StaleEdits(nowUtc, gap);
+
+            // THE LIVE SETTINGS MENU (D7): stamped like any other edit, so a release puts it straight
+            // back under the gap measured from this edit — and never held while it is the live one.
+            if (_editGapExemptMessageId == messageId)
+            {
+                _lastEditUtcByMessageId[messageId] = nowUtc;
+
+                return TimeSpan.Zero;
+            }
 
             if (!_lastEditUtcByMessageId.TryGetValue(messageId, out var lastEdit))
             {

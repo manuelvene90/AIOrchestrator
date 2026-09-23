@@ -255,5 +255,20 @@ public sealed record EngineStateSnapshot
     /// </summary>
     public DateTime? DispatchPauseLiftedUntilUtc { get; init; }
 
+    /// <summary>
+    /// The live /settings menu message, or null (plan 04 Task 5). Persisted so the menu the owner left open
+    /// keeps its edit-gap exemption across a restart (D7) — its taps are stateless and would work anyway, but
+    /// under the thirty-second gap.
+    /// </summary>
+    public long? SettingsMenuMessageId { get; init; }
+
+    /// <summary>
+    /// The pending "reply with the value" steps (D9, ruling P23): persisted so a restart leaves no invisible
+    /// trap — a step survives with its ORIGINAL deadline and lapses at it. A held Kernel value is kept with its
+    /// step, <c>web.token</c> included: this file sits beside the config.json the value is about to be written
+    /// to, and is never shown.
+    /// </summary>
+    public IReadOnlyList<SettingsMenu.ISettingsReplyStep> SettingsReplySteps { get; init; } = [];
+
     public static EngineStateSnapshot Empty => new();
 }

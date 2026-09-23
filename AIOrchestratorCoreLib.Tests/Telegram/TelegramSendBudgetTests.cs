@@ -421,4 +421,78 @@ public class TelegramSendBudgetTests : IDisposable
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => TelegramSendBudget_Factory.Create_WithEditGap(TimeSpan.Zero));
     }
+
+    // ---- D7: the one exempt message (plan 04 Task 5) ----
+
+    const long LIVE_MENU_MESSAGE_ID = 7100;
+
+    const long STATUS_LINE_MESSAGE_ID = 7200;
+
+    /// <summary>
+    /// THE LIVE /settings MENU TAKES EDIT AFTER EDIT, AND EVERY OTHER MESSAGE STILL WAITS ITS THIRTY SECONDS
+    /// (D7). Five taps in five seconds are five edits of one message; without the exemption the second to the
+    /// fifth are refused by a gap measured against the status-line loop. The shipped budget, the shipped gap —
+    /// and the status line beside it, asked one second after its first edit, is still owed the rest of 30 s.
+    /// </summary>
+    [Fact]
+    public void TheLiveSettingsMenu_IsNeverHeld_ButAnyOtherMessageStillGetsTheThirtySecondGap()
+    {
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+        var start = new DateTime(2026, 9, 23, 12, 0, 0, DateTimeKind.Utc);
+
+        budget.Exempt_FromEditGap(LIVE_MENU_MESSAGE_ID);
+
+        for (var tap = 0; tap < 5; tap++)
+            Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(LIVE_MENU_MESSAGE_ID, start.AddSeconds(tap)));
+
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(STATUS_LINE_MESSAGE_ID, start));
+
+        var owed = budget.Reserve_MessageEdit(STATUS_LINE_MESSAGE_ID, start.AddSeconds(1));
+
+        Assert.Equal(TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE - TimeSpan.FromSeconds(1), owed);
+    }
+
+    /// <summary>
+    /// AN EXEMPTION THAT OUTLIVES ITS MESSAGE IS A PERMANENTLY UN-GAPPED MESSAGE ID. Released, the menu that
+    /// was live is an ordinary message again — and its last edit still counts, so it is owed the gap from
+    /// that edit rather than handed a fresh first one.
+    /// </summary>
+    [Fact]
+    public void ReleasingTheExemption_PutsTheMessageBackUnderTheGap()
+    {
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+        var start = new DateTime(2026, 9, 23, 12, 0, 0, DateTimeKind.Utc);
+
+        budget.Exempt_FromEditGap(LIVE_MENU_MESSAGE_ID);
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(LIVE_MENU_MESSAGE_ID, start));
+
+        budget.Release_EditGapExemption(LIVE_MENU_MESSAGE_ID);
+
+        Assert.True(budget.Reserve_MessageEdit(LIVE_MENU_MESSAGE_ID, start.AddSeconds(1)) > TimeSpan.Zero);
+    }
+
+    /// <summary>
+    /// ONE ID AT A TIME — narrow by construction, not by the caller's care. Exempting the next menu releases
+    /// the one before it, and a release naming any OTHER message cannot take the live menu's exemption away.
+    /// </summary>
+    [Fact]
+    public void OnlyOneMessageIsEverExempt_AndAReleaseNamingAnotherIsIgnored()
+    {
+        const long NEXT_MENU_MESSAGE_ID = 7101;
+
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+        var start = new DateTime(2026, 9, 23, 12, 0, 0, DateTimeKind.Utc);
+
+        budget.Exempt_FromEditGap(LIVE_MENU_MESSAGE_ID);
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(LIVE_MENU_MESSAGE_ID, start));
+
+        budget.Exempt_FromEditGap(NEXT_MENU_MESSAGE_ID);
+
+        Assert.True(budget.Reserve_MessageEdit(LIVE_MENU_MESSAGE_ID, start.AddSeconds(1)) > TimeSpan.Zero);
+
+        budget.Release_EditGapExemption(LIVE_MENU_MESSAGE_ID);
+
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(NEXT_MENU_MESSAGE_ID, start.AddSeconds(2)));
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(NEXT_MENU_MESSAGE_ID, start.AddSeconds(3)));
+    }
 }

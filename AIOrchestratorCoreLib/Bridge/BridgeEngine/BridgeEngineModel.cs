@@ -69,7 +69,7 @@ internal sealed class BridgeEngineModel(
     // The OUTBOUND ALLOWANCE the Telegram client spends from, held here only so it can be written
     // into .bridge-state.json beside the cursor (brief F5) — the engine never asks it for a token.
     // Null in file-only mode and on the test seams that hand in their own client.
-    Telegram.TelegramSendBudget.ITelegramSendBudget? sendBudget = null) : IBridgeEngine, IPeriodicStatusHost
+    Telegram.TelegramSendBudget.ITelegramSendBudget? sendBudget = null) : IBridgeEngine, IPeriodicStatusHost, SettingsMenu.ISettingsMenuHost
 {
     /// <summary>
     /// WHAT THIS HOST CAN DO WITH WINDOWS, asked rather than assumed. The engine used to call
@@ -1149,6 +1149,15 @@ internal sealed class BridgeEngineModel(
     /// why this is not adopted across the file's other hundred-odd clock reads.
     /// </summary>
     readonly IClock _clock = clock;
+
+    /// <summary>
+    /// THE /settings MENU (plan 04 Task 5) — its live message, its reply steps and everything it does with a
+    /// command, a tap or a typed value live in <see cref="SettingsMenu.ISettingsMenu"/>, not here. Restored from the
+    /// engine state (ruling P23), and handed the send budget so the live menu carries D7's edit-gap exemption.
+    /// </summary>
+    readonly SettingsMenu.ISettingsMenu _settingsMenu = SettingsMenu.SettingsMenu_Factory.Create(
+        paths, store, log, clock, sendBudget,
+        SettingsMenu.SettingsMenuState_Factory.Create_Restored(restoredState.SettingsMenuMessageId, restoredState.SettingsReplySteps));
 
     /// <summary>
     /// High-risk decisions the owner has TAPPED and not yet confirmed by typing the code back.
@@ -7209,6 +7218,12 @@ internal sealed class BridgeEngineModel(
                         continue;
                     }
 
+                    // ANY /command ENDS A PENDING SETTINGS REPLY STEP in its topic and then runs as usual (plan 04
+                    // D9) — /cancel alone is consumed, and only while a step is live (ruling P15). Here, ahead of
+                    // the chain, because a command the chain runs never reaches the routable loop below.
+                    if (command != null && await _settingsMenu.Try_EndReplyStep_OnCommand_Async(client, this, message, command, cancellationToken))
+                        continue;
+
                     // Telegram's own command menu only allows [a-z0-9_], so the menu entries are
                     // mute_all/dnd_all while a hand-typed mute-all works just as well.
                     if (command == "pc")
@@ -7273,6 +7288,13 @@ internal sealed class BridgeEngineModel(
                 {
                     try
                     {
+                        // A LIVE SETTINGS REPLY STEP TAKES THE MESSAGE AS ITS VALUE, and answers it in the topic
+                        // (plan 04 D9). After the read-back, which runs first above so a live code wins (ruling
+                        // P23); before the hold words and routing, so a value is never delivered as chat. A
+                        // lapsed step takes nothing: the message routes on as usual.
+                        if (await _settingsMenu.Try_TakeReply_Async(client, this, message, cancellationToken))
+                            continue;
+
                         if (await Apply_HoldControlWord_Async(client, message, cancellationToken))
                             continue;
 
@@ -7482,6 +7504,11 @@ internal sealed class BridgeEngineModel(
         else if (command == "limits")
         {
             await Send_LimitsReport_Async(client, messageThreadId, cancellationToken);
+        }
+        else if (command == "settings")
+        {
+            // In General the machine menu; in a topic that orchestration's rows, read-only (plan 04 D3).
+            await _settingsMenu.Send_Menu_Async(client, this, messageThreadId, cancellationToken);
         }
         else if (command == "context")
         {
@@ -11514,6 +11541,12 @@ internal sealed class BridgeEngineModel(
         if (await Try_HandleModelEffortTap_Async(client, tap, cancellationToken))
             return;
 
+        // A /settings button, for the same reason as the four above: it is a control the APP owns — the payload
+        // names the view, the setting and the change — and through the generic path below it would become a
+        // synthetic owner message in an agent's channel (plan 04 Task 5).
+        if (await Try_HandleSettingsTap_Async(client, tap, cancellationToken))
+            return;
+
         PendingButtonRecord? registered;
         TapOutcomes outcome;
 
@@ -11649,6 +11682,18 @@ internal sealed class BridgeEngineModel(
         Persist_EngineState();
 
         await Route_TapAsOwnerMessage_Async(tap, registered, cancellationToken);
+    }
+
+    /// <summary>A "set:" payload is the /settings menu's; everything it does lives in <see cref="SettingsMenu.ISettingsMenu"/>.</summary>
+    async Task<bool> Try_HandleSettingsTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
+    {
+        if (!Telegram.SettingsMenu.SettingsButton_Data.Is_Ours(tap.Data))
+            return false;
+
+        if (Note_OwnerSpoke_AndWasAway())
+            await Exit_AwayMode_Async(cancellationToken);
+
+        return await _settingsMenu.Try_HandleTap_Async(client, this, tap, cancellationToken);
     }
 
     /// <summary>
@@ -14379,6 +14424,11 @@ internal sealed class BridgeEngineModel(
 
     string IPeriodicStatusHost.Build_AwayDigest(IOrchestrationSession session) => Build_AwayUpdateText(session);
 
+    // SettingsMenu.ISettingsMenuHost — adapters only, like the IPeriodicStatusHost ones around them.
+    void SettingsMenu.ISettingsMenuHost.Remember_TopicMessage(long? messageThreadId, long? messageId) => Remember_TopicMessage(messageThreadId, messageId);
+
+    void SettingsMenu.ISettingsMenuHost.Persist_EngineState() => Persist_EngineState();
+
     string IPeriodicStatusHost.Build_MemberStatus(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous, bool withVolatileReadings) =>
         Build_MemberStatusText_ForSession(session, previous, withVolatileReadings);
 
@@ -16477,6 +16527,8 @@ internal sealed class BridgeEngineModel(
                     DispatchPausedUntilUtc = _dispatchPausedUntilUtc,
                     DispatchPauseReason = _dispatchPauseReason,
                     DispatchPauseLiftedUntilUtc = _dispatchPauseLiftedUntilUtc,
+                    SettingsMenuMessageId = _settingsMenu.State.LiveMenuMessageId,
+                    SettingsReplySteps = _settingsMenu.State.Read_Steps(),
                 };
             }
         }

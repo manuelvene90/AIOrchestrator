@@ -34,6 +34,8 @@ public static class EngineState_Serializer
     const string DISPATCH_PAUSED_UNTIL = "dispatchPausedUntilUtc";
     const string DISPATCH_PAUSE_REASON = "dispatchPauseReason";
     const string DISPATCH_PAUSE_LIFTED_UNTIL = "dispatchPauseLiftedUntilUtc";
+    const string SETTINGS_MENU_MESSAGE_ID = "settingsMenuMessageId";
+    const string SETTINGS_REPLY_STEPS = "settingsReplySteps";
 
     /// <summary>
     /// Reads a snapshot and says how many records it had to drop. Never throws for the CONTENT of
@@ -72,6 +74,8 @@ public static class EngineState_Serializer
             DispatchPausedUntilUtc = Read_Instant_OrNull(root[DISPATCH_PAUSED_UNTIL]),
             DispatchPauseReason = Read_String_OrNull(root[DISPATCH_PAUSE_REASON]),
             DispatchPauseLiftedUntilUtc = Read_Instant_OrNull(root[DISPATCH_PAUSE_LIFTED_UNTIL]),
+            SettingsMenuMessageId = Read_Long_OrNull(root[SETTINGS_MENU_MESSAGE_ID]),
+            SettingsReplySteps = Read_Records(root[SETTINGS_REPLY_STEPS], Read_SettingsReplyStep_OrNull, ref dropped),
         };
 
         return (snapshot, dropped);
@@ -163,6 +167,19 @@ public static class EngineState_Serializer
             });
         }
 
+        var settingsReplySteps = new JsonArray();
+
+        foreach (var step in snapshot.SettingsReplySteps)
+        {
+            settingsReplySteps.Add(new JsonObject
+            {
+                ["threadId"] = step.ThreadId,
+                ["path"] = step.Path,
+                ["heldText"] = step.HeldText_OrNull,
+                ["expiresUtc"] = Write_Instant(step.ExpiresUtc),
+            });
+        }
+
         var root = new JsonObject
         {
             [OWNER_AWAITING_ANSWER] = awaiting,
@@ -176,6 +193,8 @@ public static class EngineState_Serializer
             [DISPATCH_PAUSED_UNTIL] = snapshot.DispatchPausedUntilUtc == null ? null : Write_Instant(snapshot.DispatchPausedUntilUtc.Value),
             [DISPATCH_PAUSE_REASON] = snapshot.DispatchPauseReason,
             [DISPATCH_PAUSE_LIFTED_UNTIL] = snapshot.DispatchPauseLiftedUntilUtc == null ? null : Write_Instant(snapshot.DispatchPauseLiftedUntilUtc.Value),
+            [SETTINGS_MENU_MESSAGE_ID] = snapshot.SettingsMenuMessageId,
+            [SETTINGS_REPLY_STEPS] = settingsReplySteps,
         };
 
         return root.ToJsonString(Configuration.JsonWriting.INDENTED);
@@ -337,6 +356,22 @@ public static class EngineState_Serializer
             ExpiresUtc = Read_Instant_OrNull(entry["expiresUtc"]),
             PromptMessageId = Read_Long_OrNull(entry["promptMessageId"]),
         };
+    }
+
+    /// <summary>
+    /// A step with no path or no deadline is DROPPED, never defaulted: a step with no deadline would swallow the
+    /// owner's next message whenever it came, which is the one failure D9 exists to forbid.
+    /// </summary>
+    static SettingsMenu.ISettingsReplyStep? Read_SettingsReplyStep_OrNull(JsonObject entry)
+    {
+        var path = Read_String_OrNull(entry["path"]);
+        var expiresUtc = Read_Instant_OrNull(entry["expiresUtc"]);
+
+        if (path == null || expiresUtc == null)
+            return null;
+
+        return SettingsMenu.SettingsReplyStep_Factory.Create_Restored(
+            Read_Long_OrNull(entry["threadId"]), path, Read_String_OrNull(entry["heldText"]), expiresUtc.Value);
     }
 
     static IReadOnlyList<string> Read_StringList(JsonNode? node)
