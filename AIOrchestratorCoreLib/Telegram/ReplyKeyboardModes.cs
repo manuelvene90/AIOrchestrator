@@ -17,7 +17,11 @@ public enum ReplyKeyboardModes
     /// <summary>No reply keyboard. The shipped default, and both presets' answer.</summary>
     Off,
 
-    /// <summary>A reply keyboard, anchored to one permanent carrier message.</summary>
+    /// <summary>
+    /// A reply keyboard, anchored to one permanent carrier message — ONCE WIRED. Nothing installs it
+    /// today: under D5's "off for both" plan 03 task 9 took its implement-nothing branch, so this value
+    /// resolves and is read by nobody (the guard in <c>ReplyKeyboardMarkupTests</c> pins that).
+    /// </summary>
     On,
 }
 
