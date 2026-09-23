@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
+using AIOrchestratorCoreLib.Configuration.EndeavourSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.PhoneSettings;
 using AIOrchestratorCoreLib.Configuration.PulseSettings;
@@ -143,6 +144,12 @@ public interface IOrchestratorConfig
     /// button bars, and where the hold toggle sits. Never null, same rule as <see cref="Phone"/>.
     /// </summary>
     IPulseSettings Pulse { get; }
+
+    /// <summary>
+    /// The <c>endeavour.*</c> rows: today only the sibling cap (spec 2026-09-23 §9, O2). Never null, same
+    /// rule as <see cref="Phone"/> — an absent block means the preset's and the catalogue's answers.
+    /// </summary>
+    IEndeavourSettings Endeavour { get; }
 
     /// <summary>
     /// THE ONE READER OF THE PER-ROLE DEFAULT — the same rule <see cref="IRunnerConfigs.Get_ForRole"/>
