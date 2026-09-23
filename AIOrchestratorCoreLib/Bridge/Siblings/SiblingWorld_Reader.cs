@@ -37,6 +37,25 @@ public static class SiblingWorld_Reader
         ISpawnSiblingRequest request,
         string? ownParkedPath)
     {
+        return Read(paths, store, config, request, ownParkedPath, GitSnapshot_Reader.Find_WorktreePaths);
+    }
+
+    /// <summary>
+    /// The same read with the git call injected — the seam that lets a test COUNT git calls. "An unknown
+    /// id starts no process" is otherwise indistinguishable from "git ran and listed nothing": both leave
+    /// <see cref="SiblingWorld.RepoWorktreePaths"/> empty (decision 20, a state with two routes to it).
+    /// Public because the test project sees only public CoreLib, the in-idiom alternative to
+    /// InternalsVisibleTo (the BridgeEngine_Factory precedent).
+    /// </summary>
+    /// <param name="listWorktrees">Given a repo path, git's worktree list for it; production passes <see cref="GitSnapshot_Reader.Find_WorktreePaths"/>.</param>
+    public static SiblingWorld Read(
+        ISupervisionPaths paths,
+        IOrchestrationSessionStore store,
+        IOrchestratorConfig config,
+        ISpawnSiblingRequest request,
+        string? ownParkedPath,
+        Func<string, IReadOnlyList<string>> listWorktrees)
+    {
         var sessions = store.Load_All();
         var requester = sessions.FirstOrDefault(session => string.Equals(session.OrchId, request.OrchId, StringComparison.Ordinal));
 
@@ -49,7 +68,7 @@ public static class SiblingWorld_Reader
 
         IReadOnlyList<string> worktrees = requester == null
             ? []
-            : GitSnapshot_Reader.Find_WorktreePaths(requester.RepoPath);
+            : listWorktrees(requester.RepoPath);
 
         // A RELATIVE PATH IS NEVER ASKED ABOUT: Directory.Exists would answer for the app's own current
         // directory. The validator refuses it by name before it would read this.

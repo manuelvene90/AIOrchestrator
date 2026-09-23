@@ -267,7 +267,67 @@ public class SiblingRequestValidatorTests
         Assert.Null(Decide(World(requester, [requester, closed])));
     }
 
+    /// <summary>
+    /// ANYONE'S OPEN TREE IS TAKEN, not only a sibling's (fix round 1, 2026-09-23). A session of another
+    /// endeavour of the same repo is no less a second writer on that checkout.
+    /// </summary>
+    [Fact]
+    public void AnotherEndeavoursOpenSession_HoldingTheTree_IsShared()
+    {
+        var requester = Session(REQUESTER_ID, endeavourId: REQUESTER_ID);
+        var stranger = Session("ai-orchestrator-3", endeavourId: "ai-orchestrator-2", bornFromHandover: "ai-orchestrator-2#9", workingPath: WORKTREE);
+
+        var refusal = Decide(World(requester, [requester, stranger]));
+
+        Assert.Equal(SiblingRefusals.WORKTREE_SHARED, refusal?.Label);
+        Assert.Contains("ai-orchestrator-3", refusal?.Body);
+    }
+
+    /// <summary>An unrelated open solo started straight on that folder (its RepoPath) holds it just the same.</summary>
+    [Fact]
+    public void AnUnrelatedOpenSolo_RunningInTheTree_IsShared()
+    {
+        var requester = Session(REQUESTER_ID);
+        var unrelated = Session("ai-orchestrator-4", repoPath: WORKTREE);
+
+        var refusal = Decide(World(requester, [requester, unrelated]));
+
+        Assert.Equal(SiblingRefusals.WORKTREE_SHARED, refusal?.Label);
+        Assert.Contains("ai-orchestrator-4", refusal?.Body);
+    }
+
+    /// <summary>
+    /// GIT'S MAIN CHECKOUT IS ALWAYS TAKEN — even when the requester itself runs in a LINKED worktree, so
+    /// its RepoPath is not the main checkout and no session in the world names it.
+    /// </summary>
+    [Fact]
+    public void GitsMainCheckout_IsShared_WhenTheRequesterRunsInALinkedWorktree()
+    {
+        var linked = Path.Combine(ROOT, "repo.worktrees", "main-work");
+        var requester = Session(REQUESTER_ID, repoPath: linked);
+
+        var refusal = Decide(World(requester, [requester], repoWorktrees: [REPO, linked, WORKTREE]), Request(worktree: REPO));
+
+        Assert.Equal(SiblingRefusals.WORKTREE_SHARED, refusal?.Label);
+        Assert.Contains("main checkout", refusal?.Body);
+    }
+
     // ---------------------------------------------------------------- name-taken
+
+    /// <summary>
+    /// THE PARENT'S OWN NAME, on a FIRST birth (fix round 1): the requester is unlinked, so it is in no
+    /// endeavour's member list — and a child named like its parent is two topics the owner cannot tell apart.
+    /// </summary>
+    [Fact]
+    public void AnUnlinkedRequestersOwnName_IsTaken()
+    {
+        var requester = Session(REQUESTER_ID, displayName: NAME);
+
+        var refusal = Decide(World(requester, [requester]));
+
+        Assert.Equal(SiblingRefusals.NAME_TAKEN, refusal?.Label);
+        Assert.Contains(REQUESTER_ID, refusal?.Body);
+    }
 
     [Fact]
     public void AnOpenSiblingsName_IsTaken()
@@ -348,10 +408,11 @@ public class SiblingRequestValidatorTests
         string? workingPath = null,
         string? displayName = null,
         bool closed = false,
-        bool supervisorSpawned = false)
+        bool supervisorSpawned = false,
+        string? repoPath = null)
     {
         return OrchestrationSession_Factory.Create(
-            orchId, "AIOrchestrator", REPO, CREATED, null, null,
+            orchId, "AIOrchestrator", repoPath ?? REPO, CREATED, null, null,
             supervisorSpawned ? CREATED : null, null, displayName, null, null, [],
             TelegramDeliveryModes.Normal, closed ? CREATED.AddHours(1) : null,
             endeavourId: endeavourId,

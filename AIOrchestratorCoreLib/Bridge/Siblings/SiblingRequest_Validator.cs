@@ -89,16 +89,20 @@ public static class SiblingRequest_Validator
         if (!world.RepoWorktreePaths.Any(path => WorkingPath_Comparer.Are_Same(path, request.WorktreePath)))
             return Refuse(SiblingRefusals.WORKTREE_NOT_OF_REPO, SiblingNotice_Wording.Describe_WorktreeNotOfRepo(request.WorktreePath, requester.RepoPath, world.RepoWorktreePaths));
 
-        var sharedWith = Find_TreeHolder_OrNull(request.WorktreePath, requester, openMembers);
+        var sharedWith = Find_TreeHolder_OrNull(request.WorktreePath, requester, world);
 
         if (sharedWith != null)
             return Refuse(SiblingRefusals.WORKTREE_SHARED, SiblingNotice_Wording.Describe_WorktreeShared(request.WorktreePath, sharedWith));
 
         // THE REQUESTER'S OWN NAME COUNTS TOO: from the child's side the requester IS an open sibling, and
-        // two topics with one name are two topics the owner cannot tell apart.
-        var nameHolder = openMembers.FirstOrDefault(session =>
-            session.DisplayName != null
-            && string.Equals(session.DisplayName.Trim(), request.Name.Trim(), StringComparison.OrdinalIgnoreCase));
+        // two topics with one name are two topics the owner cannot tell apart. Asked EXPLICITLY, because an
+        // unlinked requester — every first birth — has no endeavour id yet and so is not in openMembers
+        // (fix round 1, 2026-09-23: the comment claimed this while the code let a first child take its
+        // parent's name).
+        if (Is_SameName(requester.DisplayName, request.Name))
+            return Refuse(SiblingRefusals.NAME_TAKEN, SiblingNotice_Wording.Describe_NameTaken(request.Name, requester.OrchId));
+
+        var nameHolder = openMembers.FirstOrDefault(session => Is_SameName(session.DisplayName, request.Name));
 
         if (nameHolder != null)
             return Refuse(SiblingRefusals.NAME_TAKEN, SiblingNotice_Wording.Describe_NameTaken(request.Name, nameHolder.OrchId));
@@ -145,25 +149,45 @@ public static class SiblingRequest_Validator
     }
 
     /// <summary>
-    /// Who already works in that tree: the requester's repo, the requester's own working path, or an open
-    /// member's. A CLOSED sibling's tree is free — its job is finished, and reusing a finished tree is
-    /// ordinary. Every working path is read through <see cref="WorkingPath_Resolver"/> (decision 12).
+    /// WHO ALREADY WORKS IN THAT TREE — anyone, not only this endeavour. Two sessions editing one checkout
+    /// overwrite each other whether or not they are siblings, so every OPEN session in the world is asked
+    /// (fix round 1, 2026-09-23: this used to scan only the requester's endeavour, so an open session of
+    /// ANOTHER endeavour, or an unrelated solo of the same repo, could be handed a second writer).
+    ///
+    /// <para>
+    /// GIT'S MAIN CHECKOUT IS ALWAYS TAKEN. <c>git worktree list</c> prints it first, and it is the tree
+    /// the owner and every unlinked session of the repo work in — even when the requester's own RepoPath
+    /// is itself a linked worktree, which is exactly when checking <c>requester.RepoPath</c> alone missed it.
+    /// </para>
+    /// <para>
+    /// A CLOSED session's tree is free: its job is finished, and reusing a finished tree is ordinary.
+    /// Every working path is read through <see cref="WorkingPath_Resolver"/> (decision 12).
+    /// </para>
     /// </summary>
-    static string? Find_TreeHolder_OrNull(string worktreePath, IOrchestrationSession requester, IReadOnlyList<IOrchestrationSession> openMembers)
+    static string? Find_TreeHolder_OrNull(string worktreePath, IOrchestrationSession requester, SiblingWorld world)
     {
         if (WorkingPath_Comparer.Are_Same(requester.RepoPath, worktreePath))
-            return $"the repo itself — {requester.OrchId}'s main checkout";
+            return $"the repo itself — {requester.OrchId}'s checkout";
 
-        if (WorkingPath_Comparer.Are_Same(WorkingPath_Resolver.Resolve(requester), worktreePath))
-            return $"your own working tree ({requester.OrchId})";
+        if (world.RepoWorktreePaths.Count > 0 && WorkingPath_Comparer.Are_Same(world.RepoWorktreePaths[0], worktreePath))
+            return "the repo's main checkout (git lists it first)";
 
-        foreach (var member in openMembers)
+        foreach (var session in world.Sessions)
         {
-            if (WorkingPath_Comparer.Are_Same(WorkingPath_Resolver.Resolve(member), worktreePath))
-                return $"the working tree of {member.OrchId}, an open session of this endeavour";
+            if (session.ClosedUtc != null || !WorkingPath_Comparer.Are_Same(WorkingPath_Resolver.Resolve(session), worktreePath))
+                continue;
+
+            return Is_Session(session, requester.OrchId)
+                ? $"your own working tree ({requester.OrchId})"
+                : $"the working tree of {session.OrchId}, an open session";
         }
 
         return null;
+    }
+
+    static bool Is_SameName(string? displayName, string requestedName)
+    {
+        return displayName != null && string.Equals(displayName.Trim(), requestedName.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     static bool Is_Session(IOrchestrationSession session, string orchId)

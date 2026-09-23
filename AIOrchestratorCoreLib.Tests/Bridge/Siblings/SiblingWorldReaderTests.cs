@@ -116,16 +116,50 @@ public class SiblingWorldReaderTests : IDisposable
     /// <summary>
     /// NOTHING KEYED ON AN UNKNOWN ID (Task 6 carry): no requester in the store means no outbox read and
     /// no git process — the raw id is only ever compared, never turned into a path.
+    ///
+    /// <para>
+    /// "RUNS NO GIT" IS COUNTED, not inferred from an empty list (fix round 1, decision 20): git that ran
+    /// and listed nothing leaves the same empty list, so the lister is injected and its calls counted.
+    /// The companion test below proves the seam is live — a zero from a seam nothing calls would be the
+    /// same two-routes trap one level down.
+    /// </para>
     /// </summary>
     [Fact]
     public void AMissingRequester_ReadsNoOutbox_AndRunsNoGit()
     {
-        var world = Read(Request(Path.Combine(_tempRoot, "anywhere")));
+        List<string> gitCalls = [];
+
+        var world = Read_Counting(Request(Path.Combine(_tempRoot, "anywhere")), gitCalls);
 
         Assert.Null(world.Requester);
         Assert.Empty(world.RequesterOutboxHistory);
-        Assert.Empty(world.RepoWorktreePaths);
+        Assert.Empty(gitCalls);
         Assert.False(Directory.Exists(_paths.Get_OrchestrationFolder(REQUESTER_ID)));
+    }
+
+    [Fact]
+    public void AnExistingRequester_AsksGitOnce_ForItsOwnRepo()
+    {
+        var repo = Path.Combine(_tempRoot, "plain-repo");
+        Directory.CreateDirectory(repo);
+        _store.Create_Orchestration(REQUESTER_ID, "AIOrchestrator", repo);
+        List<string> gitCalls = [];
+
+        var world = Read_Counting(Request(Path.Combine(_tempRoot, "anywhere")), gitCalls);
+
+        Assert.Equal([repo], gitCalls);
+        Assert.Equal(["listed-by-the-fake"], world.RepoWorktreePaths);
+    }
+
+    SiblingWorld Read_Counting(ISpawnSiblingRequest request, List<string> gitCalls)
+    {
+        return SiblingWorld_Reader.Read(
+            _paths, _store, OrchestratorConfigProvider_Factory.Create(_paths).Get_Current(), request, null,
+            repoPath =>
+            {
+                gitCalls.Add(repoPath);
+                return ["listed-by-the-fake"];
+            });
     }
 
     [Fact]
