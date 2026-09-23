@@ -23,7 +23,10 @@ namespace AIOrchestratorCoreLib.Configuration;
 /// </summary>
 public static class OrchestratorConfig_Loader
 {
-    /// <summary>Orch id used for the one app-global entry this loader can produce (a mistyped preset). See <see cref="Resolve_Preset_OrClassic"/>.</summary>
+    /// <summary>
+    /// Orch id used for the two app-global entries this loader can produce: a mistyped preset (<see cref="Resolve_Preset_OrClassic"/>)
+    /// and an unreadable config file handed to the tolerant read (<see cref="Read_JsonObject_ForEditing"/>).
+    /// </summary>
     const string GLOBAL_ORCH_ID = "";
 
     public static IOrchestratorConfig Load_OrEmpty(ISupervisionPaths paths)
@@ -67,7 +70,7 @@ public static class OrchestratorConfig_Loader
         // stays a preset value and the renderers can still show its origin (spec §6.2, the reviewerModel
         // rule generalised). Resolved through the safety net below rather than
         // Presets_Loader.Resolve_ForConfig directly — this path cannot fail.
-        var preset = Resolve_Preset_OrClassic(configRoot, log);
+        var (preset, _) = Resolve_Preset_OrClassic(configRoot, log);
 
         return OrchestratorConfig_Factory.Create(
             repos,
@@ -135,17 +138,26 @@ public static class OrchestratorConfig_Loader
     /// does), the way <see cref="AIOrchestratorCoreLib.Bridge.BridgeState_Store.Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/>
     /// reports a predicate this codebase could not honour — never Telegram, an alert the owner cannot
     /// act on does not belong there (CLAUDE.md decision 15).
+    ///
+    /// <para>
+    /// INTERNAL, AND IT HANDS BACK THE NAME TOO (plan 04 Task 1, ruling P16, 2026-09-23). The settings
+    /// renderers label every origin "from preset &lt;name&gt;", so their reader needs the name this rung
+    /// actually resolved to — which is <see cref="Presets_Loader.CLASSIC"/> after a fallback, not the word
+    /// the owner typed. It calls THIS method rather than carrying its own try/catch: a second copy of "a
+    /// mistyped preset word means classic" would be one rule with two descriptions (CLAUDE.md decision 12),
+    /// and the day one of them changed the phone would label an origin the loader never used.
+    /// </para>
     /// </summary>
-    static JsonObject Resolve_Preset_OrClassic(JsonObject? configRoot, IOrchestrationLog? log)
+    internal static (JsonObject Tree, string Name) Resolve_Preset_OrClassic(JsonObject? configRoot, IOrchestrationLog? log)
     {
         try
         {
-            return Presets_Loader.Resolve_ForConfig(configRoot).Tree;
+            return Presets_Loader.Resolve_ForConfig(configRoot);
         }
         catch (Exception ex)
         {
             log?.Log_Warning(GLOBAL_ORCH_ID, $"config.json's '{Presets_Loader.PRESET_KEY}' could not be resolved ({ex.Message}) — the classic preset was used instead.");
-            return Presets_Loader.Load_Embedded(Presets_Loader.CLASSIC);
+            return (Presets_Loader.Load_Embedded(Presets_Loader.CLASSIC), Presets_Loader.CLASSIC);
         }
     }
 
@@ -312,18 +324,42 @@ public static class OrchestratorConfig_Loader
     /// cannot. A file that will not parse has no unknown keys worth preserving — they are already
     /// unreachable — and refusing to save over it would strand the owner with a corrupt config and
     /// no way to fix it from the app.
+    ///
+    /// <para>
+    /// THE ONE TOLERANT READ OF config.json, AND INTERNAL SINCE 2026-09-23 (plan 04 Task 1, ruling P16).
+    /// The settings renderers' reader (<c>SettingsPresentation.SettingsSnapshot_Reader</c>) reads through
+    /// it, and so will plan 04 Task 2's writer: an HTTP GET and a Telegram tap must answer over a
+    /// hand-edit with a trailing comma exactly as this save does, and three readers each deciding what
+    /// "unreadable" means is decision 12's drift. <see cref="Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/>
+    /// still reads through <see cref="Read_JsonObject_OrNull"/> directly and is NOT made tolerant here —
+    /// that would change what the app's startup path does, which this task was not asked to change.
+    /// </para>
+    /// <para>
+    /// SWALLOWED, NEVER SILENT, when a caller hands in <paramref name="log"/>: one warning line names the
+    /// file and the parser's own reason, because every setting on screen is about to read as its preset or
+    /// shipped default and the owner cannot see why otherwise (decision 21's corollary). Not Telegram —
+    /// decision 15. <see cref="Save"/> passes none, so its behaviour is exactly what it was.
+    /// </para>
     /// </summary>
-    static JsonObject Read_JsonObject_ForEditing(string filePath)
+    internal static JsonObject Read_JsonObject_ForEditing(string filePath, IOrchestrationLog? log = null)
     {
         try
         {
             return Read_JsonObject_OrNull(filePath) ?? [];
         }
-        catch
+        catch (Exception ex)
         {
-            // Broad by intent: malformed, truncated, or not an object at all are one situation here.
+            // Broad by intent: malformed, truncated, or unreadable are one situation here.
+            log?.Log_Warning(GLOBAL_ORCH_ID, Describe_UnreadableFile(filePath, ex.Message));
             return [];
         }
+    }
+
+    /// <summary>The warning line for a config file that could not be read — named once, for every caller of the tolerant read.</summary>
+    static string Describe_UnreadableFile(string filePath, string reason)
+    {
+        return $"'{filePath}' could not be read ({reason}) — it was treated as empty, so every setting falls to its preset or "
+            + "shipped default, and the next save from the app replaces the file.";
     }
 
     static JsonObject? Read_JsonObject_OrNull(string filePath)
