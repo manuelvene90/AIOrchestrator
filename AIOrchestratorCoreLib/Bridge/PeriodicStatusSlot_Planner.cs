@@ -48,7 +48,16 @@ public enum PeriodicStatusSlotActions
 /// </summary>
 public static class PeriodicStatusSlot_Planner
 {
-    /// <summary>The cadence itself: the wall clock is cut into half hours starting on the hour.</summary>
+    /// <summary>
+    /// THE AWAY DIGEST'S cadence: the wall clock cut into half hours starting on the hour. It was the
+    /// cadence of everything this planner governed until plan 03 Task 8 (2026-09-23), when the
+    /// re-ported periodic status came back with its own length, <c>phone.status.intervalMinutes</c>.
+    /// The coordinator's answer to D9: the SETTING governs the periodic status only, and the away
+    /// digest stays here — <see cref="AwayDigest_Decider"/> records a limit cycle locked to exactly
+    /// this number, so it is not a value a phone preference may move by accident. That is why the
+    /// length is a PARAMETER of <see cref="Slot_Start"/> and <see cref="Decide"/> rather than this
+    /// constant read inside them: each caller has to say whose cadence it is asking about.
+    /// </summary>
     public const int SLOT_MINUTES = 30;
 
     /// <summary>
@@ -79,13 +88,30 @@ public static class PeriodicStatusSlot_Planner
     public readonly record struct PeriodicStatusSlotPlan(PeriodicStatusSlotActions Action, DateTime SlotStart);
 
     /// <summary>
-    /// The half hour a moment falls in — :00 or :30, seconds cleared, on the clock it was given.
+    /// The slot a moment falls in — for <see cref="SLOT_MINUTES"/>, :00 or :30 — seconds cleared, on
+    /// the clock it was given.
+    ///
+    /// <para>
+    /// COUNTED FROM MIDNIGHT, NOT FROM THE HOUR, since the length became a parameter. Flooring the
+    /// minute-of-the-hour works only for a length that divides sixty: 45 would give :00 and :45 and
+    /// then a fifteen-minute slot back to :00, a cadence nobody asked for. Minutes since local midnight
+    /// give every length its own even grid — 45 fires 00:00, 00:45, 01:30 … — and every orchestration
+    /// still lands on the SAME grid, which is the property this class exists for. For every length
+    /// that divides sixty (30 included) the answer is identical to the old hour-based floor, so the
+    /// away digest did not move. A length that does not divide 1440 leaves the last slot before
+    /// midnight short, once a day: the catalogue bounds the setting to 5–120, and that stub is the
+    /// cheap side of a grid that re-anchors on the owner's day rather than drifting through it.
+    /// </para>
     /// </summary>
-    public static DateTime Slot_Start(DateTime moment)
+    public static DateTime Slot_Start(DateTime moment, int slotMinutes)
     {
-        var slotMinute = moment.Minute - (moment.Minute % SLOT_MINUTES);
+        if (slotMinutes <= 0)
+            throw new Exception($"A slot length must be a positive number of minutes; got {slotMinutes}");
 
-        return new DateTime(moment.Year, moment.Month, moment.Day, moment.Hour, slotMinute, 0, moment.Kind);
+        var minuteOfDay = (moment.Hour * 60) + moment.Minute;
+        var slotMinuteOfDay = minuteOfDay - (minuteOfDay % slotMinutes);
+
+        return new DateTime(moment.Year, moment.Month, moment.Day, 0, 0, 0, moment.Kind).AddMinutes(slotMinuteOfDay);
     }
 
     /// <summary>
@@ -112,12 +138,16 @@ public static class PeriodicStatusSlot_Planner
     /// respawn, at 04:00, to someone who cannot stop it — and "the app keeps dying" is what the
     /// crash-loop alert is for.
     /// </summary>
-    public static PeriodicStatusSlotPlan Decide(DateTime now, DateTime? lastPushedSlotStart)
+    /// <param name="slotMinutes">
+    /// Whose cadence this is: <see cref="SLOT_MINUTES"/> for the away digest, the resolved
+    /// <c>phone.status.intervalMinutes</c> for the periodic status (D9).
+    /// </param>
+    public static PeriodicStatusSlotPlan Decide(DateTime now, DateTime? lastPushedSlotStart, int slotMinutes)
     {
         if (lastPushedSlotStart == null)
-            return new PeriodicStatusSlotPlan(PeriodicStatusSlotActions.Adopt, Slot_Start(now.AddSeconds(BOUNDARY_GRACE_SECONDS)));
+            return new PeriodicStatusSlotPlan(PeriodicStatusSlotActions.Adopt, Slot_Start(now.AddSeconds(BOUNDARY_GRACE_SECONDS), slotMinutes));
 
-        var current = Slot_Start(now);
+        var current = Slot_Start(now, slotMinutes);
 
         // A CHANGE, never an ordering — see the residual in the class comment.
         if (lastPushedSlotStart.Value == current)

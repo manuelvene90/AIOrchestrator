@@ -468,6 +468,25 @@ public static class SettingsCatalog
             description: "How long a typed high-risk code stays valid. Long enough to fetch the phone from another room; short enough to be a second gesture.",
             restart: RestartKinds.Host));
 
+        // ON BY DEFAULT, OFF IN CLASSIC (owner, 2026-09-23, plan 03 task 15): the shipped default is
+        // today's behaviour and the guarded one (ruling R14); classic.json states the owner's way.
+        // Read by the engine at the one place a question's risk is decided, per question, so the
+        // switch takes effect on the next question with no restart.
+        kernel.Add(SettingDefinition_Factory.Create_Bool(
+            path: GuardrailSettings_Factory.HIGH_RISK_CONFIRMATION_KEY,
+            shippedDefault: GuardrailSettings_Factory.DEFAULT_HIGH_RISK_CONFIRMATION,
+            scope: SettingScopes.Machine,
+            category: SettingCategories.Kernel,
+            label: "High-risk confirmation code",
+            description:
+                "Whether a tap on a high-risk question — declared RISK: high by the asker, or matching a high-risk pattern — " +
+                "also costs a typed 4-digit code. OFF, one tap decides it, but it is still high risk: it never takes a " +
+                "default and lapses as a deny. The question contract does not change: every question still carries its " +
+                "RISK: line, and the log still records which questions are high risk. A question asked while the code was " +
+                "ON keeps its lock after the setting is turned off — the lock is fixed when the question is asked. " +
+                "highRiskPatterns: [] only silences the pattern half; this is the switch for both.",
+            restart: RestartKinds.None));
+
         kernel.Add(SettingDefinition_Factory.Create_Int(
             path: "dispatchPauseThresholdPercent",
             shippedDefault: (int)GuardrailSettings_Factory.DEFAULT_DISPATCH_PAUSE_THRESHOLD_PERCENT,
@@ -616,10 +635,10 @@ public static class SettingsCatalog
     }
 
     // ---------------------------------------------------------------------------------------
-    // PHONE — what reaches the owner's phone and how a topic looks. INERT until plan 03.
+    // PHONE — what reaches the owner's phone and how a topic looks. Every row is read by the engine
+    // at its point of effect since plan 03 (the last two, topic.modeGlyphs and topic.onClose, in
+    // Tasks 7 and 10), so the "read by nothing yet" note these rows carried is gone.
     // ---------------------------------------------------------------------------------------
-
-    const string INERT_NOTE = "REGISTERED BUT READ BY NOTHING YET — the engine starts obeying this key in plan 03.";
 
     static IReadOnlyList<ISettingDefinition> Build_Phone()
     {
@@ -644,7 +663,10 @@ public static class SettingsCatalog
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Periodic status",
-                description: $"Whether the app pushes an unprompted periodic status at all. {INERT_NOTE}",
+                description:
+                    "Whether the app posts master's periodic STATUS (the /status roster plus the current task) into each " +
+                    "orchestration topic on its interval — and only when it changed since the last one, so an idle topic " +
+                    "stays silent. The away digest is not this: it keeps its own half hour whatever this says.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Int(
@@ -655,7 +677,9 @@ public static class SettingsCatalog
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Periodic status interval (minutes)",
-                description: $"Minutes between periodic status messages, when they are on at all. {INERT_NOTE}",
+                description:
+                    "Minutes between periodic status messages, when they are on — a grid on the wall clock counted from " +
+                    "midnight, shared by every topic. Moves the periodic status only; the away digest stays on 30.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
@@ -681,7 +705,9 @@ public static class SettingsCatalog
                 description:
                     "The bar of literal slash commands above the input box. Off by default and deliberately not persistent: " +
                     "is_persistent re-shows the bar whenever the phone keyboard hides — which is what the back button does — " +
-                    $"and disables the icon that collapses it (CLAUDE.md decision 24). {INERT_NOTE}",
+                    "and disables the icon that collapses it (CLAUDE.md decision 24). 'on' INSTALLS NOTHING YET: the owner " +
+                    "answered D5 'off for both presets' (2026-09-14), so plan 03 task 9 wired no carrier and ReplyKeyboard_Markup " +
+                    "stays built, tested and deliberately uncalled — wiring it is its own request.",
                 restart: RestartKinds.Host),
 
             // THE AGGREGATION WINDOW AND ITS DISCOUNT (plan 03 task 13, owner 2026-09-23: "it should be a
@@ -761,16 +787,23 @@ public static class SettingsCatalog
                 restart: RestartKinds.None,
                 legacyPath: $"{TelegramProseSettings.TelegramProseSettings_Json.TELEGRAM_KEY}.{TelegramProseSettings.TelegramProseSettings_Json.ATTACH_ENTRIES_ABOVE_KEY}"),
 
+            // DELETE IS THE SHIPPED DEFAULT — the owner's answer D2 (2026-09-14): "delete", with close-but-keep
+            // "staying available as an option" (ruling R4 implements it). Classic states nothing and follows;
+            // quiet no longer restates it. Read at the point of effect by the engine's Execute_Close.
             SettingDefinition_Factory.Create_Enum(
                 path: "topic.onClose",
                 values: ["delete", "close"],
-                shippedDefault: "close",
+                shippedDefault: "delete",
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "On closing an orchestration",
                 description:
-                    "Whether closing an orchestration deletes its Telegram topic or closes it. 'close' keeps the audit " +
-                    $"trail the whole system is built on; 'delete' is for a phone the owner wants tidy. {INERT_NOTE}",
+                    "Whether closing an orchestration deletes its Telegram topic or closes it. 'delete' (the default) " +
+                    "removes the topic and its messages — for a phone that will hold thousands of finished topics — and " +
+                    "keeps trying: a delete that fails is retried, remembered, and paid off at the next start. 'close' " +
+                    "keeps the topic in the list with its history, marked 🏁, as an audit trail on the phone; it is one " +
+                    "closeForumTopic, not retried, because a failed close only leaves the topic open. The folder on disk " +
+                    "is kept either way.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Enum(
@@ -785,7 +818,29 @@ public static class SettingsCatalog
                     "THE FORK'S REASON FOR MOVING THEM OFF THE NAME: each rename is an editForumTopic call and EACH " +
                     "RENAME WRITES A SERVICE MESSAGE, so an app-wide mode change wrote a line into every one of the " +
                     "owner's threads to tell them something they had just done themselves. In PULSE's header the same " +
-                    $"fact costs one silent edit of a message that was being edited anyway (spec §7.4). {INERT_NOTE}",
+                    "fact costs one silent edit of a message that was being edited anyway (spec §7.4). Under 'name' that " +
+                    "cost is back: an app-wide mode change (/dnd_all, /mute_all, away) renames every open topic in one " +
+                    "sweep. A name is only renamed when what it should say has changed, never on a tick. The state " +
+                    "glyphs (🏁 💤 ✅ 🧪 ⏸) stay on the name either way, and the five are never drawn in both places.",
+                restart: RestartKinds.None),
+
+            // THE PER-REPO TOPIC COLOUR (plan 03 task 14; owner 2026-09-23 08:10: "since we merged his forks
+            // the topic icon gets colored without any context of why, red, blue, green, seemingly random").
+            // The shipped value is today's — the fork's brief F1 (dfb33688, 2026-09-10) — and classic states
+            // the owner's false (ruling R14). Read at the point of effect by RepoTopicColour_Resolver.
+            SettingDefinition_Factory.Create_Bool(
+                path: PhoneSettings.PhoneSettings_Json.TOPIC_REPO_COLOURS_PATH,
+                shippedDefault: true,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Colour topics by repository",
+                description:
+                    "Whether each repository's topics are created with a colour of their own: the first repository " +
+                    "takes blue, the next yellow, then violet, green, rose and red, and the colour is written onto the " +
+                    "repository in config.json so reordering the list never changes it. Off creates every topic in " +
+                    "Telegram's default. TELEGRAM ONLY TAKES A COLOUR WHEN A TOPIC IS CREATED (editForumTopic has no " +
+                    "icon_color), so a change reaches topics created afterwards — existing topics keep the colour they " +
+                    "have. Turning it off erases no assignment: on again, each repository gets its old colour back.",
                 restart: RestartKinds.None),
         ];
     }

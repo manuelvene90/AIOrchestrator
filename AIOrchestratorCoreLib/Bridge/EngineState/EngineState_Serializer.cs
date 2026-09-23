@@ -125,6 +125,7 @@ public static class EngineState_Serializer
                 ["deadlineUtc"] = question.DeadlineUtc == null ? null : Write_Instant(question.DeadlineUtc.Value),
                 ["defaultOptionIndex"] = question.DefaultOptionIndex,
                 ["isHighRisk"] = question.IsHighRisk,
+                ["needsCode"] = question.NeedsCode,
                 ["reminderSent"] = question.ReminderSent,
             });
         }
@@ -268,6 +269,13 @@ public static class EngineState_Serializer
             // through) must not be able to arm an unattended approval of a push.
             DefaultOptionIndex = isHighRisk ? null : Read_Int_OrNull(entry["defaultOptionIndex"]),
             IsHighRisk = isHighRisk,
+
+            // ABSENT MEANS THE CLASSIFICATION: every file written before plan 03 task 14b predates the
+            // key, and until the highRiskConfirmation switch every high-risk question DID ask the code —
+            // its terms on the phone promised one. And the lock only ever FOLLOWS the classification: a
+            // hand-edited `needsCode: true` on an ordinary question is read as false, the same inbound
+            // enforcement the default gets above.
+            NeedsCode = isHighRisk && (Read_Bool_OrNull(entry["needsCode"]) ?? true),
             ReminderSent = Read_Bool_OrNull(entry["reminderSent"]) ?? false,
 
             // `inDiscussion` is no longer read. A file written by the previous build may carry it,

@@ -319,6 +319,7 @@ public class SettingsResolverTests
         public bool Done => throw new NotSupportedException();
         public DateTime? TelegramTopicDeletePendingUtc => throw new NotSupportedException();
         public DateTime? TelegramTopicDeletedUtc => throw new NotSupportedException();
+        public DateTime? TelegramTopicFinalNameUtc => throw new NotSupportedException();
         public bool TelegramTopicDeleteFailureReported => throw new NotSupportedException();
         public DateTime? ClosedUtc => throw new NotSupportedException();
     }

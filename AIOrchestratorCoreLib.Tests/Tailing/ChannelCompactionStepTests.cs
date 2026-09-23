@@ -182,7 +182,7 @@ public class ChannelCompactionStepTests : IDisposable
         tailer.Poll([_channel]);
 
         // The mirror tick appends to channel files BETWEEN the poll and the compaction step, on the
-        // same thread: Check_LedgerHealth_Async, Check_ChannelShapes_Async and Push_AwayDigests_Async
+        // same thread: Check_LedgerHealth_Async, Check_ChannelShapes_Async and Push_PeriodicStatus_Async
         // all write entries after the poll has run. The tailer has not seen these bytes, so nothing
         // it holds says they exist — Pending is empty and the channel looks perfectly clear.
         File.AppendAllText(_channelFile, Build_Entry(ENTRIES_ABOVE_THRESHOLD + 1, "written after the poll"));

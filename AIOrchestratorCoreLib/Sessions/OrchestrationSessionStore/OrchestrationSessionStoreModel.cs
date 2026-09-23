@@ -397,6 +397,15 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Mark_TopicFinalName(string orchId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithTopicFinalName(session, DateTime.UtcNow));
+        }
+    }
+
     public void Close_Orchestration(string orchId)
     {
         lock (_writeLock)

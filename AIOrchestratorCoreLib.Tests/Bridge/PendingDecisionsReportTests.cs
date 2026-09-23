@@ -99,6 +99,52 @@ public class PendingDecisionsReportTests
     }
 
     /// <summary>
+    /// 🔐 MEANS "A CODE WILL BE ASKED", SO IT IS DRAWN ONLY WHEN ONE WILL (plan 03 task 14b). Under classic
+    /// (<c>highRiskConfirmation</c> off, the owner's 2026-09-23 "I don't want that") a high-risk question is
+    /// decided by one tap; a 🔐 beside it in /pending told the owner a code was coming — the very thing they
+    /// asked to be rid of. What it still IS stays keyed on the classification: denied on timeout, the
+    /// declared default never named (ruling R21).
+    /// </summary>
+    [Fact]
+    public void AHighRiskQuestionThatAsksNoCode_CarriesNoLock_AndIsStillDeniedOnTimeout()
+    {
+        var question = new OpenQuestionRecord
+        {
+            OrchId = "o1",
+            Text = "merge and push?",
+            AskedUtc = Now.AddMinutes(-10),
+            DeadlineUtc = Now.AddHours(1),
+            DefaultOptionIndex = 0,
+            IsHighRisk = true,
+            NeedsCode = false,
+        };
+
+        var report = PendingDecisions_Report.Build([question], [], Now);
+
+        Assert.DoesNotContain("🔐", report);
+        Assert.Contains("denied in 1h if unanswered", report);
+        Assert.DoesNotContain("taken", report);
+    }
+
+    /// <summary>The other half: a question asked while the code was on keeps its lock, and its 🔐.</summary>
+    [Fact]
+    public void AHighRiskQuestionThatAsksTheCode_CarriesTheLock()
+    {
+        var question = new OpenQuestionRecord
+        {
+            OrchId = "o1",
+            Text = "push to production?",
+            AskedUtc = Now.AddMinutes(-10),
+            IsHighRisk = true,
+            NeedsCode = true,
+        };
+
+        var report = PendingDecisions_Report.Build([question], [], Now);
+
+        Assert.StartsWith("🔐 [o1]", report, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A deadline already in the past must render as PASSED, never as a negative countdown. This
     /// is exactly how "on task under a minute" bugs happen elsewhere in this app (decision 12 in
     /// CLAUDE.md): a negative duration formatted as if it were still counting down reads as a

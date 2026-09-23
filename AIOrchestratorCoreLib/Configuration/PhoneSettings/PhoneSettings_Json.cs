@@ -55,6 +55,9 @@ public static class PhoneSettings_Json
     const string TOPIC_ON_CLOSE_PATH = "topic.onClose";
     const string TOPIC_MODE_GLYPHS_PATH = "topic.modeGlyphs";
 
+    /// <summary>Public because the catalogue row registers this spelling — one copy of the path.</summary>
+    public const string TOPIC_REPO_COLOURS_PATH = "topic.repoColours";
+
     /// <summary>
     /// A null <paramref name="configRoot"/> and a null <paramref name="presetTree"/> together are the
     /// catalogue's own shipped defaults — which is how <c>OrchestratorConfig_Factory</c> fills the block
@@ -73,7 +76,8 @@ public static class PhoneSettings_Json
             TopicClose_Actions.Parse_OrDefault(Read_Word_OrNull(TOPIC_ON_CLOSE_PATH, configRoot, presetTree)),
             ModeGlyph_Placements.Parse_OrPulseHeader(Read_Word_OrNull(TOPIC_MODE_GLYPHS_PATH, configRoot, presetTree)),
             Read_Int(AGGREGATION_SECONDS_PATH, configRoot, presetTree),
-            Read_Int(FINISHED_MESSAGE_SECONDS_PATH, configRoot, presetTree));
+            Read_Int(FINISHED_MESSAGE_SECONDS_PATH, configRoot, presetTree),
+            Settings_Resolver.Resolve_Bool(Definition(TOPIC_REPO_COLOURS_PATH), presetTree, configRoot, session: null));
     }
 
     static string? Read_Word_OrNull(string path, JsonObject? configRoot, JsonObject? presetTree)

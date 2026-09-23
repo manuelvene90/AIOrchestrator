@@ -56,40 +56,30 @@ public class AwaySuppressesAppAlertsScanTests
         Assert.DoesNotContain("SILENT_DEADLOCK_MINUTES", source);
     }
 
+    /// <summary>
+    /// THE TWO AWAY-DIGEST SCANS THAT STOOD HERE RETIRED WITH THE METHOD THEY READ (plan 03 Task 8,
+    /// 2026-09-23). They pinned that the digest was change-gated exactly once and remembered only after
+    /// a confirmed write, by reading <c>Push_AwayDigests_Async</c> out of the engine — the weaker claim,
+    /// as this file says of itself, because the engine could not be driven to a slot boundary. The sweep
+    /// left the engine when the periodic status came back, and both claims are now BEHAVIOURAL, driven
+    /// over a clock in <c>PeriodicStatusSweepTests</c>:
+    /// <c>ChangingTheStatusInterval_LeavesTheAwayDigestOnItsOwnSlot</c> (an unchanged digest is not
+    /// re-sent) and <c>AnAwayDigestWhoseAppendFailed_IsSentAgainAtTheNextSlot</c> (remembered only on a
+    /// confirmed write).
+    ///
+    /// <para>
+    /// What is left for a scan is the half a behavioural test of the sweep cannot see: that the engine
+    /// did not keep a second copy of the decision after handing it over.
+    /// </para>
+    /// </summary>
     [Fact]
-    public void TheAwayDigestIsChangeGatedExactlyOnce()
+    public void TheAwayDigestDecision_LeftTheEngine_WithNoCopyBehind()
     {
         var source = Read_EngineSource();
 
-        var occurrences = source.Split("AwayDigest_Decider.Should_Send").Length - 1;
-
-        Assert.Equal(1, occurrences);
-    }
-
-    /// <summary>
-    /// A DIGEST IS REMEMBERED ONLY AFTER IT IS WRITTEN, and this ordering is load-bearing precisely
-    /// BECAUSE the digest is change-gated: remembering one that was never appended — a channel locked
-    /// for the whole budget — means the identical digest is never sent again, so the away spell goes
-    /// silent entirely rather than merely late. `Post_StatusEntry`'s own comment named that invariant
-    /// ("nothing records it as done, so nothing is left claiming work that did not happen") while
-    /// this caller was briefly the thing breaking it.
-    /// </summary>
-    [Fact]
-    public void TheAwayDigestIsRememberedOnlyAfterAConfirmedWrite()
-    {
-        var body = Extract_Method("async Task Push_AwayDigests_Async");
-
-        Assert.Contains("AwayDigest_Decider.Should_Send", body);
-
-        var post = body.IndexOf("Post_StatusEntry(session.OrchId, digest", StringComparison.Ordinal);
-        var remember = body.IndexOf("Remember_AwayDigest", StringComparison.Ordinal);
-
-        Assert.True(post >= 0, "the away branch no longer posts the digest — this test is reading a method it does not understand");
-        Assert.True(remember >= 0, "the away digest is no longer remembered, so the change-gate has nothing to compare against");
-
-        Assert.True(
-            post < remember,
-            "the digest is remembered BEFORE the post: an append dropped by a locked channel would count as delivered, and because an unchanged digest is never re-sent that away spell goes silent entirely");
+        Assert.DoesNotContain("AwayDigest_Decider.Should_Send", source);
+        Assert.DoesNotContain("_lastAwayDigestByOrchId", source);
+        Assert.Contains("_periodicStatus.Push_Async(", source);
     }
 
     /// <summary>

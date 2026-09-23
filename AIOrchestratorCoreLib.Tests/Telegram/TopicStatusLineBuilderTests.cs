@@ -637,6 +637,28 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("✈ 💻 PULSE", header);
     }
 
+    /// <summary>
+    /// UNDER <c>topic.modeGlyphs = name</c> THE HEADER IS THE BARE LEAD WORD (plan 03 Task 7). Classic
+    /// puts the five back on the topic NAME, as master drew them, and a glyph drawn in both places is a
+    /// fact the owner reads twice and has to reconcile. Every mode input is set here, so a header that
+    /// drew any of them would show it; the cases above, which name no placement, are the shipped
+    /// <c>pulseHeader</c>.
+    /// </summary>
+    [Fact]
+    public void UnderTheNamePlacement_TheHeaderCarriesNoModeGlyph()
+    {
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+            fields: new TopicStatusFields(
+                Mode: TelegramDeliveryModes.Silenced,
+                IsAway: true,
+                IsQuiet: true,
+                Presence: OwnerPresenceModes.Terminal),
+            modeGlyphs: ModeGlyphPlacements.Name);
+
+        Assert.Equal("PULSE", line.Split('\n')[0]);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────────
     // FIELD 2 — "sup · …": the supervisor's own declared state, plus a usage-limit pause the app
     // adds on its own. Untested anywhere before this rewrite: the old lead-line-only builder had no

@@ -75,6 +75,21 @@ public class EngineStateSerializerTests
                     IsHighRisk = false,
                     ReminderSent = true,
                 },
+
+                // HIGH RISK WITH NO CODE — classic's shape since plan 03 task 15. The two flags differ, so
+                // a serializer that dropped needsCode (and fell back to the classification) fails here.
+                new OpenQuestionRecord
+                {
+                    MessageId = 557,
+                    OrchId = "orch-1",
+                    Text = "Merge and push?",
+                    AskedUtc = T0,
+                    ButtonGroupId = 1003,
+                    DeadlineUtc = T0.AddMinutes(30),
+                    DefaultOptionIndex = null,
+                    IsHighRisk = true,
+                    NeedsCode = false,
+                },
             ],
             PendingConfirmations =
             [
@@ -310,6 +325,34 @@ public class EngineStateSerializerTests
         var question = Assert.Single(snapshot.OpenQuestions);
         Assert.True(question.IsHighRisk);
         Assert.Null(question.DefaultOptionIndex);
+    }
+
+    /// <summary>
+    /// A FILE WITH NO <c>needsCode</c> — every file written before plan 03 task 14b — reads it from the
+    /// classification, because until the <c>highRiskConfirmation</c> switch every high-risk question DID
+    /// ask the code: that is the truth about the question on the phone, whose terms promised one. And a
+    /// question that is not high risk never needs a code, whatever a hand-edited file says — the lock
+    /// can only ever follow the classification, never lead it.
+    /// </summary>
+    [Fact]
+    public void AQuestionWithNoNeedsCodeKey_ReadsItFromTheClassification_AndAnOrdinaryQuestionNeverNeedsOne()
+    {
+        var askedUtc = new DateTimeOffset(T0).ToUnixTimeSeconds();
+
+        var json = $$"""
+        {
+          "openQuestions": [
+            { "messageId": 901, "orchId": "orch-1", "text": "Deploy?", "askedUtc": {{askedUtc}}, "isHighRisk": true },
+            { "messageId": 902, "orchId": "orch-1", "text": "Which colour?", "askedUtc": {{askedUtc}}, "isHighRisk": false, "needsCode": true }
+          ]
+        }
+        """;
+
+        var (snapshot, dropped) = EngineState_Serializer.Parse(json);
+
+        Assert.Equal(0, dropped);
+        Assert.True(snapshot.OpenQuestions.Single(question => question.MessageId == 901).NeedsCode);
+        Assert.False(snapshot.OpenQuestions.Single(question => question.MessageId == 902).NeedsCode);
     }
 
     /// <summary>

@@ -97,7 +97,7 @@ public static class OrchestratorConfig_Loader
             Get_Long_OrNull(configRoot, "orchestrationTokenBudget"),
             RunnerConfigs_Json.Parse(configRoot),
             Parse_PlanBackend_OrNull(configRoot),
-            Parse_Guardrails(configRoot),
+            Parse_Guardrails(configRoot, preset),
             DefaultsSettings_Json.Parse(configRoot),
 
             // ON THE PRESET RUNG SINCE 2026-09-14 (plan 03 task 1): the block now resolves its two keys
@@ -215,14 +215,26 @@ public static class OrchestratorConfig_Loader
     /// means the owner never said, and gets the default list; an explicitly empty array means they
     /// said "nothing is high risk", which is theirs to say. Collapsing the two would make the guard
     /// impossible to turn off, or impossible to keep.
+    ///
+    /// <para>
+    /// <c>highRiskConfirmation</c> IS THE ONE KEY HERE ON THE PRESET RUNG (plan 03 task 15), because it
+    /// is the one a preset states: classic turns the code off by the owner's request of 2026-09-23. The
+    /// four older keys are still read from this file alone — no preset names them, and moving them is
+    /// not this change. Resolved through <see cref="Settings_Resolver"/> like the phone rows, so a
+    /// non-boolean costs the key its preset value, never the load.
+    /// </para>
     /// </summary>
-    static IGuardrailSettings Parse_Guardrails(JsonObject? configRoot)
+    static IGuardrailSettings Parse_Guardrails(JsonObject? configRoot, JsonObject? presetTree)
     {
+        var confirmationDefinition = Catalog.Find_OrNull(GuardrailSettings_Factory.HIGH_RISK_CONFIRMATION_KEY)
+            ?? throw new Exception($"No catalogue entry for {GuardrailSettings_Factory.HIGH_RISK_CONFIRMATION_KEY} — the loader names a row the settings catalogue does not register");
+
         return GuardrailSettings_Factory.Create(
             Get_StringList_OrNull(configRoot, GUARDRAIL_HIGH_RISK_PATTERNS),
             Get_Int_OrNull(configRoot, GUARDRAIL_HIGH_RISK_CODE_EXPIRY_MINUTES),
             Get_Double_OrNull(configRoot, GUARDRAIL_DISPATCH_PAUSE_THRESHOLD_PERCENT),
-            Get_Int_OrNull(configRoot, GUARDRAIL_BUTTON_EXPIRY_MINUTES));
+            Get_Int_OrNull(configRoot, GUARDRAIL_BUTTON_EXPIRY_MINUTES),
+            Settings_Resolver.Resolve_Bool(confirmationDefinition, presetTree, configRoot, session: null));
     }
 
     /// <summary>

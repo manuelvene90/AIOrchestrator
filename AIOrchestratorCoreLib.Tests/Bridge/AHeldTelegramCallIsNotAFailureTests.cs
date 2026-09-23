@@ -171,6 +171,7 @@ public class AHeldTelegramCallIsNotAFailureTests : IDisposable
         public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => _inner.Create_ForumTopic_Async(topicName, iconColor, cancellationToken);
         public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken) => _inner.Edit_ForumTopic_Async(messageThreadId, newName, cancellationToken);
         public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken) => _inner.Edit_GeneralForumTopic_Async(newName, cancellationToken);
+        public Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => _inner.Close_ForumTopic_Async(messageThreadId, cancellationToken);
         public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => _inner.Delete_ForumTopic_Async(messageThreadId, cancellationToken);
         public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => _inner.Remove_TopicCreationPin_Async(messageThreadId, cancellationToken);
         public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken) => _inner.Send_Message_Async(messageThreadId, text, sound, cancellationToken);

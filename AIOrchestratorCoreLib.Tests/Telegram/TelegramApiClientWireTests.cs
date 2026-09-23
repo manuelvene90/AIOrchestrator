@@ -403,6 +403,29 @@ public class TelegramApiClientWireTests
     }
 
     /// <summary>
+    /// A TOPIC CREATED WITH NO COLOUR CARRIES NO <c>icon_color</c> AT ALL (plan 03 task 14). Under classic
+    /// the engine passes null (<c>TopicColourFollowsTheSettingTests</c>), and this is the other half of
+    /// "the topic is Telegram's default": the key is absent, not sent as zero. A permitted colour is still
+    /// written, so the absence above is the guard's doing and not a key the client never sends.
+    /// </summary>
+    [Fact]
+    public async Task ATopicCreatedWithNoColour_PutsNoIconColorOnTheWire_AndAPermittedColourStillDoes()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_thread_id":71}}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_thread_id":72}}""");
+
+        var client = Build_Client(transport);
+
+        await client.Create_ForumTopic_Async("alpha-1", null, CancellationToken.None);
+        await client.Create_ForumTopic_Async("alpha-2", TopicColor_Rotation.PALETTE[0], CancellationToken.None);
+
+        Assert.Equal(2, transport.Requests.Count);
+        Assert.DoesNotContain("icon_color", transport.Requests[0].Body, StringComparison.Ordinal);
+        Assert.Contains($"\"icon_color\":{TopicColor_Rotation.PALETTE[0]}", transport.Requests[1].Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// One multipart part, by name. Quoted and unquoted both accepted: .NET writes
     /// <c>name=chat_id</c> without quotes when the name needs none, and pinning the quoted form
     /// would make this test a test of the framework's formatting rather than of our payload.

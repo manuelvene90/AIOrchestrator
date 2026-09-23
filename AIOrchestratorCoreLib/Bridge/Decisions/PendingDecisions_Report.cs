@@ -46,7 +46,11 @@ public static class PendingDecisions_Report
 
     static string Describe_Question(OpenQuestionRecord question, DateTime nowUtc)
     {
-        var risk = question.IsHighRisk ? "🔐 " : "";
+        // 🔐 IS "A CODE WILL BE ASKED", so it follows NeedsCode, not the classification (plan 03 task 14b).
+        // Under classic the code is off and one tap decides a high-risk question; a lock drawn from
+        // IsHighRisk told the owner a code was coming — the very thing they asked to be rid of. What the
+        // question IS still decides its outcome text below: no default, denied on timeout (ruling R21).
+        var risk = question.NeedsCode ? "🔐 " : "";
         var age = Describe_Age(nowUtc - question.AskedUtc);
         var outcome = Describe_Outcome(question, nowUtc);
 
