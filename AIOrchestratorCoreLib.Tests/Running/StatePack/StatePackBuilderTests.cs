@@ -103,6 +103,7 @@ public class StatePackBuilderTests
     {
         public string Key => key;
         public string ChannelFilePath => path;
+        public TurnSourceKinds Kind => isOwner ? TurnSourceKinds.Owner : TurnSourceKinds.Spoke;
         public bool IsOwnerChannel => isOwner;
     }
 }

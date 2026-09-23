@@ -146,6 +146,28 @@ public class PauseGatesEveryWakerScanTests
     }
 
     /// <summary>
+    /// THE SIBLING TURN SOURCES (sibling plan 2026-09-23 Task 13, spec §5.4) are a waker of their own: a
+    /// sibling's outbox entry starts a bridge-driven solo's turn, and no delivery mode stands between the
+    /// two. The gate is in the resolver, ABOVE the source being made — a paused solo resolves no sibling
+    /// source, so nothing a sibling writes can wake it, and the cursor the dispatcher keeps for an
+    /// unresolved source carries the backlog to the unpause. Its own case (ruling G), so it stays a textual
+    /// neighbour of the Task 10 case above.
+    /// </summary>
+    [Fact]
+    public void TheSiblingTurnSources_AreGatedOnPause()
+    {
+        var source = Read_Source("TurnSources_Resolver.cs");
+
+        var create = source.IndexOf("Create_Sibling(", StringComparison.Ordinal);
+
+        Assert.True(create >= 0, "the resolver makes no sibling source — this scan is reading a file it does not understand");
+
+        var gate = source.LastIndexOf(".Paused", create, StringComparison.Ordinal);
+
+        Assert.True(gate >= 0, "no pause check before the sibling sources are made, so a sibling's entry wakes a paused solo");
+    }
+
+    /// <summary>
     /// AND THE WATCHDOG, which is the one waker that does not write to a channel at all: it respawns
     /// a dead terminal. A session booted back up reads its role command, arms a watcher and starts
     /// working — the pause silently over, with nothing on screen saying so.

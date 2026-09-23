@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Formatting;
+using AIOrchestratorCoreLib.Running.TurnSource;
 using AIOrchestratorCoreLib.Status;
 
 namespace AIOrchestratorCoreLib.Running.PendingTraffic;
@@ -268,6 +269,14 @@ public static class WakeUp_Policy
     static bool Is_Digestable(PendingEntry item, IReadOnlyCollection<string> sourcesNeverDeliveredFrom)
     {
         if (sourcesNeverDeliveredFrom.Contains(item.Source.Key))
+            return false;
+
+        // A SIBLING IS NEVER HELD (sibling plan 2026-09-23, Task 13). "Confined to the supervisor without a
+        // role test" held only while no other role had a member author inbound; a solo now does, on its
+        // siblings' outboxes. The digest exists to batch a crew's reports into one expensive supervisor turn;
+        // a sibling's CLAIM or RELEASE is coordination that a terminal solo's watcher delivers at once (spec
+        // §5.2, §5.3), and held for the window it arrives after the work it was meant to prevent.
+        if (item.Source.Kind == TurnSourceKinds.Sibling)
             return false;
 
         return ChannelAuthor_Kinds.Is_Member(item.Entry.Author) && Find_EscalationMarker_OrNull(item) == null;

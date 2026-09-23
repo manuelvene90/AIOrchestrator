@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Git.GitSnapshot;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.TurnSource;
+using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Usage;
 
@@ -21,6 +22,12 @@ namespace AIOrchestratorCoreLib.Running.StatePack;
 /// they get the whole ledger and the tail of the owner channel — the owner's messages refer back
 /// to earlier ones, and pending entries alone cannot answer them. The general supervisor keeps its
 /// own CLAUDE.md as memory (decision 8) and gets only its last entry and the pending traffic.
+/// </para>
+/// <para>
+/// A LINKED SOLO ALSO GETS ITS <c>ENDEAVOUR.md</c> (sibling plan 2026-09-23, spec §5.4), the digest of what its
+/// siblings are doing that a terminal solo reads at boot. The app writes it on the tick and removes it when
+/// no sibling is open, so a missing file means "no endeavour right now" and adds no line; a file that is
+/// there and cannot be read is NAMED, like every other input here.
 /// </para>
 /// </summary>
 public static class StatePackInputs_Reader
@@ -42,8 +49,30 @@ public static class StatePackInputs_Reader
         var (planText, ledgerLines) = Read_Plan(paths, state, ownsTheEndeavour, unavailable);
         var gitLines = state.Role == SessionRoles.General ? [] : Read_Git(state.WorkingDirectory, unavailable);
         var ownerTail = ownsTheEndeavour ? Read_OwnerTail(paths, state, unavailable) : [];
+        var endeavourDigest = state.Role == SessionRoles.Solo ? Read_EndeavourDigest_OrNull(paths, state, unavailable) : null;
 
-        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable);
+        return new StatePackInputs(state.OrchId, state.MemberId, state.Role, requestId, pending, sources, brief, lastOwn, ledgerLines, planText, gitLines, ownerTail, unavailable, endeavourDigest);
+    }
+
+    static string? Read_EndeavourDigest_OrNull(ISupervisionPaths paths, IPrintSessionState state, List<string> unavailable)
+    {
+        var file = paths.Get_EndeavourDigestFile(state.OrchId);
+
+        try
+        {
+            return File.Exists(file) ? Tolerant_FileReader.Read_AllText(file) : null;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Removed between the stat and the open — the last sibling closed on this tick. That is the
+            // absent file's answer, not a failure.
+            return null;
+        }
+        catch (Exception ex)
+        {
+            unavailable.Add($"ENDEAVOUR.md: {ex.Message}");
+            return null;
+        }
     }
 
     static IReadOnlyList<IChannelEntry> Read_History(string channelFilePath, List<string> unavailable)

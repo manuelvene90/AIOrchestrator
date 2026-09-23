@@ -896,7 +896,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             cursors.Add(cursor);
             Warn_IfEntriesWereArchivedUndelivered(state, source, cursor, entries);
 
-            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, entries, cursor), Nothing_EverDelivered(cursor)));
+            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, source.Kind, entries, cursor), Nothing_EverDelivered(cursor)));
         }
 
         // A CURSOR IS NEVER DROPPED FOR A SOURCE THAT MERELY DID NOT RESOLVE THIS TICK. It used to be,
@@ -1713,7 +1713,20 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             var delivered = pending.Where(item => SOURCE_KEYS.Equals(item.Source.Key, source.Key)).Select(item => item.Entry).ToList();
             var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
 
-            advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
+            advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, source.Kind, entries, delivered));
+        }
+
+        // A CURSOR IS NEVER DROPPED FOR A SOURCE THAT DID NOT RESOLVE FOR THIS TURN — Read_Sources's rule,
+        // and this is the other place the cursor set is rewritten. It used to keep only the turn's sources,
+        // which was invisible while every source a session lost stayed lost. A PAUSED linked solo resolves
+        // no sibling source (TurnSources_Resolver), and the owner's message that lifts a pause can start a
+        // turn a tick before the pause is lifted: dropped then, the sibling cursor came back EMPTY on
+        // unpause and the whole live outbox — the HANDOVER absorbed at registration included — was handed
+        // over again as new traffic (sibling plan 2026-09-23 Task 13, SiblingPrintTurnTests).
+        foreach (var cursor in state.Cursors)
+        {
+            if (!sources.Any(source => SOURCE_KEYS.Equals(source.Key, cursor.SourceKey)))
+                advanced.Add(cursor);
         }
 
         return advanced;
@@ -1820,7 +1833,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // question "did this reply answer the owner" would come to have two answers.
         HashSet<string> written = new(StringComparer.OrdinalIgnoreCase);
 
-        if (sources.Count <= 1)
+        // A SIBLING'S OUTBOX IS NEVER A TARGET (TurnSources_Resolver.Select_ReplyTargets says why), so a
+        // linked solo — own channel plus siblings — is ONE-TARGET and is not split, exactly as it was before
+        // it had siblings. The contract it was shown (PrintTurnPrompt_Builder.Describe_Contract) is built from
+        // the same list, so it was never told it could address one.
+        var targets = TurnSources_Resolver.Select_ReplyTargets(sources);
+
+        if (targets.Count <= 1)
         {
             var (soleSubject, soleBody) = PrintTurnEntry_Splitter.Split(resultText);
             var soleLanded = await Append_SessionEntry_WithRetry_Async(ownChannel, author, soleSubject, soleBody);
@@ -1828,10 +1847,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             if (soleLanded)
                 written.Add(ownChannel);
 
-            return Describe_Delivery(soleLanded, sources, written);
+            // ONE TARGET ANSWERS EVERYTHING IT WAS HANDED: the one entry is the whole reply, and a sibling's
+            // entry has no other place to be answered from here. Before siblings this was the same set.
+            return soleLanded ? new ReplyDelivery(true, [.. sources.Select(source => source.Key)]) : Describe_Delivery(false, sources, written);
         }
 
-        var byKey = sources.ToDictionary(source => source.Key, SOURCE_KEYS);
+        var byKey = targets.ToDictionary(source => source.Key, SOURCE_KEYS);
         var blocks = TurnReply_Splitter.Split(resultText);
 
         if (blocks.Count == 0)
@@ -1877,7 +1898,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 ownChannel,
                 AppEntryAudiences.Agent,
                 $"{MISADDRESSED_SUBJECT} {state.MemberId} — {string.Join(", ", misaddressed.Distinct())}",
-                $"Part(s) of the last turn were addressed to {string.Join(", ", misaddressed.Distinct().Select(key => $"'{key}'"))}, which {(misaddressed.Distinct().Count() == 1 ? "is not a channel" : "are not channels")} this session is woken by. They were written HERE instead, in order.\n\nAddressable this turn: {string.Join(", ", sources.Select(source => source.Key))}",
+                $"Part(s) of the last turn were addressed to {string.Join(", ", misaddressed.Distinct().Select(key => $"'{key}'"))}, which {(misaddressed.Distinct().Count() == 1 ? "is not a channel" : "are not channels")} this session is woken by. They were written HERE instead, in order.\n\nAddressable this turn: {string.Join(", ", targets.Select(source => source.Key))}",
                 DateTime.Now);
         }
 

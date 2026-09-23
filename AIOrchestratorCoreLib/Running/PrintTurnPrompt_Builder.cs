@@ -78,7 +78,7 @@ public static class PrintTurnPrompt_Builder
         else
             Append_SingleSourceTraffic(prompt, pending);
 
-        prompt.Append(multiSource ? Describe_MultiSourceContract(sources) : SINGLE_SOURCE_CONTRACT);
+        prompt.Append(Describe_Contract(sources));
         return prompt.ToString();
     }
 
@@ -104,7 +104,7 @@ public static class PrintTurnPrompt_Builder
         else
             Append_SingleSourceTraffic(prompt, pending);
 
-        prompt.Append(multiSource ? Describe_MultiSourceContract(sources) : SINGLE_SOURCE_CONTRACT);
+        prompt.Append(Describe_Contract(sources));
 
         return prompt.ToString();
     }
@@ -142,10 +142,27 @@ public static class PrintTurnPrompt_Builder
         return text.ToString();
     }
 
+    /// <summary>
+    /// The reply contract, built from the sources a reply may go to
+    /// (<see cref="TurnSources_Resolver.Select_ReplyTargets"/>) — the same list the dispatcher files the reply
+    /// by, so the session is never offered an address the bridge would refuse. A linked solo is therefore told
+    /// the single-channel contract, plus <see cref="SIBLING_SOURCES_NOTE"/>: its sibling sources are read-only.
+    /// </summary>
     public static string Describe_Contract(IReadOnlyList<ITurnSource> sources)
     {
-        return sources.Count > 1 ? Describe_MultiSourceContract(sources) : SINGLE_SOURCE_CONTRACT;
+        var targets = TurnSources_Resolver.Select_ReplyTargets(sources);
+        var contract = targets.Count > 1 ? Describe_MultiSourceContract(targets) : SINGLE_SOURCE_CONTRACT;
+
+        return targets.Count < sources.Count ? contract + SIBLING_SOURCES_NOTE : contract;
     }
+
+    /// <summary>
+    /// Said whenever a sibling's outbox is among the sources. Without it, a solo that has just read a
+    /// sibling's entry under a <c>sibling:</c> label has no way to know that its final message will not reach
+    /// that sibling — and answering the owner about a sibling's CLAIM is not answering the sibling.
+    /// </summary>
+    public const string SIBLING_SOURCES_NOTE =
+        "Entries under a `sibling:<id>` label come from that sibling's outbox. That file is theirs, and nothing you write this turn goes there: answer a sibling in YOUR OWN outbox, as your role command says. Your final message is still your entry in your own channel.\n";
 
     const string SINGLE_SOURCE_CONTRACT =
         "Act on it per your role command. Your final message IS your channel entry — the bridge appends it under your author word with the header, the index and the time: first line the subject, then a blank line, then the body. A question ends the turn exactly as an answer does.\n";

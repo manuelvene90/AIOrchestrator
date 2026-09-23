@@ -30,12 +30,20 @@ public static class StatePack_Builder
     public const int GIT_CAP = 3_000;
     public const int OWNER_TAIL_CAP = 8_000;
 
+    /// <summary>
+    /// ENDEAVOUR.md is bounded where it is built (<c>EndeavourDigest_Builder</c>: about 4-6 KB a sibling), so
+    /// this cap is a belt for a digest of more siblings than the owner's cap allows, not a budget the file
+    /// normally meets.
+    /// </summary>
+    public const int ENDEAVOUR_CAP = 24_000;
+
     public const string TITLE_PREFIX = "# State pack — ";
     public const string OPENING =
         "You are a FRESH session on an existing channel: your role command has just run and you hold no memory of earlier turns. "
         + "This pack is what the bridge knows about your work. Read it whole, then act; read the channel itself only for a fact the pack lacks. "
         + "Do not file the online greeting your boot sequence describes — the channel already carries your earlier entries.";
 
+    public const string ENDEAVOUR_HEADING = "## Your endeavour (ENDEAVOUR.md)";
     public const string PENDING_HEADING = "## What woke you — pending entries (act on these)";
     public const string UNAVAILABLE_HEADING = "## Sections the bridge could not fill";
 
@@ -67,6 +75,11 @@ public static class StatePack_Builder
             var tail = string.Join("\n\n", inputs.OwnerTail.Select(entry => entry.RawText.Trim()));
             Append_Block(text, $"## Owner channel — the last {inputs.OwnerTail.Count} entries", tail, OWNER_TAIL_CAP, "owner-channel.md");
         }
+
+        // After the owner channel and before the trigger: it moves as the siblings work, more often than the
+        // ledger and less often than the pending entries.
+        if (inputs.EndeavourDigest != null)
+            Append_Block(text, ENDEAVOUR_HEADING, inputs.EndeavourDigest, ENDEAVOUR_CAP, "ENDEAVOUR.md");
 
         text.Append(PENDING_HEADING).Append('\n').Append('\n');
         text.Append(PrintTurnPrompt_Builder.Describe_Traffic(inputs.Pending, inputs.Sources));

@@ -1,6 +1,7 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Running.TurnCursor;
+using AIOrchestratorCoreLib.Running.TurnSource;
 
 namespace AIOrchestratorCoreLib.Running;
 
@@ -27,6 +28,14 @@ namespace AIOrchestratorCoreLib.Running;
 /// lower index would never be handed to its supervisor, and nothing would say so. Counting entries or
 /// using their position is worse still: compaction breaks both (decision 13).
 /// </para>
+/// <para>
+/// AND IT DEPENDS ON THE KIND OF CHANNEL, since a solo got a second one (sibling plan 2026-09-23, spec §5.4).
+/// On a <see cref="TurnSourceKinds.Sibling"/> source — another solo's outbox — an entry authored
+/// <c>solo</c> is inbound for a solo, because the reader never writes that file: it is the sibling speaking.
+/// On the owner channel the same author word is still the reader's own record and still wakes nothing. The
+/// two-argument overloads answer for an owner or spoke source, which is every source that existed before
+/// siblings, so their callers did not move.
+/// </para>
 /// </summary>
 public static class PrintTurn_Trigger
 {
@@ -36,11 +45,17 @@ public static class PrintTurn_Trigger
     /// </summary>
     public static IReadOnlyList<IChannelEntry> Select_Pending(SessionRoles role, IReadOnlyList<IChannelEntry> entries, ITurnCursor cursor)
     {
+        return Select_Pending(role, TurnSourceKinds.Owner, entries, cursor);
+    }
+
+    /// <summary>The same, for a source of the given kind — the dispatcher's call, once per source.</summary>
+    public static IReadOnlyList<IChannelEntry> Select_Pending(SessionRoles role, TurnSourceKinds kind, IReadOnlyList<IChannelEntry> entries, ITurnCursor cursor)
+    {
         List<IChannelEntry> pending = [];
 
         foreach (var entry in entries)
         {
-            if (!Is_Inbound(role, entry.Author))
+            if (!Is_Inbound(role, kind, entry.Author))
                 continue;
 
             if (cursor.Delivered.Contains(ChannelEntry_Digest.Compute(entry)))
@@ -54,6 +69,16 @@ public static class PrintTurn_Trigger
 
     public static bool Is_Inbound(SessionRoles role, ChannelAuthors author)
     {
+        return Is_Inbound(role, TurnSourceKinds.Owner, author);
+    }
+
+    public static bool Is_Inbound(SessionRoles role, TurnSourceKinds kind, ChannelAuthors author)
+    {
+        // A SIBLING'S OUTBOX HAS ONE WRITER, the sibling, and one kind of reader, a solo. Anything else found
+        // there — an app line, an owner's hand edit — is not a sibling speaking, so it wakes nobody.
+        if (kind == TurnSourceKinds.Sibling)
+            return role == SessionRoles.Solo && author == ChannelAuthors.Solo;
+
         return role switch
         {
             SessionRoles.Implementer or SessionRoles.Reviewer => author is ChannelAuthors.Supervisor or ChannelAuthors.Owner,
