@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+using AIOrchestratorCoreLib.Bridge.PeriodicStatus;
 using AIOrchestratorCoreLib.Bridge.ReceiptRegistry;
 using AIOrchestratorCoreLib.Bridge.SuppressedEntries;
 using AIOrchestratorCoreLib.Bridge.TopicDeletion;
@@ -68,7 +69,7 @@ internal sealed class BridgeEngineModel(
     // The OUTBOUND ALLOWANCE the Telegram client spends from, held here only so it can be written
     // into .bridge-state.json beside the cursor (brief F5) — the engine never asks it for a token.
     // Null in file-only mode and on the test seams that hand in their own client.
-    Telegram.TelegramSendBudget.ITelegramSendBudget? sendBudget = null) : IBridgeEngine
+    Telegram.TelegramSendBudget.ITelegramSendBudget? sendBudget = null) : IBridgeEngine, IPeriodicStatusHost
 {
     /// <summary>
     /// WHAT THIS HOST CAN DO WITH WINDOWS, asked rather than assumed. The engine used to call
@@ -891,10 +892,10 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<long, DateTime> _lastTypingSentUtcByThread = [];
 
     /// <summary>
-    /// The last half-hour SLOT each orchestration has spent, LOCAL — not a clock reading, and named
-    /// so nobody compares it against a UTC one. `PeriodicStatusSlot_Planner` owns the rule.
+    /// The periodic status and the away digest — their slots, and what each last said. Moved out of
+    /// this file with its memories (plan 03 Task 8); see <see cref="Push_PeriodicStatus_Async"/>.
     /// </summary>
-    readonly Dictionary<string, DateTime> _lastPeriodicStatusSlot = [];
+    readonly IPeriodicStatusSweep _periodicStatus = PeriodicStatusSweep_Factory.Create();
 
     /// <summary>Per-orchestration cooldown so the brevity feedback never becomes noise itself.</summary>
     readonly Dictionary<string, DateTime> _lastVerbosityNudgeUtc = [];
@@ -1065,13 +1066,6 @@ internal sealed class BridgeEngineModel(
     /// from it instead of supervisors relaying to each other.
     /// </summary>
     bool _awayActive;
-
-    /// <summary>
-    /// Per orchestration: the away digest last SENT, so an identical one is never sent again.
-    /// Guarded by _ownerStateLock — written from the mirror loop and cleared from the inbound one.
-    /// See <see cref="AwayDigest_Decider"/> for the 30-minute loop this ends.
-    /// </summary>
-    readonly Dictionary<string, string> _lastAwayDigestByOrchId = [];
 
     /// <summary>Which stale-in-progress SET was last reported, so a fix to one line still leaves the rest heard.</summary>
     readonly Dictionary<string, string> _reportedStaleInProgress = [];
@@ -1818,7 +1812,7 @@ internal sealed class BridgeEngineModel(
         await Check_ChannelShapes_Async(cancellationToken);
         Expire_StaleAwaitingAnswerFlags();
         await Check_AwayMode_Async(cancellationToken);
-        await Push_AwayDigests_Async(cancellationToken);
+        await Push_PeriodicStatus_Async(cancellationToken);
         await Push_GeneralDashboard_Async(cancellationToken);
 
         // Cheap: guarded by a remembered name, so it is an API call only when the desired name
@@ -4536,19 +4530,20 @@ internal sealed class BridgeEngineModel(
             Compose_RiskSurface(questionPrompt, optionLabels),
             guardrails.HighRiskPatterns);
 
-        var isHighRisk = question.DeclaredHighRisk || matchedPattern != null;
-
-        // A HIGH-RISK QUESTION LOSES ITS DEFAULT HERE, at the point of asking, rather than being
-        // trusted not to have one. The agent may well have written DEFAULT: 1 on a push question in
-        // good faith; nothing downstream may act on it.
-        var effectiveDefaultIndex = isHighRisk ? null : defaultOptionIndex;
+        // TWO FACTS (plan 03 task 15, ruling R21): what the question IS — high risk, so it takes no
+        // default and lapses as a deny — and whether a tap on it also costs the read-back CODE, which
+        // the owner turned off under classic ("I don't want that", 2026-09-23). The tap always stays.
+        // HighRiskLock_Policy holds all three answers; nothing here decides them.
+        var isHighRisk = HighRiskLock_Policy.Is_HighRisk(matchedPattern, question.DeclaredHighRisk);
+        var needsCode = HighRiskLock_Policy.Needs_Code(matchedPattern, question.DeclaredHighRisk, guardrails.HighRiskConfirmation);
+        var effectiveDefaultIndex = HighRiskLock_Policy.Resolve_DefaultIndex_OrNull(defaultOptionIndex, matchedPattern, question.DeclaredHighRisk);
 
         var askedUtc = _clock.UtcNow;
         var deadlineUtc = deadline == null ? (DateTime?)null : askedUtc + deadline.Value;
 
-        var promptWithTerms = Compose_QuestionTerms(promptWithGuidance, optionLabels, isHighRisk, deadlineUtc, effectiveDefaultIndex);
+        var promptWithTerms = Compose_QuestionTerms(promptWithGuidance, optionLabels, needsCode, deadlineUtc, effectiveDefaultIndex);
 
-        var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithTerms, isHighRisk, out var buttonGroupId);
+        var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithTerms, needsCode, out var buttonGroupId);
 
         // THROUGH THE RENDERER like the mirrored body above it, and for the same reason: this text is
         // the agent's QUESTION: line and their OPTION: wording, so it carries their Markdown. The
@@ -4583,14 +4578,10 @@ internal sealed class BridgeEngineModel(
                 };
             }
 
-            if (isHighRisk)
-            {
-                _log.Log_Info(
-                    channel.OrchId,
-                    matchedPattern != null
-                        ? $"Question classified HIGH RISK (matched '{matchedPattern}') — a tap will require the read-back code"
-                        : "Question classified HIGH RISK (declared by the asker, no pattern matched) — a tap will require the read-back code");
-            }
+            var riskLine = HighRiskLock_Policy.Describe_OrNull(matchedPattern, question.DeclaredHighRisk, guardrails.HighRiskConfirmation);
+
+            if (riskLine != null)
+                _log.Log_Info(channel.OrchId, riskLine);
 
             await Supersede_OlderQuestions_Async(channel, toSupersede, cancellationToken);
 
@@ -4652,13 +4643,13 @@ internal sealed class BridgeEngineModel(
     static string Compose_QuestionTerms(
         string promptWithOptions,
         IReadOnlyList<string> optionLabels,
-        bool isHighRisk,
+        bool needsCode,
         DateTime? deadlineUtc,
         int? defaultOptionIndex)
     {
         List<string> terms = [];
 
-        if (isHighRisk)
+        if (needsCode)
             terms.Add("🔐 High risk — a tap is not enough: you will be asked to type a 4-digit code shown here.");
 
         if (deadlineUtc != null)
@@ -4692,7 +4683,7 @@ internal sealed class BridgeEngineModel(
         IReadOnlyList<string> optionTexts,
         IReadOnlyList<string> buttonLabels,
         string questionText,
-        bool isHighRisk,
+        bool needsCode,
         out long groupId)
     {
         if (buttonLabels.Count != optionTexts.Count)
@@ -4725,7 +4716,10 @@ internal sealed class BridgeEngineModel(
                     GroupId = _buttonGroupSequence,
                     QuestionText = questionText,
                     ExpiresUtc = expiresUtc,
-                    IsHighRisk = isHighRisk,
+
+                    // A BUTTON'S flag means "a tap opens the read-back code" — the question's own
+                    // classification lives on OpenQuestionRecord (plan 03 task 15).
+                    IsHighRisk = needsCode,
                 };
 
                 _buttonOrder.Enqueue(data);
@@ -11020,7 +11014,23 @@ internal sealed class BridgeEngineModel(
     }
 
 
-    string Build_MemberStatusText_ForSession(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous = null)
+    /// <param name="withVolatileReadings">
+    /// FALSE ONLY FOR THE PERIODIC STATUS'S NO-CHANGE GUARD (plan 03 Task 8), which compares this text
+    /// against the last one posted. Some readings on it move without anything happening:
+    /// <list type="bullet">
+    /// <item>each member's "last wrote N min ago" changes every time it is read;</item>
+    /// <item>the session that reads the OWNER channel — the supervisor, or a solo — is woken by the
+    /// status itself (a terminal session's watcher fires on the append), and the wake moves its
+    /// context figure AND its working state: "working now — editing X" against "idle — waiting".</item>
+    /// </list>
+    /// Compared with them in, no two statuses would ever match, or the status's own wake would make the
+    /// next one differ — the 30-minute limit cycle AwayDigest_Decider records, and at the 5-minute
+    /// minimum interval a wake's turn easily outlasts a slot (review of 8d548f0, 2026-09-23). Whether
+    /// the supervisor is WAITING ON THE OWNER stays in: a question is news. An implementer's working
+    /// state and figure stay in too — a status never wakes it, so only its own work moves them. The
+    /// owner still READS everything: the posted text is built with it all.
+    /// </param>
+    string Build_MemberStatusText_ForSession(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous = null, bool withVolatileReadings = true)
     {
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
         var supervisorUsage = Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE);
@@ -11030,12 +11040,15 @@ internal sealed class BridgeEngineModel(
         var ownerOwesReply = Status.OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
             ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId))) != null;
 
-        var supervisorContextSuffix = Build_ContextSuffix_ForSupervisor(supervisorUsage);
-        var supervisorLine = Is_Working(
-            Running.SessionRoles.Supervisor, session.OrchId,
-            Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsage)
-            ? $"working now{Describe_Activity_Suffix(supervisorUsage)}{supervisorContextSuffix}"
-            : ownerOwesReply ? $"{MemberState_Descriptor.WAITING_ON_OWNER}{supervisorContextSuffix}" : $"idle — waiting{supervisorContextSuffix}";
+        var supervisorContextSuffix = withVolatileReadings ? Build_ContextSuffix_ForSupervisor(supervisorUsage) : "";
+        var supervisorLine = !withVolatileReadings
+            // The comparison form: whether it owes the owner is news, working-or-idle is the wake's.
+            ? (ownerOwesReply ? MemberState_Descriptor.WAITING_ON_OWNER : "")
+            : Is_Working(
+                Running.SessionRoles.Supervisor, session.OrchId,
+                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsage)
+                ? $"working now{Describe_Activity_Suffix(supervisorUsage)}{supervisorContextSuffix}"
+                : ownerOwesReply ? $"{MemberState_Descriptor.WAITING_ON_OWNER}{supervisorContextSuffix}" : $"idle — waiting{supervisorContextSuffix}";
 
         // WHICH ROWS this carries is StatusRoster_Builder's — including the one that must NOT be
         // here for a basic orchestration. See that class for why the decision moved out.
@@ -11061,15 +11074,15 @@ internal sealed class BridgeEngineModel(
                 Running.SessionRoles.Implementer, session.OrchId, member.MemberId,
                 Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
 
-            var lastWrite = File.Exists(channelFile)
+            var lastWrite = withVolatileReadings && File.Exists(channelFile)
                 ? $" · last wrote {SessionDuration_Formatter.Describe(DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile))} ago"
                 : "";
 
             // Only the owner-facing session can be waiting on the OWNER; an implementer waits on its
             // supervisor, and handing the owner that queue would be telling them to clear one that is
             // not theirs.
-            var memberOwesTheOwner = ownerOwesReply
-                && Sessions.MemberKind_Ids.Resolve_Kind(member.MemberId) == Sessions.MemberKinds.Solo;
+            var memberIsSolo = Sessions.MemberKind_Ids.Resolve_Kind(member.MemberId) == Sessions.MemberKinds.Solo;
+            var memberOwesTheOwner = ownerOwesReply && memberIsSolo;
 
             // The same field, the same threshold and the same wording as the away variant of this
             // digest and as the status line — all three go through ContextVisibility_Policy and
@@ -11078,11 +11091,20 @@ internal sealed class BridgeEngineModel(
             var memberContext = UsageTotals_Reader.Read_ContextUsage_OrNull(
                 Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
 
-            var memberContextSuffix = Status.ContextVisibility_Policy.Show_Member_InPeriodicDigest(member.MemberId, memberContext)
+            // A SOLO'S FIGURE LEAVES THE COMPARISON FORM WITH THE SUPERVISOR'S, for the same reason: a
+            // solo's channel IS the owner channel (MemberChannel_Locator), so the status append wakes a
+            // terminal solo and its context grows by the wake. An implementer's never does — its
+            // watcher reads its own channel — so its figure only moves when it worked, and stays in.
+            var memberContextSuffix = (withVolatileReadings || !memberIsSolo)
+                && Status.ContextVisibility_Policy.Show_Member_InPeriodicDigest(member.MemberId, memberContext)
                 ? $" · {Formatting.ContextUsage_Formatter.Describe_OrNull(memberContext)}"
                 : "";
 
-            memberLines.Add($"- {member.MemberId}: {MemberState_Descriptor.Describe_ForOwner(declared, workingNow, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
+            // A solo's working state leaves the comparison form with the supervisor's, for the same
+            // reason: the status wakes it, so the wake — not the work — would move it.
+            var workingNowInThisForm = workingNow && (withVolatileReadings || !memberIsSolo);
+
+            memberLines.Add($"- {member.MemberId}: {MemberState_Descriptor.Describe_ForOwner(declared, workingNowInThisForm, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
         }
 
         // The header carries the ledger counts, so "who is doing what" and "how far along are we"
@@ -14238,114 +14260,55 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// THE AWAY DIGEST, AND NOTHING ELSE ANY MORE. It was <c>Push_PeriodicStatus_Async</c> when it
-    /// pushed a fifteen-line status into every topic every thirty minutes; brief C deleted that
-    /// (owner, 2026-09-09 — one status surface per topic, and it is PULSE) and left the method
-    /// named for the thing it no longer does, with a bare <c>continue</c> where the status used to
-    /// be. What survives is the AWAY digest, which is not a cadence: it fires only while the owner
-    /// is away and only when its content has changed.
+    /// THE PERIODIC STATUS AND THE AWAY DIGEST — and the name is what it does again. It was
+    /// <c>Push_PeriodicStatus_Async</c> in master, <c>Push_AwayDigests_Async</c> for the fortnight the
+    /// fork had deleted the status (2026-09-09), and is <c>Push_PeriodicStatus_Async</c> once more since
+    /// plan 03 Task 8 (2026-09-23) re-ported the status under <c>phone.status.periodic</c> (answer D1).
+    ///
     /// <para>
-    /// The half-hourly SLOT still governs it — that is why the slot planner is still here — but a
-    /// slot boundary is now permission to consider sending, not a reason to send.
+    /// EVERYTHING IT DECIDES LIVES IN <see cref="IPeriodicStatusSweep"/>, and that is the code-conventions
+    /// rule, not taste: the method grew its second branch, and a piece of this file that is touched
+    /// moves out. It also made the sweep testable for the first time — every earlier claim about it
+    /// (the pause gate, the change gate, where the stamp sits) was a source SCAN, because driving this
+    /// class to a slot boundary costs a half hour of wall clock. What stays here is the three readings
+    /// only this class has: the clock, the away flag, and the phone block, resolved on this tick.
+    /// The engine itself is the host — see the <see cref="IPeriodicStatusHost"/> adapters below.
     /// </para>
     /// </summary>
-    async Task Push_AwayDigests_Async(CancellationToken cancellationToken)
+    async Task Push_PeriodicStatus_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
             return;
 
-        // ONE reading of the clock for the whole sweep. Taking it per session would let a sweep that
-        // straddles a boundary split the batch across two slots — the trickle, in miniature.
-        var now = DateTime.Now;
-
-        foreach (var session in Sessions_ThisTick())
-        {
-            if (session.ClosedUtc != null || session.TelegramTopicId == null)
-                continue;
-
-            // PAUSED: skipped before the stamp for the same reason as a meeting — stamping here
-            // would restart the clock on every tick of a pause that may last days, so the first
-            // digest after they lift it would be a whole period late.
-            if (session.Paused)
-                continue;
-
-            // MEETING: skipped BEFORE the stamp, deliberately. Stamping here would restart the
-            // 30-minute clock on every tick of the meeting, so the owner would leave terminal mode
-            // and then wait up to half an hour for the first status. Leaving the stamp alone means
-            // the very next tick after they return posts one — which IS the "what waited while we
-            // talked" summary, built by the formatter that already exists rather than a second copy.
-            if (OwnerPresence_Policy.Suppresses_SupervisorAttention(session.OwnerPresence))
-                continue;
-
-            // No mode gate here: the status now rides the channel, so Normal mirrors it, Deferred
-            // queues it (newest only) and Silenced drops it — all handled by the mirror already.
-            var plan = PeriodicStatusSlot_Planner.Decide(now, Last_PeriodicStatusSlot_OrNull(session.OrchId));
-
-            if (plan.Action == PeriodicStatusSlotActions.Skip)
-                continue;
-
-            // Spent whatever happens below: an Adopt sends nothing, and of the three sending paths
-            // one deliberately stays silent. Recording once here is why none of them can fire twice.
-            _lastPeriodicStatusSlot[session.OrchId] = plan.SlotStart;
-
-            // First sight — including EVERY orchestration after an app restart, since this store is
-            // in-memory. It stays silent so a restart cannot push every topic at once, off-boundary.
-            if (plan.Action == PeriodicStatusSlotActions.Adopt)
-                continue;
-
-            // Away mode: the owner cannot reply, so this update is their ONLY window into the
-            // orchestration — it goes out whether or not the ledger says work is in flight,
-            // because "imp-1 is blocked waiting for you" is exactly what they need to know.
-            if (Is_AwayMode())
-            {
-                // ONLY WHEN SOMETHING CHANGED (owner's call, 2026-08-19). An unchanged digest is not
-                // merely redundant on their phone: it is APPENDED TO THE CHANNEL, and an append is
-                // what a session's watcher fires on — so it wakes a session that has nothing to do,
-                // which writes STANDING BY, which re-arms both of the app's OTHER alert paths. That is
-                // 30-minute limit cycle in AwayDigest_Decider's docstring. Not sending it is what
-                // breaks the loop, so this is a correctness guard rather than a politeness one.
-                var digest = Build_AwayUpdateText(session);
-
-                if (!AwayDigest_Decider.Should_Send(Last_AwayDigest_OrNull(session.OrchId), digest))
-                    continue;
-
-                // REMEMBERED ONLY ON A CONFIRMED WRITE. Recording it first would let a channel that
-                // stayed locked for the whole budget count as a delivery, and because an unchanged
-                // digest is never re-sent, that away spell would go silent entirely.
-                //
-                // THE PICTURE IS APPENDED AFTER THE DECISION AND IS NOT REMEMBERED WITH IT. Deciding
-                // on the digest TEXT and storing the digest TEXT is what keeps the no-change rule
-                // above intact: a fresh timestamped IMAGE: path differs on every single pass, so
-                // folding it into either side would make every digest look changed and restart the
-                // exact 30-minute limit cycle that rule exists to break.
-                if (Post_StatusEntry(session.OrchId, digest + await Build_StatusScreenshotMarker_OrEmpty_Async(session, cancellationToken), session.OwnerPresence))
-                    Remember_AwayDigest(session.OrchId, digest);
-
-                continue;
-            }
-
-            // THE HALF-HOURLY STATUS IS GONE (owner's decision, 2026-09-09). It sent a fresh
-            // fifteen-line message every thirty minutes — ten of them in five and a half hours in
-            // one topic, three of them identical at 19:00, 19:30 and 20:00 with every member
-            // closed. Its own trigger was wrong (it read PLAN.md's in-progress lines, not whether
-            // any session had worked), and half its content was wrong or jargon: "5 running" with
-            // nine members closed, "now: FIN-D-293a step 6" repeated for five hours after 293 was
-            // merged, "idle — writing window left open".
-            //
-            // ONE STATUS SURFACE PER TOPIC, and it is PULSE: one message at the bottom, edited in
-            // place, silent. A cadence that posts is a waterfall by construction — the owner's own
-            // word for it — however good its content is. What survives here is the AWAY digest
-            // above, which is not a cadence: it fires only while the owner is away and only when
-            // its content has changed.
-            continue;
-        }
+        await _periodicStatus.Push_Async(
+            DateTime.Now, Is_AwayMode(), _configProvider.Get_Current().Phone, Sessions_ThisTick(), this, cancellationToken);
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // IPeriodicStatusHost — adapters only. Nothing below decides; each forwards to what this class
+    // already had, so the sweep cannot grow a second copy of a reading.
+    // ---------------------------------------------------------------------------------------------
+
+    string IPeriodicStatusHost.Build_AwayDigest(IOrchestrationSession session) => Build_AwayUpdateText(session);
+
+    string IPeriodicStatusHost.Build_MemberStatus(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous, bool withVolatileReadings) =>
+        Build_MemberStatusText_ForSession(session, previous, withVolatileReadings);
+
+    Planning.PlanProgress.IPlanProgress? IPeriodicStatusHost.Read_PlanProgress_OrNull(string orchId) =>
+        Planning.PlanLedger_Parser.Parse_OrNull(UsageTotals_Reader.Read_Text_Safe(_paths.Get_PlanFile(orchId)));
+
+    bool IPeriodicStatusHost.Has_AnySessionWorkedWithin(IOrchestrationSession session, int minutes) => Has_AnySessionWorkedWithin(session, minutes);
+
+    Task<string> IPeriodicStatusHost.Build_ScreenshotMarker_OrEmpty_Async(IOrchestrationSession session, CancellationToken cancellationToken) =>
+        Build_StatusScreenshotMarker_OrEmpty_Async(session, cancellationToken);
+
+    bool IPeriodicStatusHost.Post_StatusEntry(string orchId, string text, OwnerPresenceModes presence) => Post_StatusEntry(orchId, text, presence);
+
     /// <summary>
-    /// The picture of the session's terminal that rides the AWAY DIGEST (owner, 2026-08-24), so the
-    /// update SHOWS what is happening as well as saying it. Returns the IMAGE: line to append, or
-    /// an empty string when there is nothing to show. (It said "the periodic status" until brief C
-    /// removed that; the digest is the only thing left that carries a picture.)
+    /// The picture of the session's terminal that rides the AWAY DIGEST and the PERIODIC STATUS
+    /// (owner, 2026-08-24), so the update SHOWS what is happening as well as saying it. Returns the
+    /// IMAGE: line to append, or an empty string when there is nothing to show. (The status left this
+    /// sentence when brief C deleted it and came back with plan 03 Task 8, 2026-09-23.)
     ///
     /// THE QUEUEING THE OWNER ASKED FOR IS NOT HERE — it is in <see cref="WindowFocus.TerminalWindow_Capturer"/>,
     /// which serialises every capture process-wide. This sweep is sequential already; the reason the
@@ -14505,12 +14468,6 @@ internal sealed class BridgeEngineModel(
 
         return Sessions_ThisTick().Any(session =>
             session.ClosedUtc == null && OwnerPresence_Policy.Suppresses_SupervisorAttention(session.OwnerPresence));
-    }
-
-    /// <summary>The slot this orchestration last spent, or null when it has never been seen.</summary>
-    DateTime? Last_PeriodicStatusSlot_OrNull(string orchId)
-    {
-        return _lastPeriodicStatusSlot.TryGetValue(orchId, out var slot) ? slot : null;
     }
 
     /// <summary>Per orchestration: each currently-open `[>]` line, and when it first appeared in that shape.</summary>
@@ -14719,21 +14676,6 @@ internal sealed class BridgeEngineModel(
             cancellationToken);
     }
 
-    /// <summary>The away digest last sent for this orchestration, or null in a fresh away spell.</summary>
-    string? Last_AwayDigest_OrNull(string orchId)
-    {
-        lock (_ownerStateLock)
-            return _lastAwayDigestByOrchId.TryGetValue(orchId, out var digest) ? digest : null;
-    }
-
-    /// <summary>Recorded only AFTER a confirmed append — a digest remembered but never written would
-    /// silence the whole away spell, since an unchanged one is never re-sent.</summary>
-    void Remember_AwayDigest(string orchId, string digest)
-    {
-        lock (_ownerStateLock)
-            _lastAwayDigestByOrchId[orchId] = digest;
-    }
-
     /// <summary>
     /// A supervisor message reached the owner's phone and is so far unanswered. The 3rd one makes
     /// this orchestration go QUIET immediately — waiting out the 15-minute clock before reacting is
@@ -14776,7 +14718,7 @@ internal sealed class BridgeEngineModel(
 
             // The next away spell starts from null, so its FIRST digest always sends rather than
             // being compared against a snapshot from hours ago and silently swallowed.
-            _lastAwayDigestByOrchId.Clear();
+            _periodicStatus.Forget_AwayDigests();
 
             foreach (var tracker in _awayTrackers.Values)
             {
@@ -15211,7 +15153,7 @@ internal sealed class BridgeEngineModel(
     /// <returns>Whether the entry was actually written — see the note at the append.</returns>
     bool Post_StatusEntry(string orchId, string text, OwnerPresenceModes presence)
     {
-        // Suppressed WITHOUT spending the slot during a meeting (see Push_AwayDigests_Async), so
+        // Suppressed WITHOUT spending the slot during a meeting (see PeriodicStatusSweepModel), so
         // the first tick after the owner leaves terminal mode posts a fresh status — which IS the
         // "what waited while we talked" summary, built by the formatter that already exists.
         //
@@ -15228,8 +15170,8 @@ internal sealed class BridgeEngineModel(
         // channel would then go silent ENTIRELY rather than merely late. The old comment here ended
         // "nothing records it as done, so nothing is left claiming work that did not happen"; that
         // invariant is exactly what a remembered-but-unwritten digest would break, so the away caller
-        // records its delivery only on a true. The periodic caller still discards it, for the
-        // original reason.
+        // records its delivery only on a true. The periodic status, re-ported change-gated in plan 03
+        // Task 8, is under the same premise now and records its delivery only on a true as well.
         return Append_SupervisorAttention_UnlessMeeting(orchId, MirrorText_Formatter.STATUS_SUBJECT_PREFIX, text, presence, Channels.AppEntryAudiences.Owner);
     }
 

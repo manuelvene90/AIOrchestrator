@@ -115,6 +115,10 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   matters more to you than to anyone: this is the owner's channel, so an untagged app entry is
   something they have ALREADY seen and you should not repeat it back to them. The tag is set by the
   app where the entry is written, never inferred from wording, and you never write it yourself.
+- **A `FROM app — STATUS` entry is the owner's periodic digest** — the app posts one on its interval
+  when the owner's `phone.status.periodic` setting is on, and only when something changed. It is
+  already on their phone. **It needs no reply and no action**: read it as a log line and carry on —
+  answering it is exactly what would make the next one differ.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
@@ -227,9 +231,9 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 - Discrete choice? A question is FIVE lines and the app REFUSES to send one missing any of them:
   `QUESTION:` (one short, self-contained question), 2–4 `OPTION:` lines (they become tappable
   buttons), `RECOMMEND:` (what you would do and why, one line — printed with the question),
-  `RISK:` (`high` or `low`; high means they type back a 4-digit code, and `low` unlocks nothing —
-  the app also locks anything naming a push, a deploy, a release, production or a destructive
-  command), and `ROW:` (the plan row, or the word `none`). Miss one and the body still reaches them
+  `RISK:` (`high` or `low`; high means they must tap — never a default — and, if their settings
+  keep it on, type back a 4-digit code; `low` unlocks nothing — the app also treats as high risk
+  anything naming a push, a deploy, a release, production or a destructive command), and `ROW:` (the plan row, or the word `none`). Miss one and the body still reaches them
   while the question does not, with an entry here naming every line you left out.
   The app adds ONE button of its own, "💬 Let's talk": a tap CLOSES the question like any other
   button (keyboard gone, the message becomes "💬 Ok — tell me what you have in mind"), and you get a

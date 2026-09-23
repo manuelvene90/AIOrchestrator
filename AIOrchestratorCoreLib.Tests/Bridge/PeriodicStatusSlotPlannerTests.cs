@@ -23,6 +23,9 @@ public class PeriodicStatusSlotPlannerTests
 
     const int TICK_SECONDS = 2;
 
+    /// <summary>The away digest's cadence — every property below was written against it and still holds for it.</summary>
+    const int HALF_HOUR = PeriodicStatusSlot_Planner.SLOT_MINUTES;
+
     // ---------------------------------------------------------------------------------------
     // Slot_Start — the flooring itself
     // ---------------------------------------------------------------------------------------
@@ -38,7 +41,7 @@ public class PeriodicStatusSlotPlannerTests
     [InlineData(59, 59)]
     public void AMomentBelongsToTheHalfHourItFallsIn(int minute, int second)
     {
-        var slot = PeriodicStatusSlot_Planner.Slot_Start(NOON.AddMinutes(minute).AddSeconds(second));
+        var slot = PeriodicStatusSlot_Planner.Slot_Start(NOON.AddMinutes(minute).AddSeconds(second), HALF_HOUR);
 
         Assert.Equal(minute < 30 ? NOON : NOON.AddMinutes(30), slot);
         Assert.Equal(0, slot.Second);
@@ -49,7 +52,7 @@ public class PeriodicStatusSlotPlannerTests
     [Fact]
     public void ASlotKeepsTheKindOfTheClockItWasFlooredFrom()
     {
-        Assert.Equal(DateTimeKind.Local, PeriodicStatusSlot_Planner.Slot_Start(NOON.AddMinutes(7)).Kind);
+        Assert.Equal(DateTimeKind.Local, PeriodicStatusSlot_Planner.Slot_Start(NOON.AddMinutes(7), HALF_HOUR).Kind);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -107,7 +110,7 @@ public class PeriodicStatusSlotPlannerTests
 
         Assert.Equal(
             [NOON.AddMinutes(30), NOON.AddMinutes(60), NOON.AddMinutes(90), NOON.AddMinutes(120)],
-            [.. pushes.Select(PeriodicStatusSlot_Planner.Slot_Start)]);
+            [.. pushes.Select(push => PeriodicStatusSlot_Planner.Slot_Start(push, HALF_HOUR))]);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -130,7 +133,7 @@ public class PeriodicStatusSlotPlannerTests
     [Fact]
     public void AlreadyPushedThisSlotIsSkipped()
     {
-        var plan = PeriodicStatusSlot_Planner.Decide(NOON.AddMinutes(12), NOON);
+        var plan = PeriodicStatusSlot_Planner.Decide(NOON.AddMinutes(12), NOON, HALF_HOUR);
 
         Assert.Equal(PeriodicStatusSlotActions.Skip, plan.Action);
     }
@@ -167,7 +170,7 @@ public class PeriodicStatusSlotPlannerTests
 
         var pushes = Push_Instants(grid, firstSeen: NOON);
 
-        Assert.Equal([NOON.AddMinutes(60)], [.. pushes.Select(PeriodicStatusSlot_Planner.Slot_Start)]);
+        Assert.Equal([NOON.AddMinutes(60)], [.. pushes.Select(push => PeriodicStatusSlot_Planner.Slot_Start(push, HALF_HOUR))]);
     }
 
     /// <summary>
@@ -180,8 +183,8 @@ public class PeriodicStatusSlotPlannerTests
         var boundary = NOON.AddMinutes(30);
         var previousSlot = NOON;
 
-        var inside = PeriodicStatusSlot_Planner.Decide(boundary.AddSeconds(PeriodicStatusSlot_Planner.BOUNDARY_GRACE_SECONDS), previousSlot);
-        var outside = PeriodicStatusSlot_Planner.Decide(boundary.AddSeconds(PeriodicStatusSlot_Planner.BOUNDARY_GRACE_SECONDS + 1), previousSlot);
+        var inside = PeriodicStatusSlot_Planner.Decide(boundary.AddSeconds(PeriodicStatusSlot_Planner.BOUNDARY_GRACE_SECONDS), previousSlot, HALF_HOUR);
+        var outside = PeriodicStatusSlot_Planner.Decide(boundary.AddSeconds(PeriodicStatusSlot_Planner.BOUNDARY_GRACE_SECONDS + 1), previousSlot, HALF_HOUR);
 
         Assert.Equal(PeriodicStatusSlotActions.Push, inside.Action);
         Assert.Equal(PeriodicStatusSlotActions.Skip, outside.Action);
@@ -200,7 +203,7 @@ public class PeriodicStatusSlotPlannerTests
     [Fact]
     public void AnOrchestrationFirstSeenAdoptsItsSlotWithoutPushing()
     {
-        var plan = PeriodicStatusSlot_Planner.Decide(NOON.AddMinutes(7), lastPushedSlotStart: null);
+        var plan = PeriodicStatusSlot_Planner.Decide(NOON.AddMinutes(7), lastPushedSlotStart: null, HALF_HOUR);
 
         Assert.Equal(PeriodicStatusSlotActions.Adopt, plan.Action);
         Assert.Equal(NOON, plan.SlotStart);
@@ -224,7 +227,7 @@ public class PeriodicStatusSlotPlannerTests
     [Fact]
     public void AdoptionCountsTheGraceWindowIn()
     {
-        var plan = PeriodicStatusSlot_Planner.Decide(NOON.AddSeconds(-1), lastPushedSlotStart: null);
+        var plan = PeriodicStatusSlot_Planner.Decide(NOON.AddSeconds(-1), lastPushedSlotStart: null, HALF_HOUR);
 
         Assert.Equal(PeriodicStatusSlotActions.Adopt, plan.Action);
         Assert.Equal(NOON, plan.SlotStart);
@@ -262,9 +265,67 @@ public class PeriodicStatusSlotPlannerTests
         var steppedBackTo = NOON.AddMinutes(30);
         var slotAlreadyPushedBeforeTheStep = NOON.AddMinutes(90);
 
-        var plan = PeriodicStatusSlot_Planner.Decide(steppedBackTo.AddSeconds(3), slotAlreadyPushedBeforeTheStep);
+        var plan = PeriodicStatusSlot_Planner.Decide(steppedBackTo.AddSeconds(3), slotAlreadyPushedBeforeTheStep, HALF_HOUR);
 
         Assert.Equal(PeriodicStatusSlotActions.Push, plan.Action);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The slot length is a parameter (plan 03 Task 8, answer D9)
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A LENGTH THAT DOES NOT DIVIDE AN HOUR STILL GETS AN EVEN GRID. Flooring the minute of the hour
+    /// would give 45 a slot at :00 and :45 and then a fifteen-minute one back to :00; counted from
+    /// midnight it fires every 45 minutes, and every orchestration fires on the same ones.
+    /// </summary>
+    [Theory]
+    [InlineData(45, 11, 20, 11, 15)]
+    [InlineData(45, 13, 0, 12, 45)]
+    [InlineData(45, 13, 29, 12, 45)]
+    [InlineData(45, 13, 30, 13, 30)]
+    [InlineData(20, 12, 59, 12, 40)]
+    [InlineData(120, 13, 15, 12, 0)]
+    public void ASlotOfAnyLength_IsCountedFromMidnight(int slotMinutes, int hour, int minute, int expectedHour, int expectedMinute)
+    {
+        var moment = new DateTime(2026, 9, 23, hour, minute, 17, DateTimeKind.Local);
+
+        Assert.Equal(
+            new DateTime(2026, 9, 23, expectedHour, expectedMinute, 0, DateTimeKind.Local),
+            PeriodicStatusSlot_Planner.Slot_Start(moment, slotMinutes));
+    }
+
+    /// <summary>
+    /// THE AWAY DIGEST DID NOT MOVE when the flooring changed: for every length that divides an hour —
+    /// its 30 included — counting from midnight lands on exactly the slot the hour-based floor did.
+    /// Walked over a whole day minute by minute, so no hour of it is taken on trust.
+    /// </summary>
+    [Theory]
+    [InlineData(30)]
+    [InlineData(5)]
+    [InlineData(15)]
+    [InlineData(60)]
+    public void ForALengthThatDividesAnHour_TheSlotIsTheHourBasedOne(int slotMinutes)
+    {
+        var midnight = new DateTime(2026, 9, 23, 0, 0, 0, DateTimeKind.Local);
+
+        for (var moment = midnight; moment < midnight.AddDays(1); moment = moment.AddMinutes(1))
+        {
+            var hourBased = new DateTime(moment.Year, moment.Month, moment.Day, moment.Hour, moment.Minute - (moment.Minute % slotMinutes), 0, moment.Kind);
+
+            Assert.Equal(hourBased, PeriodicStatusSlot_Planner.Slot_Start(moment, slotMinutes));
+        }
+    }
+
+    /// <summary>A length of zero or less is a bug upstream, and the planner names it rather than dividing by it.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-30)]
+    public void ANonPositiveLength_IsRefused(int slotMinutes)
+    {
+        var refusal = Assert.ThrowsAny<Exception>(() => PeriodicStatusSlot_Planner.Slot_Start(NOON, slotMinutes));
+
+        Assert.Contains(slotMinutes.ToString(), refusal.Message, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -297,7 +358,7 @@ public class PeriodicStatusSlotPlannerTests
             if (now < firstSeen)
                 continue;
 
-            var plan = PeriodicStatusSlot_Planner.Decide(now, lastPushedSlotStart);
+            var plan = PeriodicStatusSlot_Planner.Decide(now, lastPushedSlotStart, HALF_HOUR);
 
             if (plan.Action == PeriodicStatusSlotActions.Skip)
                 continue;

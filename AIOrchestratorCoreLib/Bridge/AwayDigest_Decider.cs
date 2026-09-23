@@ -28,6 +28,14 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// and anything that genuinely changes what they would see changes these characters. A structural
 /// comparison would have to be kept in step with the formatter by hand, which is the second copy
 /// this repo has already been burned by (CLAUDE.md decision 12).
+///
+/// THE PERIODIC STATUS IS ITS SECOND CONSUMER (plan 03 Task 8, 2026-09-23, ruling R6). The re-ported
+/// status is an append to the same owner channel, so it can drive the same loop through a terminal
+/// session's watcher — and the complaint that got it deleted on 2026-09-09 was three IDENTICAL
+/// statuses at 19:00, 19:30 and 20:00. One rule for both, rather than a second string comparison with
+/// its own name: the name is the digest's because the digest came first. What the status passes in is
+/// its COMPARISON form, built without the readings that move by themselves (see
+/// <c>PeriodicStatusSweepModel</c>) — compared on the posted text, no two statuses would ever match.
 /// </summary>
 public static class AwayDigest_Decider
 {

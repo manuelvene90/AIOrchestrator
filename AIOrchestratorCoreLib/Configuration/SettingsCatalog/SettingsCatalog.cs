@@ -472,6 +472,25 @@ public static class SettingsCatalog
             description: "How long a typed high-risk code stays valid. Long enough to fetch the phone from another room; short enough to be a second gesture.",
             restart: RestartKinds.Host));
 
+        // ON BY DEFAULT, OFF IN CLASSIC (owner, 2026-09-23, plan 03 task 15): the shipped default is
+        // today's behaviour and the guarded one (ruling R14); classic.json states the owner's way.
+        // Read by the engine at the one place a question's risk is decided, per question, so the
+        // switch takes effect on the next question with no restart.
+        kernel.Add(SettingDefinition_Factory.Create_Bool(
+            path: GuardrailSettings_Factory.HIGH_RISK_CONFIRMATION_KEY,
+            shippedDefault: GuardrailSettings_Factory.DEFAULT_HIGH_RISK_CONFIRMATION,
+            scope: SettingScopes.Machine,
+            category: SettingCategories.Kernel,
+            label: "High-risk confirmation code",
+            description:
+                "Whether a tap on a high-risk question — declared RISK: high by the asker, or matching a high-risk pattern — " +
+                "also costs a typed 4-digit code. OFF, one tap decides it, but it is still high risk: it never takes a " +
+                "default and lapses as a deny. The question contract does not change: every question still carries its " +
+                "RISK: line, and the log still records which questions are high risk. A question asked while the code was " +
+                "ON keeps its lock after the setting is turned off — the lock is fixed when the question is asked. " +
+                "highRiskPatterns: [] only silences the pattern half; this is the switch for both.",
+            restart: RestartKinds.None));
+
         kernel.Add(SettingDefinition_Factory.Create_Int(
             path: "dispatchPauseThresholdPercent",
             shippedDefault: (int)GuardrailSettings_Factory.DEFAULT_DISPATCH_PAUSE_THRESHOLD_PERCENT,
@@ -666,7 +685,10 @@ public static class SettingsCatalog
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Periodic status",
-                description: $"Whether the app pushes an unprompted periodic status at all. {INERT_NOTE}",
+                description:
+                    "Whether the app posts master's periodic STATUS (the /status roster plus the current task) into each " +
+                    "orchestration topic on its interval — and only when it changed since the last one, so an idle topic " +
+                    "stays silent. The away digest is not this: it keeps its own half hour whatever this says.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Int(
@@ -677,7 +699,9 @@ public static class SettingsCatalog
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Periodic status interval (minutes)",
-                description: $"Minutes between periodic status messages, when they are on at all. {INERT_NOTE}",
+                description:
+                    "Minutes between periodic status messages, when they are on — a grid on the wall clock counted from " +
+                    "midnight, shared by every topic. Moves the periodic status only; the away digest stays on 30.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
@@ -703,7 +727,9 @@ public static class SettingsCatalog
                 description:
                     "The bar of literal slash commands above the input box. Off by default and deliberately not persistent: " +
                     "is_persistent re-shows the bar whenever the phone keyboard hides — which is what the back button does — " +
-                    $"and disables the icon that collapses it (CLAUDE.md decision 24). {INERT_NOTE}",
+                    "and disables the icon that collapses it (CLAUDE.md decision 24). 'on' INSTALLS NOTHING YET: the owner " +
+                    "answered D5 'off for both presets' (2026-09-14), so plan 03 task 9 wired no carrier and ReplyKeyboard_Markup " +
+                    "stays built, tested and deliberately uncalled — wiring it is its own request.",
                 restart: RestartKinds.Host),
 
             // THE AGGREGATION WINDOW AND ITS DISCOUNT (plan 03 task 13, owner 2026-09-23: "it should be a

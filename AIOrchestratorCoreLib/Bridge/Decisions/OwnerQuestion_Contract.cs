@@ -156,7 +156,7 @@ public static class OwnerQuestion_Contract
             QuestionFaults.NoQuestion => "QUESTION: is missing — one short, self-contained question the owner can answer from a lock screen.",
             QuestionFaults.FewerThanTwoOptions => "OPTION: lines — at least two, spelled out; a question with one option is not a choice.",
             QuestionFaults.NoRecommendation => "RECOMMEND: is missing — what you would do, and why, in one line.",
-            QuestionFaults.NoRisk => "RISK: is missing — `high` or `low`. High means a tap is not enough and the owner types a read-back code.",
+            QuestionFaults.NoRisk => "RISK: is missing — `high` or `low`. High means the owner must answer it with a tap — it never takes a default — and, if their settings keep it on, also type a read-back code.",
             QuestionFaults.RiskNotHighOrLow => "RISK: must be exactly `high` or `low` — nothing in between, because nothing in between has a behaviour.",
             QuestionFaults.NoRow => "ROW: is missing — the plan row this decision belongs to (e.g. FIN-D-277), or the word `none`.",
             QuestionFaults.RowNotACodeOrNone => "ROW: must be a row code such as FIN-D-277 (an addendum letter is fine) or the word `none`.",
