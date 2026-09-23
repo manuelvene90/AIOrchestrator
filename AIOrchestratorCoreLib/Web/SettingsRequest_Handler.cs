@@ -77,8 +77,8 @@ namespace AIOrchestratorCoreLib.Web;
 /// keeps reading and editing open while <c>web.token</c> is empty, and two guards keep that from reaching
 /// further than the owner meant: every request must be addressed to a loopback NAME (<see cref="Is_LoopbackHost"/>
 /// — the DNS-rebinding defence, independent of how the listener registers its prefixes), and a token-less
-/// PUT or DELETE may not touch a row in <see cref="FENCED_PATHS"/>, whose values the bridge executes or which
-/// govern this door itself.
+/// PUT or DELETE may not touch a row in <see cref="FENCED_PATHS"/> — rows whose values the bridge executes, the
+/// two that govern this door itself, and the three that decide which human and which chat the bridge obeys.
 /// </para>
 ///
 /// <para>
@@ -137,28 +137,41 @@ public static class SettingsRequest_Handler
     public static readonly IReadOnlyList<string> LOOPBACK_HOST_NAMES = ["127.0.0.1", "localhost", "[::1]"];
 
     /// <summary>
-    /// THE ROWS A TOKEN-LESS EDIT MAY NOT TOUCH (ruling P32b, 2026-09-23) — ONE list, and the reason for each.
-    /// While <c>web.token</c> is empty an edit is open to anything that can reach the loopback port: on the
-    /// owner's brother's VPS that is every OS account on the machine, which config.json's own file permissions
-    /// keep out. For most rows that is D4's accepted cost; for these it would be handing over the machine:
+    /// THE ROWS A TOKEN-LESS EDIT MAY NOT TOUCH (rulings P32b and P34, 2026-09-23) — ONE list: rows whose value
+    /// the bridge executes, the listener's own two rows, and the three rows that decide which human and which
+    /// chat the bridge obeys (D2's phone fence, same reason). While <c>web.token</c> is empty an edit is open to
+    /// anything that can reach the loopback port: on the owner's brother's VPS that is every OS account on the
+    /// machine, which config.json's own file permissions keep out. For most rows that is D4's accepted cost; for
+    /// these it would be handing over the machine:
     /// <list type="bullet">
     /// <item><c>voiceTranscribeCommand</c> — a command line the bridge SHELLS OUT to with every voice note
     /// (<c>VoiceTranscriberModel</c>, through <c>ShellCommand_Builder</c>). Setting it is running a command as
     /// the owner.</item>
     /// <item><c>web.listen</c> — would move this listener off loopback onto a reachable interface.</item>
     /// <item><c>web.token</c> — the first caller would pick the secret and lock the owner out of their own page.</item>
+    /// <item><c>telegramOwnerUserId</c>, <c>telegramSupergroupChatId</c>, <c>telegramInbound</c> — who the owner is,
+    /// which chat the bridge answers, and whether this host listens at all. Rewriting them makes another
+    /// person the owner of every agent the bridge drives — command execution by another route — or cuts the
+    /// real owner off. The same three keys D2 already refuses on the phone, for the same reason (P34).</item>
     /// </list>
     /// NOT FENCED, and why, from a read of <c>SettingsCatalog.cs</c> on 2026-09-23: the six <c>models.*</c> rows
     /// reach the command line as an ARGUMENT and their validator (<c>SettingValidators.MODEL_WORD</c>) admits
     /// letters, digits, '-', '_' and '.' only; <c>runners.sessionMemoryMax</c> is one argv element to
     /// <c>systemd-run</c>, and only after <c>MemorySize_Parser</c> has read it as a size; <c>repos</c> and
     /// <c>planBackend</c> are ReadOnly, refused by the writer anyway; no row names an executable path (the
-    /// <c>claude</c> binary is hard-coded in <c>ClaudeInvocation_Resolver</c>). The owner-identity rows
-    /// (<c>telegramOwnerUserId</c>, <c>telegramSupergroupChatId</c>) execute nothing and are outside the
-    /// ruling's definition; whether they join this list is an open question in the task-6 fix-1 report.
+    /// <c>claude</c> binary is hard-coded in <c>ClaudeInvocation_Resolver</c>). <c>highRiskPatterns</c> stays
+    /// open by ruling (P34): emptying it weakens a guardrail but grants nothing by itself.
     /// Matched by the catalogue row a path RESOLVES to, so a legacy spelling cannot walk around the fence.
     /// </summary>
-    public static readonly IReadOnlyList<string> FENCED_PATHS = ["voiceTranscribeCommand", "web.listen", "web.token"];
+    public static readonly IReadOnlyList<string> FENCED_PATHS =
+    [
+        "voiceTranscribeCommand",
+        "web.listen",
+        "web.token",
+        "telegramInbound",
+        "telegramSupergroupChatId",
+        "telegramOwnerUserId",
+    ];
 
     /// <summary>
     /// A REPEATED KEY IS REFUSED, NOT LAST-WINS. <c>{"x":30,"x":45}</c> is two answers to one question, and

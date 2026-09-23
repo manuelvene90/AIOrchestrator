@@ -738,15 +738,30 @@ public class SettingsRequestHandlerTests : IDisposable
     }
 
     /// <summary>
-    /// A TOKEN-LESS EDIT OF A FENCED ROW IS A 403 AND WRITES NOTHING (ruling P32b). Each value is one its own
-    /// definition ACCEPTS — asserted first — so the refusal measured is the fence and not the catalogue:
-    /// <c>voiceTranscribeCommand</c> is a command line the bridge shells out to, <c>web.listen</c> would move
-    /// this door off loopback, <c>web.token</c> would let the first caller pick the owner's secret.
+    /// ONE EDIT PER FENCED ROW, each a value its own definition ACCEPTS, so the two theories below measure the
+    /// fence and never the catalogue. <see cref="EveryFencedPath_IsACatalogueRow_AndTheGetMarksExactlyThose"/>
+    /// requires this to cover every entry of <see cref="SettingsRequest_Handler.FENCED_PATHS"/>, so a row fenced
+    /// later cannot arrive without its own refused / applied pair.
+    /// </summary>
+    public static TheoryData<string, string> FencedEdits => new()
+    {
+        // P32b: a command line the bridge shells out to; the listener's own two rows.
+        { "voiceTranscribeCommand", "\"whisper {input}\"" },
+        { "web.listen", "\"0.0.0.0:7391\"" },
+        { "web.token", "\"chosen-by-the-first-caller\"" },
+
+        // P34: which human and which chat the bridge obeys — D2's phone fence, same reason.
+        { "telegramInbound", "\"off\"" },
+        { "telegramSupergroupChatId", "-1009876543210" },
+        { "telegramOwnerUserId", "987654321" },
+    };
+
+    /// <summary>
+    /// A TOKEN-LESS EDIT OF A FENCED ROW IS A 403 AND WRITES NOTHING (rulings P32b, P34). The value is asserted
+    /// acceptable to its definition first, so the refusal measured is the fence and not the catalogue.
     /// </summary>
     [Theory]
-    [InlineData("voiceTranscribeCommand", "\"whisper {input}\"")]
-    [InlineData("web.listen", "\"0.0.0.0:7391\"")]
-    [InlineData("web.token", "\"chosen-by-the-first-caller\"")]
+    [MemberData(nameof(FencedEdits))]
     public void Put_AFencedRow_WithNoConfiguredToken_IsFourOhThree_AndAppliesNothing(string path, string valueJson)
     {
         const string original = """{"phone":{"status":{"intervalMinutes":45}}}""";
@@ -767,17 +782,24 @@ public class SettingsRequestHandlerTests : IDisposable
         Assert.Equal(original, Config_Text());
     }
 
-    /// <summary>The fence is a token-less limit, not a ban: with web.token set and sent, the same row applies.</summary>
-    [Fact]
-    public void Put_AFencedRow_WithTheRightToken_Applies()
+    /// <summary>
+    /// The fence is a token-less limit, not a ban: with web.token set and sent, every fenced row applies. Read
+    /// back from the FILE, not a reading — web.token's reading is masked (P2), and "it was written" is the claim.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(FencedEdits))]
+    public void Put_AFencedRow_WithTheRightToken_Applies(string path, string valueJson)
     {
         const string configured = "the-right-token";
 
-        var (status, _, body) = Put("""{"voiceTranscribeCommand":"whisper {input}"}""", configured, Header_Carrying(configured));
+        var (status, _, body) = Put($$"""{"{{path}}":{{valueJson}}}""", configured, Header_Carrying(configured));
 
         Assert.Equal(200, status);
         Assert.Equal("Applied", (string?)Single_Result(body)["outcome"]);
-        Assert.Equal("whisper {input}", Reading("voiceTranscribeCommand").Value_OrNull!.GetValue<string>());
+        Assert.True(
+            JsonNode.DeepEquals(JsonNode.Parse(valueJson), SettingsJson_Path.Read_OrNull(Json(Config_Text()), path)),
+            $"'{path}' is not {valueJson} in config.json: {Config_Text()}");
+        Assert.Equal(SettingOrigins.ConfigFile, Reading(path).Origin);
     }
 
     /// <summary>
@@ -820,22 +842,35 @@ public class SettingsRequestHandlerTests : IDisposable
     }
 
     /// <summary>
-    /// THE ONE LIST IS REAL AND THE PAGE IS TOLD IT. Every fenced path must be a catalogue row under exactly that
-    /// spelling — a row renamed without this list would silently unfence it — and the GET marks exactly those
-    /// rows, so the page greys them out from data rather than from a second copy of the list.
+    /// THE ONE LIST IS REAL, IT IS THE RULED ONE, AND THE PAGE IS TOLD IT. The list is exactly what rulings P32b
+    /// and P34 name — a row dropped from it reopens a door, so it is spelled out here rather than read back from
+    /// the handler — and <c>highRiskPatterns</c> is named as staying OPEN (P34). Every fenced path must be a
+    /// catalogue row under exactly that spelling (a row renamed without this list would silently unfence it),
+    /// <see cref="FencedEdits"/> must cover each one, and the GET marks exactly those rows, so the page greys
+    /// them out from data rather than from a second copy of the list.
     /// </summary>
     [Fact]
     public void EveryFencedPath_IsACatalogueRow_AndTheGetMarksExactlyThose()
     {
-        Assert.NotEmpty(SettingsRequest_Handler.FENCED_PATHS);
+        string[] ruled =
+        [
+            "voiceTranscribeCommand", "web.listen", "web.token",                        // P32b
+            "telegramInbound", "telegramSupergroupChatId", "telegramOwnerUserId",       // P34
+        ];
+
+        static IEnumerable<string> Sorted(IEnumerable<string> paths) => paths.OrderBy(path => path, StringComparer.Ordinal);
+
+        Assert.Equal(Sorted(ruled), Sorted(SettingsRequest_Handler.FENCED_PATHS));
+        Assert.DoesNotContain("highRiskPatterns", SettingsRequest_Handler.FENCED_PATHS);
         Assert.All(SettingsRequest_Handler.FENCED_PATHS, path => Assert.Equal(path, Definition(path).Path));
+        Assert.Equal(Sorted(SettingsRequest_Handler.FENCED_PATHS), Sorted(FencedEdits.Select(row => (string)row[0])));
 
-        var marked = Rows(Json(Get().Body))
-            .Where(row => (bool)row["fenced"]!)
-            .Select(row => (string)row["path"]!)
-            .OrderBy(path => path, StringComparer.Ordinal);
+        var json = Json(Get().Body);
+        var marked = Rows(json).Where(row => (bool)row["fenced"]!).Select(row => (string)row["path"]!);
 
-        Assert.Equal(SettingsRequest_Handler.FENCED_PATHS.OrderBy(path => path, StringComparer.Ordinal), marked);
+        Assert.Equal(Sorted(SettingsRequest_Handler.FENCED_PATHS), Sorted(marked));
+        Assert.False((bool)Row(json, "highRiskPatterns")["fenced"]!);
+        Assert.False((bool)Row(json, INTERVAL_PATH)["fenced"]!);
     }
 
     /// <summary>
@@ -964,7 +999,11 @@ public class SettingsRequestHandlerTests : IDisposable
 
             Write_Config("{}");
 
-            var put = Put($$"""{"{{BUTTON_EXPIRY_PATH}}":1440,"{{CHAT_ID_PATH}}":-1001234567890}""").Body;
+            // The chat id is fenced (P34), so this PUT carries a set token: the row stays because it is the
+            // negative, wider-than-Int32 number this test exists for.
+            const string configured = "the-right-token";
+
+            var put = Put($$"""{"{{BUTTON_EXPIRY_PATH}}":1440,"{{CHAT_ID_PATH}}":-1001234567890}""", configured, Header_Carrying(configured)).Body;
             var get = Get().Body;
             var refused = Put($$"""{"{{BUTTON_EXPIRY_PATH}}":1.5}""").Body;
 
