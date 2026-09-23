@@ -90,16 +90,32 @@ public class ReceiptRegistryTests
 
     /// <summary>
     /// A TYPED WAIT TOOK THE ✓ to make it "⏸ holding"; the GO that releases the hold gives it back as the
-    /// tick, so the delivery edits it into ✓✓ — replacing a newer ✓ if one was sent meanwhile.
+    /// tick, so the delivery edits it into ✓✓. With nothing registered — and when the registered ✓ IS it.
     /// </summary>
     [Fact]
     public void AnAdoptedHoldReceipt_IsTheTickTheDeliveryWillEdit()
     {
-        _registry.Remember_Tick(TOPIC_ID, 9002);
-
         Assert.True(_registry.Adopt_Tick(TOPIC_ID, 9001));
         Assert.True(_registry.Is_TheTickTheDeliveryWillEdit(TOPIC_ID, 9001));
+
+        Assert.True(_registry.Adopt_Tick(TOPIC_ID, 9001));
         Assert.Equal(9001, _registry.Take_Tick_OrNull(TOPIC_ID));
+    }
+
+    /// <summary>
+    /// REFUSED OVER A DIFFERENT, LIVE ✓ — CHANGED DELIBERATELY in Task 6c fix round 1. This case used to assert
+    /// the opposite ("replacing a newer ✓ if one was sent meanwhile"), and that was the review's m1: a ⏸ tapped
+    /// on an older ✓ while a newer one was registered made the older one the tick at GO, so the NEWER ✓ — the one
+    /// under the owner's last message — kept ⏸ Wait ▶ Send now on a batch that had been delivered. The newer ✓
+    /// is the receipt; the older hold receipt goes back to being a ✓ instead (<see cref="IReceiptRegistry.Finish_Hold"/>).
+    /// </summary>
+    [Fact]
+    public void AdoptingOverADifferentLiveTick_IsRefused_AndTheLiveTickStays()
+    {
+        _registry.Remember_Tick(TOPIC_ID, 9002);
+
+        Assert.False(_registry.Adopt_Tick(TOPIC_ID, 9001));
+        Assert.Equal(9002, _registry.Take_Tick_OrNull(TOPIC_ID));
     }
 
     /// <summary>
@@ -219,5 +235,106 @@ public class ReceiptRegistryTests
         _registry.Settle_EditDeferred(9001, NOW.AddSeconds(30));
 
         Assert.NotNull(_registry.Stage_Edit_OrNull(9002, "b", buttons: null, "scope", NOW));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // One hold, one receipt — and every route that ends a hold finishes it (Task 6c fix round 1)
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void AHoldReceipt_IsFound_AndCountsUp()
+    {
+        _registry.Remember_HoldReceipt(TOPIC_ID, 9001, heldCount: 1);
+
+        Assert.Equal((9001L, 1), _registry.Find_HoldReceipt_OrNull(TOPIC_ID));
+        Assert.Equal((9001L, 2), _registry.Count_HeldMessage_OrNull(TOPIC_ID));
+        Assert.Equal((9001L, 2), _registry.Find_HoldReceipt_OrNull(TOPIC_ID));
+        Assert.Null(_registry.Find_HoldReceipt_OrNull(null));
+    }
+
+    /// <summary>A hold with no message (entered from the bar) still counts, and has nothing to redraw or find.</summary>
+    [Fact]
+    public void AHoldWithNoMessage_CountsButHasNoReceipt()
+    {
+        _registry.Remember_HoldReceipt(TOPIC_ID, messageId: null, heldCount: 0);
+
+        Assert.Null(_registry.Count_HeldMessage_OrNull(TOPIC_ID));
+        Assert.Null(_registry.Find_HoldReceipt_OrNull(TOPIC_ID));
+        Assert.Equal((false, (long?)null), _registry.Finish_Hold(TOPIC_ID, deliveringHeldMessages: true));
+    }
+
+    /// <summary>A GO that ends no hold — Send now on a ✓ — finishes nothing and rewrites nothing.</summary>
+    [Fact]
+    public void AGoWithNoHoldReceipt_FinishesNothing()
+    {
+        _registry.Remember_Tick(TOPIC_ID, 9002);
+
+        Assert.Equal((false, (long?)null), _registry.Finish_Hold(TOPIC_ID, deliveringHeldMessages: true));
+        Assert.Equal(9002, _registry.Take_Tick_OrNull(TOPIC_ID));
+    }
+
+    /// <summary>
+    /// THE DOUBLE TICK'S ROUTE: held messages are being delivered and nothing else is registered (a typed WAIT
+    /// took the ✓), or the registered ✓ is this very message (a tapped ⏸) — the hold receipt becomes THE ✓, the
+    /// delivery edits it into ✓✓, and nothing is rewritten first. The hold is over: it is found no more.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AHoldReceipt_BeingDelivered_IsAdopted_WhenNothingElseIsRegistered(bool itIsAlsoTheRegisteredTick)
+    {
+        if (itIsAlsoTheRegisteredTick)
+            _registry.Remember_Tick(TOPIC_ID, 9001);
+
+        _registry.Remember_HoldReceipt(TOPIC_ID, 9001, heldCount: 2);
+
+        Assert.Equal((true, (long?)null), _registry.Finish_Hold(TOPIC_ID, deliveringHeldMessages: true));
+        Assert.True(_registry.Is_TheTickTheDeliveryWillEdit(TOPIC_ID, 9001));
+        Assert.Null(_registry.Find_HoldReceipt_OrNull(TOPIC_ID));
+    }
+
+    /// <summary>An EMPTY hold delivers nothing to finish it, so its receipt goes back to being a ✓ — and is never left as a tick.</summary>
+    [Fact]
+    public void AnEmptyHold_IsRewritten_NeverAdopted()
+    {
+        _registry.Remember_HoldReceipt(TOPIC_ID, 9001, heldCount: 0);
+
+        Assert.Equal((true, (long?)9001), _registry.Finish_Hold(TOPIC_ID, deliveringHeldMessages: false));
+        Assert.Null(_registry.Take_Tick_OrNull(TOPIC_ID));
+    }
+
+    /// <summary>
+    /// ANOTHER RECEIPT WILL CARRY THE DELIVERY — a newer ✓ (it becomes ✓✓) or a 👀 (it becomes 👌) — so the hold
+    /// receipt is rewritten back to a ✓ rather than adopted over it, and the other receipt is left in place.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AHoldReceipt_BesideAnotherTickOrAReaction_IsRewritten(bool aReactionWaits)
+    {
+        if (aReactionWaits)
+            _registry.Remember_Reaction(TOPIC_ID, 77);
+        else
+            _registry.Remember_Tick(TOPIC_ID, 9002);
+
+        _registry.Remember_HoldReceipt(TOPIC_ID, 9001, heldCount: 2);
+
+        Assert.Equal((true, (long?)9001), _registry.Finish_Hold(TOPIC_ID, deliveringHeldMessages: true));
+        Assert.False(_registry.Is_TheTickTheDeliveryWillEdit(TOPIC_ID, 9001));
+
+        if (aReactionWaits)
+            Assert.Equal(77, _registry.Take_Reaction_OrNull(TOPIC_ID));
+        else
+            Assert.Equal(9002, _registry.Take_Tick_OrNull(TOPIC_ID));
+    }
+
+    /// <summary>A hold is finished once: the second route to end it finds nothing left to do.</summary>
+    [Fact]
+    public void AHold_IsFinishedOnce()
+    {
+        _registry.Remember_HoldReceipt(TOPIC_ID, 9001, heldCount: 0);
+        _registry.Finish_Hold(TOPIC_ID, deliveringHeldMessages: false);
+
+        Assert.Equal((false, (long?)null), _registry.Finish_Hold(TOPIC_ID, deliveringHeldMessages: true));
     }
 }

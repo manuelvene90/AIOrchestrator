@@ -17,6 +17,14 @@ internal sealed class ReceiptRegistryModel : IReceiptRegistry
     readonly Dictionary<long, PendingEdit> _pendingEditByMessageId = [];
     long _lastEditVersion;
 
+    /// <summary>
+    /// Each thread's hold receipt and the count it shows — moved out of <c>BridgeEngineModel._holdReceipts</c>
+    /// (fix round 1), which keyed it by channel file under the engine's owner-state lock. HERE, under the same
+    /// lock as the ticks, because finishing a hold reads and writes both: "adopt it only if no other ✓ is
+    /// registered" is one decision, and taking it across two locks is how a flush lands between the halves.
+    /// </summary>
+    readonly Dictionary<long, (long? MessageId, int HeldCount)> _holdByThread = [];
+
     public void Remember_Tick(long? messageThreadId, long tickMessageId)
     {
         lock (_gate)
@@ -55,16 +63,69 @@ internal sealed class ReceiptRegistryModel : IReceiptRegistry
 
     public bool Adopt_Tick(long? messageThreadId, long messageId)
     {
+        lock (_gate)
+            return Try_Adopt(messageThreadId ?? GENERAL_TOPIC_KEY, messageId);
+    }
+
+    public (long MessageId, int HeldCount)? Find_HoldReceipt_OrNull(long? messageThreadId)
+    {
+        lock (_gate)
+        {
+            return _holdByThread.TryGetValue(messageThreadId ?? GENERAL_TOPIC_KEY, out var hold) && hold.MessageId != null
+                ? (hold.MessageId.Value, hold.HeldCount)
+                : null;
+        }
+    }
+
+    public void Remember_HoldReceipt(long? messageThreadId, long? messageId, int heldCount)
+    {
+        lock (_gate)
+            _holdByThread[messageThreadId ?? GENERAL_TOPIC_KEY] = (messageId, heldCount);
+    }
+
+    public (long MessageId, int HeldCount)? Count_HeldMessage_OrNull(long? messageThreadId)
+    {
         var key = messageThreadId ?? GENERAL_TOPIC_KEY;
 
         lock (_gate)
         {
-            if (_reactedOwnerMessageIdByThread.ContainsKey(key))
-                return false;
+            if (!_holdByThread.TryGetValue(key, out var hold))
+                return null;
 
-            _tickMessageIdByThread[key] = messageId;
-            return true;
+            var counted = (hold.MessageId, HeldCount: hold.HeldCount + 1);
+            _holdByThread[key] = counted;
+
+            return counted.MessageId == null ? null : (counted.MessageId.Value, counted.HeldCount);
         }
+    }
+
+    public (bool HadReceipt, long? RewriteMessageId) Finish_Hold(long? messageThreadId, bool deliveringHeldMessages)
+    {
+        var key = messageThreadId ?? GENERAL_TOPIC_KEY;
+
+        lock (_gate)
+        {
+            if (!_holdByThread.Remove(key, out var hold) || hold.MessageId == null)
+                return (false, null);
+
+            if (deliveringHeldMessages && Try_Adopt(key, hold.MessageId.Value))
+                return (true, null);
+
+            return (true, hold.MessageId);
+        }
+    }
+
+    /// <summary>The adoption rule, shared by <see cref="Adopt_Tick"/> and <see cref="Finish_Hold"/>. Called under <c>_gate</c>.</summary>
+    bool Try_Adopt(long key, long messageId)
+    {
+        if (_reactedOwnerMessageIdByThread.ContainsKey(key))
+            return false;
+
+        if (_tickMessageIdByThread.TryGetValue(key, out var registered) && registered != messageId)
+            return false;
+
+        _tickMessageIdByThread[key] = messageId;
+        return true;
     }
 
     public (long MessageId, long Version, string Text, IReadOnlyList<(string Data, string Label)>? Buttons, int AttemptNumber, string LogScope)? Stage_Edit_OrNull(

@@ -891,15 +891,6 @@ internal sealed class BridgeEngineModel(
     /// <summary>Per-orchestration cooldown so the brevity feedback never becomes noise itself.</summary>
     readonly Dictionary<string, DateTime> _lastVerbosityNudgeUtc = [];
 
-    sealed class HoldReceipt
-    {
-        public long? MessageId;
-        public int HeldCount;
-    }
-
-    /// <summary>Target channel → the WAIT acknowledgement being kept up to date while held.</summary>
-    readonly Dictionary<string, HoldReceipt> _holdReceipts = [];
-
     /// <summary>
     /// How long an unanswered question freezes the conversation. Long enough to make "a question
     /// stops the turn" real; short enough that an owner who never answers is not starved of
@@ -1081,10 +1072,11 @@ internal sealed class BridgeEngineModel(
     DateTime _lastOwnerMessageUtc = DateTime.UtcNow;
 
     /// <summary>
-    /// Guards _holdReceipts and _pendingOwnerReplies. GO flushes from the INBOUND loop (waiting for
-    /// the 2 s mirror tick would be exactly the lag GO exists to remove), so both dictionaries are
-    /// now touched from two threads. Short, non-async critical sections only — never hold this
-    /// across an await.
+    /// Guards _pendingOwnerReplies (and the other owner-facing state noted at each field). GO flushes from
+    /// the INBOUND loop (waiting for the 2 s mirror tick would be exactly the lag GO exists to remove), so
+    /// it is touched from two threads. The hold receipts it used to guard too now live in IReceiptRegistry,
+    /// under the lock of the ticks they may become (Task 6c fix round 1). Short, non-async critical
+    /// sections only — never hold this across an await.
     /// </summary>
     readonly Lock _ownerStateLock = new();
 
@@ -12313,7 +12305,11 @@ internal sealed class BridgeEngineModel(
             // the tick itself becomes the hold receipt, so the owner sees "✓ ⏸ holding · 1 message"
             // where the bare "✓" was, instead of a stale tick plus a second message.
             var heldAlready = _ownerDeliveryBuffer.Count_Pending(targetKey);
-            var existingTickId = _receipts.Take_Tick_OrNull(message.MessageThreadId);
+
+            // ONE HOLD, ONE RECEIPT (Task 6c fix round 1): a WAIT while the hold has a receipt redraws that one
+            // (if its count moved) — a second "⏸ holding" stranded the first for ever.
+            var (standingReceiptId, redraw) = HoldTap_Decider.Resolve_WaitReceipt(
+                tappedReceiptId: null, _receipts.Find_HoldReceipt_OrNull(message.MessageThreadId), heldAlready);
 
             try
             {
@@ -12325,10 +12321,20 @@ internal sealed class BridgeEngineModel(
                 // PULSE's own ▶ GO, and this acknowledgement carries none (plan 03 Task 5).
                 var releaseButton = ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, message.MessageThreadId, Is_HoldToggleOnTheBar());
 
-                if (existingTickId != null)
+                if (standingReceiptId != null)
+                {
+                    if (redraw)
+                    {
+                        await ReceiptEdit_Sender.Write_Async(
+                            _receipts, client, Describe_MessageOrch(message), standingReceiptId.Value, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
+                    }
+
+                    receiptId = standingReceiptId;
+                }
+                else if (_receipts.Take_Tick_OrNull(message.MessageThreadId) is { } existingTickId)
                 {
                     await ReceiptEdit_Sender.Write_Async(
-                        _receipts, client, Describe_MessageOrch(message), existingTickId.Value, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
+                        _receipts, client, Describe_MessageOrch(message), existingTickId, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
                     receiptId = existingTickId;
                 }
                 else
@@ -12336,10 +12342,7 @@ internal sealed class BridgeEngineModel(
                     receiptId = await client.Send_MessageWithButtons_Async(message.MessageThreadId, Build_HoldReceiptText(heldAlready), releaseButton, TelegramSendSounds.Silent, cancellationToken);
                 }
 
-                lock (_ownerStateLock)
-                {
-                    _holdReceipts[targetKey] = new HoldReceipt { MessageId = receiptId, HeldCount = heldAlready };
-                }
+                _receipts.Remember_HoldReceipt(message.MessageThreadId, receiptId, heldAlready);
             }
             catch (OperationCanceledException)
             {
@@ -12355,19 +12358,23 @@ internal sealed class BridgeEngineModel(
 
         if (OwnerControlWords.Is_Go(message.Text))
         {
-            _ownerDeliveryBuffer.Release(targetKey);
+            // FINISHED BEFORE THE RELEASE, like every GO (IReceiptRegistry.Finish_Hold has why).
+            var (finishedAHoldReceipt, holdReceiptToRewrite) = _receipts.Finish_Hold(
+                message.MessageThreadId, deliveringHeldMessages: _ownerDeliveryBuffer.Count_Pending(targetKey) > 0);
 
-            lock (_ownerStateLock)
-            {
-                _holdReceipts.Remove(targetKey);
-            }
+            _ownerDeliveryBuffer.Release(targetKey);
 
             _log.Log_Info(Describe_MessageOrch(message), "Owner sent GO — releasing held messages");
 
-            // The receipt the owner did not get per message, now that the thought is complete. It
-            // reacts to the GO message itself — which is the last thing they sent, so the mark
-            // lands where they are looking, exactly as it does for an ordinary message.
-            await Send_ReceivedAck_Async(client, message, cancellationToken);
+            if (holdReceiptToRewrite != null)
+                await Rewrite_HoldButtonMessage_BestEffort_Async(client, holdReceiptToRewrite.Value, HoldButtonActions.Go, message.MessageThreadId, heldCount: 0, cancellationToken);
+
+            // THE GO WORD IS A CONTROL WORD, NOT CONTENT (ruling R19, Task 6c fix round 1): when it ended a hold
+            // with a receipt, its effect is shown THERE — adopted and ✓✓ under classic, back to a ✓ beside a 👀 —
+            // and a ✓ (or 👀) of its own was a second receipt for one hold, which is what left the first saying
+            // "⏸ holding". A GO with no hold receipt to finish still gets the mark where the owner is looking.
+            if (!finishedAHoldReceipt)
+                await Send_ReceivedAck_Async(client, message, cancellationToken);
 
             // Deliver HERE rather than waiting for the next mirror tick. GO means "I am done
             // typing", so every millisecond after it is dead time — and the tick is up to 2 s away.
@@ -13251,19 +13258,6 @@ internal sealed class BridgeEngineModel(
         if (targetKey == null)
             return true;
 
-        if (action == HoldButtonActions.Hold)
-        {
-            _ownerDeliveryBuffer.Hold(targetKey, DateTime.UtcNow);
-            _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped WAIT — delivery held until GO");
-        }
-        else
-        {
-            _ownerDeliveryBuffer.Release(targetKey);
-            _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped GO — releasing held messages");
-        }
-
-        var heldCount = _ownerDeliveryBuffer.Count_Pending(targetKey);
-
         // THE STATUS LINE IS NOT A RECEIPT, AND A TAP ON IT MUST NOT REWRITE IT (brief D).
         //
         // The toggle now also lives on PULSE, and this handler's whole job used to be "rewrite the
@@ -13278,45 +13272,41 @@ internal sealed class BridgeEngineModel(
         var tappedTheStatusLine = tap.MessageId != null
             && _store.Find_ByTelegramTopicId_OrNull(threadId ?? 0)?.StatusLineMessageId == tap.MessageId;
 
-        if (tap.MessageId != null && !tappedTheStatusLine)
+        if (action == HoldButtonActions.Hold)
         {
-            // A GO IS ABOUT THE HOLD'S OWN RECEIPT, read before it is forgotten (plan 03 Task 6c).
-            long? holdReceiptId = null;
+            _ownerDeliveryBuffer.Hold(targetKey, DateTime.UtcNow);
+            _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped WAIT — delivery held until GO");
 
-            lock (_ownerStateLock)
-            {
-                if (action == HoldButtonActions.Hold)
-                    _holdReceipts[targetKey] = new HoldReceipt { MessageId = tap.MessageId, HeldCount = heldCount };
-                else if (_holdReceipts.Remove(targetKey, out var hold))
-                    holdReceiptId = hold.MessageId;
-            }
+            // ONE HOLD, ONE RECEIPT (Task 6c fix round 1): a ⏸ while the hold has a receipt is about that one.
+            var heldCount = _ownerDeliveryBuffer.Count_Pending(targetKey);
+            var (receiptId, redraw) = HoldTap_Decider.Resolve_WaitReceipt(
+                tappedTheStatusLine ? null : tap.MessageId, _receipts.Find_HoldReceipt_OrNull(threadId), heldCount);
 
-            var receiptId = HoldTap_Decider.Resolve_Receipt(action, tap.MessageId.Value, holdReceiptId);
+            if (receiptId == null)
+                return true;
 
-            if (HoldTap_Decider.Should_AdoptHoldReceipt(action, heldCount, holdReceiptId))
-                _receipts.Adopt_Tick(threadId, receiptId);
+            _receipts.Remember_HoldReceipt(threadId, receiptId, heldCount);
 
-            // NOT AFTER A SEND NOW: the delivery below edits that same ✓ to ✓✓, and a rewrite first would
-            // spend the message's one edit per 30 s and leave the ✓✓ held (HoldTap_Decider has the account).
-            if (HoldTap_Decider.Should_RewriteReceipt(
-                    action, holdingBeforeTheTap, heldCount, _receipts.Is_TheTickTheDeliveryWillEdit(threadId, receiptId)))
-            {
-                await Rewrite_HoldButtonMessage_BestEffort_Async(client, receiptId, action, threadId, heldCount, cancellationToken);
-            }
+            if (redraw)
+                await Rewrite_HoldButtonMessage_BestEffort_Async(client, receiptId.Value, action, threadId, heldCount, cancellationToken);
+
+            return true;
         }
-        else if (action == HoldButtonActions.Go)
-        {
-            // A hold entered from the bar has no receipt message, so there is nothing to forget
-            // except the entry itself — left behind, it would make Update_HoldReceipt_Async keep
-            // rewriting a message that no longer represents a hold.
-            lock (_ownerStateLock)
-                _holdReceipts.Remove(targetKey);
-        }
+
+        // A GO — on a ✓ (▶ Send now), on the hold receipt, or on PULSE — FINISHES THE HOLD'S RECEIPT, and
+        // BEFORE the release (the review's m6): see IReceiptRegistry.Finish_Hold. What it did not adopt goes
+        // back to being a ✓; nothing else is rewritten, so a Send now on a ✓ spends none of that ✓'s edits.
+        var (_, holdReceiptToRewrite) = _receipts.Finish_Hold(threadId, deliveringHeldMessages: pendingBeforeTheTap > 0);
+
+        _ownerDeliveryBuffer.Release(targetKey);
+        _log.Log_Info(Describe_ThreadOrch(threadId), "Owner tapped GO — releasing held messages");
+
+        if (holdReceiptToRewrite != null)
+            await Rewrite_HoldButtonMessage_BestEffort_Async(client, holdReceiptToRewrite.Value, action, threadId, heldCount: 0, cancellationToken);
 
         // GO means "I am done typing", so the wait for the next mirror tick — up to 2 s — is dead
         // time. Same reasoning as the typed GO, which flushes immediately for exactly this reason.
-        if (action == HoldButtonActions.Go)
-            await Flush_OwnerDeliveries_Async(cancellationToken);
+        await Flush_OwnerDeliveries_Async(cancellationToken);
 
         return true;
     }
@@ -13538,22 +13528,10 @@ internal sealed class BridgeEngineModel(
     async Task Update_HoldReceipt_Async(
         ITelegramApiClient client, Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
     {
-        var targetKey = Resolve_TargetChannelFile_OrNull(message);
+        // The count lives with the hold's receipt in the registry (Task 6c fix round 1), under the tick's lock.
+        var receipt = _receipts.Count_HeldMessage_OrNull(message.MessageThreadId);
 
-        if (targetKey == null)
-            return;
-
-        HoldReceipt? receipt;
-
-        lock (_ownerStateLock)
-        {
-            if (!_holdReceipts.TryGetValue(targetKey, out receipt))
-                return;
-
-            receipt.HeldCount++;
-        }
-
-        if (receipt.MessageId == null)
+        if (receipt == null)
             return;
 
         try
@@ -13567,8 +13545,8 @@ internal sealed class BridgeEngineModel(
                 _receipts,
                 client,
                 Describe_MessageOrch(message),
-                receipt.MessageId.Value,
-                Build_HoldReceiptText(receipt.HeldCount),
+                receipt.Value.MessageId,
+                Build_HoldReceiptText(receipt.Value.HeldCount),
                 ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, message.MessageThreadId, Is_HoldToggleOnTheBar()),
                 cancellationToken);
         }
@@ -13812,12 +13790,6 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Deliver_OwnerMessage_Async(KeyValuePair<string, IReadyDelivery> delivery, CancellationToken cancellationToken)
     {
-        // Delivered — including via the idle cap on a forgotten WAIT, which never sees a GO.
-        lock (_ownerStateLock)
-        {
-            _holdReceipts.Remove(delivery.Key);
-        }
-
         (string OrchId, long? ThreadId) target;
 
         lock (_deliveryLock)
@@ -13852,6 +13824,16 @@ internal sealed class BridgeEngineModel(
             _log.Log_Info(target.OrchId, "Owner message held mid-delivery — WAIT arrived after it left the buffer; it is back in the buffer until GO");
             return;
         }
+
+        // A HOLD THAT ENDED WITH NO GO TO FINISH IT is finished here, by the rule every GO uses
+        // (IReceiptRegistry.Finish_Hold) — a failure path's put-back Release is the one such end left; there
+        // is no idle cap, a hold ends only with Release. BELOW the "is it held?" check above, on purpose: a
+        // WAIT that arrived after this message left the buffer put it back, and that hold's receipt must
+        // survive or its count-ups and its GO would find nothing (this removal used to sit above the check).
+        var (_, holdReceiptToRewrite) = _receipts.Finish_Hold(target.ThreadId, deliveringHeldMessages: true);
+
+        if (holdReceiptToRewrite != null && _telegramClient != null)
+            await Rewrite_HoldButtonMessage_BestEffort_Async(_telegramClient, holdReceiptToRewrite.Value, HoldButtonActions.Go, target.ThreadId, heldCount: 0, cancellationToken);
 
         var deliveryText = delivery.Value.Text;
 

@@ -6,15 +6,17 @@ namespace AIOrchestratorCoreLib.Tests.Bridge.ReceiptRegistry;
 
 /// <summary>
 /// A RECEIPT EDIT HELD BY THE PER-MESSAGE GAP IS RETRIED, NEVER DROPPED — and a refusal no wait will fix is
-/// still the writer's to handle (plan 03 Task 6c). Driven over the real gate with a one-second gap: the fake
-/// refuses exactly what the real client would refuse, before the call.
+/// still the writer's to handle (plan 03 Task 6c). Driven over the real gate with a three-second gap, the one
+/// the engine probes use: the fake refuses exactly what the real client would refuse, before the call. It was
+/// one second until fix round 1, and a stall of a second on a loaded machine — between two writes, or between
+/// a write and the "before the door" drain — turned a correct run red.
 /// </summary>
 public class ReceiptEditSenderTests
 {
     const long RECEIPT_ID = 4321;
     const string SCOPE = "orch-1";
 
-    static readonly TimeSpan EDIT_GAP = TimeSpan.FromSeconds(1);
+    static readonly TimeSpan EDIT_GAP = TimeSpan.FromSeconds(3);
     static readonly TimeSpan PAST_THE_GAP = EDIT_GAP + TimeSpan.FromMilliseconds(300);
     static readonly IReadOnlyList<(string Data, string Label)> GO_BUTTON = [("go:77", "▶ GO")];
 
@@ -89,7 +91,9 @@ public class ReceiptEditSenderTests
 
         Assert.Empty(_telegram.TextEdits);
 
-        await Task.Delay(TimeSpan.FromSeconds(1.3));
+        // Past the gap as well as the one second Telegram asked for: the first attempt reserved the message's
+        // slot before the wire refused it, so the retry meets the door first.
+        await Task.Delay(PAST_THE_GAP);
         await Drain_Async();
 
         Assert.Equal(("✓✓", ""), _telegram.Current_Of_OrNull(RECEIPT_ID));

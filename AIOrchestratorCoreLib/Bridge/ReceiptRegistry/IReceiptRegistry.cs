@@ -52,14 +52,44 @@ public interface IReceiptRegistry
     bool Is_TheTickTheDeliveryWillEdit(long? messageThreadId, long messageId);
 
     /// <summary>
-    /// MAKES A HOLD RECEIPT THE ✓ THE DELIVERY WILL EDIT — for a GO that releases held messages (plan 03
-    /// Task 6c). A typed WAIT takes the ✓ out of this registry to turn it into "⏸ holding", so without this
-    /// the delivery had no tick to edit and the batch never showed ✓✓; adopting the hold receipt gives every
-    /// way into a hold the double tick, with one edit. Refused (false) while a 👀 waits beside it: the
-    /// delivery turns that 👌 and never takes the tick, and a tick left behind would be edited by a LATER
-    /// delivery that has nothing to do with it.
+    /// MAKES A HOLD RECEIPT THE ✓ THE DELIVERY WILL EDIT — only when NOTHING ELSE is registered for the thread
+    /// (plan 03 Task 6c). A typed WAIT takes the ✓ out of this registry to turn it into "⏸ holding", so without
+    /// this the delivery had no tick to edit and the batch never showed ✓✓. Refused (false) while a 👀 waits:
+    /// the delivery turns that 👌 and never takes the tick, and a tick left behind would be edited by a LATER
+    /// delivery that has nothing to do with it. Refused while a DIFFERENT ✓ is registered (fix round 1, the
+    /// review's m1): that ✓ is newer — it sits under the owner's last message — and adopting over it left it
+    /// showing its buttons on a delivered batch. Accepted when the registered ✓ IS this message.
     /// </summary>
     bool Adopt_Tick(long? messageThreadId, long messageId);
+
+    /// <summary>
+    /// ONE HOLD, ONE RECEIPT (plan 03 Task 6c fix round 1): the message a hold in this thread is kept on, and the
+    /// count it shows — or null when there is no hold, or it has no message (entered from the PULSE bar, or its
+    /// acknowledgement could not be sent). A WAIT, typed or tapped, asks this FIRST: a hold that already has a
+    /// receipt is redrawn there, never given a second "⏸ holding" that strands the first.
+    /// </summary>
+    (long MessageId, int HeldCount)? Find_HoldReceipt_OrNull(long? messageThreadId);
+
+    /// <summary>The hold in this thread is kept on <paramref name="messageId"/> (null: it has no message), showing <paramref name="heldCount"/>.</summary>
+    void Remember_HoldReceipt(long? messageThreadId, long? messageId, int heldCount);
+
+    /// <summary>
+    /// A message landed during the hold: its count goes up, and the receipt to redraw is returned — null when
+    /// there is no hold here, or one with no message to redraw (the count still goes up).
+    /// </summary>
+    (long MessageId, int HeldCount)? Count_HeldMessage_OrNull(long? messageThreadId);
+
+    /// <summary>
+    /// EVERY ROUTE THAT ENDS A HOLD FINISHES ITS RECEIPT (plan 03 Task 6c fix round 1) — typed GO, a tapped GO or
+    /// ▶ Send now, PULSE's ▶ GO, and a delivery that finds a hold receipt nobody finished. Forgets the hold's
+    /// receipt and, in the same lock as the tick it reads, decides what becomes of it: ADOPTED as THE ✓ when held
+    /// messages are being delivered and <see cref="Adopt_Tick"/> accepts it (the delivery then edits it into ✓✓),
+    /// otherwise returned as the message to rewrite back to a ✓ — a hold receipt no delivery will edit must not
+    /// say "⏸ holding" after the hold is over. <c>HadReceipt</c> is false when there was nothing to finish.
+    /// Called BEFORE the buffer is released (the review's m6): a mirror-tick flush in between would find no ✓,
+    /// and the receipt adopted after it would sit in the registry for an unrelated delivery.
+    /// </summary>
+    (bool HadReceipt, long? RewriteMessageId) Finish_Hold(long? messageThreadId, bool deliveringHeldMessages);
 
     /// <summary>
     /// THE TEXT A RECEIPT MESSAGE SHOULD SHOW — LAST WRITER WINS — staged by every writer of a receipt

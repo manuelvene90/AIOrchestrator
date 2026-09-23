@@ -2,6 +2,8 @@ using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
+using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram;
@@ -57,8 +59,8 @@ public class TheDoubleTickSurvivesTheEditGapTests : IDisposable
     readonly string _tempRepo;
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
-    readonly IOrchestrationLauncher _launcher;
-    readonly IOrchestratorConfigProvider _configProvider;
+    IOrchestrationLauncher _launcher;
+    IOrchestratorConfigProvider _configProvider;
     readonly IEngineStateStore _engineState = EngineStateStore_Factory.Create_InMemory();
     readonly RecordingLog_Fake _log = new();
     readonly ScriptedInbound_Fake _telegram = new();
@@ -66,6 +68,7 @@ public class TheDoubleTickSurvivesTheEditGapTests : IDisposable
 
     CancellationTokenSource? _runCancellation;
     Task? _runLoop;
+    string? _orchId;
 
     public TheDoubleTickSurvivesTheEditGapTests()
     {
@@ -76,20 +79,51 @@ public class TheDoubleTickSurvivesTheEditGapTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        // NO PRESET, which is classic: the receipt is the ✓ MESSAGE (phone.receipts = ticks) and it carries
-        // ⏸ Wait then ▶ Send now (pulse.holdToggle = false) — the owner's own setup.
-        File.WriteAllText(
-            _paths.ConfigFile,
-            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
-
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
         _store = OrchestrationSessionStore_Factory.Create(_paths);
-        _configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
-        _launcher = OrchestrationLauncher_Factory.Create(_paths, _configProvider, _store, new RecordingSpawner_Fake(), _log);
+
+        // NO PRESET, which is classic: the receipt is the ✓ MESSAGE (phone.receipts = ticks) and it carries
+        // ⏸ Wait then ▶ Send now (pulse.holdToggle = false) — the owner's own setup.
+        (_configProvider, _launcher) = Configure(preset: null);
 
         _telegram.Gate_EditsThrough(TelegramSendBudget_Factory.Create_WithEditGap(EDIT_GAP));
+    }
+
+    /// <summary>
+    /// Writes config.json for <paramref name="preset"/> (null: none, which is classic) and builds the provider
+    /// and launcher on it — called again by a probe BEFORE it builds its engine. QUIET NAMES BRIDGE-DRIVEN
+    /// RUNNERS, and a registered print session would make the engine reach for a LIVE <c>claude</c>, so every
+    /// role is pinned to the terminal runner, config.json outranking the preset — and the fixture refuses to
+    /// run if that did not take (decision 20), exactly as <c>WhoRingsUnderEachPresetTests.Use_Preset</c> does.
+    /// </summary>
+    (IOrchestratorConfigProvider, IOrchestrationLauncher) Configure(string? preset)
+    {
+        var terminalRunners = string.Join(
+            ",",
+            SessionRole_Names.ALL.Select(role => $"\"{SessionRole_Names.Get_ConfigKey(role)}\":{{\"runner\":\"terminal\"}}"));
+
+        var presetKey = preset == null ? "" : $",\"preset\":\"{preset}\"";
+
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}{presetKey},\"runners\":{{{terminalRunners}}}}}");
+
+        var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
+        var config = configProvider.Get_Current();
+
+        foreach (var role in SessionRole_Names.ALL)
+            Assert.Equal(SessionRunners.Terminal, config.Runners.Get_ForRole(role).Runner);
+
+        Assert.Equal(preset == "quiet" ? ReceiptStyles.Reactions : ReceiptStyles.Ticks, config.Phone.Receipts);
+
+        return (configProvider, OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log));
+    }
+
+    void Use_Quiet()
+    {
+        (_configProvider, _launcher) = Configure("quiet");
     }
 
     public void Dispose()
@@ -304,6 +338,277 @@ public class TheDoubleTickSurvivesTheEditGapTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------------------
+    // ONE HOLD, ONE RECEIPT — every route that ends a hold finishes it (Task 6c fix round 1)
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// TYPED WAIT THEN TYPED GO, UNDER CLASSIC (path A, ruling R19). The typed GO dropped the hold entry and
+    /// gave the GO word a ✓ of its own, which then became ✓✓ — while the hold receipt went on saying "⏸ holding
+    /// … send GO" over a batch that had been delivered. The GO word is a control word, not content: its effect
+    /// is shown on the hold receipt, which becomes THE ✓ and then ✓✓ — one hold, one receipt, one ✓✓.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TypedWaitThenTypedGo_UnderClassic_TheHoldReceiptBecomesTheDoubleTick_AndTheGoWordGetsNoTick()
+    {
+        var engine = Build_Engine();
+        var channelFile = Start_Orchestration();
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json(FRAGMENT, 9841, 841)));
+            Assert.True(await Wait_Until_Async(() => Find_TickIds().Count == 1, 20_000), _telegram.Dump_Sent());
+
+            var holdReceiptId = Find_TickIds()[0];
+            _telegram.Queue_Updates(Updates_Json(Message_Json("wait", 9842, 842)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Shows(holdReceiptId, "holding · 1 message"), 10_000),
+                $"the typed WAIT never turned the ✓ into the hold receipt.{Environment.NewLine}{Describe(holdReceiptId)}");
+
+            _telegram.Queue_Updates(Updates_Json(Message_Json("go", 9843, 843)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Channel_Contains(channelFile, FRAGMENT), 10_000),
+                $"the typed GO did not deliver the held message.{Environment.NewLine}{_log.Dump()}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Current_Of_OrNull(holdReceiptId) == (DOUBLE_TICK, ""), AFTER_THE_GAP_MILLISECONDS),
+                $"the hold receipt still says what it said before the typed GO delivered the batch.{Environment.NewLine}{Describe(holdReceiptId)}{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(5));
+
+            Assert.Equal([holdReceiptId], Find_TickIds());
+            Assert.Equal((DOUBLE_TICK, ""), _telegram.Current_Of_OrNull(holdReceiptId));
+        });
+    }
+
+    /// <summary>
+    /// TYPED WAIT THEN TYPED GO, UNDER QUIET (path A, ruling R19). The message before the WAIT carries 👀, so the
+    /// delivery turns THAT 👌 and the hold receipt is not adopted — it is rewritten to its after-hold text (a ✓,
+    /// with the tick's own button) instead of saying "⏸ holding" for ever. The GO word gets no reaction of its
+    /// own: it used to take the 👀 slot, so the 👌 landed on "go" and not on the message it picked up.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TypedWaitThenTypedGo_UnderQuiet_TheHoldReceiptIsRewritten_AndTheGoWordGetsNoReaction()
+    {
+        Use_Quiet();
+
+        var engine = Build_Engine();
+        var channelFile = Start_Orchestration();
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json(FRAGMENT, 9851, 851)));
+            Assert.True(await Wait_Until_Async(() => _telegram.Reactions.Contains((851, OwnerReaction_Emoji.RECEIVED)), 20_000), _log.Dump());
+
+            _telegram.Queue_Updates(Updates_Json(Message_Json("wait", 9852, 852)));
+            Assert.True(await Wait_Until_Async(() => _telegram.Find_SentContaining("holding") != null, 10_000), _telegram.Dump_Sent());
+
+            var holdReceiptId = _telegram.LastSentMessageId_Containing("holding");
+            _telegram.Queue_Updates(Updates_Json(Message_Json("go", 9853, 853)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Channel_Contains(channelFile, FRAGMENT), 10_000),
+                $"the typed GO did not deliver the held message.{Environment.NewLine}{_log.Dump()}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Current_Of_OrNull(holdReceiptId) == ("✓", HoldButton_Data.SEND_NOW_LABEL), AFTER_THE_GAP_MILLISECONDS),
+                $"the hold receipt was never finished after the typed GO.{Environment.NewLine}{Describe(holdReceiptId)}{Environment.NewLine}{_log.Dump()}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Reactions.Contains((851, OwnerReaction_Emoji.PICKED_UP)), 10_000),
+                $"the message the delivery picked up never got its 👌.{Environment.NewLine}{string.Join(" | ", _telegram.Reactions)}");
+
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(5));
+
+            Assert.DoesNotContain(_telegram.Reactions, reaction => reaction.MessageId == 853);
+        });
+    }
+
+    /// <summary>
+    /// ▶ GO ON THE PULSE BAR ENDS A TYPED WAIT'S HOLD (path B, quiet — the toggle lives on the bar). The bar's
+    /// branch only forgot the hold entry, so the typed WAIT's "⏸ holding" stayed on a delivered batch. The bar
+    /// is not a receipt and is never rewritten; the hold's own receipt is finished, as from every other route.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AGoOnThePulseBar_UnderQuiet_FinishesATypedHoldsReceipt()
+    {
+        Use_Quiet();
+
+        var engine = Build_Engine();
+        var channelFile = Start_Orchestration();
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            Assert.True(
+                await Wait_Until_Async(() => _store.Get_Session(_orchId!).StatusLineMessageId != null, 30_000),
+                $"the status line was never posted, so there is no bar to tap.{Environment.NewLine}{_log.Dump()}");
+
+            var statusLineId = _store.Get_Session(_orchId!).StatusLineMessageId!.Value;
+
+            _telegram.Queue_Updates(Updates_Json(Message_Json(FRAGMENT, 9861, 861)));
+            Assert.True(await Wait_Until_Async(() => _telegram.Reactions.Contains((861, OwnerReaction_Emoji.RECEIVED)), 20_000), _log.Dump());
+
+            _telegram.Queue_Updates(Updates_Json(Message_Json("wait", 9862, 862)));
+            Assert.True(await Wait_Until_Async(() => _telegram.Find_SentContaining("holding") != null, 10_000), _telegram.Dump_Sent());
+
+            var holdReceiptId = _telegram.LastSentMessageId_Containing("holding");
+            _telegram.Queue_Updates(Updates_Json(Tap_Json(HoldButtonActions.Go, statusLineId, 9863)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Channel_Contains(channelFile, FRAGMENT), 10_000),
+                $"the bar's ▶ GO did not deliver the held message.{Environment.NewLine}{_log.Dump()}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Current_Of_OrNull(holdReceiptId) == ("✓", HoldButton_Data.SEND_NOW_LABEL), AFTER_THE_GAP_MILLISECONDS),
+                $"the bar's ▶ GO left the typed WAIT's receipt saying what it said.{Environment.NewLine}{Describe(holdReceiptId)}{Environment.NewLine}{_log.Dump()}");
+        });
+    }
+
+    /// <summary>
+    /// A SECOND TYPED WAIT DURING A HOLD (path E). It sent a new "⏸ holding" and moved the hold onto it, so the
+    /// first one was stranded saying "holding" for ever. One hold has one receipt: the second WAIT targets it
+    /// (and redraws it only if its count changed — an identical edit is a 400 that still spends the slot).
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ASecondTypedWait_DuringAHold_KeepsOneHoldMessage_AndItReachesDoubleTick()
+    {
+        var engine = Build_Engine();
+        var channelFile = Start_Orchestration();
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("wait", 9871, 871)));
+            Assert.True(await Wait_Until_Async(() => _telegram.Find_SentContaining("holding") != null, 20_000), _telegram.Dump_Sent());
+
+            var holdReceiptId = _telegram.LastSentMessageId_Containing("holding");
+            _telegram.Queue_Updates(Updates_Json(Message_Json(FRAGMENT, 9872, 872)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Shows(holdReceiptId, "holding · 1 message"), 10_000),
+                $"the held message never counted up on the hold receipt.{Environment.NewLine}{Describe(holdReceiptId)}");
+
+            _telegram.Queue_Updates(Updates_Json(Message_Json("wait", 9873, 873)));
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(10));
+
+            Assert.Equal(1, _telegram.Count_Sent_Containing("holding"));
+
+            _telegram.Queue_Updates(Updates_Json(Tap_Json(HoldButtonActions.Go, holdReceiptId, 9874)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Channel_Contains(channelFile, FRAGMENT), 10_000),
+                $"the GO did not deliver the held message.{Environment.NewLine}{_log.Dump()}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Current_Of_OrNull(holdReceiptId) == (DOUBLE_TICK, ""), AFTER_THE_GAP_MILLISECONDS),
+                $"the one hold receipt never reached ✓✓.{Environment.NewLine}{Describe(holdReceiptId)}{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+            Assert.Equal(1, _telegram.Count_Sent_Containing("holding"));
+        });
+    }
+
+    /// <summary>
+    /// ⏸ WAIT TAPPED ON AN OLDER ✓ WHILE A TYPED WAIT HOLDS (path D). The tap moved the hold onto the older ✓
+    /// and rewrote it into a second "⏸ holding", stranding the typed WAIT's receipt. One hold, one receipt: the
+    /// tap is about the hold's own receipt, the older ✓ is left as it is, and the receipt reaches ✓✓ at GO.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AWaitTappedOnAnOlderTick_DuringATypedHold_KeepsTheHoldReceipt()
+    {
+        var engine = Build_Engine();
+        var channelFile = Start_Orchestration();
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("first part of the", 9881, 881)));
+            Assert.True(await Wait_Until_Async(() => Find_TickIds().Count == 1, 20_000), _telegram.Dump_Sent());
+
+            _telegram.Queue_Updates(Updates_Json(Message_Json("second part of the", 9882, 882)));
+            Assert.True(await Wait_Until_Async(() => Find_TickIds().Count == 2, 20_000), _telegram.Dump_Sent());
+
+            var olderTickId = Find_TickIds()[0];
+            var holdReceiptId = Find_TickIds()[1];
+
+            _telegram.Queue_Updates(Updates_Json(Message_Json("wait", 9883, 883)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Shows(holdReceiptId, "holding · 2 messages"), 10_000),
+                $"the typed WAIT never turned the newest ✓ into the hold receipt.{Environment.NewLine}{Describe(holdReceiptId)}");
+
+            _telegram.Queue_Updates(Updates_Json(Tap_Json(HoldButtonActions.Hold, olderTickId, 9884)));
+
+            Assert.True(await Wait_Until_Async(() => _telegram.Answered_Callbacks >= 1, 10_000), "the ⏸ tap was never answered");
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(10));
+
+            Assert.DoesNotContain(_telegram.ButtonEdits, edit => edit.MessageId == olderTickId);
+
+            _telegram.Queue_Updates(Updates_Json(Tap_Json(HoldButtonActions.Go, holdReceiptId, 9885)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Channel_Contains(channelFile, "second part of the"), 10_000),
+                $"the GO did not deliver the held messages.{Environment.NewLine}{_log.Dump()}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Current_Of_OrNull(holdReceiptId) == (DOUBLE_TICK, ""), AFTER_THE_GAP_MILLISECONDS),
+                $"the typed WAIT's receipt was stranded by the ⏸ tap on an older ✓.{Environment.NewLine}{Describe(holdReceiptId)}{Environment.NewLine}{Describe(olderTickId)}");
+
+            Assert.DoesNotContain(_telegram.ButtonEdits, edit => edit.MessageId == olderTickId);
+            Assert.DoesNotContain(_telegram.TextEdits, edit => edit.MessageId == olderTickId);
+        });
+    }
+
+    /// <summary>
+    /// ⏸ WAIT ON AN OLDER ✓ WHILE A NEWER ✓ IS LIVE, THEN ▶ GO (the review's m1). Adopting the older ✓ as the
+    /// tick replaced the newer one, so the newest ✓ — the one under the owner's last message — kept its buttons
+    /// on a delivered batch. A hold receipt is adopted only when nothing else is registered: here the newest ✓
+    /// becomes ✓✓ and the older one goes back to being a ✓.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AWaitOnAnOlderTick_ThenGo_TheNewestTickBecomesTheDoubleTick()
+    {
+        var engine = Build_Engine();
+        var channelFile = Start_Orchestration();
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("first part of the", 9891, 891)));
+            Assert.True(await Wait_Until_Async(() => Find_TickIds().Count == 1, 20_000), _telegram.Dump_Sent());
+
+            _telegram.Queue_Updates(Updates_Json(Message_Json("second part of the", 9892, 892)));
+            Assert.True(await Wait_Until_Async(() => Find_TickIds().Count == 2, 20_000), _telegram.Dump_Sent());
+
+            var olderTickId = Find_TickIds()[0];
+            var newestTickId = Find_TickIds()[1];
+
+            _telegram.Queue_Updates(Updates_Json(Tap_Json(HoldButtonActions.Hold, olderTickId, 9893)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Shows(olderTickId, "holding · 2 messages"), 10_000),
+                $"the ⏸ tap never turned the older ✓ into the hold receipt.{Environment.NewLine}{Describe(olderTickId)}");
+
+            _telegram.Queue_Updates(Updates_Json(Tap_Json(HoldButtonActions.Go, olderTickId, 9894)));
+
+            Assert.True(
+                await Wait_Until_Async(() => Channel_Contains(channelFile, "second part of the"), 10_000),
+                $"the GO did not deliver the held messages.{Environment.NewLine}{_log.Dump()}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Current_Of_OrNull(newestTickId) == (DOUBLE_TICK, ""), AFTER_THE_GAP_MILLISECONDS),
+                $"the newest ✓ kept its buttons on a delivered batch.{Environment.NewLine}{Describe(newestTickId)}{Environment.NewLine}{Describe(olderTickId)}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Current_Of_OrNull(olderTickId) == ("✓", $"{HoldButton_Data.HOLD_LABEL} | {HoldButton_Data.SEND_NOW_LABEL}"), AFTER_THE_GAP_MILLISECONDS),
+                $"the older ✓ still says it is holding after the hold ended.{Environment.NewLine}{Describe(olderTickId)}");
+        });
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Harness — the static helpers are SendNowSkipsTheWindowTests' own; these need this fixture
     // ---------------------------------------------------------------------------------------
 
@@ -319,6 +624,7 @@ public class TheDoubleTickSurvivesTheEditGapTests : IDisposable
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        _orchId = session.OrchId;
 
         var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
 

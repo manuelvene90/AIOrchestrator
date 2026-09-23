@@ -77,7 +77,7 @@ public interface IOwnerDeliveryBuffer
 
     bool Has_PendingDeliveries();
 
-    /// <summary>WAIT: hold everything for this target until <see cref="Release"/> or the idle cap.</summary>
+    /// <summary>WAIT: hold everything for this target until <see cref="Release"/> — there is no idle cap; a hold ends only with GO (owner, 2026-08-20).</summary>
     void Hold(string targetKey, DateTime nowUtc);
 
     /// <summary>GO: deliver what has accumulated on the next take, without waiting out the window.</summary>
