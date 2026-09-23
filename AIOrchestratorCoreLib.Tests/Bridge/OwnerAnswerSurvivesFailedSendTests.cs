@@ -547,14 +547,58 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
+    /// <summary>The id every created topic gets — tests that create one read it back from here.</summary>
+    public const long CREATED_TOPIC_ID = 7777L;
+
+    readonly List<string> _createdTopicNames = [];
+    readonly List<string> _renamedTopicNames = [];
+    bool _answerRenamesNotModified;
+
+    /// <summary>
+    /// RECORDED since 2026-09-23 (dvfs-33: a topic born as its bare orch id): which NAME a topic was
+    /// created with is the fact the creation fix is about, and a fake that forgot it could not tell
+    /// "born named" from "born bare and renamed a tick later".
+    /// </summary>
     public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
-        return Task.FromResult(7777L);
+        lock (_lock)
+            _createdTopicNames.Add(topicName);
+
+        return Task.FromResult(CREATED_TOPIC_ID);
     }
 
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken)
     {
+        lock (_lock)
+        {
+            _renamedTopicNames.Add(newName);
+
+            // Telegram's real answer to an edit that changes nothing — the gate reads it as applied.
+            if (_answerRenamesNotModified)
+                throw new TelegramApiException(
+                    400, "Telegram 'editForumTopic' failed with HTTP 400: {\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: TOPIC_NOT_MODIFIED\"}", null);
+        }
+
         return Task.CompletedTask;
+    }
+
+    /// <summary>From now on every rename is answered 400 TOPIC_NOT_MODIFIED, as Telegram does for an unchanged name.</summary>
+    public void Answer_Renames_AsNotModified()
+    {
+        lock (_lock)
+            _answerRenamesNotModified = true;
+    }
+
+    public IReadOnlyList<string> Created_TopicNames()
+    {
+        lock (_lock)
+            return _createdTopicNames.ToList();
+    }
+
+    public IReadOnlyList<string> Renamed_TopicNames()
+    {
+        lock (_lock)
+            return _renamedTopicNames.ToList();
     }
 
     public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
@@ -685,6 +729,13 @@ internal sealed class RecordingLog_Fake : IOrchestrationLog
     {
         lock (_lock)
             return string.Join(Environment.NewLine, _allLines);
+    }
+
+    /// <summary>How many Info lines carry this fragment — for "logged once, not once per tick".</summary>
+    public int Count_Infos_Containing(string fragment)
+    {
+        lock (_lock)
+            return _infos.Count(message => message.Contains(fragment, StringComparison.Ordinal));
     }
 
     public void Log_Info(string orchId, string message)
