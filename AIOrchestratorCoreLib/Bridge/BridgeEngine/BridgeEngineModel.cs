@@ -1645,6 +1645,12 @@ internal sealed class BridgeEngineModel(
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
 
+        // RECEIPT EDITS THE PER-MESSAGE GAP HELD land here once their door opens (plan 03 Task 6c) — right
+        // after the delivery that most often stages one (the ✓✓), and above the DND gate: an edit rings
+        // nothing, and a mute must not leave "⏸ holding" on a message that has been delivered.
+        if (_telegramClient != null)
+            await ReceiptEdit_Sender.Drain_Async(_receipts, _telegramClient, _log, cancellationToken);
+
         // AFTER the owner's delivery, and that ORDER IS THE POINT. Both draw on the one allowance
         // above, so whichever runs first can spend it — and several wedged channels retrying
         // announcements would leave nothing for the owner's own message, which is the highest-value
@@ -12321,7 +12327,8 @@ internal sealed class BridgeEngineModel(
 
                 if (existingTickId != null)
                 {
-                    await client.Edit_MessageTextWithButtons_Async(existingTickId.Value, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
+                    await ReceiptEdit_Sender.Write_Async(
+                        _receipts, client, Describe_MessageOrch(message), existingTickId.Value, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
                     receiptId = existingTickId;
                 }
                 else
@@ -13273,20 +13280,28 @@ internal sealed class BridgeEngineModel(
 
         if (tap.MessageId != null && !tappedTheStatusLine)
         {
+            // A GO IS ABOUT THE HOLD'S OWN RECEIPT, read before it is forgotten (plan 03 Task 6c).
+            long? holdReceiptId = null;
+
             lock (_ownerStateLock)
             {
                 if (action == HoldButtonActions.Hold)
                     _holdReceipts[targetKey] = new HoldReceipt { MessageId = tap.MessageId, HeldCount = heldCount };
-                else
-                    _holdReceipts.Remove(targetKey);
+                else if (_holdReceipts.Remove(targetKey, out var hold))
+                    holdReceiptId = hold.MessageId;
             }
+
+            var receiptId = HoldTap_Decider.Resolve_Receipt(action, tap.MessageId.Value, holdReceiptId);
+
+            if (HoldTap_Decider.Should_AdoptHoldReceipt(action, heldCount, holdReceiptId))
+                _receipts.Adopt_Tick(threadId, receiptId);
 
             // NOT AFTER A SEND NOW: the delivery below edits that same ✓ to ✓✓, and a rewrite first would
             // spend the message's one edit per 30 s and leave the ✓✓ held (HoldTap_Decider has the account).
-            if (HoldTap_Decider.Should_RewriteTappedMessage(
-                    action, holdingBeforeTheTap, heldCount, _receipts.Is_TheTickTheDeliveryWillEdit(threadId, tap.MessageId.Value)))
+            if (HoldTap_Decider.Should_RewriteReceipt(
+                    action, holdingBeforeTheTap, heldCount, _receipts.Is_TheTickTheDeliveryWillEdit(threadId, receiptId)))
             {
-                await Rewrite_HoldButtonMessage_BestEffort_Async(client, tap.MessageId.Value, action, threadId, heldCount, cancellationToken);
+                await Rewrite_HoldButtonMessage_BestEffort_Async(client, receiptId, action, threadId, heldCount, cancellationToken);
             }
         }
         else if (action == HoldButtonActions.Go)
@@ -13317,8 +13332,10 @@ internal sealed class BridgeEngineModel(
         {
             // Through the one placement, like every receipt-side hold button (plan 03 Task 5): a receipt
             // drawn before the toggle moved to PULSE loses its button here rather than keep a second copy.
-            await client.Edit_MessageTextWithButtons_Async(
-                messageId, text, ReceiptButtons_Builder.Build_AfterTap(action, threadId, Is_HoldToggleOnTheBar()), cancellationToken);
+            // Through the receipt's slot, like every receipt edit (Task 6c): a held rewrite waits, never drops.
+            await ReceiptEdit_Sender.Write_Async(
+                _receipts, client, Describe_ThreadOrch(threadId), messageId, text,
+                ReceiptButtons_Builder.Build_AfterTap(action, threadId, Is_HoldToggleOnTheBar()), cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -13544,7 +13561,12 @@ internal sealed class BridgeEngineModel(
             // WITH the release button: a plain edit sends no reply_markup, which Telegram reads as
             // "remove the keyboard" — so counting up the held messages would silently take away the
             // ▶ GO the owner is meant to press. Unless the toggle lives on PULSE (plan 03 Task 5).
-            await client.Edit_MessageTextWithButtons_Async(
+            // THROUGH THE RECEIPT'S SLOT (Task 6c): a count-up inside the gap waits for the door, and a later
+            // one replaces it there — the owner is shown the newest count, never an older one landing late.
+            await ReceiptEdit_Sender.Write_Async(
+                _receipts,
+                client,
+                Describe_MessageOrch(message),
                 receipt.MessageId.Value,
                 Build_HoldReceiptText(receipt.HeldCount),
                 ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, message.MessageThreadId, Is_HoldToggleOnTheBar()),
@@ -15308,7 +15330,8 @@ internal sealed class BridgeEngineModel(
                 // The ✓✓ has to survive the edit: the owner still needs to see their message landed.
                 var canvasText = isReceiptCanvas ? $"✓✓  ·  {text}" : text;
 
-                await _telegramClient.Edit_MessageText_Async(canvasMessageId.Value, canvasText, cancellationToken);
+                // Through the canvas's slot (Task 6c): the receipt's other writers edit it too, and last wins.
+                await ReceiptEdit_Sender.Write_Async(_receipts, _telegramClient, orchId, canvasMessageId.Value, canvasText, buttons: null, cancellationToken);
                 pending.NarrationMessageId = canvasMessageId;
             }
             else
@@ -15640,7 +15663,8 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await _telegramClient.Edit_MessageText_Async(canvasMessageId.Value, turnEndedText, cancellationToken);
+            // Through the canvas's slot (Task 6c): a turn end inside the gap of the ✓✓ waits for the door.
+            await ReceiptEdit_Sender.Write_Async(_receipts, _telegramClient, orchId, canvasMessageId.Value, turnEndedText, buttons: null, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -15899,7 +15923,7 @@ internal sealed class BridgeEngineModel(
             try
             {
                 if (nudgeCanvasMessageId != null)
-                    await _telegramClient.Edit_MessageText_Async(nudgeCanvasMessageId.Value, text, cancellationToken);
+                    await ReceiptEdit_Sender.Write_Async(_receipts, _telegramClient, orchId, nudgeCanvasMessageId.Value, text, buttons: null, cancellationToken);
                 else
                     await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, text, cancellationToken);
             }
@@ -15965,7 +15989,10 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                await client.Edit_MessageText_Async(messageId.Value, text, cancellationToken);
+                // A HELD DOOR IS NOT A FAILED EDIT (plan 03 Task 6c): after a ⏸ Wait this ✓✓ is the message's
+                // second edit inside the per-message gap. The slot keeps it until the door opens (ReceiptEdit_Sender
+                // has the account) and the ✓'s id is returned either way — it IS this exchange's receipt.
+                await ReceiptEdit_Sender.Write_Async(_receipts, client, GLOBAL_ORCH_ID, messageId.Value, text, buttons: null, cancellationToken);
                 return (messageId, false);
             }
             catch (OperationCanceledException)

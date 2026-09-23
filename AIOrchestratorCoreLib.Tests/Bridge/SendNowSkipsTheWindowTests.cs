@@ -33,11 +33,11 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// </summary>
 public class SendNowSkipsTheWindowTests : IDisposable
 {
-    const long SUPERGROUP_CHAT_ID = -1002233445566;
-    const long OWNER_USER_ID = 555000111;
-    const long TOPIC_ID = 9797;
+    internal const long SUPERGROUP_CHAT_ID = -1002233445566;
+    internal const long OWNER_USER_ID = 555000111;
+    internal const long TOPIC_ID = 9797;
 
-    const string FRAGMENT = "and also check the";
+    internal const string FRAGMENT = "and also check the";
 
     readonly string _tempRoot;
     readonly string _tempRepo;
@@ -181,9 +181,11 @@ public class SendNowSkipsTheWindowTests : IDisposable
     ///
     /// <para>
     /// WHAT THIS DOES NOT PROVE, said plainly: against the REAL client the ✓✓ is still the second edit of
-    /// that message, so a GO tapped within 30 s of the WAIT has its ✓✓ held and not retried — the receipt
-    /// then keeps saying "⏸ holding" after the delivery. That predates this task (the per-message edit gap,
-    /// 2026-09-10) and is reported, not fixed here; the fake has no gap, so no probe in this file can see it.
+    /// that message, so a GO tapped within 30 s of the WAIT has its ✓✓ held by the per-message edit gap
+    /// (2026-09-10). The fake in this file has no gap, so no probe here can see that. Until plan 03 Task 6c
+    /// the held ✓✓ was never retried and the receipt kept saying "⏸ holding" after the delivery; that is now
+    /// fixed, and proved over the REAL gate by
+    /// <see cref="TheDoubleTickSurvivesTheEditGapTests.WaitThenGo_WithinTheGap_TheTickStillBecomesDoubleTick"/>.
     /// </para>
     /// </summary>
     [Fact]
@@ -297,11 +299,13 @@ public class SendNowSkipsTheWindowTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------------------
-    // Harness — copied from TheBridgeNeverLiesAboutDeliveryTests, where these helpers are private
+    // Harness — copied from TheBridgeNeverLiesAboutDeliveryTests, where these helpers are private.
+    // The static ones are INTERNAL so TheDoubleTickSurvivesTheEditGapTests shares them rather than
+    // adding another copy (code-conventions: share the wait/fake-Telegram helpers).
     // ---------------------------------------------------------------------------------------
 
     /// <summary>Fast()'s tick, lock allowance and trailing quiet, with an aggregation window no test outlives.</summary>
-    static IBridgeEngineTiming LongWindow() =>
+    internal static IBridgeEngineTiming LongWindow() =>
         BridgeEngineTiming_Factory.Create_Custom(
             BridgeTestTiming.TICK_MILLISECONDS,
             ownerAggregationSeconds: 60,
@@ -340,7 +344,7 @@ public class SendNowSkipsTheWindowTests : IDisposable
         return _telegram.Sent_WithIds.Last(sent => sent.Text == "✓").Id;
     }
 
-    static bool Channel_Contains(string channelFile, string fragment)
+    internal static bool Channel_Contains(string channelFile, string fragment)
     {
         return File.Exists(channelFile) && File.ReadAllText(channelFile).Contains(fragment, StringComparison.Ordinal);
     }
@@ -370,9 +374,9 @@ public class SendNowSkipsTheWindowTests : IDisposable
         }
     }
 
-    static string Updates_Json(string update) => "{\"ok\":true,\"result\":[" + update + "]}";
+    internal static string Updates_Json(string update) => "{\"ok\":true,\"result\":[" + update + "]}";
 
-    static string Message_Json(string text, long updateId, long messageId)
+    internal static string Message_Json(string text, long updateId, long messageId)
     {
         return $"{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
             + $"\"message_thread_id\":{TOPIC_ID},\"from\":{{\"id\":{OWNER_USER_ID}}},"
@@ -380,12 +384,12 @@ public class SendNowSkipsTheWindowTests : IDisposable
     }
 
     /// <summary>A tap on the ✓'s ▶ Send now — which is GO's payload, so a tap on a hold receipt's ▶ GO reads the same.</summary>
-    static string SendNowTap_Json(long tappedMessageId, long updateId)
+    internal static string SendNowTap_Json(long tappedMessageId, long updateId)
     {
         return Tap_Json(HoldButtonActions.Go, tappedMessageId, updateId);
     }
 
-    static string Tap_Json(HoldButtonActions action, long tappedMessageId, long updateId)
+    internal static string Tap_Json(HoldButtonActions action, long tappedMessageId, long updateId)
     {
         var data = HoldButton_Data.Build(action, TOPIC_ID);
 
@@ -395,7 +399,7 @@ public class SendNowSkipsTheWindowTests : IDisposable
             + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}}}}}}}}";
     }
 
-    static async Task<bool> Wait_Until_Async(Func<bool> condition, int maxMilliseconds)
+    internal static async Task<bool> Wait_Until_Async(Func<bool> condition, int maxMilliseconds)
     {
         for (var waited = 0; waited < maxMilliseconds; waited += 100)
         {
@@ -408,7 +412,7 @@ public class SendNowSkipsTheWindowTests : IDisposable
         return condition();
     }
 
-    static async Task Stop_Async(CancellationTokenSource cancellation, Task loop)
+    internal static async Task Stop_Async(CancellationTokenSource cancellation, Task loop)
     {
         await cancellation.CancelAsync();
 

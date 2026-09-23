@@ -18,7 +18,7 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 ///
 /// <para>
 /// The owner, 2026-09-23: *"I like the double tick message to confirm that the message has arrived and
-/// then that the message has been handed to the sup/solo, he prefers the stupid reactions."* Classic —
+/// then that the message has been handed to the sup/solo."* Classic —
 /// the owner's machine, and any machine that names no preset — is <c>ticks</c>: a silent ✓ under the
 /// message, edited to ✓✓ when a session is handed it. Quiet — the fork author's — is <c>reactions</c>:
 /// 👀 on the owner's own bubble, then 👌. Until this task the engine tried the reaction whatever the

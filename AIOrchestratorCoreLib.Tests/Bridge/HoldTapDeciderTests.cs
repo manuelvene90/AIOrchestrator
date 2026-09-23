@@ -5,9 +5,10 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
 /// <summary>
-/// What a ⏸/▶ tap SAYS (the toast over the button) and whether it REWRITES the message it was tapped on
-/// (plan 03 Task 6b). The engine half — that the tap delivers at once and the ✓ still becomes ✓✓ — is
-/// <see cref="SendNowSkipsTheWindowTests"/>.
+/// What a ⏸/▶ tap SAYS (the toast over the button) and whether it REWRITES the receipt it is about
+/// (plan 03 Task 6b) — and, since Task 6c, WHICH receipt that is and whether a GO makes it the ✓. The engine
+/// half — that the tap delivers at once and the ✓ still becomes ✓✓ — is <see cref="SendNowSkipsTheWindowTests"/>
+/// and, over the real per-message edit gap, <see cref="TheDoubleTickSurvivesTheEditGapTests"/>.
 /// </summary>
 public class HoldTapDeciderTests
 {
@@ -51,7 +52,7 @@ public class HoldTapDeciderTests
     [InlineData(true, 3, true)]
     public void AHold_AlwaysRewritesTheTappedMessage(bool holdingBeforeTheTap, int pendingAfterTheTap, bool deliveryWillEditIt)
     {
-        Assert.True(HoldTap_Decider.Should_RewriteTappedMessage(HoldButtonActions.Hold, holdingBeforeTheTap, pendingAfterTheTap, deliveryWillEditIt));
+        Assert.True(HoldTap_Decider.Should_RewriteReceipt(HoldButtonActions.Hold, holdingBeforeTheTap, pendingAfterTheTap, deliveryWillEditIt));
     }
 
     /// <summary>
@@ -66,14 +67,14 @@ public class HoldTapDeciderTests
     [InlineData(0, false)]
     public void AGoOnATickThatWasNotHolding_RewritesNothing(int pendingAfterTheTap, bool deliveryWillEditIt)
     {
-        Assert.False(HoldTap_Decider.Should_RewriteTappedMessage(HoldButtonActions.Go, holdingBeforeTheTap: false, pendingAfterTheTap, deliveryWillEditIt));
+        Assert.False(HoldTap_Decider.Should_RewriteReceipt(HoldButtonActions.Go, holdingBeforeTheTap: false, pendingAfterTheTap, deliveryWillEditIt));
     }
 
     /// <summary>Releasing a hold whose delivery will edit this very message: the ✓✓ replaces "⏸ holding", so no rewrite first.</summary>
     [Fact]
     public void AGoReleasingAHold_LeavesTheMessageToTheDeliveryThatWillEditIt()
     {
-        Assert.False(HoldTap_Decider.Should_RewriteTappedMessage(HoldButtonActions.Go, holdingBeforeTheTap: true, pendingAfterTheTap: 2, deliveryWillEditTheTappedMessage: true));
+        Assert.False(HoldTap_Decider.Should_RewriteReceipt(HoldButtonActions.Go, holdingBeforeTheTap: true, pendingAfterTheTap: 2, deliveryWillEditTheReceipt: true));
     }
 
     /// <summary>
@@ -86,6 +87,52 @@ public class HoldTapDeciderTests
     [InlineData(2, false)]
     public void AGoEndingAHold_RewritesAMessageNoDeliveryWillEdit(int pendingAfterTheTap, bool deliveryWillEditIt)
     {
-        Assert.True(HoldTap_Decider.Should_RewriteTappedMessage(HoldButtonActions.Go, holdingBeforeTheTap: true, pendingAfterTheTap, deliveryWillEditIt));
+        Assert.True(HoldTap_Decider.Should_RewriteReceipt(HoldButtonActions.Go, holdingBeforeTheTap: true, pendingAfterTheTap, deliveryWillEditIt));
+    }
+
+    /// <summary>
+    /// A GO IS ABOUT THE HOLD'S OWN RECEIPT (plan 03 Task 6c, the review's Minor 1): ▶ Send now tapped on an
+    /// older ✓ while a typed WAIT holds finishes the "⏸ holding" message, not the ✓ it was tapped on.
+    /// </summary>
+    [Fact]
+    public void AGoWhileAHoldHasAReceipt_IsAboutThatReceipt()
+    {
+        Assert.Equal(4003, HoldTap_Decider.Resolve_Receipt(HoldButtonActions.Go, tappedMessageId: 4001, holdReceiptMessageId: 4003));
+    }
+
+    [Fact]
+    public void AGoWithNoHoldReceipt_IsAboutTheTappedMessage()
+    {
+        Assert.Equal(4001, HoldTap_Decider.Resolve_Receipt(HoldButtonActions.Go, tappedMessageId: 4001, holdReceiptMessageId: null));
+    }
+
+    /// <summary>A WAIT makes the tapped ✓ the hold receipt, whatever was holding before.</summary>
+    [Fact]
+    public void AHold_IsAboutTheTappedMessage()
+    {
+        Assert.Equal(4001, HoldTap_Decider.Resolve_Receipt(HoldButtonActions.Hold, tappedMessageId: 4001, holdReceiptMessageId: 4003));
+    }
+
+    /// <summary>
+    /// A GO THAT RELEASES HELD MESSAGES MAKES THE HOLD RECEIPT THE ✓ (the review's Minor 8), so the delivery
+    /// edits it into ✓✓ — the typed WAIT had taken the ✓ out of the registry to make it.
+    /// </summary>
+    [Fact]
+    public void AGoReleasingHeldMessages_AdoptsTheHoldReceipt()
+    {
+        Assert.True(HoldTap_Decider.Should_AdoptHoldReceipt(HoldButtonActions.Go, pendingAfterTheTap: 2, holdReceiptMessageId: 4003));
+    }
+
+    /// <summary>
+    /// Not for an EMPTY hold (nothing will be delivered to finish it — the rewrite does), not for a hold with
+    /// no receipt message, and never for a WAIT.
+    /// </summary>
+    [Theory]
+    [InlineData(HoldButtonActions.Go, 0, 4003L)]
+    [InlineData(HoldButtonActions.Go, 2, null)]
+    [InlineData(HoldButtonActions.Hold, 2, 4003L)]
+    public void AnythingElse_AdoptsNothing(HoldButtonActions action, int pendingAfterTheTap, long? holdReceiptMessageId)
+    {
+        Assert.False(HoldTap_Decider.Should_AdoptHoldReceipt(action, pendingAfterTheTap, holdReceiptMessageId));
     }
 }

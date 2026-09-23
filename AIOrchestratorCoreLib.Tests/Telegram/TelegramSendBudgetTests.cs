@@ -391,4 +391,34 @@ public class TelegramSendBudgetTests : IDisposable
         // The door still opens exactly one gap after the edit that actually went out.
         Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(4242, NOW + gap));
     }
+
+    /// <summary>
+    /// THE TEST SEAM HOLDS FOR ITS OWN GAP, and only the seam does (plan 03 Task 6c). The engine probes that
+    /// watch a held ✓✓ land need a gap of seconds; production must keep the measured thirty, which every
+    /// other factory still hands out.
+    /// </summary>
+    [Fact]
+    public void TheEditGapSeam_HoldsForTheGapItWasGiven_AndTheProductionFactoriesKeepTheMeasuredOne()
+    {
+        var seamed = TelegramSendBudget_Factory.Create_WithEditGap(TimeSpan.FromSeconds(2));
+
+        seamed.Reserve_MessageEdit(4242, NOW);
+
+        Assert.Equal(TimeSpan.FromSeconds(1), seamed.Reserve_MessageEdit(4242, NOW.AddSeconds(1)));
+        Assert.Equal(TimeSpan.Zero, seamed.Reserve_MessageEdit(4242, NOW.AddSeconds(2)));
+
+        var persisted = TelegramSendBudget_Factory.Create_FromPersisted(TokenBucket_Gate.DEFAULT_CAPACITY, NOW, NOW);
+
+        persisted.Reserve_MessageEdit(4242, NOW);
+
+        Assert.Equal(
+            TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE - TimeSpan.FromSeconds(2),
+            persisted.Reserve_MessageEdit(4242, NOW.AddSeconds(2)));
+    }
+
+    [Fact]
+    public void TheEditGapSeam_RefusesAGapThatIsNotPositive()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => TelegramSendBudget_Factory.Create_WithEditGap(TimeSpan.Zero));
+    }
 }
