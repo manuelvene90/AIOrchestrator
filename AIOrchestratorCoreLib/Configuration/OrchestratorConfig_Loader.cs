@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
@@ -25,8 +26,9 @@ namespace AIOrchestratorCoreLib.Configuration;
 public static class OrchestratorConfig_Loader
 {
     /// <summary>
-    /// Orch id used for the two app-global entries this loader can produce: a mistyped preset (<see cref="Resolve_Preset_OrClassic"/>)
-    /// and an unreadable config file handed to the tolerant read (<see cref="Read_JsonObject_ForEditing"/>).
+    /// Orch id used for the three app-global entries this loader can produce: a mistyped preset (<see cref="Resolve_Preset_OrClassic"/>),
+    /// an unreadable config file handed to the tolerant read (<see cref="Read_JsonObject_ForEditing"/>), and a write refused by
+    /// <see cref="Read_TreeForEditing"/>.
     /// </summary>
     const string GLOBAL_ORCH_ID = "";
 
@@ -259,6 +261,25 @@ public static class OrchestratorConfig_Loader
     /// THE LOCK IS IN-PROCESS ONLY: the WPF app and the daemon are two processes, an agent hand-editing the
     /// file is a third, and a lock in one restrains nothing in the others.
     /// </para>
+    /// <para>
+    /// A FILE IT COULD NOT OPEN IS NEVER REWRITTEN (plan 04 Task 2c, ruling P35, 2026-09-23). This is master's
+    /// code, older than plan 04, and it read both files through the lenient <see cref="Read_JsonObject_ForEditing"/>
+    /// — a plain <c>File.ReadAllText</c> underneath, not even the retrying reader — so a sharing violation (the
+    /// daemon's own save, an editor, an antivirus scan) read as EMPTY and config.json was written holding only the
+    /// keys above: <c>planBackend</c>, the <c>effort</c>/<c>phone</c>/<c>pulse</c>/<c>web</c> blocks, the model keys
+    /// and the guardrails gone on one press of the window's Save or one <c>/screens</c> from the phone. The reason
+    /// that read gave for its leniency — "a file that will not parse has no unknown keys worth preserving" — is
+    /// about a file that will not PARSE, never one that could not be OPENED. So both reads now go through
+    /// <see cref="Read_TreeForEditing"/>: ABSENT starts empty as before; UNREADABLE throws an <see cref="IOException"/>
+    /// naming the file and nothing is written; a CORRUPT config.json keeps the documented replacement (the window's
+    /// Save is the owner's way back in from a config the loader cannot read). Two exceptions to that replacement,
+    /// ruled P36 and both refused like UNREADABLE: a config.json that parses but states a key TWICE (it threw with
+    /// nothing written before Task 2c, and keeps that outcome — its other keys are intact), and ANY unparsable
+    /// secrets.json (it holds only what a human put there, so a rewrite is never the smaller loss). BOTH FILES ARE READ BEFORE EITHER IS WRITTEN: the
+    /// secrets read used to follow the config write, so a held secrets.json was a half save — config.json rewritten,
+    /// the token not — behind an exception that said the save had failed. The contract for a caller does not change:
+    /// this method is <c>void</c> and a failed write already threw.
+    /// </para>
     /// </summary>
     public static void Save(IOrchestratorConfig config, ISupervisionPaths paths)
     {
@@ -287,7 +308,8 @@ public static class OrchestratorConfig_Loader
             reposArray.Add(repoObject);
         }
 
-        var configRoot = Read_JsonObject_ForEditing(paths.ConfigFile);
+        var configRoot = Read_TreeForEditing_OrThrow(paths.ConfigFile, corruptReadsAsEmpty: true);
+        var secretsRoot = Read_TreeForEditing_OrThrow(paths.SecretsFile, corruptReadsAsEmpty: false);
 
         configRoot["repos"] = reposArray;
         configRoot["telegramSupergroupChatId"] = config.TelegramSupergroupChatId;
@@ -330,8 +352,6 @@ public static class OrchestratorConfig_Loader
         // PhoneSettings_Json and PulseSettings_Json have no Write either.
         // All seven are read; none is owned.
 
-        var secretsRoot = Read_JsonObject_ForEditing(paths.SecretsFile);
-
         secretsRoot["telegramBotToken"] = config.TelegramBotToken;
 
         Atomic_FileWriter.Write_AllText(paths.SecretsFile, secretsRoot.ToJsonString(JsonWriting.INDENTED));
@@ -346,12 +366,20 @@ public static class OrchestratorConfig_Loader
     /// it into the chat it controls), so <see cref="Settings_Writer"/> cannot write it; this writes the token
     /// and nothing beside it. Every other key of secrets.json is carried through; a null token is written as
     /// JSON null, which reads back as no token — the same thing <see cref="Save"/> writes for an empty box.
+    ///
+    /// <para>
+    /// IT NEVER REWRITES A secrets.json IT COULD NOT READ (plan 04 Task 2c, ruling P35). It read through the lenient
+    /// <see cref="Read_JsonObject_ForEditing"/>, so a held or unparsable secrets.json became <c>{telegramBotToken}</c>
+    /// alone. Both states now throw an <see cref="IOException"/> naming the file, and nothing is written:
+    /// secrets.json holds only what a human put there, so a rewrite is never the smaller loss — the rule
+    /// <see cref="Save"/> follows for this file too (P36).
+    /// </para>
     /// </summary>
     public static void Save_BotToken(ISupervisionPaths paths, string? token)
     {
         lock (Settings_Writer.CONFIG_WRITE_LOCK)
         {
-            var secretsRoot = Read_JsonObject_ForEditing(paths.SecretsFile);
+            var secretsRoot = Read_TreeForEditing_OrThrow(paths.SecretsFile, corruptReadsAsEmpty: false);
 
             secretsRoot["telegramBotToken"] = token;
 
@@ -360,29 +388,30 @@ public static class OrchestratorConfig_Loader
     }
 
     /// <summary>
-    /// The tree a save edits: the file's own object when it can be read, an empty one when it
-    /// cannot. A file that will not parse has no unknown keys worth preserving — they are already
-    /// unreachable — and refusing to save over it would strand the owner with a corrupt config and
-    /// no way to fix it from the app.
+    /// The tree a screen DRAWS: the file's own object when it can be read, an empty one when it cannot —
+    /// every failure is "empty". For READ-ONLY callers only; a writer reads through
+    /// <see cref="Read_TreeForEditing"/>.
     ///
     /// <para>
     /// THE ONE TOLERANT READ OF config.json, AND INTERNAL SINCE 2026-09-23 (plan 04 Task 1, ruling P16).
     /// The settings renderers' reader (<c>SettingsPresentation.SettingsSnapshot_Reader</c>) reads through
-    /// it: an HTTP GET and a Telegram menu must draw over a hand-edit with a trailing comma exactly as this
-    /// save reads it, and several readers each deciding what "unreadable" means is decision 12's drift.
-    /// <c>SettingsWriting.Settings_Writer</c> does NOT read through it any more (plan 04 Task 2b, ruling P33):
-    /// "every failure is empty" made a sharing violation or a half-typed file into an empty tree, and the
-    /// writer then replaced config.json with the edited keys alone. A reader that draws may fall back to
-    /// empty; a writer that would replace the file may not — it tells absent, unreadable and unparsable
-    /// apart and refuses the last two. <see cref="Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/>
-    /// still reads through <see cref="Read_JsonObject_OrNull"/> directly and is NOT made tolerant here —
-    /// that would change what the app's startup path does, which this task was not asked to change.
+    /// it: an HTTP GET and a Telegram menu must draw over a hand-edit with a trailing comma, and several
+    /// readers each deciding what "unreadable" means is decision 12's drift.
+    /// <see cref="Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/> still reads through
+    /// <see cref="Read_JsonObject_OrNull"/> directly and is NOT made tolerant here — that would change what
+    /// the app's startup path does, which no task has asked to change.
+    /// </para>
+    /// <para>
+    /// NO WRITER READS THROUGH IT ANY MORE. <c>Settings_Writer</c> left it in plan 04 Task 2b (ruling P33), and
+    /// <see cref="Save"/> and <see cref="Save_BotToken"/> in Task 2c (ruling P35): "every failure is empty" made
+    /// a sharing violation into an empty tree, and each of them then replaced the file with its own keys
+    /// alone. A reader that draws may fall back to empty; a writer that would replace the file may not.
     /// </para>
     /// <para>
     /// SWALLOWED, NEVER SILENT, when a caller hands in <paramref name="log"/>: one warning line names the
     /// file and the parser's own reason, because every setting on screen is about to read as its preset or
     /// shipped default and the owner cannot see why otherwise (decision 21's corollary). Not Telegram —
-    /// decision 15. <see cref="Save"/> passes none, so its behaviour is exactly what it was.
+    /// decision 15.
     /// </para>
     /// </summary>
     internal static JsonObject Read_JsonObject_ForEditing(string filePath, IOrchestrationLog? log = null)
@@ -403,8 +432,157 @@ public static class OrchestratorConfig_Loader
     static string Describe_UnreadableFile(string filePath, string reason)
     {
         return $"'{filePath}' could not be read ({reason}) — it was treated as empty, so every setting falls to its preset or "
-            + "shipped default. A settings edit is refused until the file can be read; the Settings window's Save and the "
-            + "/screenshots toggle still replace it.";
+            + "shipped default. Nothing writes over it while it cannot be opened, or while a key in it is stated twice; if it "
+            + "opens but does not parse, a settings edit is still refused, and the Settings window's Save and the /screens "
+            + "toggle replace it.";
+    }
+
+    /// <summary>Names no caller: <c>Settings_Writer</c>, <see cref="Save"/> and <see cref="Save_BotToken"/> all refuse through it.</summary>
+    const string WRITE_REFUSED_PREFIX = "A write was refused: ";
+
+    /// <summary>A duplicated key does not parse for a writer — see <see cref="Parse_Tree"/>.</summary>
+    static readonly JsonDocumentOptions EDIT_PARSE_OPTIONS = new() { AllowDuplicateProperties = false };
+
+    /// <summary>
+    /// THE ONE READ A WRITER EDITS — config.json for <c>Settings_Writer</c> and <see cref="Save"/>, secrets.json for
+    /// <see cref="Save"/> and <see cref="Save_BotToken"/> — and it answers exactly one of two things: the tree to edit,
+    /// or the reason the file refuses. Never an empty tree standing in for a file that is there. Moved here from
+    /// <c>Settings_Writer</c> (where plan 04 Task 2b wrote it, ruling P33) by Task 2c (ruling P35), so that three
+    /// writers share one classifier rather than each deciding what "unreadable" means (decision 12).
+    /// <list type="number">
+    /// <item><b>Absent</b> (no file, or no folder yet) → an empty tree: there is nothing on disk to lose, so a
+    /// first write creates the file holding the written keys.</item>
+    /// <item><b>Present, could not be read</b> → refused, always. Read through <see cref="Tolerant_FileReader"/>,
+    /// which already outlasts the atomic writer's rename (<c>e72cc84</c>); a holder that outlasts IT — another
+    /// process's save, an editor, an antivirus scan, a folder where the file should be — is still holding it, and
+    /// an empty tree written now would replace the owner's file the moment the holder lets go.</item>
+    /// <item><b>Present, read, CORRUPT</b> — not JSON, a top level that is not an object, or EMPTY (also what an
+    /// editor that truncates before it writes looks like for a moment) → refused, unless the caller passes
+    /// <paramref name="corruptReadsAsEmpty"/>. Only <see cref="Save"/> does, and only for config.json, keeping its
+    /// documented replacement of a corrupt config (P35, narrowed by P36); that replacement is silent, as it always
+    /// was, because Save has no log. secrets.json is never replaced this way by either of its writers (P36): it holds
+    /// only what a human put there.</item>
+    /// <item><b>Present, parses, a key stated twice</b> → refused, ALWAYS, whatever the caller passes (P36). It is
+    /// two answers to one question — a rewrite would pick one for the owner — and every other key in the file is
+    /// intact, so it is not the "corrupt, nothing left to preserve" case. Before Task 2c, Save's lenient read handed
+    /// such a file back as a tree that threw <see cref="ArgumentException"/> on Save's first write, so nothing was
+    /// written; that outcome is kept, as a refusal with a reason. Told apart by <see cref="Parse_Tree"/>, inside the
+    /// one classifier, rather than by a second one.</item>
+    /// </list>
+    /// One warning line per refusal when <paramref name="log"/> is given (decision 15: the log, not Telegram; the
+    /// caller answers the owner where they acted). The prefix names no caller, because three different doors use it.
+    /// </summary>
+    internal static (JsonObject? Tree_OrNull, string? Refusal_OrNull) Read_TreeForEditing(
+        string filePath, IOrchestrationLog? log, bool corruptReadsAsEmpty)
+    {
+        string text;
+
+        try
+        {
+            text = Tolerant_FileReader.Read_AllText(filePath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return ([], null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, Log_WriteRefusal(log, Describe_UnreadableForEditing(filePath, ex.Message)));
+        }
+
+        var (tree, problem, isDuplicateKey) = Parse_Tree(text);
+
+        if (tree != null)
+            return (tree, null);
+
+        if (corruptReadsAsEmpty && !isDuplicateKey)
+            return ([], null);
+
+        return (null, Log_WriteRefusal(log, Describe_UnparsableForEditing(filePath, problem!)));
+    }
+
+    /// <summary>
+    /// <see cref="Read_TreeForEditing"/> for the two void doors, which have no outcome to return: a refusal is an
+    /// <see cref="IOException"/> carrying the refusal's own words. An IOException for BOTH states, the unparsable one
+    /// included, so a caller's one catch for a failed save — <see cref="Atomic_FileWriter"/> already throws
+    /// IOException or UnauthorizedAccessException — covers a refused read as well. Nothing has been written when it
+    /// throws: both doors read everything before they write anything.
+    /// </summary>
+    static JsonObject Read_TreeForEditing_OrThrow(string filePath, bool corruptReadsAsEmpty)
+    {
+        var (tree, refusal) = Read_TreeForEditing(filePath, log: null, corruptReadsAsEmpty);
+
+        return tree ?? throw new IOException(refusal);
+    }
+
+    /// <summary>
+    /// The file's text as the object a writer may edit, or why it is not one. Strict where the loader is lenient on
+    /// exactly one point — a duplicated key is refused at the parse rather than surfacing later as a throw from a
+    /// lazily built <see cref="JsonObject"/>, the choice <c>SettingsRequest_Handler</c> makes for a PUT body for the
+    /// same reason.
+    ///
+    /// <para>
+    /// <c>IsDuplicateKey</c> says which refusal it was (P36). The strict parse reports a duplicate as an ordinary
+    /// <see cref="JsonException"/>, so the text is parsed once more with duplicates allowed: an OBJECT that then
+    /// parses is a file whose only fault is a key stated twice. Asked only on the refusal path, so a readable file
+    /// is parsed once.
+    /// </para>
+    /// </summary>
+    static (JsonObject? Tree_OrNull, string? Problem_OrNull, bool IsDuplicateKey) Parse_Tree(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return (null, "the file is empty", false);
+
+        try
+        {
+            return JsonNode.Parse(text, nodeOptions: null, EDIT_PARSE_OPTIONS) is JsonObject tree
+                ? (tree, null, false)
+                : (null, "its top level is not a JSON object", false);
+        }
+        catch (JsonException ex)
+        {
+            return Is_ObjectWithDuplicateKey(text)
+                ? (null, $"a key is stated twice — {ex.Message}", true)
+                : (null, ex.Message, false);
+        }
+    }
+
+    /// <summary>True when the text parses as an object once duplicate keys are allowed — see <see cref="Parse_Tree"/>.</summary>
+    static bool Is_ObjectWithDuplicateKey(string text)
+    {
+        try
+        {
+            using var lenient = JsonDocument.Parse(text);
+
+            return lenient.RootElement.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    static string Log_WriteRefusal(IOrchestrationLog? log, string refusal)
+    {
+        log?.Log_Warning(GLOBAL_ORCH_ID, WRITE_REFUSED_PREFIX + refusal);
+
+        return refusal;
+    }
+
+    /// <summary>
+    /// "In use" is the likely cause and is said as one — the reason in brackets (a sharing violation, an access
+    /// denial, a folder where the file should be) is what tells them apart.
+    /// </summary>
+    static string Describe_UnreadableForEditing(string filePath, string reason)
+    {
+        return $"'{filePath}' could not be read ({reason}) — another program is probably using it. Nothing was written and "
+            + "the file is exactly as it was; try again in a moment.";
+    }
+
+    static string Describe_UnparsableForEditing(string filePath, string reason)
+    {
+        return $"'{filePath}' does not parse as a JSON object ({reason}). Nothing was written and the file is exactly as it "
+            + "was — rewriting a file this app cannot read would erase every key in it. Fix it by hand first.";
     }
 
     static JsonObject? Read_JsonObject_OrNull(string filePath)

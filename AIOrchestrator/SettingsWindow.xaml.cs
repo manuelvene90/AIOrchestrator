@@ -75,7 +75,18 @@ public partial class SettingsWindow : Window
             _config.OrchestrationTokenBudget,
             _config.Runners);
 
-        OrchestratorConfig_Loader.Save(updated, _paths);
+        // A refused or failed save leaves the window open with the loader's own reason (plan 04 Task 2c, P35):
+        // a refused save wrote nothing, and the owner can press Save again once the file is free.
+        try
+        {
+            OrchestratorConfig_Loader.Save(updated, _paths);
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(ex.Message, "Settings were not saved");
+            return;
+        }
+
         Close();
     }
 

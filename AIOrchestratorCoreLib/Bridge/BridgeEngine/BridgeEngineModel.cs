@@ -1273,25 +1273,6 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>
-    /// Turns the periodic status's screenshots on or off, APP-WIDE and persisted — the owner asked
-    /// for it to "work app wise, independently from where I place the command", so it lives in
-    /// config.json rather than on any one orchestration.
-    /// </summary>
-    public void Set_StatusScreenshots(bool enabled)
-    {
-        var current = _configProvider.Get_Current();
-
-        if (current.TelegramStatusScreenshots == enabled)
-            return;
-
-        OrchestratorConfig_Loader.Save(OrchestratorConfig_Factory.Create_WithStatusScreenshots(current, enabled), _paths);
-
-        _log.Log_Info(GLOBAL_ORCH_ID, enabled
-            ? "Status screenshots ON — the periodic status carries a picture of each session's terminal"
-            : "Status screenshots OFF — the periodic status is text only");
-    }
-
     public void Set_SilenceAllTopics(bool silenced)
     {
         if (_silenceAllTopics == silenced)
@@ -8112,8 +8093,15 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Toggle_StatusScreenshots_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var enabled = !_configProvider.Get_Current().TelegramStatusScreenshots;
-        Set_StatusScreenshots(enabled);
+        // The save and its wording live in StatusScreenshots_Writer (moved out by plan 04 Task 2c). A refused save
+        // changed nothing, so there is no camera to sync — only the owner to answer.
+        var (saved, reply) = StatusScreenshots_Writer.Toggle_Flag(_configProvider.Get_Current(), _paths, _log);
+
+        if (!saved)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, reply, cancellationToken);
+            return;
+        }
 
         // The camera on the General topic is the AMBIENT reminder that it is on, so it is pushed with
         // the reply rather than waiting for the next tick — the owner asked for the two together.
@@ -8126,11 +8114,7 @@ internal sealed class BridgeEngineModel(
 
         await Sync_GeneralTopicName_BestEffort_Async(client, cancellationToken);
 
-        var text = enabled
-            ? "📸 Status screenshots ON — every half-hourly status carries a picture of the session's terminal, taken only while you are away from the PC."
-            : "📸 Status screenshots OFF — the half-hourly status is text only from here on.";
-
-        await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, reply, cancellationToken);
     }
 
     const string MODEL_COMMAND = "model";
