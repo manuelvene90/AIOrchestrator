@@ -237,9 +237,10 @@ public class ConfigurableCommandButtonsTests : IDisposable
     // ---------------------------------------------------------------------------------------
 
     /// <summary>
-    /// <c>pulse.holdToggle = true</c>: the toggle is the bar's last button, and the ✓ receipt carries
-    /// nothing. Driven through the engine, because the one value is read at two call sites there and a
-    /// pure test of either builder stays green with the argument dropped at one of them.
+    /// <c>pulse.holdToggle = true</c>: the toggle is the bar's last button, and the ✓ receipt carries no
+    /// hold button — only ▶ Send now (plan 03 Task 6b), which is delivery and not the toggle (ruling R2).
+    /// Driven through the engine, because the one value is read at two call sites there and a pure test
+    /// of either builder stays green with the argument dropped at one of them.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
@@ -250,15 +251,16 @@ public class ConfigurableCommandButtonsTests : IDisposable
         var (bar, tick) = await Run_UntilTheBarAndTheTickArrive_Async(engine);
 
         Assert.Equal(HoldButton_Data.Build(HoldButtonActions.Hold, TOPIC_ID), bar[^1]);
-        Assert.Empty(tick);
+        Assert.Equal([HoldButton_Data.Build(HoldButtonActions.Go, TOPIC_ID)], tick);
     }
 
     /// <summary>
     /// <c>pulse.holdToggle = false</c> — classic, and the machine that names nothing. The tick carries
-    /// ⏸ Wait and the bar carries no hold payload at all.
+    /// ⏸ Wait then ▶ Send now (plan 03 Task 6b), and the bar carries no hold payload at all.
     ///
-    /// The reaction is REFUSED so the tick is sent: on this tree the ✓ message is the reaction's
-    /// fallback (Task 6 makes it classic's first choice), and without a tick there is nothing to look at.
+    /// Classic's receipt IS the ✓ since plan 03 Task 6 (<c>phone.receipts = ticks</c>, no reaction
+    /// attempted); the harness still refuses reactions because the D10 case below runs under
+    /// <c>reactions</c>, where the ✓ is only the fallback.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
@@ -274,7 +276,7 @@ public class ConfigurableCommandButtonsTests : IDisposable
                 "cmd:pc:4242", "cmd:close:4242", "cmd:pause:4242", "cmd:progress:4242",
             ],
             bar);
-        Assert.Equal([HoldButton_Data.Build(HoldButtonActions.Hold, TOPIC_ID)], tick);
+        Assert.Equal([HoldButton_Data.Build(HoldButtonActions.Hold, TOPIC_ID), HoldButton_Data.Build(HoldButtonActions.Go, TOPIC_ID)], tick);
 
         // Classic's bar is all tap-routed and its pair is coherent, so the log has nothing to say.
         Assert.Equal(0, Count_WarningsContaining("no tap can run"));
@@ -341,6 +343,13 @@ public class ConfigurableCommandButtonsTests : IDisposable
     /// be drawn is asked: the bar, the ✓ tick (⏸ Wait) and the hold receipt (▶ GO). Exactly one of the bar
     /// and the receipts carries it — the receipts together are ONE place, the message under what the
     /// owner sent.
+    ///
+    /// <para>
+    /// ▶ SEND NOW IS NOT COUNTED AS THE TOGGLE (plan 03 Task 6b, ruling R2). It carries the GO payload —
+    /// the engine's release, which skips the window — so a payload-only count reads it as a second copy
+    /// of the toggle under every placement. It is recognised by its LABEL, the one thing that tells it
+    /// from the ▶ GO a hold receipt carries, and it is asserted separately: it rides every ✓.
+    /// </para>
     /// </summary>
     [Fact]
     public void TheHoldToggle_IsNeverInBothPlaces_UnderEitherPreset()
@@ -380,7 +389,9 @@ public class ConfigurableCommandButtonsTests : IDisposable
         var (bar, tick) = await Run_UntilTheBarAndTheTickArrive_Async(engine);
 
         Assert.Equal(HoldButton_Data.Build(HoldButtonActions.Hold, TOPIC_ID), bar[^1]);
-        Assert.Empty(tick);
+
+        // The fallback ✓ carries ▶ Send now alone: the toggle fell back to the bar, and Send now is not it.
+        Assert.Equal([HoldButton_Data.Build(HoldButtonActions.Go, TOPIC_ID)], tick);
 
         Assert.Equal(1, Count_WarningsContaining("pulse.holdToggle", "phone.receipts"));
         Assert.False(
@@ -424,12 +435,19 @@ public class ConfigurableCommandButtonsTests : IDisposable
         var barCarriesIt = TopicCommandButtons.Build_ForTopic(buttons, TOPIC_ID, isHolding: false, heldCount: 0, onTheBar)
             .Any(button => HoldButton_Data.Parse_OrNull(button.Data) != null);
 
-        var receiptsCarryIt = ReceiptButtons_Builder.Build_ForTick(TOPIC_ID, onTheBar)
+        var tick = ReceiptButtons_Builder.Build_ForTick(TOPIC_ID, onTheBar);
+
+        var receiptsCarryIt = tick
             .Concat(ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Hold, TOPIC_ID, onTheBar))
             .Concat(ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, TOPIC_ID, onTheBar))
+            .Where(button => button.Label != HoldButton_Data.SEND_NOW_LABEL)
             .Any(button => HoldButton_Data.Parse_OrNull(button.Data) != null);
 
         Assert.True(barCarriesIt != receiptsCarryIt, $"{scenario}: bar carries the toggle = {barCarriesIt}, a receipt carries it = {receiptsCarryIt}");
+
+        Assert.True(
+            tick.Count(button => button.Label == HoldButton_Data.SEND_NOW_LABEL) == 1,
+            $"{scenario}: the ✓ does not carry exactly one ▶ Send now — it rides every tick, wherever the toggle lives");
     }
 
     /// <summary>A new provider per fact, with the keys written before it exists — see ThePulseObeysItsSettingsTests.</summary>
@@ -457,9 +475,10 @@ public class ConfigurableCommandButtonsTests : IDisposable
     }
 
     /// <summary>
-    /// PULSE is posted, then the owner writes with reactions refused, so the ✓ tick is sent; a few more
-    /// ticks follow so any once-per-process latch has been asked more than once. Returns the payloads of
-    /// the last PULSE write and of the tick.
+    /// PULSE is posted, then the owner writes with reactions refused, so the ✓ tick is sent under either
+    /// receipt style (under ticks no reaction is attempted at all; under reactions the ✓ is the fallback);
+    /// a few more ticks follow so any once-per-process latch has been asked more than once. Returns the
+    /// payloads of the last PULSE write and of the tick.
     /// </summary>
     async Task<(IReadOnlyList<string> Bar, IReadOnlyList<string> Tick)> Run_UntilTheBarAndTheTickArrive_Async(IBridgeEngine engine)
     {

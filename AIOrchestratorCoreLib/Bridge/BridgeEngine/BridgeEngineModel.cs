@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+using AIOrchestratorCoreLib.Bridge.ReceiptRegistry;
 using AIOrchestratorCoreLib.Bridge.SuppressedEntries;
 using AIOrchestratorCoreLib.Bridge.TopicDeletion;
 using AIOrchestratorCoreLib.Channels;
@@ -821,26 +822,10 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, DateTime> _statusLineFailedAtByOrchId = [];
 
     /// <summary>
-    /// The receipt message being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff), so three states cost
-    /// one message instead of three. Key 0 = the General topic (no thread id).
+    /// The receipt being EVOLVED per thread (✓ → ✓✓ → ✓✓ · handoff, or 👀 → 👌), so three states cost
+    /// one message instead of three — see <see cref="IReceiptRegistry"/> (moved out, plan 03 Task 6b).
     /// </summary>
-    readonly Dictionary<long, long> _receiptMessageIdByThread = [];
-
-    /// <summary>
-    /// The OWNER'S OWN message currently wearing 👀, per thread — brief D's receipt (2026-09-09:
-    /// "acknowledge my messages with a reaction on my bubble instead of a ✓ message").
-    ///
-    /// <para>
-    /// Beside <see cref="_receiptMessageIdByThread"/> rather than replacing it, because the two
-    /// hold DIFFERENT message ids and only one of them exists at a time: this one is the owner's
-    /// message, and that one is a bot message sent only when the reaction was refused. Reusing a
-    /// single dictionary would mean an id whose meaning depends on which path wrote it, and the
-    /// pickup would then edit the owner's own message instead of reacting to it.
-    /// </para>
-    /// </summary>
-    readonly Dictionary<long, long> _reactedOwnerMessageIdByThread = [];
-
-    readonly Lock _receiptLock = new();
+    readonly IReceiptRegistry _receipts = ReceiptRegistry_Factory.Create();
 
     /// <summary>
     /// Message ids KNOWN to belong to each topic (ours + the owner's), for /clear. Telegram message
@@ -11181,7 +11166,7 @@ internal sealed class BridgeEngineModel(
             _topicNameRetryAfterUtc.Remove(session.OrchId);
 
             Take_KnownTopicMessageIds(messageThreadId);
-            Take_ReceiptMessageId_OrNull(messageThreadId);
+            _receipts.Take_Tick_OrNull(messageThreadId);
 
             // THE STATUS LINE IS FORGOTTEN HERE, DETERMINISTICALLY, beside the four resets that were
             // already doing this for everything else the old topic owned.
@@ -12322,7 +12307,7 @@ internal sealed class BridgeEngineModel(
             // the tick itself becomes the hold receipt, so the owner sees "✓ ⏸ holding · 1 message"
             // where the bare "✓" was, instead of a stale tick plus a second message.
             var heldAlready = _ownerDeliveryBuffer.Count_Pending(targetKey);
-            var existingTickId = Take_ReceiptMessageId_OrNull(message.MessageThreadId);
+            var existingTickId = _receipts.Take_Tick_OrNull(message.MessageThreadId);
 
             try
             {
@@ -13242,11 +13227,19 @@ internal sealed class BridgeEngineModel(
         var (action, threadId) = parsed.Value;
         var targetKey = Resolve_TargetChannelFile_OrNull(threadId);
 
+        // Read BEFORE the tap acts, because the answer goes first: a GO onto an empty, unheld buffer is
+        // a Send now on a message that already left, and says so (HoldTap_Decider, plan 03 Task 6b).
+        var holdingBeforeTheTap = targetKey != null && _ownerDeliveryBuffer.Is_Holding(targetKey);
+        var pendingBeforeTheTap = targetKey == null ? 0 : _ownerDeliveryBuffer.Count_Pending(targetKey);
+
         // ANSWERED FIRST, WHATEVER HAPPENS NEXT: an unanswered callback leaves the button spinning
         // on the phone, which reads as the app being dead at the exact moment they are asking it to
         // stop something.
         await Answer_CallbackTap_BestEffort_Async(
-            client, tap.CallbackQueryId, targetKey == null ? "no orchestration in this topic" : "✓", cancellationToken);
+            client,
+            tap.CallbackQueryId,
+            HoldTap_Decider.Describe_Answer(targetKey != null, action, pendingBeforeTheTap, holdingBeforeTheTap),
+            cancellationToken);
 
         if (targetKey == null)
             return true;
@@ -13288,7 +13281,13 @@ internal sealed class BridgeEngineModel(
                     _holdReceipts.Remove(targetKey);
             }
 
-            await Rewrite_HoldButtonMessage_BestEffort_Async(client, tap.MessageId.Value, action, threadId, heldCount, cancellationToken);
+            // NOT AFTER A SEND NOW: the delivery below edits that same ✓ to ✓✓, and a rewrite first would
+            // spend the message's one edit per 30 s and leave the ✓✓ held (HoldTap_Decider has the account).
+            if (HoldTap_Decider.Should_RewriteTappedMessage(
+                    action, holdingBeforeTheTap, heldCount, _receipts.Is_TheTickTheDeliveryWillEdit(threadId, tap.MessageId.Value)))
+            {
+                await Rewrite_HoldButtonMessage_BestEffort_Async(client, tap.MessageId.Value, action, threadId, heldCount, cancellationToken);
+            }
         }
         else if (action == HoldButtonActions.Go)
         {
@@ -13310,9 +13309,8 @@ internal sealed class BridgeEngineModel(
     async Task Rewrite_HoldButtonMessage_BestEffort_Async(
         ITelegramApiClient client, long messageId, HoldButtonActions action, long? threadId, int heldCount, CancellationToken cancellationToken)
     {
-        // After a HOLD the button becomes the release; after a GO it goes back to offering a hold,
-        // because the next message is already on its way and they may want to stop that one too.
-        var nextAction = action == HoldButtonActions.Hold ? HoldButtonActions.Go : HoldButtonActions.Hold;
+        // After a HOLD the button becomes the release; after a GO the receipt is a ✓ again and offers both
+        // directions — ⏸ Wait and ▶ Send now — because the next message may be one to hold or one to send.
         var text = action == HoldButtonActions.Hold ? Build_HoldReceiptText(heldCount) : "✓";
 
         try
@@ -13320,7 +13318,7 @@ internal sealed class BridgeEngineModel(
             // Through the one placement, like every receipt-side hold button (plan 03 Task 5): a receipt
             // drawn before the toggle moved to PULSE loses its button here rather than keep a second copy.
             await client.Edit_MessageTextWithButtons_Async(
-                messageId, text, ReceiptButtons_Builder.Build_ForHoldReceipt(nextAction, threadId, Is_HoldToggleOnTheBar()), cancellationToken);
+                messageId, text, ReceiptButtons_Builder.Build_AfterTap(action, threadId, Is_HoldToggleOnTheBar()), cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -14015,15 +14013,12 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// THE RECEIPT IS A REACTION NOW — brief D. 👀 goes on the owner's OWN message the moment the
-    /// bridge has appended it; <see cref="Publish_DeliveryReceipt_Async"/> replaces it with 👌 when
-    /// a session picks it up. No bot message at all in the ordinary case.
+    /// <c>phone.receipts</c> CHOOSES THE RECEIPT (plan 03 Task 6; <see cref="ReceiptStyle_Decider"/>
+    /// has the two phones and why <c>ticks</c> never attempts the reaction). Under <c>reactions</c> 👀
+    /// goes on the owner's OWN message — brief D — and <see cref="Publish_DeliveryReceipt_Async"/> makes
+    /// it 👌 when a session picks it up. Under <c>ticks</c> the silent ✓ below is the receipt, and the
+    /// same method edits it to ✓✓.
     ///
-    /// <para>
-    /// After brief C the ✓ was already silent, but it was still a LINE IN THE TOPIC for every line
-    /// the owner wrote — fifteen of them in one export. A reaction sits on the thing it is about
-    /// and costs nothing.
-    /// </para>
     /// <para>
     /// THE FALLBACK IS THE OLD PATH, UNCHANGED, and it is not optional: Telegram answers 400 for a
     /// message it will not let a bot react to and 429 under load, and an acknowledgement that
@@ -14036,11 +14031,10 @@ internal sealed class BridgeEngineModel(
     {
         var messageThreadId = message.MessageThreadId;
 
-        if (message.MessageId != null && await Try_React_Async(client, message.MessageId.Value, OwnerReaction_Emoji.RECEIVED, cancellationToken))
+        if (ReceiptStyle_Decider.Should_TryReaction(_configProvider.Get_Current().Phone.Receipts, message.MessageId)
+            && await Try_React_Async(client, message.MessageId!.Value, OwnerReaction_Emoji.RECEIVED, cancellationToken))
         {
-            lock (_receiptLock)
-                _reactedOwnerMessageIdByThread[messageThreadId ?? 0] = message.MessageId.Value;
-
+            _receipts.Remember_Reaction(messageThreadId, message.MessageId.Value);
             return;
         }
 
@@ -14051,6 +14045,7 @@ internal sealed class BridgeEngineModel(
             // tap beats typing WAIT by the seconds that decide whether the hold catches the message at
             // all. Their words: "clicking a button is faster than typing wait." When the toggle lives on
             // PULSE the tick carries none: one toggle in two places is decision 12 (plan 03 Task 5).
+            // ▶ Send now rides it either way — delivery, not the toggle (plan 03 Task 6b, ruling R2).
             var messageId = await client.Send_MessageWithButtons_Async(
                 messageThreadId,
                 "✓",
@@ -14064,7 +14059,7 @@ internal sealed class BridgeEngineModel(
 
             if (messageId != null)
             {
-                Remember_ReceiptMessage(messageThreadId, messageId.Value);
+                _receipts.Remember_Tick(messageThreadId, messageId.Value);
                 Remember_TopicMessage(messageThreadId, messageId);
             }
         }
@@ -14075,14 +14070,6 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Received-ack send failed: {ex.Message}");
-        }
-    }
-
-    void Remember_ReceiptMessage(long? messageThreadId, long messageId)
-    {
-        lock (_receiptLock)
-        {
-            _receiptMessageIdByThread[messageThreadId ?? 0] = messageId;
         }
     }
 
@@ -14188,40 +14175,6 @@ internal sealed class BridgeEngineModel(
             // which is "send the tick instead".
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Reaction {emoji} on message {messageId} was refused ({ex.Message}) — falling back to the ✓ receipt");
             return false;
-        }
-    }
-
-    /// <summary>
-    /// The owner message wearing 👀 in this thread, if any, consumed on read — the reaction twin of
-    /// <see cref="Take_ReceiptMessageId_OrNull"/>, and consumed for the same reason: the next batch
-    /// gets its own receipt rather than overwriting one that has already been answered.
-    /// </summary>
-    long? Take_ReactedOwnerMessageId_OrNull(long? messageThreadId)
-    {
-        lock (_receiptLock)
-        {
-            var key = messageThreadId ?? 0;
-
-            if (!_reactedOwnerMessageIdByThread.TryGetValue(key, out var messageId))
-                return null;
-
-            _reactedOwnerMessageIdByThread.Remove(key);
-            return messageId;
-        }
-    }
-
-    long? Take_ReceiptMessageId_OrNull(long? messageThreadId)
-    {
-        lock (_receiptLock)
-        {
-            var key = messageThreadId ?? 0;
-
-            if (!_receiptMessageIdByThread.TryGetValue(key, out var messageId))
-                return null;
-
-            // Consumed: the next batch starts its own receipt rather than rewriting this one.
-            _receiptMessageIdByThread.Remove(key);
-            return messageId;
         }
     }
 
@@ -15998,7 +15951,7 @@ internal sealed class BridgeEngineModel(
         // fallback path only. A reaction that has since become unsettable (the owner deleted the
         // message) falls through to that path, which sends nothing unless the caller said the text
         // carries information, so a lost 👌 costs the glyph and never a new line in the topic.
-        var reactedMessageId = Take_ReactedOwnerMessageId_OrNull(messageThreadId);
+        var reactedMessageId = _receipts.Take_Reaction_OrNull(messageThreadId);
 
         if (reactedMessageId != null
             && await Try_React_Async(client, reactedMessageId.Value, OwnerReaction_Emoji.PICKED_UP, cancellationToken))
@@ -16006,7 +15959,7 @@ internal sealed class BridgeEngineModel(
             return (null, true);
         }
 
-        var messageId = Take_ReceiptMessageId_OrNull(messageThreadId);
+        var messageId = _receipts.Take_Tick_OrNull(messageThreadId);
 
         if (messageId != null)
         {
