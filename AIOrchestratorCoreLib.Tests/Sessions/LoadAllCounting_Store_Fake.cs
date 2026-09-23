@@ -67,6 +67,10 @@ internal sealed class LoadAllCounting_Store_Fake(IOrchestrationSessionStore inne
 
     public void Set_Paused(string orchId, bool paused) => _inner.Set_Paused(orchId, paused);
 
+    public void Set_EndeavourId(string orchId, string endeavourId) => _inner.Set_EndeavourId(orchId, endeavourId);
+
+    public void Set_SiblingLink(string orchId, string endeavourId, string bornFromOrchId, string bornFromHandover, string workingPath) => _inner.Set_SiblingLink(orchId, endeavourId, bornFromOrchId, bornFromHandover, workingPath);
+
     public void Set_OwnerPresence(string orchId, AIOrchestratorCoreLib.Telegram.OwnerPresenceModes presence) => _inner.Set_OwnerPresence(orchId, presence);
 
     public void Set_MemberPid(string orchId, string memberId, int? pid) => _inner.Set_MemberPid(orchId, memberId, pid);

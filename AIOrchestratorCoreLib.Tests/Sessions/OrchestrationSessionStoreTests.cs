@@ -11,6 +11,11 @@ public class OrchestrationSessionStoreTests : IDisposable
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
 
+    // Strings only: the store records a path, it never checks the directory exists, so the sibling
+    // tests need no folder on disk for either.
+    readonly string _repo = @"C:\repos\ai-orchestrator";
+    readonly string _worktree = @"C:\repos\ai-orchestrator.worktrees\limits";
+
     public OrchestrationSessionStoreTests()
     {
         _tempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-store-tests-{Guid.NewGuid():N}");
@@ -469,5 +474,53 @@ eposrb");
         Assert.DoesNotContain("\"paused\"", File.ReadAllText(path));
 
         Assert.False(Reload().Get_Session("arb-fix").Paused);
+    }
+
+    /// <summary>
+    /// AN UNRELATED WRITE MUST NOT UNLINK A SIBLING. Every Set_* rebuilds the session through
+    /// CreateFrom_Existing, and a field it forgets to carry is cleared by the next pid write, which
+    /// happens on every spawn. Read back through Reload() so an in-memory copy cannot pass for what
+    /// reached session.json.
+    /// </summary>
+    [Fact]
+    public void TheSiblingLink_SurvivesAnUnrelatedWrite()
+    {
+        _store.Create_Orchestration("ai-orchestrator-8", "AIOrchestrator", _repo);
+        _store.Set_SiblingLink("ai-orchestrator-8", "ai-orchestrator-7", "ai-orchestrator-7", "ai-orchestrator-7#14", _worktree);
+        _store.Set_Paused("ai-orchestrator-8", true);
+        _store.Set_DisplayName("ai-orchestrator-8", "AI-Orch · limits");
+        _store.Set_SupervisorPid("ai-orchestrator-8", 4321);
+
+        var session = Reload().Get_Session("ai-orchestrator-8");
+
+        Assert.Equal("ai-orchestrator-7", session.EndeavourId);
+        Assert.Equal("ai-orchestrator-7", session.BornFromOrchId);
+        Assert.Equal("ai-orchestrator-7#14", session.BornFromHandover);
+        Assert.Equal(_worktree, session.WorkingPath);
+
+        // And the link did not cost the unrelated writes their own fields either.
+        Assert.True(session.Paused);
+        Assert.Equal("AI-Orch · limits", session.DisplayName);
+    }
+
+    /// <summary>
+    /// THE PARENT IS STAMPED WITH THE ENDEAVOUR AND NOTHING ELSE. It was not born from anyone and it
+    /// still runs where it always ran, so the three child-only fields must stay null — a parent
+    /// reporting a WorkingPath would move its next respawn.
+    /// </summary>
+    [Fact]
+    public void Set_EndeavourId_StampsTheParent_AndLeavesTheOtherThreeNull()
+    {
+        _store.Create_Orchestration("ai-orchestrator-7", "AIOrchestrator", _repo);
+        _store.Set_EndeavourId("ai-orchestrator-7", "ai-orchestrator-7");
+        _store.Set_Done("ai-orchestrator-7", true);
+
+        var parent = Reload().Get_Session("ai-orchestrator-7");
+
+        Assert.Equal("ai-orchestrator-7", parent.EndeavourId);
+        Assert.Null(parent.BornFromOrchId);
+        Assert.Null(parent.BornFromHandover);
+        Assert.Null(parent.WorkingPath);
+        Assert.Equal(_repo, parent.RepoPath);
     }
 }

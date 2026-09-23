@@ -321,5 +321,9 @@ public class SettingsResolverTests
         public DateTime? TelegramTopicDeletedUtc => throw new NotSupportedException();
         public bool TelegramTopicDeleteFailureReported => throw new NotSupportedException();
         public DateTime? ClosedUtc => throw new NotSupportedException();
+        public string? EndeavourId => throw new NotSupportedException();
+        public string? BornFromOrchId => throw new NotSupportedException();
+        public string? BornFromHandover => throw new NotSupportedException();
+        public string? WorkingPath => throw new NotSupportedException();
     }
 }

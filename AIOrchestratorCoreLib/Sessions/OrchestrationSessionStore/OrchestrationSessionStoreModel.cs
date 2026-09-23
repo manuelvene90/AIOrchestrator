@@ -246,6 +246,24 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Set_EndeavourId(string orchId, string endeavourId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithEndeavourId(session, endeavourId));
+        }
+    }
+
+    public void Set_SiblingLink(string orchId, string endeavourId, string bornFromOrchId, string bornFromHandover, string workingPath)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithSiblingLink(session, endeavourId, bornFromOrchId, bornFromHandover, workingPath));
+        }
+    }
+
     public void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence)
     {
         lock (_writeLock)

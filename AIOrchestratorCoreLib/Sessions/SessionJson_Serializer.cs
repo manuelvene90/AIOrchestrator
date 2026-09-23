@@ -46,6 +46,10 @@ public static class SessionJson_Serializer
             ["awaitingTest"] = session.AwaitingTest,
             ["done"] = session.Done,
             ["paused"] = session.Paused,
+            ["endeavourId"] = session.EndeavourId,
+            ["bornFromOrchId"] = session.BornFromOrchId,
+            ["bornFromHandover"] = session.BornFromHandover,
+            ["workingPath"] = session.WorkingPath,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicDeletePendingUtc"] = session.TelegramTopicDeletePendingUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicDeletedUtc"] = session.TelegramTopicDeletedUtc?.ToString("O", CultureInfo.InvariantCulture),
@@ -135,7 +139,16 @@ public static class SessionJson_Serializer
             // Absent in every session written before today, and false is the only safe reading of
             // absence: an orchestration nobody paused is not paused. Reading a missing key as true
             // would put every pre-existing orchestration to sleep on the first load.
-            root["paused"]?.GetValue<bool>() ?? false);
+            root["paused"]?.GetValue<bool>() ?? false,
+
+            // ABSENT IN EVERY SESSION WRITTEN BEFORE 2026-09-23, AND NULL IS THE ONLY SAFE READING:
+            // not linked to any endeavour, born from nobody, and spawned at RepoPath — exactly what
+            // every such orchestration always was. Any other reading of absence would either invent
+            // siblings or move a session's working directory on its next respawn.
+            Get_String_OrNull(root, "endeavourId"),
+            Get_String_OrNull(root, "bornFromOrchId"),
+            Get_String_OrNull(root, "bornFromHandover"),
+            Get_String_OrNull(root, "workingPath"));
     }
 
     /// <summary>

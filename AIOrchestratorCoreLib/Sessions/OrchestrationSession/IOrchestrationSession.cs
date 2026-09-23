@@ -157,4 +157,52 @@ public interface IOrchestrationSession
 
     /// <summary>Set when the general supervisor closed this orchestration. Folder stays as audit trail.</summary>
     DateTime? ClosedUtc { get; }
+
+    /// <summary>
+    /// THE ENDEAVOUR THIS ORCHESTRATION BELONGS TO — the link between sibling solos (spec §3.2,
+    /// approved 2026-09-23). Written by the spawn-sibling executor: on the PARENT the first time it
+    /// gets a sibling, and on every child at creation. Set once, never cleared. Absent means null,
+    /// and null means not linked, which is what every session.json written before 2026-09-23 says.
+    ///
+    /// <para>
+    /// ITS VALUE IS THE FIRST ORCHESTRATION'S ID (e.g. <c>ai-orchestrator-7</c>), not a fresh token:
+    /// it is stable, a human reading session.json or a log line knows at once which conversation
+    /// started the endeavour, and it can never collide with a later one because
+    /// <c>OrchId_Allocator.Allocate_NextOrchId</c> only counts upwards — an id is never re-allocated.
+    /// </para>
+    /// <para>
+    /// WHY THERE IS NO <c>siblings[]</c> LIST. Membership is derived, never stored as a list: the
+    /// siblings of X are the sessions of one <c>Load_All()</c> whose EndeavourId equals X's
+    /// (<see cref="EndeavourMembers_Resolver"/>). The proposal's array was rejected because N arrays
+    /// in N files are N copies of one fact; a close, a crash between two saves or a hand edit
+    /// desynchronises them; this codebase has paid for every second copy it ever kept (decision 12's
+    /// second duration formatter, <c>ChannelDiscovery</c>'s missing reviewer prefix); and
+    /// <c>Load_All</c> is already cached per file on length and mtime, so deriving costs nothing
+    /// the dashboard tick does not already pay.
+    /// </para>
+    /// </summary>
+    string? EndeavourId { get; }
+
+    /// <summary>
+    /// The sibling that asked for this one. Written by the executor on the child at creation. AUDIT
+    /// ONLY — it grants no authority: a sibling born from X may not act on X's behalf, and nothing
+    /// may branch on this field to decide who is allowed to do what. Absent means null (a first
+    /// orchestration, or any session written before 2026-09-23).
+    /// </summary>
+    string? BornFromOrchId { get; }
+
+    /// <summary>
+    /// <c>"&lt;orch&gt;#&lt;n&gt;"</c>: the HANDOVER entry that authorised this birth — and the
+    /// IDEMPOTENCY KEY (spec §4.4): a second spawn-sibling request citing the same entry is refused
+    /// with this session's id instead of starting a twin. Written by the executor on the child at
+    /// creation. Absent means null.
+    /// </summary>
+    string? BornFromHandover { get; }
+
+    /// <summary>
+    /// The directory the session is SPAWNED in — typically the sibling's own worktree, so two solos
+    /// never edit one checkout. Written by the executor on the child at creation. Absent means null,
+    /// and null means <see cref="RepoPath"/>: exactly today's behaviour, so no existing session moves.
+    /// </summary>
+    string? WorkingPath { get; }
 }
