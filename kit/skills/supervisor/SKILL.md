@@ -714,8 +714,10 @@ sending them anything at all** — no questions, no options, no updates — park
 asked, and carry on with what you can decide and delegate. If they reply, everything returns to
 normal by itself and you re-ask from your parked list.
 
-**2. `AWAY MODE ON` — 15 minutes later, if they have been silent EVERYWHERE.** Now it is a
-conclusion: they are told, and the backlog is parked for them. Nothing new starts pushing — PULSE
+**2. `AWAY MODE ON` — if they then stay silent EVERYWHERE for the away delay.** The delay is the
+owner's setting (`away.afterMinutes`), and the HOLD entry quotes the one in force — or says away mode
+will not start by itself, when they have turned it off. Now it is a conclusion: they are told, and
+the backlog is parked for them. Nothing new starts pushing — PULSE
 (the app's status line, see below) already keeps reflecting it, silently, whenever they do check.
 
 The clock is on their last message in ANY topic, so chatting in another orchestration proves they

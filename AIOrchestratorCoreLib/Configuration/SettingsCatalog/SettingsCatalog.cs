@@ -680,6 +680,29 @@ public static class SettingsCatalog
                     "midnight, shared by every topic. Moves the periodic status only; the away digest stays on 30.",
                 restart: RestartKinds.None),
 
+            // THE AWAY DELAY (plan 03 task 18; owner 2026-09-23, ai-orchestrator-29 entry [95]: "the away mode
+            // is triggered too soon all the time. That also should be a setting."). The shipped value is
+            // today's 15 (ruling R14) and classic states the owner's 60. Read by the engine each time it asks
+            // AwayMode_Policy.Should_EnterAway, which is also where 0 is read as "never", not "at once".
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.AWAY_AFTER_MINUTES_PATH,
+                shippedDefault: Bridge.AwayMode_Policy.DEFAULT_AWAY_AFTER_MINUTES,
+
+                // 0 IS LEGAL AND IS THE OFF SWITCH; a day is the ceiling, because a silence longer than
+                // that is not a delay any more — it is the switch, and 0 already says so plainly.
+                minimum: 0,
+                maximum: 1440,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Away mode after (minutes)",
+                description:
+                    "How long you can be silent — no message or tap in ANY topic — while an orchestration is holding " +
+                    "its questions for you, before the app decides you are away: it tells you once, parks the " +
+                    "questions already asked, tells every session to ask nothing more, and sends a short update per " +
+                    "orchestration every 30 minutes until you write again. Any message you send ends it everywhere, " +
+                    "and it never starts while you are at a PC (/pc). 0 means away mode never starts by itself.",
+                restart: RestartKinds.None),
+
             SettingDefinition_Factory.Create_Bool(
                 path: "phone.appMessagesRing",
                 shippedDefault: true,

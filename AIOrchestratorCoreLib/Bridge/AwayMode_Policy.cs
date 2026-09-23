@@ -13,8 +13,9 @@ namespace AIOrchestratorCoreLib.Bridge;
 ///   NORMAL → QUIET   at the 3rd unanswered message, IMMEDIATELY. That orchestration stops asking.
 ///                    It is a suspicion, not a conclusion: the owner may be 30 seconds from
 ///                    replying, so nothing is announced and nothing is parked yet.
-///   QUIET  → AWAY    once the owner has been silent EVERYWHERE for 15 minutes. Now it is a
-///                    conclusion: announced, questions parked, short updates begin.
+///   QUIET  → AWAY    once the owner has been silent EVERYWHERE for `away.afterMinutes` (15 shipped,
+///                    60 under classic; 0 = never by itself). Now it is a conclusion: announced,
+///                    questions parked, short updates begin.
 ///   → NORMAL         the instant the owner says anything anywhere.
 ///
 /// AWAY IS APP-WIDE, never per orchestration. The owner is either at their phone or not; they are
@@ -27,8 +28,16 @@ public static class AwayMode_Policy
     /// <summary>Consecutive unanswered messages that make ONE orchestration stop asking.</summary>
     public const int QUIET_THRESHOLD = 3;
 
-    /// <summary>Silence from the owner ANYWHERE before quiet hardens into away.</summary>
-    public const int AWAY_AFTER_MINUTES = 15;
+    /// <summary>
+    /// The SHIPPED default of <c>away.afterMinutes</c> — silence from the owner ANYWHERE before quiet
+    /// hardens into away — and nothing else. The settings catalogue's row reads it as its default, which
+    /// is its only reader: the rule is <see cref="Should_EnterAway"/> with the configured value handed
+    /// in, resolved by the engine at the point of effect (plan 03 task 18). It was the rule itself, a
+    /// compiled 15, until the owner said on 2026-09-23 (ai-orchestrator-29 entry [95]): <i>"the away mode
+    /// is triggered too soon all the time. That also should be a setting."</i> Renamed from
+    /// <c>AWAY_AFTER_MINUTES</c> so nobody reads it as the number in force.
+    /// </summary>
+    public const int DEFAULT_AWAY_AFTER_MINUTES = 15;
 
     /// <summary>The short update cadence while away — enough to stay informed, not enough to be spam.</summary>
     public const int AWAY_UPDATE_MINUTES = 30;
@@ -41,7 +50,13 @@ public static class AwayMode_Policy
 
     /// <summary>
     /// Away needs BOTH: somebody actually waiting on the owner (otherwise silence just means there
-    /// was nothing to say), and 15 minutes of silence from them across every topic.
+    /// was nothing to say), and <paramref name="awayAfterMinutes"/> of silence from them across every
+    /// topic — <c>away.afterMinutes</c>, handed in by the engine as it reads it at this tick.
+    ///
+    /// ZERO MEANS NEVER, NOT AT ONCE. A zero-minute delay read literally would declare the owner away on
+    /// the first tick after the third unanswered message — the opposite of what somebody who sets it to
+    /// zero is asking for. So 0 turns the automatic start off, and nothing else starts away mode today:
+    /// there is no command that enters it by hand.
     ///
     /// AND IT NEVER APPLIES WHILE THE OWNER IS AT A PC (owner's ruling, 2026-09-07: *"when I'm at
     /// the pc, which mean when at least one session is in pc mode, automatic away mode should never
@@ -56,15 +71,40 @@ public static class AwayMode_Policy
     /// different kind: presence is a FACT the owner stated, while the other two are inferences drawn
     /// from silence. An inference must not outrank the thing it is a guess about.
     /// </summary>
-    public static bool Should_EnterAway(bool anyOrchestrationQuiet, bool ownerAtAPc, DateTime lastOwnerMessageUtc, DateTime nowUtc)
+    public static bool Should_EnterAway(bool anyOrchestrationQuiet, bool ownerAtAPc, DateTime lastOwnerMessageUtc, DateTime nowUtc, int awayAfterMinutes)
     {
         if (ownerAtAPc)
+            return false;
+
+        if (awayAfterMinutes <= 0)
             return false;
 
         if (!anyOrchestrationQuiet)
             return false;
 
-        return (nowUtc - lastOwnerMessageUtc).TotalMinutes >= AWAY_AFTER_MINUTES;
+        return (nowUtc - lastOwnerMessageUtc).TotalMinutes >= awayAfterMinutes;
+    }
+
+    /// <summary>
+    /// The HOLD entry a session gets the moment its orchestration goes quiet — built here, with the delay
+    /// in force, because it PROMISES the session what happens next: "if they stay silent for N minutes you
+    /// will get an AWAY MODE ON entry". A number that is not the configured one is a promise the app then
+    /// breaks, and at 0 there is no such entry to promise. It lived in the engine as prose quoting the
+    /// compiled constant, which is how a second copy of the number would have survived the setting.
+    /// </summary>
+    public static string Build_HoldNotice(int awayAfterMinutes)
+    {
+        var whatComesNext = awayAfterMinutes > 0
+            ? $"If they stay silent for {awayAfterMinutes} minutes you will get an AWAY MODE ON entry; "
+            : "On this machine away mode does not start by itself (away.afterMinutes is 0), so no AWAY MODE ON entry will follow "
+              + "however long they are silent; ";
+
+        return $"{QUIET_THRESHOLD} of your messages are unanswered. They may simply be mid-task, so nothing is being "
+            + "assumed yet — but STOP sending them anything more for now: no questions, no options, no updates.\n\n"
+            + "Park what you would have asked (keep the list; you will re-ask from it) and carry on with what you can "
+            + "decide and delegate yourself. "
+            + whatComesNext
+            + "if they reply, everything returns to normal on its own.";
     }
 
     /// <summary>

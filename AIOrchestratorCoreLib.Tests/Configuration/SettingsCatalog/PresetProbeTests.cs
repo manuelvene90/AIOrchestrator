@@ -114,6 +114,10 @@ public class PresetProbeTests
 
     // NO CODE ON A HIGH-RISK QUESTION (owner, 2026-09-23, plan 03 task 15): "I don't want that."
     [InlineData("highRiskConfirmation", "false")]
+
+    // AWAY MODE AFTER AN HOUR, NOT FIFTEEN MINUTES (owner, 2026-09-23 entry [95], plan 03 task 18):
+    // "the away mode is triggered too soon all the time". 60 is the controller's value, announced in [97].
+    [InlineData("away.afterMinutes", "60")]
     public void UnderClassic_TheMachineResolvesToMastersWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.CLASSIC, path));
@@ -148,6 +152,7 @@ public class PresetProbeTests
     [InlineData("runners.implementer.resume", "\"fresh\"")]
     [InlineData("runners.general.resume", "\"fresh\"")]
     [InlineData("highRiskConfirmation", "true")]
+    [InlineData("away.afterMinutes", "15")]
     public void UnderQuiet_TheMachineResolvesToTheForksWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.QUIET, path));
