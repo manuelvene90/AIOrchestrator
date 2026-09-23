@@ -33,6 +33,15 @@ namespace AIOrchestratorCoreLib.Telegram.SettingsMenu;
 /// a second tap through the <see cref="SettingsMenuViews.Confirm"/> view (ruling P6). D3: an orchestration
 /// topic gets the read-only <see cref="SettingsMenuViews.Orchestration"/> view, never the machine menu.
 /// </para>
+/// <para>
+/// THE OUTPUT IS PLAIN TEXT, AND IT IS ROWS. Labels, descriptions and values carry <c>&lt;</c>, <c>&gt;</c>
+/// and <c>&amp;</c> freely (a highRiskPatterns word, a runner description), and none of it is escaped here. The
+/// engine (Task 5) must either send it without a parse mode —
+/// <c>ITelegramApiClient.Send_MessageWithButtonRows_Async</c> / <c>Edit_MessageTextWithButtonRows_Async</c>
+/// set none — or HTML-escape it before any <c>parse_mode = "HTML"</c> path; and it must send the keyboard as
+/// the ROWS returned, not through <c>Send_HtmlMessageWithButtons_Async</c>, which takes a flat button list and
+/// would stack the page row's Previous / Back / Next and a Values view's word pairs one per line.
+/// </para>
 /// </summary>
 public static class SettingsMenu_Builder
 {
@@ -100,6 +109,9 @@ public static class SettingsMenu_Builder
     const string CHOICE_NOTE = "Tap the value you want.";
 
     const string CONFIRM_NOTE = "Nothing changes until you tap Yes.";
+
+    /// <summary>A Secret row's Confirm: the typed value is not repeated, not even cut short.</summary>
+    const string SECRET_QUESTION = "Save the value you typed? It is a secret, so it is not shown here.";
 
     const string RESET_QUESTION = "Reset it? Its key is deleted from config.json, and the preset or the shipped default answers again.";
 
@@ -486,6 +498,13 @@ public static class SettingsMenu_Builder
     {
         var definition = reading.Definition;
         var editor = SettingEditor_Factory.Create_ForReading(reading);
+
+        // A SECRET'S TYPED VALUE IS NEVER DRAWN (fix round 1 of 7763a6b, ruling P40). "Change it to <token>?"
+        // was a second, BOT-sent copy of web.token in the chat — one the owner cannot delete — right after the
+        // reply prompt promised the value is never shown back. Keyed on the editor's Secret kind, which
+        // SettingEditor_Factory derives from the reader's one masked path, so no second path literal exists here.
+        if (editor.Kind == SettingEditorKinds.Secret && edit is SettingsMenuEdits.Set or SettingsMenuEdits.ApplyHeldReply)
+            return SECRET_QUESTION;
 
         return edit switch
         {

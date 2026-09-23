@@ -529,6 +529,28 @@ public class SettingsMenuBuilderTests
         Assert.Equal(Index_Of("buttonExpiryMinutes"), yes.Index);
     }
 
+    /// <summary>
+    /// A TYPED SECRET IS NEVER DRAWN BACK (fix round 1 of 7763a6b, ruling P40). The Kernel Confirm of a held
+    /// web.token reply used to read "Change it to &lt;the token&gt;?" — a second, BOT-sent copy in the chat history,
+    /// which the owner cannot delete, while the reply prompt had just promised "the value is never shown back".
+    /// A sentinel that appears nowhere — text, caption or payload — is the only proof that holds.
+    /// </summary>
+    [Fact]
+    public void ASecretReplyConfirm_ShowsTheTypedValueNowhere()
+    {
+        const string sentinel = "SENTINEL-7f3a-token";
+        var (text, rows) = View(SettingsMenuViews.Confirm, SettingsSnapshot_Reader.MASKED_SECRET_PATH, Readings(), edit: SettingsMenuEdits.ApplyHeldReply, word: sentinel);
+
+        Assert.DoesNotContain(sentinel, text);
+        Assert.All(Buttons(rows), button => Assert.DoesNotContain(sentinel, button.Label));
+        Assert.All(Buttons(rows), button => Assert.DoesNotContain(sentinel, button.Data));
+
+        var yes = Taps(rows).Single(tap => tap.Edit != null);
+
+        Assert.Equal(SettingsMenuEdits.ApplyHeldReply, yes.Edit);
+        Assert.Null(yes.Word);
+    }
+
     [Fact]
     public void TheReplyPrompt_NamesTheSettingItsValueAndSlashCancel()
     {

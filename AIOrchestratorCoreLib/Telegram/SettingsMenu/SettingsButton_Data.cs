@@ -148,24 +148,30 @@ public static class SettingsButton_Data
     /// The payload against THIS build's catalogue, or null when it is stale (D8) — answer
     /// <see cref="STALE_ANSWER"/> and act on nothing. A view that names a setting must name one whose category
     /// AND Path check both agree with the row now at that index; a Category view must name a category this build
-    /// has; a Confirm must carry the change it confirms; and the Orchestration view has no taps at all.
+    /// has; a Confirm must carry the change it confirms; a change must name a setting (a Categories or Category
+    /// payload carrying one is stale); and the Orchestration view has no taps at all.
     /// </summary>
     public static (SettingsMenuViews View, SettingCategories? Category, int? Index, ISettingDefinition? Definition_OrNull, int Page, SettingsMenuEdits? Edit, string? Word)? Resolve_OrNull(
         (SettingsMenuViews View, string CategoryWord, int? Index, string Check, int Page, SettingsMenuEdits? Edit, string? Word) parsed)
     {
         switch (parsed.View)
         {
+            // No button of these two views carries a change, and a change with no setting to change would read as
+            // a write through Writes_OnTap with a null definition to write to (fix round 1 of 7763a6b).
             case SettingsMenuViews.Categories:
-                return (parsed.View, null, null, null, parsed.Page, parsed.Edit, parsed.Word);
+                if (parsed.Edit != null)
+                    return null;
+
+                return (parsed.View, null, null, null, parsed.Page, null, null);
 
             case SettingsMenuViews.Category:
             {
                 var category = Find_Category_OrNull(parsed.CategoryWord);
 
-                if (category == null)
+                if (category == null || parsed.Edit != null)
                     return null;
 
-                return (parsed.View, category, null, null, parsed.Page, parsed.Edit, parsed.Word);
+                return (parsed.View, category, null, null, parsed.Page, null, null);
             }
 
             case SettingsMenuViews.Setting:

@@ -276,6 +276,27 @@ public class SettingsButtonDataTests
         Assert.Null(SettingsButton_Data.Resolve_OrNull(parsed.Value));
     }
 
+    /// <summary>
+    /// A CHANGE WITH NO SETTING TO CHANGE IS NOT A TAP THIS BUILD MADE (fix round 1 of 7763a6b). No button of
+    /// the Categories or Category view carries an edit, so one that does would otherwise resolve, read as a
+    /// write through <c>Writes_OnTap</c>, and hand the handler a null definition to write to.
+    /// </summary>
+    [Theory]
+    [InlineData("set:h::::0:=on")]
+    [InlineData("set:h::::0:~")]
+    [InlineData("set:h::::0:?")]
+    [InlineData("set:c:Kernel:::0:=on")]
+    [InlineData("set:c:Pulse:::1:+progress")]
+    [InlineData("set:c:Phone:::0:!")]
+    public void AnEditRidingOnAViewThatNamesNoSetting_IsAnsweredAsStale(string callbackData)
+    {
+        var parsed = SettingsButton_Data.Parse_OrNull(callbackData);
+
+        Assert.NotNull(parsed);
+        Assert.NotNull(parsed.Value.Edit);
+        Assert.Null(SettingsButton_Data.Resolve_OrNull(parsed.Value));
+    }
+
     /// <summary>A CONFIRM VIEW NEVER WRITES (ruling P6): the first tap of a Kernel edit only asks.</summary>
     [Fact]
     public void Writes_OnTap_IsFalseForAConfirmView_AndForTheReplyStep_AndForNavigation()
