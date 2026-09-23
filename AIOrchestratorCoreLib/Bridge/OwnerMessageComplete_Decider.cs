@@ -6,7 +6,7 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// <para>
 /// Measured on the VPS on 2026-09-09: an owner's Telegram message took 11–12 s median to reach the
 /// supervisor's channel, and six of those seconds were the aggregation window
-/// (<c>OWNER_AGGREGATION_SECONDS</c>). Every message served that quiet period so that the occasional
+/// (now <c>phone.aggregationSeconds</c>). Every message served that quiet period so that the occasional
 /// burst would arrive as ONE turn. The owner's ruling that day was to shrink the window to three
 /// seconds and to shorten it sharply for a message that is plainly over: one ending in <c>.</c>,
 /// <c>?</c> or <c>!</c>, or one that is a slash command.
@@ -24,7 +24,7 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// delivering on the very next flush pass, which was measured on 2026-09-09 to defeat the aggregation
 /// it was written beside: two finished messages two seconds apart bought TWO supervisor turns because
 /// the first was taken before the second arrived. It now means a SHORT quiet period instead of the full
-/// window — <c>OwnerDeliveryBufferModel.FINISHED_MESSAGE_QUIET_SECONDS</c> — so a burst still rides one
+/// window — <c>phone.finishedMessageSeconds</c>, which classic sets equal to the window (2026-09-23) — so a burst still rides one
 /// turn and a message that really is alone still goes fast.
 /// </para>
 /// <para>
@@ -61,7 +61,7 @@ public static class OwnerMessageComplete_Decider
 
     /// <summary>
     /// True when this text may be delivered with a SHORT quiet period rather than the full aggregation
-    /// window — see <c>OwnerDeliveryBufferModel.FINISHED_MESSAGE_QUIET_SECONDS</c>.
+    /// window — see <c>phone.finishedMessageSeconds</c> (<c>OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS</c> as shipped).
     ///
     /// <para>
     /// Trailing whitespace is typing, not meaning, so it is trimmed before the last character is read

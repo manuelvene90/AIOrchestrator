@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
+using AIOrchestratorCoreLib.Telegram.TelegramSendBudget;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
@@ -370,7 +371,18 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
     readonly object _lock = new();
     readonly List<string> _sentTexts = [];
+
+    /// <summary>
+    /// Every send WITH the id it was given and the sound it went out with, beside <c>_sentTexts</c>
+    /// rather than replacing it: every accessor that already reads the texts keeps reading them
+    /// unchanged. A receipt is ONE message followed through its edits (✓ → ✓✓), which needs its id,
+    /// and "a receipt never rings" lives only in the sound argument.
+    /// </summary>
+    readonly List<(long Id, string Text, TelegramSendSounds Sound)> _sentWithIds = [];
     readonly List<string> _editedTexts = [];
+
+    /// <summary>Every edit that sent no keyboard, by the message it rewrote — the ✓✓ is one of these.</summary>
+    readonly List<(long MessageId, string Text)> _textEdits = [];
     readonly List<(string Data, string Label)> _buttons = [];
     string? _queuedUpdatesJson;
     Exception? _updatesFailure;
@@ -499,6 +511,102 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             return _buttons.FirstOrDefault(button => button.Label.Contains(labelFragment, StringComparison.Ordinal)).Data;
     }
 
+    public IReadOnlyList<(long Id, string Text, TelegramSendSounds Sound)> Sent_WithIds
+    {
+        get { lock (_lock) return [.. _sentWithIds]; }
+    }
+
+    /// <summary>The id of the newest send containing <paramref name="fragment"/> — throws when there is none, which is a setup failure.</summary>
+    public long LastSentMessageId_Containing(string fragment)
+    {
+        lock (_lock)
+            return _sentWithIds.Last(sent => sent.Text.Contains(fragment, StringComparison.Ordinal)).Id;
+    }
+
+    public IReadOnlyList<(long MessageId, string Text)> TextEdits
+    {
+        get { lock (_lock) return [.. _textEdits]; }
+    }
+
+    ITelegramSendBudget? _editGate;
+    readonly List<long> _heldEditMessageIds = [];
+
+    /// <summary>
+    /// What each message shows NOW — its text and the labels of its keyboard ("" for none) — after every
+    /// send and every edit that was actually made. A probe that asks "what is the owner left looking at"
+    /// reads this, not the edit lists: a receipt edited four times is only ever one screen.
+    /// </summary>
+    readonly Dictionary<long, (string Text, string Labels)> _currentByMessageId = [];
+
+    /// <summary>
+    /// PUTS THE REAL PER-MESSAGE EDIT GAP IN FRONT OF EVERY EDIT (plan 03 Task 6c). Without it this fake
+    /// lets a message be edited any number of times a second, which is how the held ✓✓ stayed invisible
+    /// to every engine test: the real client refuses a second edit of one message inside
+    /// <see cref="TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE"/> BEFORE the call, and the
+    /// engine used to drop what it was refused.
+    ///
+    /// <para>
+    /// THE SAME CALL THE CLIENT MAKES (<see cref="MessageEditSlot_Gate.Reserve_OrThrowHeld"/>), on the
+    /// real budget the test hands in — normally <see cref="TelegramSendBudget_Factory.Create_WithEditGap"/>
+    /// with a gap of a second or two, so a held edit can be watched landing. A held edit is recorded in
+    /// <see cref="Count_HeldEdits_Of"/> and NOWHERE ELSE: the call was never made, so it is not an edit.
+    /// Opt-in, so every existing probe keeps the fake it was written against.
+    /// </para>
+    /// </summary>
+    public void Gate_EditsThrough(ITelegramSendBudget budget)
+    {
+        lock (_lock)
+            _editGate = budget;
+    }
+
+    /// <summary>How many edits of <paramref name="messageId"/> the gate refused — the proof a probe actually met the gap.</summary>
+    public int Count_HeldEdits_Of(long messageId)
+    {
+        lock (_lock)
+            return _heldEditMessageIds.Count(id => id == messageId);
+    }
+
+    /// <summary>The message as the owner sees it now, or null when this fake never sent it.</summary>
+    public (string Text, string Labels)? Current_Of_OrNull(long messageId)
+    {
+        lock (_lock)
+            return _currentByMessageId.TryGetValue(messageId, out var current) ? current : null;
+    }
+
+    readonly HashSet<long> _refusedEditMessageIds = [];
+
+    /// <summary>
+    /// Every edit of <paramref name="messageId"/> fails with a plain exception — Telegram saying NO (a 400,
+    /// the message gone), which no wait changes, as opposed to the 429 of <see cref="Rate_Limit_Edits_Of"/>.
+    /// </summary>
+    public void Refuse_Edits_Of(long messageId)
+    {
+        lock (_lock)
+            _refusedEditMessageIds.Add(messageId);
+    }
+
+    /// <summary>
+    /// Null when the edit may go out; otherwise what the edit fails with — the gate's held exception first
+    /// (it is checked before the call), then a scripted refusal. Called under <c>_lock</c>.
+    /// </summary>
+    Exception? Find_EditRefusal_OrNull(long messageId)
+    {
+        if (_editGate == null)
+            return _refusedEditMessageIds.Contains(messageId) ? new Exception($"scripted edit refusal for message {messageId}") : null;
+
+        try
+        {
+            MessageEditSlot_Gate.Reserve_OrThrowHeld(_editGate, messageId, DateTime.UtcNow);
+        }
+        catch (TelegramHeldException held)
+        {
+            _heldEditMessageIds.Add(messageId);
+            return held;
+        }
+
+        return _refusedEditMessageIds.Contains(messageId) ? new Exception($"scripted edit refusal for message {messageId}") : null;
+    }
+
     public async Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken)
     {
         string? queued;
@@ -546,7 +654,7 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             _timeoutSendsContaining = fragment;
     }
 
-    long? Record(string text)
+    long? Record(string text, TelegramSendSounds sound)
     {
         lock (_lock)
         {
@@ -575,20 +683,22 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             }
 
             _sentTexts.Add(text);
+            _sentWithIds.Add((_nextMessageId, text, sound));
+            _currentByMessageId[_nextMessageId] = (text, "");
             return _nextMessageId++;
         }
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(text));
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(text, sound));
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(html));
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(html, sound));
 
     public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
         => Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
 
     public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        var messageId = Record(text);
+        var messageId = Record(text, sound);
 
         lock (_lock)
         {
@@ -596,6 +706,9 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
             if (buttons.Any(button => button.Data.StartsWith(CallbackToken.PREFIX, StringComparison.Ordinal)))
                 LastButtonMessageId = messageId;
+
+            if (messageId != null)
+                _currentByMessageId[messageId.Value] = (text, string.Join(" | ", buttons.Select(button => button.Label)));
         }
 
         return Task.FromResult(messageId);
@@ -611,6 +724,10 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
     {
         lock (_lock)
         {
+            // THE DOOR BEFORE THE WIRE, in the real client's order: a held edit never reaches the 429 script.
+            if (Find_EditRefusal_OrNull(messageId) is { } refusal)
+                return Task.FromException(refusal);
+
             if (_editRateLimitsByMessageId.TryGetValue(messageId, out var script))
             {
                 script.Attempts++;
@@ -625,6 +742,10 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             }
 
             _editedTexts.Add(text);
+            _textEdits.Add((messageId, text));
+
+            // A plain edit sends no reply_markup, which Telegram reads as "remove the keyboard".
+            _currentByMessageId[messageId] = (text, "");
         }
 
         return Task.CompletedTask;
@@ -664,6 +785,18 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
     readonly List<(long MessageId, string? Emoji)> _reactions = [];
     string? _refuseReactionsReason;
+    int _reactionAttempts;
+
+    /// <summary>
+    /// Every reaction ASKED FOR, refused ones included — <see cref="Reactions"/> holds only the ones
+    /// that landed, so it cannot tell "never attempted" from "attempted and refused", and under
+    /// <c>phone.receipts = ticks</c> the attempt itself is the cost (a Telegram call and a rate-limit
+    /// slot per owner message).
+    /// </summary>
+    public int Reaction_Attempts
+    {
+        get { lock (_lock) return _reactionAttempts; }
+    }
 
     /// <summary>Every reaction set, in order — the receipt brief D replaced the ✓ message with.</summary>
     public IReadOnlyList<(long MessageId, string? Emoji)> Reactions
@@ -682,6 +815,8 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
     {
         lock (_lock)
         {
+            _reactionAttempts++;
+
             if (_refuseReactionsReason != null)
                 return Task.FromException(new Exception(_refuseReactionsReason));
 
@@ -716,20 +851,26 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
-        lock (_lock)
-            _buttonEdits.Add((messageId, text, buttons.Count, string.Join(" | ", buttons.Select(button => button.Label))));
-
-        return Task.CompletedTask;
+        return Edit_MessageTextWithButtonRows_Async(messageId, text, [.. buttons.Select(button => (IReadOnlyList<(string Data, string Label)>)[button])], cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
     {
         lock (_lock)
-            _buttonEdits.Add((messageId, text, buttonRows.Sum(row => row.Count), string.Join(" | ", buttonRows.SelectMany(row => row).Select(button => button.Label))));
+        {
+            if (Find_EditRefusal_OrNull(messageId) is { } refusal)
+                return Task.FromException(refusal);
+
+            var labels = string.Join(" | ", buttonRows.SelectMany(row => row).Select(button => button.Label));
+
+            _buttonEdits.Add((messageId, text, buttonRows.Sum(row => row.Count), labels));
+            _currentByMessageId[messageId] = (text, labels);
+        }
 
         return Task.CompletedTask;
     }
     int _answeredCallbacks;
+    readonly List<string> _answeredCallbackTexts = [];
 
     /// <summary>How many taps were answered — a tap left unanswered spins on the owner's phone.</summary>
     public int Answered_Callbacks
@@ -737,14 +878,36 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
         get { lock (_lock) return _answeredCallbacks; }
     }
 
+    /// <summary>What each tap was answered with, in order — the toast the owner reads over the button.</summary>
+    public IReadOnlyList<string> Answered_CallbackTexts
+    {
+        get { lock (_lock) return [.. _answeredCallbackTexts]; }
+    }
+
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
     {
         lock (_lock)
+        {
             _answeredCallbacks++;
+            _answeredCallbackTexts.Add(text);
+        }
 
         return Task.CompletedTask;
     }
-    public Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            if (Find_EditRefusal_OrNull(messageId) is { } refusal)
+                return Task.FromException(refusal);
+
+            if (_currentByMessageId.TryGetValue(messageId, out var current))
+                _currentByMessageId[messageId] = (current.Text, "");
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;

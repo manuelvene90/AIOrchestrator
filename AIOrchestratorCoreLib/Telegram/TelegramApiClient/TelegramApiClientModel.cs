@@ -924,10 +924,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (_cooldowns.Is_Held(target, nowUtc, out var notBeforeUtc))
             throw new TelegramHeldException(target, notBeforeUtc);
 
-        var owed = _budget.Reserve_MessageEdit(messageId, nowUtc);
-
-        if (owed > TimeSpan.Zero)
-            throw new TelegramHeldException(target, nowUtc + owed);
+        MessageEditSlot_Gate.Reserve_OrThrowHeld(_budget, messageId, nowUtc);
     }
 
     /// <summary>Blocks until the class of call named by <paramref name="callClass"/> may go out.</summary>

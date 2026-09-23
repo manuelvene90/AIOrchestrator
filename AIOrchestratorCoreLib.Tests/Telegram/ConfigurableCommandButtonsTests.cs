@@ -29,12 +29,11 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// cause.
 /// </para>
 /// <para>
-/// AND THE BUILDER MUST NOT DRAW WHAT NO TAP CAN RUN. Widening the wiring guard to every verb an owner
-/// may configure (2026-09-14) found 22 menu verbs with no case in the tap handler — classic's own
-/// <c>/pause</c> and <c>/progress</c> among them. Those two were master's own buttons (a2c9a3d, the
-/// owner's request of 2026-09-09) whose tap cases the fork merge dropped, so they were re-wired; the
-/// other twenty are left off every bar and said once in the log, rather than drawn as buttons that
-/// answer "from an older version of the app".
+/// AND EVERY COMMAND CAN BE A BUTTON (plan 03 Task 5b, ruling R16). Task 5's widened wiring guard found
+/// twenty menu verbs no tap could run, so an owner could order their bar but not choose what was on
+/// it. A tap on a verb with no dedicated case is now dispatched exactly as the typed <c>/verb</c> in
+/// the same topic; what is still left off a bar, and said once in the log, is an element whose TARGET
+/// no payload can carry (<c>tail 1</c>).
 /// </para>
 /// </summary>
 public class ConfigurableCommandButtonsTests : IDisposable
@@ -119,10 +118,11 @@ public class ConfigurableCommandButtonsTests : IDisposable
 
     /// <summary>
     /// CLASSIC NAMES EIGHT AND EIGHT ARE DRAWN, in classic's own order — the bar master drew on
-    /// 2026-09-09 (a2c9a3d), with the labels D3 gives it: the verbs that had an emoji keep it, the rest
-    /// are their bare slash command. /pause and /progress are drawn because their tap cases were
-    /// re-wired in this task; before that the widened guard found neither. The expected bar is SPELLED
-    /// OUT, not read back from the preset — deriving it would assert that a file equals itself.
+    /// 2026-09-09 (a2c9a3d), WITH MASTER'S LABELS (plan 03 Task 5b): 📸 /screen, 👁 /show, 🧪 /test,
+    /// 💻 /pc, 💤 /pause and 📊 /progress are master's own glyphs, read back from that commit. Task 5 had
+    /// drawn those six bare under D3, which is right only for a verb that never had a label. The expected
+    /// bar is SPELLED OUT, not read back from the preset — deriving it would assert that a file equals
+    /// itself.
     /// </summary>
     [Fact]
     public void ClassicsBar_RendersEightButtons_InTheStatedOrder()
@@ -131,7 +131,9 @@ public class ConfigurableCommandButtonsTests : IDisposable
 
         var bar = TopicCommandButtons.Build_ForTopic(classic, TOPIC_ID, isHolding: false, heldCount: 0, holdToggleOnTheBar: false);
 
-        Assert.Equal(["/screen", "/show", "🔀 /merge", "/test", "/pc", "🏁 /close", "/pause", "/progress"], bar.Select(button => button.Label));
+        Assert.Equal(
+            ["📸 /screen", "👁 /show", "🔀 /merge", "🧪 /test", "💻 /pc", "🏁 /close", "💤 /pause", "📊 /progress"],
+            bar.Select(button => button.Label));
         Assert.Equal(
             [
                 "cmd:screen:4242", "cmd:show:4242", "cmd:merge:4242", "cmd:test:4242",
@@ -144,38 +146,60 @@ public class ConfigurableCommandButtonsTests : IDisposable
     }
 
     /// <summary>
-    /// A VERB NO TAP CAN RUN IS LEFT OFF, AND SAID. /tasks is a legal menu verb with no case in the tap
-    /// handler: drawn, it would answer "that button is from an older version of the app". The line names
-    /// the setting and every refused verb, because the owner reads it to find out why a button they
-    /// configured is missing.
+    /// A VERB TASK 5 REFUSED IS DRAWN, IN THE CONFIGURED ORDER (plan 03 Task 5b). /cost, /model and /done
+    /// had no case in the tap handler, so Task 5 left all three off every bar; the owner's ask was to
+    /// choose WHICH commands are there and in which order, and a bar that silently drops three of them
+    /// answers neither half. Nothing is said in the log, because nothing was refused.
     /// </summary>
     [Fact]
-    public void AVerbNoTapCanRun_IsLeftOffTheBar_AndDescribedByItsSetting()
+    public void APreviouslyRefusedVerb_IsDrawn_InTheConfiguredOrder()
+    {
+        var bar = TopicCommandButtons.Build_ForTopic(["cost", "model", "done"], TOPIC_ID, isHolding: false, heldCount: 0, holdToggleOnTheBar: false);
+
+        Assert.Equal(["cmd:cost:4242", "cmd:model:4242", "cmd:done:4242"], bar.Select(button => button.Data));
+        Assert.Equal(["/cost", "/model", "/done"], bar.Select(button => button.Label));
+        Assert.Null(TopicCommandButtons.Describe_VerbsWithoutTapRoute_OrNull(PulseSettings_Json.BUTTONS_PATH, ["cost", "model", "done"]));
+
+        // Every verb of the "/" menu is drawable, on either bar — the set plan 04's settings picker reads.
+        foreach (var (verb, _) in BotCommandMenu.ALL)
+            Assert.True(TopicCommandButtons.Has_TapRoute(verb), $"'/{verb}' is a menu command and is still refused from the bar");
+    }
+
+    /// <summary>
+    /// A TARGET NO PAYLOAD CARRIES IS STILL LEFT OFF, AND SAID. "tail 1" is a legal bar ELEMENT (its first
+    /// word is a menu verb), but a tap payload has two fields — verb and topic — and only "tail sup" rides
+    /// inside its verb. Drawn, its tap would not parse back and would do nothing with nothing logged. The
+    /// line names the setting and every refused element, because the owner reads it to find out why a
+    /// button they configured is missing.
+    /// </summary>
+    [Fact]
+    public void ATargetNoTapCarries_IsLeftOffTheBar_AndDescribedByItsSetting()
     {
         var bar = TopicCommandButtons.Build_ForTopic(["pending", "tasks", "left", "tail 1"], TOPIC_ID, isHolding: false, heldCount: 0, holdToggleOnTheBar: false);
 
-        Assert.Equal(["cmd:pending:4242", "cmd:left:4242"], bar.Select(button => button.Data));
+        Assert.Equal(["cmd:pending:4242", "cmd:tasks:4242", "cmd:left:4242"], bar.Select(button => button.Data));
         Assert.Equal(
-            "pulse.buttons names 'tasks', 'tail 1' — no tap can run them, so they are left off the bar (type the command instead)",
-            TopicCommandButtons.Describe_VerbsWithoutTapRoute_OrNull(PulseSettings_Json.BUTTONS_PATH, ["pending", "tasks", "left", "tail 1"]));
+            "pulse.buttons names 'tail 1', 'log sup' — no tap can run them, so they are left off the bar (type the command instead)",
+            TopicCommandButtons.Describe_VerbsWithoutTapRoute_OrNull(PulseSettings_Json.BUTTONS_PATH, ["pending", "tail 1", "left", "log sup"]));
         Assert.Equal(
-            "general.buttons names 'tasks' — no tap can run it, so it is left off the bar (type the command instead)",
-            TopicCommandButtons.Describe_VerbsWithoutTapRoute_OrNull(PulseSettings_Json.GENERAL_BUTTONS_PATH, ["tasks"]));
+            "general.buttons names 'tail 1' — no tap can run it, so it is left off the bar (type the command instead)",
+            TopicCommandButtons.Describe_VerbsWithoutTapRoute_OrNull(PulseSettings_Json.GENERAL_BUTTONS_PATH, ["tail 1"]));
     }
 
     /// <summary>D3 (b): a verb the label table does not know renders as its bare slash command — usable, never unrenderable.</summary>
     [Fact]
     public void AVerbWithNoEmoji_RendersAsItsSlashCommand()
     {
-        Assert.Equal("/screen", CommandButton_Labels.For("screen"));
-        Assert.Equal("/pause", CommandButton_Labels.For("pause"));
+        Assert.Equal("/cost", CommandButton_Labels.For("cost"));
+        Assert.Equal("/tasks", CommandButton_Labels.For("tasks"));
         Assert.Equal("/organize_mains", CommandButton_Labels.For("organize_mains"));
     }
 
     /// <summary>
     /// D3 (a): the labels that existed before the bars were configurable are carried VERBATIM — eleven
     /// rows across the two old arrays, nine verbs, since /pending and /limits sat on both bars with the
-    /// same label.
+    /// same label — and so are MASTER'S SIX (a2c9a3d, plan 03 Task 5b), the labels classic's own bar
+    /// wore on the owner's phone before the fork merge.
     /// </summary>
     [Theory]
     [InlineData("pending", "⏳ /pending")]
@@ -187,6 +211,12 @@ public class ConfigurableCommandButtonsTests : IDisposable
     [InlineData("summary", "📊 /summary")]
     [InlineData("resume", "▶ /resume")]
     [InlineData("dnd_all", "🌙 /dnd_all")]
+    [InlineData("screen", "📸 /screen")]
+    [InlineData("show", "👁 /show")]
+    [InlineData("test", "🧪 /test")]
+    [InlineData("pc", "💻 /pc")]
+    [InlineData("pause", "💤 /pause")]
+    [InlineData("progress", "📊 /progress")]
     public void TheLabelsThatAlreadyExisted_AreCarriedVerbatim(string verb, string label)
     {
         Assert.Equal(label, CommandButton_Labels.For(verb));
@@ -209,15 +239,15 @@ public class ConfigurableCommandButtonsTests : IDisposable
     }
 
     /// <summary>
-    /// A GENERAL LIST IS DRAWN AS CONFIGURED, through the real engine and onto the dashboard — with the
-    /// verb no tap can run left off and said once. This is the half DndKeepsTheSilentSurfacesCurrentTests
+    /// A GENERAL LIST IS DRAWN AS CONFIGURED, through the real engine and onto the dashboard — /tasks
+    /// included since plan 03 Task 5b, and the element whose target no tap carries left off and said once. This is the half DndKeepsTheSilentSurfacesCurrentTests
     /// used to pin with the shipped five; under classic that list is empty now.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
     public async Task AConfiguredGeneralList_IsTheBarOnTheDashboard()
     {
-        var engine = Build_Engine("\"general\":{\"buttons\":[\"summary\",\"pending\",\"tasks\"]}");
+        var engine = Build_Engine("\"general\":{\"buttons\":[\"summary\",\"tasks\",\"tail 1\"]}");
 
         await Run_WhileAsync(engine, async () =>
         {
@@ -228,8 +258,8 @@ public class ConfigurableCommandButtonsTests : IDisposable
             await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(5));
         });
 
-        Assert.Equal(["cmd:summary:0", "cmd:pending:0"], _telegram.Find_ButtonDataFor(GeneralDashboard_Composer.HEADING)!);
-        Assert.Equal(1, Count_WarningsContaining("general.buttons", "'tasks'"));
+        Assert.Equal(["cmd:summary:0", "cmd:tasks:0"], _telegram.Find_ButtonDataFor(GeneralDashboard_Composer.HEADING)!);
+        Assert.Equal(1, Count_WarningsContaining("general.buttons", "'tail 1'"));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -237,9 +267,10 @@ public class ConfigurableCommandButtonsTests : IDisposable
     // ---------------------------------------------------------------------------------------
 
     /// <summary>
-    /// <c>pulse.holdToggle = true</c>: the toggle is the bar's last button, and the ✓ receipt carries
-    /// nothing. Driven through the engine, because the one value is read at two call sites there and a
-    /// pure test of either builder stays green with the argument dropped at one of them.
+    /// <c>pulse.holdToggle = true</c>: the toggle is the bar's last button, and the ✓ receipt carries no
+    /// hold button — only ▶ Send now (plan 03 Task 6b), which is delivery and not the toggle (ruling R2).
+    /// Driven through the engine, because the one value is read at two call sites there and a pure test
+    /// of either builder stays green with the argument dropped at one of them.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
@@ -250,15 +281,16 @@ public class ConfigurableCommandButtonsTests : IDisposable
         var (bar, tick) = await Run_UntilTheBarAndTheTickArrive_Async(engine);
 
         Assert.Equal(HoldButton_Data.Build(HoldButtonActions.Hold, TOPIC_ID), bar[^1]);
-        Assert.Empty(tick);
+        Assert.Equal([HoldButton_Data.Build(HoldButtonActions.Go, TOPIC_ID)], tick);
     }
 
     /// <summary>
     /// <c>pulse.holdToggle = false</c> — classic, and the machine that names nothing. The tick carries
-    /// ⏸ Wait and the bar carries no hold payload at all.
+    /// ⏸ Wait then ▶ Send now (plan 03 Task 6b), and the bar carries no hold payload at all.
     ///
-    /// The reaction is REFUSED so the tick is sent: on this tree the ✓ message is the reaction's
-    /// fallback (Task 6 makes it classic's first choice), and without a tick there is nothing to look at.
+    /// Classic's receipt IS the ✓ since plan 03 Task 6 (<c>phone.receipts = ticks</c>, no reaction
+    /// attempted); the harness still refuses reactions because the D10 case below runs under
+    /// <c>reactions</c>, where the ✓ is only the fallback.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
@@ -274,7 +306,7 @@ public class ConfigurableCommandButtonsTests : IDisposable
                 "cmd:pc:4242", "cmd:close:4242", "cmd:pause:4242", "cmd:progress:4242",
             ],
             bar);
-        Assert.Equal([HoldButton_Data.Build(HoldButtonActions.Hold, TOPIC_ID)], tick);
+        Assert.Equal([HoldButton_Data.Build(HoldButtonActions.Hold, TOPIC_ID), HoldButton_Data.Build(HoldButtonActions.Go, TOPIC_ID)], tick);
 
         // Classic's bar is all tap-routed and its pair is coherent, so the log has nothing to say.
         Assert.Equal(0, Count_WarningsContaining("no tap can run"));
@@ -341,6 +373,13 @@ public class ConfigurableCommandButtonsTests : IDisposable
     /// be drawn is asked: the bar, the ✓ tick (⏸ Wait) and the hold receipt (▶ GO). Exactly one of the bar
     /// and the receipts carries it — the receipts together are ONE place, the message under what the
     /// owner sent.
+    ///
+    /// <para>
+    /// ▶ SEND NOW IS NOT COUNTED AS THE TOGGLE (plan 03 Task 6b, ruling R2). It carries the GO payload —
+    /// the engine's release, which skips the window — so a payload-only count reads it as a second copy
+    /// of the toggle under every placement. It is recognised by its LABEL, the one thing that tells it
+    /// from the ▶ GO a hold receipt carries, and it is asserted separately: it rides every ✓.
+    /// </para>
     /// </summary>
     [Fact]
     public void TheHoldToggle_IsNeverInBothPlaces_UnderEitherPreset()
@@ -380,7 +419,9 @@ public class ConfigurableCommandButtonsTests : IDisposable
         var (bar, tick) = await Run_UntilTheBarAndTheTickArrive_Async(engine);
 
         Assert.Equal(HoldButton_Data.Build(HoldButtonActions.Hold, TOPIC_ID), bar[^1]);
-        Assert.Empty(tick);
+
+        // The fallback ✓ carries ▶ Send now alone: the toggle fell back to the bar, and Send now is not it.
+        Assert.Equal([HoldButton_Data.Build(HoldButtonActions.Go, TOPIC_ID)], tick);
 
         Assert.Equal(1, Count_WarningsContaining("pulse.holdToggle", "phone.receipts"));
         Assert.False(
@@ -424,12 +465,19 @@ public class ConfigurableCommandButtonsTests : IDisposable
         var barCarriesIt = TopicCommandButtons.Build_ForTopic(buttons, TOPIC_ID, isHolding: false, heldCount: 0, onTheBar)
             .Any(button => HoldButton_Data.Parse_OrNull(button.Data) != null);
 
-        var receiptsCarryIt = ReceiptButtons_Builder.Build_ForTick(TOPIC_ID, onTheBar)
+        var tick = ReceiptButtons_Builder.Build_ForTick(TOPIC_ID, onTheBar);
+
+        var receiptsCarryIt = tick
             .Concat(ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Hold, TOPIC_ID, onTheBar))
             .Concat(ReceiptButtons_Builder.Build_ForHoldReceipt(HoldButtonActions.Go, TOPIC_ID, onTheBar))
+            .Where(button => button.Label != HoldButton_Data.SEND_NOW_LABEL)
             .Any(button => HoldButton_Data.Parse_OrNull(button.Data) != null);
 
         Assert.True(barCarriesIt != receiptsCarryIt, $"{scenario}: bar carries the toggle = {barCarriesIt}, a receipt carries it = {receiptsCarryIt}");
+
+        Assert.True(
+            tick.Count(button => button.Label == HoldButton_Data.SEND_NOW_LABEL) == 1,
+            $"{scenario}: the ✓ does not carry exactly one ▶ Send now — it rides every tick, wherever the toggle lives");
     }
 
     /// <summary>A new provider per fact, with the keys written before it exists — see ThePulseObeysItsSettingsTests.</summary>
@@ -457,9 +505,10 @@ public class ConfigurableCommandButtonsTests : IDisposable
     }
 
     /// <summary>
-    /// PULSE is posted, then the owner writes with reactions refused, so the ✓ tick is sent; a few more
-    /// ticks follow so any once-per-process latch has been asked more than once. Returns the payloads of
-    /// the last PULSE write and of the tick.
+    /// PULSE is posted, then the owner writes with reactions refused, so the ✓ tick is sent under either
+    /// receipt style (under ticks no reaction is attempted at all; under reactions the ✓ is the fallback);
+    /// a few more ticks follow so any once-per-process latch has been asked more than once. Returns the
+    /// payloads of the last PULSE write and of the tick.
     /// </summary>
     async Task<(IReadOnlyList<string> Bar, IReadOnlyList<string> Tick)> Run_UntilTheBarAndTheTickArrive_Async(IBridgeEngine engine)
     {

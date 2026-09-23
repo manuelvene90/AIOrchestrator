@@ -12,8 +12,9 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// topic, <c>general.buttons</c> for General, each a list of verbs resolved catalogue → preset →
 /// config.json and handed to the builders below by the engine at the point of effect. This class
 /// no longer decides WHICH buttons a bar carries; it decides what a verb's button IS (its payload,
-/// through <see cref="CommandButton_Labels"/> its label), whether a tap can run it at all, and how a
-/// tap parses back. <see cref="Commands"/> and <see cref="GeneralCommands"/> stay as the SHIPPED lists
+/// through <see cref="CommandButton_Labels"/> its label), whether a tap can run it at all, how a
+/// tap parses back, and — for a verb with no dedicated tap case — the text the tap is dispatched as
+/// (<see cref="Build_TypedCommandText"/>, ruling R16). <see cref="Commands"/> and <see cref="GeneralCommands"/> stay as the SHIPPED lists
 /// the settings catalogue reads its defaults from.
 ///
 /// TWO BARS SINCE 2026-09-09, because the two kinds of topic answer different questions. An
@@ -119,43 +120,61 @@ public static class TopicCommandButtons
         StringComparer.Ordinal);
 
     /// <summary>
-    /// THE VERBS A TAP CAN ACTUALLY RUN — exactly the cases of <c>BridgeEngineModel.Try_HandleTopicCommandTap_Async</c>.
+    /// WHETHER A TAP ON THIS VERB'S BUTTON RUNS ANYTHING — the builders draw nothing else, and plan 04's
+    /// settings picker reads this to offer the drawable set. True for EVERY verb of the "/" menu and for
+    /// "tail sup" (plan 03 Task 5b, ruling R16).
     ///
     /// <para>
-    /// A SECOND READING OF A FACT THE ENGINE OWNS, and it is here because the engine is
-    /// <c>internal sealed</c>: nothing outside it can ask its switch. EveryTopicButtonIsWiredTests holds
-    /// this set to that switch in BOTH directions over every verb an owner may configure, so wiring a
-    /// verb is a case there and a word here, and forgetting either is red.
+    /// IT USED TO BE A HAND-KEPT SET OF SIXTEEN, "exactly the cases of the tap handler", and Task 5's
+    /// widened wiring guard found the other twenty menu verbs refused from every bar — so the owner could
+    /// order their bar but not choose what was on it (2026-09-23: <i>"I absolutely need to be able to
+    /// choose which command and in which order"</i>). A tap on a verb with no dedicated case now goes to
+    /// the engine's default arm, which dispatches <see cref="Build_TypedCommandText"/> through the same
+    /// chain the typed message takes, so every command the menu offers is a command a tap can run.
+    /// EveryTopicButtonIsWiredTests proves that per verb against the engine's source, in both directions.
     /// </para>
     /// <para>
-    /// THE SET IS SMALLER THAN THE MENU, AND THAT IS A FINDING, NOT A DESIGN (2026-09-14). Widening the
-    /// wiring guard to the whole menu found 22 verbs with no tap case — classic's own /pause and /progress
-    /// among them. Those two were master's buttons (a2c9a3d, 2026-09-09) whose cases the fork merge
-    /// dropped, and they were re-wired so classic's bar is drawn whole. The other TWENTY would each tell
-    /// the owner "that button is from an older version of the app", so the builders refuse to draw them,
-    /// the engine says so once in the log, and they stay typed commands until someone wires them.
-    /// </para>
-    /// <para>
-    /// /refresh is in it although no shipped bar draws it: its case stays so superseded PULSE messages,
-    /// which keep their old keyboard on the phone, still refresh when tapped.
+    /// WHAT IS STILL REFUSED is a bar ELEMENT whose target no payload can carry — "tail 1", "log sup".
+    /// The validator accepts them (their first word is a menu verb), but a payload has two fields, verb
+    /// and topic, and only "tail sup" rides inside its verb; drawn, the tap would not parse back and would
+    /// do nothing with nothing logged. So the refusal and its one log line
+    /// (<see cref="Describe_VerbsWithoutTapRoute_OrNull"/>) stay, for those.
     /// </para>
     /// </summary>
-    static readonly HashSet<string> TAP_ROUTED_COMMANDS = new(
-        [
-            "show", "screen", "pending", "left", "tail sup", "limits", "merge", "test", "pc", "summary", "resume",
-            "dnd_all", "close", "refresh", "pause", "progress",
-        ],
-        StringComparer.Ordinal);
-
-    /// <summary>Whether a tap on this verb's button runs anything — the builders draw nothing else.</summary>
     public static bool Has_TapRoute(string verb)
     {
-        return TAP_ROUTED_COMMANDS.Contains(verb);
+        return KNOWN_COMMANDS.Contains(verb);
+    }
+
+    /// <summary>
+    /// THE TEXT A TAP IS DISPATCHED AS when its verb has no dedicated case: exactly what the owner would
+    /// have typed — "/cost", "/model" — so the engine lexes it with the same lexer and runs it through the
+    /// same chain, and a button can never behave differently from the command it names (ruling R16). The
+    /// topic is not in the text because it is not in a typed command either: it is the thread the message
+    /// (here, the button) sat in.
+    /// </summary>
+    public static string Build_TypedCommandText(string verb)
+    {
+        return "/" + verb;
+    }
+
+    /// <summary>
+    /// Whether this payload is a bar tap on a DELIVERY-MODE toggle (🌙 /dnd, 🔕 /mute, and their app-wide
+    /// pair). The inbound loop lifts app-wide DND for anything the owner taps — the rule reads "the owner
+    /// texting or tapping ANYTHING (except a mode command)", and the exception was never applied to taps:
+    /// a tapped 🌙 /dnd_all while everything was deferred was lifted by its own batch and then toggled
+    /// straight back ON, so that button could never turn DND off, while the typed /dnd_all could
+    /// (found 2026-09-23 making every command tappable, plan 03 Task 5b). Null and foreign payloads are
+    /// false — they are the owner speaking, which is what the lift is for.
+    /// </summary>
+    public static bool Is_DeliveryModeTap(string? callbackData)
+    {
+        return Parse_OrNull(callbackData) is { } parsed && DeliveryModeCommands.Is_ModeCommand(parsed.Command);
     }
 
     /// <summary>
     /// Inline-keyboard buttons for one orchestration topic: (callback_data, label) for each configured
-    /// verb a tap can run, in the configured order, then THE HOLD TOGGLE when
+    /// verb a tap can run (every menu verb, and "tail sup"), in the configured order, then THE HOLD TOGGLE when
     /// <paramref name="holdToggleOnTheBar"/> puts it here.
     ///
     /// <para>
@@ -233,8 +252,9 @@ public static class TopicCommandButtons
     }
 
     /// <summary>
-    /// The one line the engine logs for a bar that names verbs no tap can run, or null when every verb
-    /// has a route. Plain words and the setting's own key, because the reader is the owner scanning
+    /// The one line the engine logs for a bar that names elements no tap can run, or null when every one
+    /// has a route. Since plan 03 Task 5b every menu verb has one, so what this still names is an element
+    /// whose target no payload carries ("tail 1"). Plain words and the setting's own key, because the reader is the owner scanning
     /// orchestrator.log.jsonl for why a button they configured is missing — never a Telegram message
     /// (decision 15: they cannot act on it from the phone).
     /// </summary>

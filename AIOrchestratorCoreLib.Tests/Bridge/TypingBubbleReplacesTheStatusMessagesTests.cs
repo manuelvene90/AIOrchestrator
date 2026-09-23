@@ -23,6 +23,13 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// Two cases, each pinned against the engine's REAL loops with a fake client that records the two
 /// things this is about separately: the messages that reach the topic and the typing actions that do
 /// not. Both went red on the code they replace, which is what makes them evidence rather than décor.
+///
+/// <para>
+/// UNDER BOTH RECEIPT STYLES (plan 03 Task 6). The claim was written when the receipt was always a
+/// reaction; <c>phone.receipts</c> now chooses, and under <c>ticks</c> the receipt is a MESSAGE — the ✓
+/// the engine edits to ✓✓ — which is exactly the canvas a "thinking…" line used to be written onto.
+/// So each case runs under each style, and says which spelling of the receipt it saw.
+/// </para>
 /// </summary>
 public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
 {
@@ -37,10 +44,13 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
     readonly string _tempRepo;
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
-    readonly IOrchestrationLauncher _launcher;
-    readonly IBridgeEngine _engine;
     readonly TypingRecordingTelegram_Fake _telegram;
     readonly TypingProbeLog_Fake _log;
+
+    // NOT READONLY for one reason: each case names its receipt style, and Use_Receipts builds these once,
+    // before the engine has ever run. Nothing else assigns them.
+    IOrchestrationLauncher? _launcher;
+    IBridgeEngine? _engine;
 
     public TypingBubbleReplacesTheStatusMessagesTests()
     {
@@ -51,16 +61,20 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        File.WriteAllText(
-            _paths.ConfigFile,
-            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
-
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
         _store = OrchestrationSessionStore_Factory.Create(_paths);
         _log = new TypingProbeLog_Fake();
         _telegram = new TypingRecordingTelegram_Fake();
+    }
+
+    /// <summary>Writes <c>phone.receipts</c> and builds the engine on it — once per case, before it runs.</summary>
+    void Use_Receipts(string receipts)
+    {
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"receipts\":\"{receipts}\"}}}}");
 
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
@@ -77,10 +91,14 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
     /// The session is mid-turn when the owner's message lands. The old receipt wrote "thinking…" onto
     /// the tick; now the bubble carries the wait, refreshed while the turn runs, and no message says it.
     /// </summary>
-    [Fact]
+    [Theory]
     [Trait("Speed", "Slow")]
-    public async Task WhileTheSessionWorks_TheOwnerSeesTheTypingBubble_AndNoMessageSaysThinking()
+    [InlineData(Receipt_Styles.TICKS_TEXT)]
+    [InlineData(Receipt_Styles.REACTIONS_TEXT)]
+    public async Task WhileTheSessionWorks_TheOwnerSeesTheTypingBubble_AndNoMessageSaysThinking(string receipts)
     {
+        Use_Receipts(receipts);
+
         var orchId = await Start_WithChannelAlreadySeen_Async();
         Mark_SessionMidTurn(orchId);
 
@@ -99,10 +117,14 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
     /// The session answers and goes quiet. The answer IS the completion; a "done for now — turn ended"
     /// message after it told the owner nothing they were not already reading.
     /// </summary>
-    [Fact]
+    [Theory]
     [Trait("Speed", "Slow")]
-    public async Task WhenTheAnswerArrives_NothingFollowsIt()
+    [InlineData(Receipt_Styles.TICKS_TEXT)]
+    [InlineData(Receipt_Styles.REACTIONS_TEXT)]
+    public async Task WhenTheAnswerArrives_NothingFollowsIt(string receipts)
     {
+        Use_Receipts(receipts);
+
         var orchId = await Start_WithChannelAlreadySeen_Async();
 
         _telegram.Queue_OwnerMessage(Build_OwnerMessageJson("is the rebuild done"));
@@ -127,6 +149,13 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
         Assert.False(
             _telegram.Has_Sent_Containing("thinking"),
             $"a message still says 'thinking'.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        // AND THE RECEIPT WAS THE ONE ASKED FOR — the ✓ that became ✓✓, or no tick at all — so neither
+        // case above passed by acknowledging in the other style.
+        if (receipts == Receipt_Styles.TICKS_TEXT)
+            Assert.True(_telegram.Has_Sent_Containing("✓✓"), $"under ticks the receipt never became ✓✓.{Environment.NewLine}{_telegram.Dump_Sent()}");
+        else
+            Assert.False(_telegram.Has_Sent_Containing("✓"), $"under reactions a ✓ line reached the topic.{Environment.NewLine}{_telegram.Dump_Sent()}");
     }
 
     /// <summary>
@@ -151,7 +180,7 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
     /// <summary>An unseen channel is registered at its current end; one short run baselines it first.</summary>
     async Task<string> Start_WithChannelAlreadySeen_Async()
     {
-        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var session = (_launcher ?? throw new Exception("Use_Receipts was not called")).Start_Orchestration("Repo", _tempRepo);
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
         Seed_OwnerChannel(session.OrchId);
 
@@ -184,7 +213,7 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
     {
         using var cancellation = new CancellationTokenSource();
 
-        var loop = _engine.Run_Async(cancellation.Token);
+        var loop = (_engine ?? throw new Exception("Use_Receipts was not called")).Run_Async(cancellation.Token);
         var satisfied = false;
 
         for (var waited = 0; waited < maxMilliseconds; waited += 100)

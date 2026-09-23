@@ -15,6 +15,14 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// what keeps "never both" a property of the code rather than of four call sites remembering it.
 /// </para>
 /// <para>
+/// ▶ SEND NOW RIDES EVERY ✓, and it is not the toggle (plan 03 Task 6b, ruling R2). It is the GO payload
+/// under <see cref="HoldButton_Data.SEND_NOW_LABEL"/> — delivery, not a hold — so it is drawn whatever the
+/// placement says, and "the toggle is never in both places" stays true with it on the tick: under
+/// classic the ✓ offers ⏸ Wait then ▶ Send now, under the toggle-on-PULSE placement ▶ Send now alone.
+/// A HOLD receipt does not carry it: while held there is one way out, ▶ GO, which already means "send
+/// what is held, now".
+/// </para>
+/// <para>
 /// AN EMPTY RESULT IS A RECEIPT WITH NO KEYBOARD, not a failure: the client sends it with no
 /// <c>reply_markup</c> at all, and on an edit that absence removes whatever keyboard the message had.
 /// </para>
@@ -22,14 +30,16 @@ namespace AIOrchestratorCoreLib.Telegram;
 public static class ReceiptButtons_Builder
 {
     /// <summary>
-    /// The ✓ tick's buttons: ⏸ Wait when the toggle lives on the receipt, nothing when it lives on PULSE.
-    /// A tick is the one receipt that exists in the ordinary case, so a later receipt-side button that is
-    /// NOT the hold toggle joins this list — and the placement stays decided by the argument, never
-    /// re-decided by the button that joins.
+    /// The ✓ tick's buttons: ⏸ Wait when the toggle lives on the receipt, then ▶ Send now always. The
+    /// placement stays decided by the argument, never re-decided by the button that joins.
     /// </summary>
     public static IReadOnlyList<(string Data, string Label)> Build_ForTick(long? messageThreadId, bool holdToggleOnTheBar)
     {
-        return Build_ForHoldReceipt(HoldButtonActions.Hold, messageThreadId, holdToggleOnTheBar);
+        return
+        [
+            .. Build_ForHoldReceipt(HoldButtonActions.Hold, messageThreadId, holdToggleOnTheBar),
+            (HoldButton_Data.Build(HoldButtonActions.Go, messageThreadId), HoldButton_Data.SEND_NOW_LABEL),
+        ];
     }
 
     /// <summary>
@@ -46,5 +56,17 @@ public static class ReceiptButtons_Builder
         var label = offered == HoldButtonActions.Hold ? HoldButton_Data.HOLD_LABEL : HoldButton_Data.GO_LABEL;
 
         return [(HoldButton_Data.Build(offered, messageThreadId), label)];
+    }
+
+    /// <summary>
+    /// The receipt a tap leaves behind. After a HOLD it is the hold receipt, offering the release; after a
+    /// GO it is a ✓ again and offers what every ✓ offers — both directions, never a lone ⏸ Wait, because
+    /// the next message may be one the owner wants to hold or one they want sent at once.
+    /// </summary>
+    public static IReadOnlyList<(string Data, string Label)> Build_AfterTap(HoldButtonActions tapped, long? messageThreadId, bool holdToggleOnTheBar)
+    {
+        return tapped == HoldButtonActions.Hold
+            ? Build_ForHoldReceipt(HoldButtonActions.Go, messageThreadId, holdToggleOnTheBar)
+            : Build_ForTick(messageThreadId, holdToggleOnTheBar);
     }
 }

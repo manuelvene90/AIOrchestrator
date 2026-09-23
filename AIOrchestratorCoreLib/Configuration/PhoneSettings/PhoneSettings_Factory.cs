@@ -19,7 +19,9 @@ public static class PhoneSettings_Factory
         ReplyKeyboardModes replyKeyboard,
         ReceiptStyles receipts,
         TopicCloseActions topicOnClose,
-        ModeGlyphPlacements topicModeGlyphs)
+        ModeGlyphPlacements topicModeGlyphs,
+        int aggregationSeconds,
+        int finishedMessageSeconds)
     {
         return new PhoneSettingsModel(
             push,
@@ -29,6 +31,8 @@ public static class PhoneSettings_Factory
             replyKeyboard,
             receipts,
             topicOnClose,
-            topicModeGlyphs);
+            topicModeGlyphs,
+            aggregationSeconds,
+            finishedMessageSeconds);
     }
 }

@@ -65,9 +65,13 @@ public class ThePhoneRingsOnlyForTheSupervisorTests : IDisposable
         // pair: under filtered a plain report is held for the turn-end digest (OwnerPushDeciderTests,
         // AStatusLineDoesNotSpendTheOwnersWaitTests), and under quiet it is sent SILENT — both presets'
         // phones are pinned by WhoRingsUnderEachPresetTests.
+        //
+        // phone.receipts = reactions is STATED for the same reason: the receipt assertions below are the
+        // fork's spelling of "one silent acknowledgement" (brief D), and since plan 03 Task 6 the machine
+        // that names nothing acknowledges with the ✓ message instead — ReceiptStyleTests pins that one.
         File.WriteAllText(
             _paths.ConfigFile,
-            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\",\"appMessagesRing\":true}}}}");
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\",\"appMessagesRing\":true,\"receipts\":\"reactions\"}}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 

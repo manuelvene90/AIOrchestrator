@@ -11,7 +11,9 @@ internal sealed class PhoneSettingsModel(
     ReplyKeyboardModes replyKeyboard,
     ReceiptStyles receipts,
     TopicCloseActions topicOnClose,
-    ModeGlyphPlacements topicModeGlyphs) : IPhoneSettings
+    ModeGlyphPlacements topicModeGlyphs,
+    int aggregationSeconds,
+    int finishedMessageSeconds) : IPhoneSettings
 {
     public PhonePushModes Push { get; } = push;
     public bool PeriodicStatus { get; } = periodicStatus;
@@ -21,4 +23,6 @@ internal sealed class PhoneSettingsModel(
     public ReceiptStyles Receipts { get; } = receipts;
     public TopicCloseActions TopicOnClose { get; } = topicOnClose;
     public ModeGlyphPlacements TopicModeGlyphs { get; } = topicModeGlyphs;
+    public int AggregationSeconds { get; } = aggregationSeconds;
+    public int FinishedMessageSeconds { get; } = finishedMessageSeconds;
 }

@@ -30,9 +30,11 @@ namespace AIOrchestratorCoreLib.Telegram;
 ///
 /// WHICH OF THOSE FIELDS, AND IN WHAT ORDER, IS THE OWNER'S SINCE PLAN 03 (`pulse.fields`, spec §7.3).
 /// The six above are the catalogue's shipped list (with the closed count, seven words); classic lists
-/// five — the supervisor, the members, their model-and-effort reading as master drew it, what merged,
-/// and the heartbeat. Once there is anything to say, <see cref="Build"/> draws the header, then walks
-/// the list calling one private per word, and every field keeps its own rule for omitting itself.
+/// five — the compact task count, the supervisor, the members, their model-and-effort reading as master
+/// drew it, and the heartbeat. Once there is anything to say, <see cref="Build"/> draws the header, then
+/// walks the list calling one private per word, and every field keeps its own rule for omitting itself.
+/// The one exception to "the header first" is `progress` listed FIRST, which is drawn above it (owner,
+/// 2026-09-23 — classic does exactly that; see Build_ProgressLine).
 ///
 /// NOT PINNED, and the owner's reason for refusing that is the reason this file exists at all.
 /// "Working now" elsewhere in the app is FILE MTIME, which stays true for ~2 minutes after a turn
@@ -177,8 +179,9 @@ public static class TopicStatusLine_Builder
     /// </param>
     /// <param name="pulseFields">
     /// `pulse.fields` as the engine resolved it: <see cref="PulseField_Names"/> words, drawn in this
-    /// order under the header. NULL IS THE CATALOGUE'S SHIPPED LIST, so the callers that predate the
-    /// setting keep today's line without naming one; the engine always passes the resolved list.
+    /// order under the header — except a leading <see cref="PulseField_Names.PROGRESS"/>, drawn above it.
+    /// NULL IS THE CATALOGUE'S SHIPPED LIST, so the callers that predate the setting keep today's line
+    /// without naming one; the engine always passes the resolved list.
     /// </param>
     /// <param name="stepMinutes">
     /// `pulse.stepMinutes` as resolved — the ONE step the member durations, the "unchanged" clause and
@@ -243,14 +246,37 @@ public static class TopicStatusLine_Builder
         // was the supervisor's), and the owner reads it as a fact about a session, not as a section.
         var showModelEffort = fieldList.Contains(PulseField_Names.MODEL_EFFORT, StringComparer.Ordinal);
 
-        // THE HEADER FIRST AND UNCONDITIONAL — the lead word and every MODE glyph, 🌙 🔕 ✈ 🤐 💻, all
-        // five of which left the topic name on 2026-09-10 — then THE FIELDS IN THE LISTED ORDER. Every
-        // field omits itself when it has nothing to say; none of them substitutes a placeholder.
-        List<string> lines = [Build_HeaderLine(fields)];
+        // THE COUNT MAY LEAD THE MESSAGE — the one exception to "the header first" (owner, 2026-09-23:
+        // *"the task count 1/12 (8%) at the very top of the message because it's the most important
+        // information"*). When `progress` is the FIRST word of the list it is drawn ABOVE the header,
+        // on a line of its own; anywhere else it is drawn in its place like every other field. See
+        // Build_ProgressLine for why a line above rather than a prefix on the header.
+        var countLeads = fieldList.Count > 0 && fieldList[0] == PulseField_Names.PROGRESS;
 
-        foreach (var field in fieldList)
+        List<string> lines = [];
+
+        if (countLeads)
+            lines.AddRange(Draw_Field(PulseField_Names.PROGRESS));
+
+        // THE HEADER, UNCONDITIONAL — the lead word and every MODE glyph, 🌙 🔕 ✈ 🤐 💻, all five of
+        // which left the topic name on 2026-09-10 — then THE FIELDS IN THE LISTED ORDER. Every field
+        // omits itself when it has nothing to say; none of them substitutes a placeholder. A count
+        // with no ledger draws nothing above it, so the header leads again rather than a blank line.
+        lines.Add(Build_HeaderLine(fields));
+
+        // A REPEAT IS DRAWN AS OFTEN AS IT IS LISTED. The validator refuses a repeated word, and a
+        // de-duplication here would be a second copy of that rule (CLAUDE.md decision 12). Skipping the
+        // leading count is not one: it was drawn above, and this walk draws the rest exactly once each.
+        foreach (var field in countLeads ? fieldList.Skip(1) : fieldList)
+            lines.AddRange(Draw_Field(field));
+
+        return string.Join('\n', lines);
+
+        // ONE SWITCH, whichever side of the header a field lands on — so the count on top and the count
+        // in its listed place cannot come to read differently.
+        IReadOnlyList<string> Draw_Field(string field)
         {
-            IReadOnlyList<string> drawn = field switch
+            return field switch
             {
                 PulseField_Names.WAITING_ON_YOU => asks.Count > 0 ? [Build_WaitingOnYouLine(asks)] : [],
 
@@ -275,6 +301,11 @@ public static class TopicStatusLine_Builder
                     ? [Build_MergedLine(progress, figuresUnchangedFor, step)]
                     : [],
 
+                // THE SAME GUARD AS `merged`, for the same reason: Total 0 is the say-nothing message.
+                PulseField_Names.PROGRESS => progress != null && progress.Total > 0
+                    ? [Build_ProgressLine(progress)]
+                    : [],
+
                 PulseField_Names.MODEL_EFFORT => [],
 
                 // THE HEARTBEAT, unconditional once there is anything to say. It is what tells the owner
@@ -289,13 +320,7 @@ public static class TopicStatusLine_Builder
                     $"Unhandled pulse field '{field}' — {nameof(SettingValidators)}.{nameof(SettingValidators.PULSE_FIELDS)} refuses every word " +
                     $"outside {nameof(PulseField_Names)}.{nameof(PulseField_Names.ALL)}, so this list did not come through the resolver"),
             };
-
-            // A REPEAT IS DRAWN AS OFTEN AS IT IS LISTED. The validator refuses a repeated word, and a
-            // de-duplication here would be a second copy of that rule (CLAUDE.md decision 12).
-            lines.AddRange(drawn);
         }
-
-        return string.Join('\n', lines);
     }
 
     /// <summary>
@@ -698,6 +723,40 @@ public static class TopicStatusLine_Builder
     }
 
     /// <summary>
+    /// THE `progress` FIELD — `1/12 (8%)` and not one character more. Owner, 2026-09-23: *"I want the
+    /// pulse message have the task count 1/12 (8%) at the very top of the message because it's the most
+    /// important information. And I don't want to have useless words like 1/23 merged 4%. Just
+    /// 1/23 (4%)."* It is <see cref="Build_MergedLine"/>'s reading with the words taken out, and the
+    /// numbers are the same numbers: Done and Total, and <see cref="PlanProgress_Formatter.Percent"/> for
+    /// the percent — never a second division (CLAUDE.md decision 12), so this line, `merged` and
+    /// `/progress` cannot quote one ledger three ways.
+    ///
+    /// <para>
+    /// NO "UNCHANGED FOR" CLAUSE, which `merged` keeps. The clause would turn the owner's bare
+    /// reading back into a sentence (`1/12 (8%) · unchanged 25 min`) on the one line they asked to be
+    /// bare — and as the first line it is the notification preview, where a clause that moves every
+    /// step would read as the news. An owner who wants the clause lists `merged`, which is unchanged.
+    /// A side effect, and a welcome one: the count only changes when the ledger does, so a still
+    /// orchestration no longer differs from itself at every step boundary on this line.
+    /// </para>
+    /// <para>
+    /// FIRST IN THE LIST, IT IS A LINE ABOVE THE HEADER — option (a) of the task brief, chosen over
+    /// (b), splicing it into the header as `1/12 (8%) · ✈ PULSE`. Both put the count first; (a) is the
+    /// one that keeps every line with ONE owner. <see cref="Strip_Heartbeat"/> matches whole lines by
+    /// their opening and the render key compares whole texts, and both stay exact either way — but under
+    /// (b) the header's text would depend on a field, the count would read one way on top and another
+    /// in its listed place, and "the header" would stop being a line anything can recognise. Under (a)
+    /// the count is the same line wherever it sits, the header is the same line it has been since
+    /// 2026-09-10, and the one thing that moved is their order. It costs one line of height, which is the
+    /// line the owner asked for.
+    /// </para>
+    /// </summary>
+    static string Build_ProgressLine(IPlanProgress progress)
+    {
+        return $"{progress.Done}/{progress.Total} ({PlanProgress_Formatter.Percent(progress)}%)";
+    }
+
+    /// <summary>
     /// FIELD 6 — the heartbeat. A status line that has stopped being redrawn looks exactly like one
     /// describing a quiet orchestration, and this is the only field that can tell them apart.
     ///
@@ -767,7 +826,8 @@ public static class TopicStatusLine_Builder
     /// because the heartbeat was always drawn last; once the owner orders the fields it can be first, and
     /// a heartbeat left in makes every step boundary read as news. Matching a WHOLE LINE by its opening
     /// is still exact: every other line opens with something of its own — the header's lead word or a
-    /// glyph, `⏳`, `sup · `, a member's `• ` bullet or id, a count, `last · ` — so a task that begins
+    /// glyph, `⏳`, `sup · `, a member's `• ` bullet or id, a count (the closed count, `merged`, and the
+    /// `progress` line, which may even lead the message — all digits), `last · ` — so a task that begins
     /// with the word "updated" sits after a bullet and can never open a line.
     /// </para>
     /// </summary>

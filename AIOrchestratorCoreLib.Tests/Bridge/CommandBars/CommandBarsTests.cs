@@ -58,15 +58,15 @@ public class CommandBarsTests
     public void ARefusedVerb_IsSaidOnce_AcrossRebuilds_AndANewRefusalIsSaidWhenItAppears()
     {
         for (var tick = 0; tick < 5; tick++)
-            _bars.Build_TopicRows(Pulse(["pending", "tasks"], holdToggle: true), ReceiptStyles.Ticks, TOPIC_ID, isHolding: false, heldCount: 0);
+            _bars.Build_TopicRows(Pulse(["pending", "tail 1"], holdToggle: true), ReceiptStyles.Ticks, TOPIC_ID, isHolding: false, heldCount: 0);
 
-        Assert.Equal(1, Count_Warnings("pulse.buttons names 'tasks'"));
+        Assert.Equal(1, Count_Warnings("pulse.buttons names 'tail 1'"));
 
-        _bars.Build_TopicRows(Pulse(["pending", "mute_all"], holdToggle: true), ReceiptStyles.Ticks, TOPIC_ID, isHolding: false, heldCount: 0);
-        _bars.Build_TopicRows(Pulse(["pending", "tasks"], holdToggle: true), ReceiptStyles.Ticks, TOPIC_ID, isHolding: false, heldCount: 0);
+        _bars.Build_TopicRows(Pulse(["pending", "log sup"], holdToggle: true), ReceiptStyles.Ticks, TOPIC_ID, isHolding: false, heldCount: 0);
+        _bars.Build_TopicRows(Pulse(["pending", "tail 1"], holdToggle: true), ReceiptStyles.Ticks, TOPIC_ID, isHolding: false, heldCount: 0);
 
-        Assert.Equal(1, Count_Warnings("pulse.buttons names 'mute_all'"));
-        Assert.Equal(1, Count_Warnings("pulse.buttons names 'tasks'"));
+        Assert.Equal(1, Count_Warnings("pulse.buttons names 'log sup'"));
+        Assert.Equal(1, Count_Warnings("pulse.buttons names 'tail 1'"));
         Assert.Equal(2, Count_Warnings("no tap can run"));
     }
 

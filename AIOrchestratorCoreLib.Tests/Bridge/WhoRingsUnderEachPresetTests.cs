@@ -79,6 +79,9 @@ public class WhoRingsUnderEachPresetTests : IDisposable
     IOrchestrationLauncher? _launcher;
     IBridgeEngine? _engine;
 
+    /// <summary>Which phone the fixture is under — it decides what "the receipt landed" looks like (plan 03 Task 6).</summary>
+    string? _preset;
+
     public WhoRingsUnderEachPresetTests()
     {
         _tempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-who-rings-tests-{Guid.NewGuid():N}");
@@ -204,11 +207,13 @@ public class WhoRingsUnderEachPresetTests : IDisposable
     /// THE BUSY NARRATION AND THE RECEIPT TICK ARE SILENT BY CONSTRUCTION, and read no setting.
     ///
     /// <para>
-    /// Neither is reachable from an engine test: the first busy narration waits
-    /// <c>NARRATION_FIRST_DELAY_SECONDS = 180</c>, a compiled constant outside the injected timing, and the
-    /// ✓ receipt message is not the path this tree takes (the receipt is a reaction until Task 6 makes
-    /// <c>phone.receipts</c> choose). So this reads the source, with the honesty of
-    /// <see cref="BusyNoticeRespectsAnAnswerScanTests"/>: it proves the send is written silent, not that it fires.
+    /// The narration is not reachable from an engine test: the first busy narration waits
+    /// <c>NARRATION_FIRST_DELAY_SECONDS = 180</c>, a compiled constant outside the injected timing. So this
+    /// reads the source, with the honesty of <see cref="BusyNoticeRespectsAnAnswerScanTests"/>: it proves
+    /// the send is written silent, not that it fires. The ✓ IS reachable since plan 03 Task 6 made
+    /// <c>phone.receipts</c> choose — classic's receipt is that message — and
+    /// <see cref="Start_WithTheOwnerWaiting_Async"/> measures its silence through the engine; its scan
+    /// stays as the structural half.
     /// </para>
     /// </summary>
     [Theory]
@@ -250,6 +255,8 @@ public class WhoRingsUnderEachPresetTests : IDisposable
     /// </summary>
     void Use_Preset(string preset)
     {
+        _preset = preset;
+
         var terminalRunners = string.Join(
             ",",
             SessionRole_Names.ALL.Select(role => $"\"{SessionRole_Names.Get_ConfigKey(role)}\":{{\"runner\":\"terminal\"}}"));
@@ -285,6 +292,8 @@ public class WhoRingsUnderEachPresetTests : IDisposable
     /// <summary>
     /// Channel seen, session mid-turn, the owner's message DELIVERED — which raises their credit — and its
     /// receipt landed. Nothing has rung: the receipt is the first thing the app writes, and it is silent.
+    /// The receipt is each preset's own (plan 03 Task 6): quiet's is a reaction on the owner's message,
+    /// classic's is the ✓ message — a send, so its silence is measured here rather than assumed.
     /// </summary>
     async Task<string> Start_WithTheOwnerWaiting_Async()
     {
@@ -303,14 +312,26 @@ public class WhoRingsUnderEachPresetTests : IDisposable
         _telegram.Queue_Updates(Build_OwnerMessageJson(OWNER_TEXT));
 
         Assert.True(
-            await Run_Until_Async(() => _log.Has_Info_Containing("Owner message delivered") && _telegram.Reactions.Count >= 1, BridgeTestTiming.Window_ForAggregation(60)),
-            $"the owner's message was never delivered and acknowledged.{Environment.NewLine}{_log.Dump()}");
+            await Run_Until_Async(() => _log.Has_Info_Containing("Owner message delivered") && Has_ReceiptLanded(), BridgeTestTiming.Window_ForAggregation(60)),
+            $"the owner's message was never delivered and acknowledged.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
+
+        if (_preset != Presets_Loader.QUIET)
+            Assert.Equal(TelegramSendSounds.Silent, Sound_Of(RECEIPT_TICK));
 
         Assert.True(
             _telegram.Count_Sent_WithSound(TelegramSendSounds.Rings) == 0,
             $"the app rang the phone before any supervisor entry existed:{Environment.NewLine}{_telegram.Dump_Sent()}");
 
         return session.OrchId;
+    }
+
+    const string RECEIPT_TICK = "✓";
+
+    bool Has_ReceiptLanded()
+    {
+        return _preset == Presets_Loader.QUIET
+            ? _telegram.Reactions.Count >= 1
+            : _telegram.Has_Sent_Containing(RECEIPT_TICK);
     }
 
     async Task Wait_Sent_Async(string fragment)
