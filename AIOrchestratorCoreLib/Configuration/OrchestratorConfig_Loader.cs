@@ -368,9 +368,13 @@ public static class OrchestratorConfig_Loader
     /// <para>
     /// THE ONE TOLERANT READ OF config.json, AND INTERNAL SINCE 2026-09-23 (plan 04 Task 1, ruling P16).
     /// The settings renderers' reader (<c>SettingsPresentation.SettingsSnapshot_Reader</c>) reads through
-    /// it, and so will plan 04 Task 2's writer: an HTTP GET and a Telegram tap must answer over a
-    /// hand-edit with a trailing comma exactly as this save does, and three readers each deciding what
-    /// "unreadable" means is decision 12's drift. <see cref="Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/>
+    /// it: an HTTP GET and a Telegram menu must draw over a hand-edit with a trailing comma exactly as this
+    /// save reads it, and several readers each deciding what "unreadable" means is decision 12's drift.
+    /// <c>SettingsWriting.Settings_Writer</c> does NOT read through it any more (plan 04 Task 2b, ruling P33):
+    /// "every failure is empty" made a sharing violation or a half-typed file into an empty tree, and the
+    /// writer then replaced config.json with the edited keys alone. A reader that draws may fall back to
+    /// empty; a writer that would replace the file may not — it tells absent, unreadable and unparsable
+    /// apart and refuses the last two. <see cref="Load_OrEmpty(ISupervisionPaths, IOrchestrationLog?)"/>
     /// still reads through <see cref="Read_JsonObject_OrNull"/> directly and is NOT made tolerant here —
     /// that would change what the app's startup path does, which this task was not asked to change.
     /// </para>
@@ -399,7 +403,8 @@ public static class OrchestratorConfig_Loader
     static string Describe_UnreadableFile(string filePath, string reason)
     {
         return $"'{filePath}' could not be read ({reason}) — it was treated as empty, so every setting falls to its preset or "
-            + "shipped default, and the next save from the app replaces the file.";
+            + "shipped default. A settings edit is refused until the file can be read; the Settings window's Save and the "
+            + "/screenshots toggle still replace it.";
     }
 
     static JsonObject? Read_JsonObject_OrNull(string filePath)

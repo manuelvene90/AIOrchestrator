@@ -525,20 +525,124 @@ public class SettingsRequestHandlerTests : IDisposable
     /// A WRITE THAT DID NOT HAPPEN IS NEVER REPORTED AS ONE (<c>Atomic_FileWriter</c>'s rule, which
     /// <c>Settings_Writer</c> keeps by throwing). The handler turns the throw into a 500 that says nothing was
     /// applied, and one line for the log — the owner caused it, so the page answers too (decision 15).
+    ///
+    /// <para>
+    /// THE READ MUST SUCCEED FOR THE WRITE TO BE REACHED (plan 04 Task 2b): a config.json the writer cannot read
+    /// is refused before any write, which is a different answer, pinned below. So the file is held open WITHOUT
+    /// <see cref="FileShare.Delete"/> — the writer's read shares with that, its replacing rename cannot. That is
+    /// Windows' mechanism (POSIX renames over an open file), so the POSIX half of the same promise is the
+    /// unwritable-folder sibling that follows; each skips by name where it cannot provoke anything.
+    /// </para>
     /// </summary>
-    [Fact]
+    [RequiresFileShareEnforcementFact]
     public void Put_WhenTheWriteFails_IsFiveHundred_AndClaimsNothingApplied()
     {
-        // A FOLDER where config.json should be: the read finds no file, and the rename over it fails on every OS.
+        const string original = """{"phone":{"status":{"intervalMinutes":30}}}""";
+        Write_Config(original);
+        var log = new RecordingLog();
+
+        (int Status, string ContentType, string Body) answer;
+
+        using (new FileStream(_paths.ConfigFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            answer = Put($$"""{"{{INTERVAL_PATH}}":45}""", log: log);
+
+        Assert_WriteThrew_AndNothingWasApplied(answer, log, original);
+    }
+
+    /// <summary>The same promise where the OS lets a folder refuse new files: the read succeeds, the temp file cannot be created.</summary>
+    [RequiresUnwritableFolderFact]
+    public void Put_WhenTheFolderRefusesTheWrite_IsFiveHundred_AndClaimsNothingApplied()
+    {
+        const string original = """{"phone":{"status":{"intervalMinutes":30}}}""";
+        Write_Config(original);
+        var log = new RecordingLog();
+
+        (int Status, string ContentType, string Body) answer;
+
+        using (UnwritableFolder.Take_WritePermission(_tempRoot))
+            answer = Put($$"""{"{{INTERVAL_PATH}}":45}""", log: log);
+
+        Assert_WriteThrew_AndNothingWasApplied(answer, log, original);
+    }
+
+    void Assert_WriteThrew_AndNothingWasApplied((int Status, string ContentType, string Body) answer, RecordingLog log, string original)
+    {
+        Assert.Equal(500, answer.Status);
+        Assert.Contains("could not be written", (string?)Json(answer.Body)["error"]);
+        Assert.Contains("nothing in this request was applied", (string?)Json(answer.Body)["error"]);
+        Assert.Null(Json(answer.Body)["results"]);
+        Assert.Single(log.Errors);
+        Assert.Equal(original, Config_Text());
+    }
+
+    /// <summary>
+    /// A config.json THE WRITER COULD NOT READ IS REFUSED, NOT REPLACED (plan 04 Task 2b, ruling P33), and the
+    /// page hears it as the same 500 a failed write is: nothing in the request was applied, and the writer's
+    /// own words say why. A FOLDER where the file should be is the portable stand-in for "present and
+    /// unreadable" — every OS refuses to read a folder as a file; the file another program holds open is pinned
+    /// against the writer itself (<c>SettingsWriterTests.AConfigFileHeldOpenExclusively_IsNotOverwritten</c>).
+    /// ONE log line, the writer's warning: the handler adds no error of its own for a refusal the writer has
+    /// already named.
+    /// </summary>
+    [Fact]
+    public void Put_WhenConfigJsonCannotBeRead_IsFiveHundred_AndAppliesNothing()
+    {
         Directory.CreateDirectory(_paths.ConfigFile);
+        var log = new RecordingLog();
+
+        var (status, contentType, body) = Put($$"""{"{{INTERVAL_PATH}}":45,"no.such.setting":1}""", log: log);
+
+        Assert.Equal(500, status);
+        Assert.Equal(JSON_CONTENT_TYPE, contentType);
+
+        var error = (string?)Json(body)["error"];
+        Assert.Contains("could not be read", error);
+        Assert.Contains("Nothing in this request was applied", error);
+        Assert.Null(Json(body)["results"]);
+
+        Assert.True(Directory.Exists(_paths.ConfigFile));
+        Assert.Single(log.Warnings);
+        Assert.Empty(log.Errors);
+    }
+
+    /// <summary>
+    /// A config.json THAT DOES NOT PARSE IS LEFT BYTE FOR BYTE (P33): before 2026-09-23 this PUT answered 200 and
+    /// replaced a half-typed file with one holding only the interval — the owner's repos and chat ids gone.
+    /// </summary>
+    [Fact]
+    public void Put_OverAConfigJsonThatDoesNotParse_IsFiveHundred_AndLeavesItByteForByte()
+    {
+        const string original = """{ "repos": [ { "name": "half-typed" """;
+        Write_Config(original);
         var log = new RecordingLog();
 
         var (status, _, body) = Put($$"""{"{{INTERVAL_PATH}}":45}""", log: log);
 
         Assert.Equal(500, status);
-        Assert.False(string.IsNullOrWhiteSpace((string?)Json(body)["error"]));
-        Assert.DoesNotContain("Applied", body);
-        Assert.Single(log.Errors);
+
+        var error = (string?)Json(body)["error"];
+        Assert.Contains("does not parse", error);
+        Assert.Contains("Nothing in this request was applied", error);
+        Assert.Equal(original, Config_Text());
+        Assert.Single(log.Warnings);
+        Assert.Empty(log.Errors);
+    }
+
+    /// <summary>A Reset rewrites config.json like a PUT does, so an unparsable file refuses it the same way.</summary>
+    [Fact]
+    public void Delete_OverAConfigJsonThatDoesNotParse_IsFiveHundred_AndLeavesItByteForByte()
+    {
+        const string original = """{ "phone": { "status": { "intervalMinutes": 45 """;
+        Write_Config(original);
+
+        var (status, _, body) = Delete(Reset_Target(INTERVAL_PATH));
+
+        Assert.Equal(500, status);
+
+        var error = (string?)Json(body)["error"];
+        Assert.Contains("does not parse", error);
+        Assert.Contains("Nothing in this request was applied", error);
+        Assert.Equal(original, Config_Text());
     }
 
     /// <summary>
@@ -1020,12 +1124,15 @@ public class SettingsRequestHandlerTests : IDisposable
     {
         public List<string> Errors { get; } = [];
 
+        public List<string> Warnings { get; } = [];
+
         public void Log_Info(string orchId, string message)
         {
         }
 
         public void Log_Warning(string orchId, string message)
         {
+            Warnings.Add(message);
         }
 
         public void Log_Error(string orchId, string message, Exception? exception)

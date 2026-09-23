@@ -69,7 +69,9 @@ namespace AIOrchestratorCoreLib.Web;
 /// Anything else → { "error": "…" } with 400 (unreadable body, DELETE without ?path=), 401 (web.token set and
 /// the header absent or wrong), 403 (web.token empty and the request touches a fenced row — nothing applied),
 /// 404 (not /settings), 405 (not GET/PUT/DELETE), 421 (Host is not a loopback name — checked before anything
-/// else), 500 (config.json could not be written — nothing in that request was applied).
+/// else), 500 (config.json could not be written, or the writer refused it because it could not be read or does
+/// not parse — the writer's WriteFailed, never a "results" outcome; nothing in that request was applied, and the
+/// file is as it was).
 /// </code>
 ///
 /// <para>
@@ -461,7 +463,9 @@ public static class SettingsRequest_Handler
 
         try
         {
-            return Answer_Results(Settings_Writer.Apply_Many(paths, edits, log));
+            var results = Settings_Writer.Apply_Many(paths, edits, log);
+
+            return Refuse_WriteFailed_OrNull(results) ?? Answer_Results(results);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -545,8 +549,9 @@ public static class SettingsRequest_Handler
         try
         {
             var (outcome, message) = Settings_Writer.Reset(paths, settingPath, log);
+            IReadOnlyList<(string Path, SettingsWriteOutcomes Outcome, string? Message_OrNull)> results = [(settingPath, outcome, message)];
 
-            return Answer_Results([(settingPath, outcome, message)]);
+            return Refuse_WriteFailed_OrNull(results) ?? Answer_Results(results);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -587,6 +592,9 @@ public static class SettingsRequest_Handler
         {
             SettingsWriteOutcomes.Applied or SettingsWriteOutcomes.Reset => true,
             SettingsWriteOutcomes.RefusedUnknownPath or SettingsWriteOutcomes.RefusedReadOnly or SettingsWriteOutcomes.RefusedInvalid => false,
+
+            // Never reached — Refuse_WriteFailed_OrNull answers it as a 500 first — and honest if it ever were.
+            SettingsWriteOutcomes.WriteFailed => false,
             _ => throw new InvalidOperationException($"Unhandled SettingsWriteOutcomes: {outcome}"),
         };
     }
@@ -604,6 +612,28 @@ public static class SettingsRequest_Handler
         log?.Log_Error(GLOBAL_ORCH_ID, $"Settings web page: {message}", ex);
 
         return Answer_Error(HttpStatusCode.InternalServerError, message);
+    }
+
+    /// <summary>
+    /// THE WRITER REFUSED THE FILE, SO NOTHING WAS WRITTEN (plan 04 Task 2b, ruling P33): config.json is present
+    /// and could not be read, or does not parse, and the writer left it byte for byte rather than replace it with
+    /// the edited keys alone. The page hears it as the same 500 a write that threw is — to the owner both are
+    /// "your edit did not happen" — carrying the writer's own reason (in use: try again; does not parse: fix it by
+    /// hand). "Nothing in this request" is literal: one refused read refuses every accepted edit in the body, and
+    /// the writer writes a body in one rename or not at all. NOT LOGGED HERE: the writer has already logged its
+    /// one warning line for this refusal, and a second line from the page would count one event twice. Null
+    /// when no result is WriteFailed.
+    /// </summary>
+    static (int Status, string ContentType, string Body)? Refuse_WriteFailed_OrNull(
+        IReadOnlyList<(string Path, SettingsWriteOutcomes Outcome, string? Message_OrNull)> results)
+    {
+        foreach (var (_, outcome, message) in results)
+        {
+            if (outcome == SettingsWriteOutcomes.WriteFailed)
+                return Answer_Error(HttpStatusCode.InternalServerError, Describe_WriteRefused(message));
+        }
+
+        return null;
     }
 
     // ---------------------------------------------------------------------------------------
@@ -714,5 +744,10 @@ public static class SettingsRequest_Handler
     static string Describe_WriteFailed(string reason)
     {
         return $"config.json could not be written ({reason}) — nothing in this request was applied.";
+    }
+
+    static string Describe_WriteRefused(string? writersReason)
+    {
+        return $"{writersReason ?? "config.json was not written."} Nothing in this request was applied.";
     }
 }

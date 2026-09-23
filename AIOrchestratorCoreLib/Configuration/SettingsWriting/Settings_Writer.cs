@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingDefinition;
@@ -51,12 +52,23 @@ namespace AIOrchestratorCoreLib.Configuration.SettingsWriting;
 /// the loader has always kept for <c>reviewerModel</c>, enforced for every row.
 /// </para>
 /// <para>
-/// THE READ IS THE LOADER'S OWN TOLERANT ONE (<see cref="OrchestratorConfig_Loader.Read_JsonObject_ForEditing"/>,
-/// ruling P16), never a second copy: unknown keys survive every write (D6 — agents edit config.json at runtime,
-/// and a write that dropped <c>planBackend</c> would be the defect <see cref="OrchestratorConfig_Loader.Save"/>'s
-/// own docstring records being fixed twice), and a config.json that will not parse is REPLACED rather than
-/// refused — refusing would strand the owner with a corrupt file and no way to fix it from the app — with one
-/// warning line naming the file, because the owner is about to lose hand-edited keys they cannot see.
+/// THE WRITE MERGES INTO THE FILE AS IT IS: unknown keys survive every write (D6 — agents edit config.json at
+/// runtime, and a write that dropped <c>planBackend</c> would be the defect <see cref="OrchestratorConfig_Loader.Save"/>'s
+/// own docstring records being fixed twice).
+/// </para>
+/// <para>
+/// AND IT NEVER REPLACES A FILE IT COULD NOT READ (plan 04 Task 2b, ruling P33, 2026-09-23). Task 2 read through
+/// the loader's tolerant read (<see cref="OrchestratorConfig_Loader.Read_JsonObject_ForEditing"/>), which turns
+/// EVERY failure into an empty tree — right for a screen that must draw something, and for
+/// <see cref="OrchestratorConfig_Loader.Save"/>'s own documented choice, and data loss here: a Windows sharing
+/// violation (the app's Save, the repo reorderer, the daemon, an editor, an antivirus scan) read as "empty", and
+/// the file was replaced by one holding only the edited keys — the owner's repos, chat ids and hand-edited keys
+/// gone on a phone tap. Reproduced against <c>52c82b3</c> by
+/// <c>SettingsWriterTests.AConfigFileHeldOnlyDuringTheRead_IsNotReplacedByTheEditedKeyAlone</c>. So the writer
+/// tells the three states apart (<see cref="Read_TreeForEditing"/>): ABSENT starts from an empty tree, since
+/// there is nothing on disk to lose; PRESENT BUT UNREADABLE and PRESENT BUT UNPARSABLE are refused as
+/// <see cref="SettingsWriteOutcomes.WriteFailed"/>, the file left byte for byte as it was. Refusing strands the
+/// owner with a file to fix by hand — a hand fix loses less than a rewrite, and the owner may be mid-edit.
 /// </para>
 /// <para>
 /// ATOMIC, and under <see cref="CONFIG_WRITE_LOCK"/>: see the lock's own doc for what it does and, more
@@ -81,6 +93,12 @@ public static class Settings_Writer
     /// </summary>
     public static readonly Lock CONFIG_WRITE_LOCK = new();
 
+    /// <summary>A duplicated key does not parse here — see <see cref="Parse_Tree"/>.</summary>
+    static readonly JsonDocumentOptions CONFIG_PARSE_OPTIONS = new() { AllowDuplicateProperties = false };
+
+    /// <summary>The machine-wide log line, not one orchestration's — the same id the config loader's own warnings use.</summary>
+    const string GLOBAL_ORCH_ID = "";
+
     /// <summary>One edit — the same rules and the same single write as <c>Apply_Many</c>, because it IS a one-edit <c>Apply_Many</c>.</summary>
     public static (SettingsWriteOutcomes Outcome, string? Message_OrNull) Apply(ISupervisionPaths paths, string path, JsonNode? value, IOrchestrationLog? log)
     {
@@ -95,6 +113,9 @@ public static class Settings_Writer
     /// racing the other ten. One refused edit does not refuse the rest; each result carries the path AS THE
     /// CALLER SPELLED IT (a legacy word included), so a handler can answer its own body key by key. When
     /// nothing is accepted the file is not touched at all. Edits to the same row apply in order, last wins.
+    /// When the FILE refuses (P33 — present, and unreadable or unparsable) every accepted edit answers
+    /// <see cref="SettingsWriteOutcomes.WriteFailed"/> with the one reason, nothing is written, and the log gets
+    /// one line for the read, not one per edit.
     /// </summary>
     public static IReadOnlyList<(string Path, SettingsWriteOutcomes Outcome, string? Message_OrNull)> Apply_Many(
         ISupervisionPaths paths,
@@ -117,7 +138,7 @@ public static class Settings_Writer
         Action<string, string> writeAllText)
     {
         List<(string Path, SettingsWriteOutcomes Outcome, string? Message_OrNull)> results = [];
-        List<(ISettingDefinition Definition, JsonNode? Value)> accepted = [];
+        List<(int ResultIndex, ISettingDefinition Definition, JsonNode? Value)> accepted = [];
 
         foreach (var (path, value) in edits)
         {
@@ -130,7 +151,7 @@ public static class Settings_Writer
                 continue;
             }
 
-            accepted.Add((definition!, value));
+            accepted.Add((results.Count, definition!, value));
             results.Add((path, SettingsWriteOutcomes.Applied, null));
         }
 
@@ -139,9 +160,17 @@ public static class Settings_Writer
 
         lock (CONFIG_WRITE_LOCK)
         {
-            var root = OrchestratorConfig_Loader.Read_JsonObject_ForEditing(paths.ConfigFile, log);
+            var (root, fileRefusal) = Read_TreeForEditing(paths.ConfigFile, log);
 
-            foreach (var (definition, value) in accepted)
+            if (root == null)
+            {
+                foreach (var (resultIndex, _, _) in accepted)
+                    results[resultIndex] = (results[resultIndex].Path, SettingsWriteOutcomes.WriteFailed, fileRefusal);
+
+                return results;
+            }
+
+            foreach (var (_, definition, value) in accepted)
             {
                 Remove_EverySpelling(root, definition);
                 SettingsJson_Path.Write(root, definition.Path, value);
@@ -159,7 +188,9 @@ public static class Settings_Writer
     /// Deletes every spelling of the row — nested, flat and legacy — so the value falls to the preset or the
     /// shipped default, and writes nothing in its place. A row that was never set is harmless: the file is not
     /// rewritten, and the message says there was nothing to reset rather than claiming an effect. A ReadOnly row
-    /// is refused by the same rule as a write — a Reset of <c>repos</c> would delete the repository list.
+    /// is refused by the same rule as a write — a Reset of <c>repos</c> would delete the repository list. A file
+    /// that refuses (P33) refuses a Reset exactly as it refuses a write: "nothing to reset" is a claim about a
+    /// file, and a file this class could not read supports no claim at all.
     /// </summary>
     public static (SettingsWriteOutcomes Outcome, string? Message_OrNull) Reset(ISupervisionPaths paths, string path, IOrchestrationLog? log)
     {
@@ -171,7 +202,10 @@ public static class Settings_Writer
 
         lock (CONFIG_WRITE_LOCK)
         {
-            var root = OrchestratorConfig_Loader.Read_JsonObject_ForEditing(paths.ConfigFile, log);
+            var (root, fileRefusal) = Read_TreeForEditing(paths.ConfigFile, log);
+
+            if (root == null)
+                return (SettingsWriteOutcomes.WriteFailed, fileRefusal);
 
             if (!Remove_EverySpelling(root, definition!))
                 return (SettingsWriteOutcomes.Reset, Describe_NothingToReset(definition!));
@@ -181,6 +215,79 @@ public static class Settings_Writer
         }
 
         return (SettingsWriteOutcomes.Reset, null);
+    }
+
+    /// <summary>
+    /// THE ONE READ THIS WRITER EDITS (P33), and it answers exactly one of two things: the tree to edit, or the
+    /// reason the file refuses — never an empty tree standing in for a file that is there.
+    /// <list type="number">
+    /// <item><b>Absent</b> (no file, or no folder yet) → an empty tree: there is nothing on disk to lose, so a
+    /// first write creates the file holding the edited keys.</item>
+    /// <item><b>Present, could not be read</b> → refused. Read through <see cref="Tolerant_FileReader"/>, which
+    /// already outlasts the atomic writer's rename (<c>e72cc84</c>); a holder that outlasts IT — another
+    /// process's Save, an editor, an antivirus scan, a folder where the file should be — is still holding it,
+    /// and an empty tree written now would replace the owner's file the moment the holder lets go.</item>
+    /// <item><b>Present, read, does not parse</b> → refused: not JSON, a top level that is not an object, a key
+    /// stated twice (two answers to one question — a rewrite would pick one for the owner), or EMPTY. Empty is
+    /// refused too, although it holds nothing, because it is also what an editor that truncates before it
+    /// writes looks like for a moment: on Linux a rename landing in that moment would leave the editor writing
+    /// into an unlinked file and the owner with only the edited keys.</item>
+    /// </list>
+    /// Beside, not through, <see cref="OrchestratorConfig_Loader.Read_JsonObject_ForEditing"/>: that read's
+    /// "every failure is empty" is right for a screen that must draw something and for the loader's own
+    /// <c>Save</c>, and it is exactly the defect here. One warning line per refusal (decision 15: the log, not
+    /// Telegram; the renderer answers the owner where they tapped).
+    /// </summary>
+    static (JsonObject? Tree_OrNull, string? Refusal_OrNull) Read_TreeForEditing(string configFile, IOrchestrationLog? log)
+    {
+        string text;
+
+        try
+        {
+            text = Tolerant_FileReader.Read_AllText(configFile);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return ([], null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, Log_Refusal(log, Describe_Unreadable(configFile, ex.Message)));
+        }
+
+        var (tree, problem) = Parse_Tree(text);
+
+        return tree != null ? (tree, null) : (null, Log_Refusal(log, Describe_Unparsable(configFile, problem!)));
+    }
+
+    /// <summary>
+    /// The file's text as the object this writer may edit, or why it is not one. Strict where the loader is
+    /// lenient on exactly one point — a duplicated key is refused at the parse rather than surfacing later as a
+    /// throw from a lazily built <see cref="JsonObject"/>, the choice <c>SettingsRequest_Handler</c> makes for a
+    /// PUT body for the same reason.
+    /// </summary>
+    static (JsonObject? Tree_OrNull, string? Problem_OrNull) Parse_Tree(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return (null, "the file is empty");
+
+        try
+        {
+            return JsonNode.Parse(text, nodeOptions: null, CONFIG_PARSE_OPTIONS) is JsonObject tree
+                ? (tree, null)
+                : (null, "its top level is not a JSON object");
+        }
+        catch (JsonException ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
+    static string Log_Refusal(IOrchestrationLog? log, string refusal)
+    {
+        log?.Log_Warning(GLOBAL_ORCH_ID, $"A settings edit was refused: {refusal}");
+
+        return refusal;
     }
 
     /// <summary>The two refusals that are about the PATH, read off the catalogue — null when the row may be written.</summary>
@@ -231,6 +338,22 @@ public static class Settings_Writer
     static string Describe_UnknownPath(string path)
     {
         return $"'{path}' is not a setting — no catalogue row answers to that path or to an old spelling of one.";
+    }
+
+    /// <summary>
+    /// "In use" is the likely cause and is said as one — the reason in brackets (a sharing violation, an access
+    /// denial, a folder where the file should be) is what tells them apart.
+    /// </summary>
+    static string Describe_Unreadable(string configFile, string reason)
+    {
+        return $"'{configFile}' could not be read ({reason}) — another program is probably using it. Nothing was written and "
+            + "the file is exactly as it was; try again in a moment.";
+    }
+
+    static string Describe_Unparsable(string configFile, string reason)
+    {
+        return $"'{configFile}' does not parse as a JSON object ({reason}). Nothing was written and the file is exactly as it "
+            + "was — rewriting a file this app cannot read would erase every key in it. Fix it by hand first.";
     }
 
     /// <summary>The row's own Description says where it IS changed (a window, config.json by hand, the command that toggles it).</summary>

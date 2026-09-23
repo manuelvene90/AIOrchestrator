@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
 using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
@@ -442,26 +443,282 @@ public class SettingsWriterTests : IDisposable
         Assert.Equal(50, Read_Config()["phone"]!["status"]!["intervalMinutes"]!.GetValue<int>());
     }
 
+    // ---------------------------------------------------------------------------------------
+    // THE THREE STATES OF config.json (plan 04 Task 2b, ruling P33)
+    // ---------------------------------------------------------------------------------------
+
     /// <summary>
-    /// A CORRUPT config.json IS REPLACED RATHER THAN REFUSED, and it is LOGGED. Read_JsonObject_ForEditing
-    /// already swallows a parse failure to an empty object, for the stated reason that refusing would strand
-    /// the owner with a corrupt config and no way to fix it from the app. That reasoning holds here, and the
-    /// silence does not: one warning line naming the file, because the owner is about to lose hand-edited
-    /// keys they cannot see (decision 21's corollary — say which predicate failed and why).
+    /// What an owner's config.json looks like: the keys a wipe would cost them — the repo list, the two chat
+    /// ids, a key only a hand put there — beside one row a write will touch.
     /// </summary>
-    [Fact]
-    public void ACorruptConfigFile_IsReplaced_AndOneWarningLineNamesIt()
+    const string OWNERS_CONFIG = """
+        {
+          "repos": [ { "name": "Arb Studio", "path": "/repos/arb" } ],
+          "telegramSupergroupChatId": -1001234567890,
+          "telegramOwnerUserId": 42,
+          "phone": { "status": { "intervalMinutes": 30 } },
+          "somethingAHandAdded": { "kept": true }
+        }
+        """;
+
+    /// <summary>
+    /// Every way a file can be PRESENT, READ and still not be a tree this writer may edit: half-typed, empty
+    /// (an editor that truncates before it writes looks exactly like this for a moment), valid JSON whose top
+    /// level is not an object, and a key stated twice — two answers to one question, and a rewrite would have
+    /// to pick one of them for the owner.
+    /// </summary>
+    public static TheoryData<string> UnparsableConfigTexts => new()
     {
-        File.WriteAllText(_paths.ConfigFile, "{not json at all");
+        "{not json at all",
+        """{ "repos": [ { "name": "half-typed" """,
+        "",
+        "  \r\n  ",
+        "[1, 2]",
+        "null",
+        """{ "repos": [], "repos": [ { "name": "Arb Studio", "path": "/repos/arb" } ] }""",
+    };
+
+    /// <summary>
+    /// A config.json THAT DOES NOT PARSE IS NEVER OVERWRITTEN (P33 state 2). Until 2026-09-23 the writer read it
+    /// as empty and wrote a file holding only the edited key — a phone tap erased the owner's repos, chat ids
+    /// and every hand-edited key. The owner may be mid-edit; a hand fix loses less than a rewrite. Refused as
+    /// WriteFailed, with a message that names the file and says it does not parse — the words that tell this
+    /// route from the in-use one below (decision 20: a state with two routes to it pins neither) — and ONE
+    /// warning line for the log (decision 15: not Telegram).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(UnparsableConfigTexts))]
+    public void AnUnparsableConfigFile_IsNotOverwritten_AndTheWriteSaysWhy(string text)
+    {
+        File.WriteAllText(_paths.ConfigFile, text);
+        var before = File.ReadAllBytes(_paths.ConfigFile);
         var log = new RecordingLog();
 
         var result = Settings_Writer.Apply(_paths, INTERVAL_PATH, JsonValue.Create(45), log);
 
-        Assert.Equal(SettingsWriteOutcomes.Applied, result.Outcome);
-        Assert.Equal(45, Read_Config()["phone"]!["status"]!["intervalMinutes"]!.GetValue<int>());
+        Assert.Equal(SettingsWriteOutcomes.WriteFailed, result.Outcome);
+        Assert.Contains(_paths.ConfigFile, result.Message_OrNull);
+        Assert.Contains("does not parse", result.Message_OrNull);
+        Assert.Equal(before, File.ReadAllBytes(_paths.ConfigFile));
 
         var warning = Assert.Single(log.Warnings);
         Assert.Contains(_paths.ConfigFile, warning);
+    }
+
+    /// <summary>
+    /// A config.json ANOTHER PROGRAM HOLDS IS NEVER OVERWRITTEN (P33 state 3), and the edit lands once it is let
+    /// go. On Windows a sharing violation is routine — the app's own Save, the repo reorderer, the daemon, an
+    /// editor, an antivirus scan — and before 2026-09-23 it read as "empty" and the owner's file was replaced by
+    /// the edited key alone. The read goes through <c>Tolerant_FileReader</c>, which outlasts a rename; a holder
+    /// that outlasts IT is refused, and nothing is written.
+    ///
+    /// <para>
+    /// THE HOLD IS <see cref="FileShare.None"/> ON THE TEST THREAD. Windows refuses the read through its share
+    /// modes; .NET on Linux and macOS emulates FileShare.None with an advisory flock that the reader's own open
+    /// runs into, so this is expected to RUN on both CI operating systems — it skips, by name, only where the
+    /// probe finds that emulation off (<see cref="RequiresExclusiveOpenEnforcementFactAttribute"/>).
+    /// </para>
+    /// </summary>
+    [RequiresExclusiveOpenEnforcementFact]
+    public void AConfigFileHeldOpenExclusively_IsNotOverwritten()
+    {
+        File.WriteAllText(_paths.ConfigFile, OWNERS_CONFIG);
+        var before = File.ReadAllBytes(_paths.ConfigFile);
+        var log = new RecordingLog();
+
+        (SettingsWriteOutcomes Outcome, string? Message_OrNull) refused;
+
+        using (new FileStream(_paths.ConfigFile, FileMode.Open, FileAccess.Read, FileShare.None))
+            refused = Settings_Writer.Apply(_paths, INTERVAL_PATH, JsonValue.Create(45), log);
+
+        Assert.Equal(SettingsWriteOutcomes.WriteFailed, refused.Outcome);
+        Assert.Contains(_paths.ConfigFile, refused.Message_OrNull);
+        Assert.Contains("could not be read", refused.Message_OrNull);
+        Assert.Equal(before, File.ReadAllBytes(_paths.ConfigFile));
+        Assert.Contains(_paths.ConfigFile, Assert.Single(log.Warnings));
+
+        // Let go: the same edit lands, and every other key of the owner's file is still there.
+        Assert.Equal((SettingsWriteOutcomes.Applied, (string?)null), Settings_Writer.Apply(_paths, INTERVAL_PATH, JsonValue.Create(45), log));
+        Assert.Equal(45, Read_Config()["phone"]!["status"]!["intervalMinutes"]!.GetValue<int>());
+        Assert_EveryKeyButTheIntervalIsTheOwners();
+        Assert.Single(log.Warnings);
+    }
+
+    /// <summary>
+    /// THE WIPE ITSELF, reproduced deterministically: a holder that lets go BETWEEN the read and the write — the
+    /// ordinary shape of a sharing violation (an antivirus scan, the other host's Save), and the one a hold that
+    /// lasts the whole call cannot show, because on Windows the rename then fails too and the write throws.
+    /// The counted writer releases the hold just before it writes. Before 2026-09-23 the read failed, was taken
+    /// for "empty", the hold was gone by the rename, and config.json was replaced by the one edited key; now the
+    /// read's refusal means the writer is never called at all.
+    /// </summary>
+    [RequiresExclusiveOpenEnforcementFact]
+    public void AConfigFileHeldOnlyDuringTheRead_IsNotReplacedByTheEditedKeyAlone()
+    {
+        File.WriteAllText(_paths.ConfigFile, OWNERS_CONFIG);
+        var before = File.ReadAllBytes(_paths.ConfigFile);
+        var hold = new FileStream(_paths.ConfigFile, FileMode.Open, FileAccess.Read, FileShare.None);
+        var writes = 0;
+        IReadOnlyList<(string Path, SettingsWriteOutcomes Outcome, string? Message_OrNull)> results;
+
+        try
+        {
+            results = Settings_Writer.Apply_Many(
+                _paths,
+                [(INTERVAL_PATH, JsonValue.Create(45))],
+                log: null,
+                (file, text) =>
+                {
+                    writes++;
+                    hold.Dispose();
+                    Atomic_FileWriter.Write_AllText(file, text);
+                });
+        }
+        finally
+        {
+            hold.Dispose();
+        }
+
+        // The file first, as text, so a regression shows WHAT replaced the owner's config rather than a byte dump.
+        Assert.Equal(OWNERS_CONFIG, File.ReadAllText(_paths.ConfigFile));
+        Assert.Equal(before, File.ReadAllBytes(_paths.ConfigFile));
+        Assert.Equal(0, writes);
+        Assert.Equal(SettingsWriteOutcomes.WriteFailed, Assert.Single(results).Outcome);
+    }
+
+    /// <summary>
+    /// A MISSING config.json IS THE ONE STATE THAT STARTS FROM AN EMPTY TREE (P33 state 1, today's behaviour,
+    /// pinned): there is nothing on disk to lose, so the file is created holding the edited key and nothing
+    /// else — no materialised default beside it — and there is nothing to warn about.
+    /// </summary>
+    [Fact]
+    public void AMissingConfigFile_IsCreatedWithTheEditedKeyOnly()
+    {
+        Assert.False(File.Exists(_paths.ConfigFile));
+        var log = new RecordingLog();
+
+        var result = Settings_Writer.Apply(_paths, INTERVAL_PATH, JsonValue.Create(45), log);
+
+        Assert.Equal((SettingsWriteOutcomes.Applied, (string?)null), result);
+        Assert.True(
+            JsonNode.DeepEquals(JsonNode.Parse("""{"phone":{"status":{"intervalMinutes":45}}}"""), Read_Config()),
+            $"a missing config.json was created as: {File.ReadAllText(_paths.ConfigFile)}");
+        Assert.Empty(log.Warnings);
+    }
+
+    /// <summary>A Reset with no config.json at all has nothing to delete: it says so and creates no file.</summary>
+    [Fact]
+    public void Reset_OfAMissingConfigFile_IsHarmless_AndCreatesNothing()
+    {
+        var log = new RecordingLog();
+
+        var result = Settings_Writer.Reset(_paths, INTERVAL_PATH, log);
+
+        Assert.Equal(SettingsWriteOutcomes.Reset, result.Outcome);
+        Assert.Contains("nothing to reset", result.Message_OrNull);
+        Assert.False(File.Exists(_paths.ConfigFile));
+        Assert.Empty(log.Warnings);
+    }
+
+    /// <summary>
+    /// RESET REFUSES AN UNPARSABLE FILE TOO — it rewrites config.json exactly as a write does. Before
+    /// 2026-09-23 it read the file as empty, found "nothing to reset" and said the row "already reads its
+    /// preset or shipped default": a confident claim about a file it had not understood.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(UnparsableConfigTexts))]
+    public void Reset_OverAnUnparsableConfigFile_IsRefused_AndTheFileIsUntouched(string text)
+    {
+        File.WriteAllText(_paths.ConfigFile, text);
+        var before = File.ReadAllBytes(_paths.ConfigFile);
+        var log = new RecordingLog();
+
+        var result = Settings_Writer.Reset(_paths, INTERVAL_PATH, log);
+
+        Assert.Equal(SettingsWriteOutcomes.WriteFailed, result.Outcome);
+        Assert.Contains(_paths.ConfigFile, result.Message_OrNull);
+        Assert.Contains("does not parse", result.Message_OrNull);
+        Assert.Equal(before, File.ReadAllBytes(_paths.ConfigFile));
+        Assert.Contains(_paths.ConfigFile, Assert.Single(log.Warnings));
+    }
+
+    /// <summary>
+    /// RESET REFUSES A FILE ANOTHER PROGRAM HOLDS, and resets once it is let go. The row IS set in the file, so
+    /// a Reset that got through would have something to delete — the refusal cannot be the harmless
+    /// "nothing to reset" answer by another route.
+    /// </summary>
+    [RequiresExclusiveOpenEnforcementFact]
+    public void Reset_OfAConfigFileHeldOpenExclusively_IsRefused_AndTheFileIsUntouched()
+    {
+        File.WriteAllText(_paths.ConfigFile, OWNERS_CONFIG);
+        var before = File.ReadAllBytes(_paths.ConfigFile);
+        var log = new RecordingLog();
+
+        (SettingsWriteOutcomes Outcome, string? Message_OrNull) refused;
+
+        using (new FileStream(_paths.ConfigFile, FileMode.Open, FileAccess.Read, FileShare.None))
+            refused = Settings_Writer.Reset(_paths, INTERVAL_PATH, log);
+
+        Assert.Equal(SettingsWriteOutcomes.WriteFailed, refused.Outcome);
+        Assert.Contains(_paths.ConfigFile, refused.Message_OrNull);
+        Assert.Contains("could not be read", refused.Message_OrNull);
+        Assert.Equal(before, File.ReadAllBytes(_paths.ConfigFile));
+        Assert.Contains(_paths.ConfigFile, Assert.Single(log.Warnings));
+
+        Assert.Equal((SettingsWriteOutcomes.Reset, (string?)null), Settings_Writer.Reset(_paths, INTERVAL_PATH, log));
+        Assert.False(Read_Config()["phone"]!["status"]!.AsObject().ContainsKey("intervalMinutes"));
+        Assert_EveryKeyButTheIntervalIsTheOwners();
+    }
+
+    /// <summary>
+    /// ONE REFUSED READ REFUSES THE WHOLE BODY, AND IS ONE LOG LINE — not one per edit. Every edit the catalogue
+    /// accepted answers WriteFailed with the same reason; the edits refused on their own merits keep their own
+    /// answer (the handler's "nothing in this request was applied" rests on the writer writing nothing at all,
+    /// which the counted writer proves).
+    /// </summary>
+    [Fact]
+    public void ApplyMany_OverAnUnparsableConfigFile_WritesNothing_AndEveryAcceptedEditSaysWhy()
+    {
+        File.WriteAllText(_paths.ConfigFile, "{not json at all");
+        var log = new RecordingLog();
+        var writes = 0;
+
+        var results = Settings_Writer.Apply_Many(
+            _paths,
+            [
+                (INTERVAL_PATH, JsonValue.Create(45)),
+                ("phone.notARealSetting", JsonValue.Create(true)),
+                ("telegramInbound", JsonValue.Create("off")),
+            ],
+            log,
+            (file, text) =>
+            {
+                writes++;
+                Atomic_FileWriter.Write_AllText(file, text);
+            });
+
+        Assert.Equal(0, writes);
+        Assert.Equal(
+            [
+                (INTERVAL_PATH, SettingsWriteOutcomes.WriteFailed),
+                ("phone.notARealSetting", SettingsWriteOutcomes.RefusedUnknownPath),
+                ("telegramInbound", SettingsWriteOutcomes.WriteFailed),
+            ],
+            results.Select(result => (result.Path, result.Outcome)));
+        Assert.Equal(results[0].Message_OrNull, results[2].Message_OrNull);
+        Assert.Contains("does not parse", results[0].Message_OrNull);
+        Assert.Single(log.Warnings);
+    }
+
+    /// <summary>The file now, minus the interval row, is <see cref="OWNERS_CONFIG"/> minus the interval row.</summary>
+    void Assert_EveryKeyButTheIntervalIsTheOwners()
+    {
+        var expected = JsonNode.Parse(OWNERS_CONFIG)!.AsObject();
+        var actual = Read_Config();
+        SettingsJson_Path.Remove(expected, INTERVAL_PATH);
+        SettingsJson_Path.Remove(actual, INTERVAL_PATH);
+
+        Assert.True(JsonNode.DeepEquals(expected, actual), $"the owner's other keys did not survive: {actual.ToJsonString()}");
     }
 
     /// <summary>
