@@ -4841,6 +4841,14 @@ internal sealed class BridgeEngineModel(
         if (!string.IsNullOrWhiteSpace(session?.RepoPath))
             allowedRoots.Add(session.RepoPath);
 
+        // WHERE THE SESSION RUNS, from the one definition (final review I2): a sibling works in its own
+        // worktree, outside RepoPath, and its build log or screenshot was refused. Nothing wider.
+        // Added only when it differs, so the refusal's list of roots does not name the repo twice.
+        var workingPath = session == null ? null : WorkingPath_Resolver.Resolve(session);
+
+        if (!string.IsNullOrWhiteSpace(workingPath) && !allowedRoots.Contains(workingPath, StringComparer.OrdinalIgnoreCase))
+            allowedRoots.Add(workingPath);
+
         var channelFolder = Path.GetDirectoryName(channel.FilePath);
 
         if (!string.IsNullOrWhiteSpace(channelFolder))
@@ -5531,7 +5539,7 @@ internal sealed class BridgeEngineModel(
 
                 if (refusal != null)
                 {
-                    Tell_SiblingRefusal(request.OrchId, refusal.Value.Label, (refusal.Value.Subject, refusal.Value.Body));
+                    Tell_SiblingRefusal(request, world, refusal.Value.Label, (refusal.Value.Subject, refusal.Value.Body), unlessPaused: false);
                     Archive_ResolvedRequest_BestEffort(request.SourceFilePath, refusal.Value.Label);
                     continue;
                 }
@@ -5851,7 +5859,7 @@ internal sealed class BridgeEngineModel(
             try
             {
                 foreach (var notice in SiblingClose_Step.Build_SurvivorNotices(_paths, _store.Load_All(), session))
-                    Append_OrchestrationAppEntry(notice.OrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
+                    Append_SiblingNotice_UnlessPaused(notice.OrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
             }
             catch (Exception noticeException)
             {
@@ -6104,8 +6112,11 @@ internal sealed class BridgeEngineModel(
         // than swallowed as already-said.
         _confirmationsUnaskable.Remove(session.OrchId);
 
-        // The prompt-time re-run of the sibling table (§4.2) — the Sibling arm of the moot rule above.
-        if (request.Kind == ParkedCloseKinds.Sibling && Refuse_ParkedSibling_IfNoLongerValid(request, parkedPath))
+        // The prompt-time re-run of the sibling table (§4.2) — the Sibling arm of the moot rule above. A PAUSED
+        // requester's request WAITS (final review I1): its refusal would be a foreign append that wakes it, and
+        // a birth for a session the owner put to sleep is not a question to put to them now. Neither refused
+        // nor asked; the first sweep after the unpause judges it, and the 12 h lapse still applies.
+        if (request.Kind == ParkedCloseKinds.Sibling && (session.Paused || Refuse_ParkedSibling_IfNoLongerValid(request, parkedPath)))
             return;
 
         // What is being ended mid-flight, named at the moment they decide. It does NOT block the
@@ -6737,6 +6748,13 @@ internal sealed class BridgeEngineModel(
             if (_telegramClient != null && promptMessageId != null)
                 await Record_TapDecision_OnPrompt_Async(_telegramClient, promptMessageId.Value, confirmation.OrchId, result, cancellationToken);
         }
+
+        // THE ROSTER WAS READ BEFORE THE BIRTH (final review M4): the tick's snapshot predates the child and
+        // its parent's new link, so the endeavour reconcile further down this tick would write their files a
+        // tick late — and a print child's first turn could run with no ENDEAVOUR.md. Re-read once, only on a
+        // tick that ran a birth.
+        if (approved.Count > 0 && _sessionsThisTick != null)
+            _sessionsThisTick = _store.Load_All();
     }
 
     /// <summary>
@@ -6766,7 +6784,7 @@ internal sealed class BridgeEngineModel(
                 return false;
 
             _log.Log_Info(request.OrchId, $"A parked spawn-sibling no longer holds — {refusal.Value.Label}; refused before the owner was asked");
-            Tell_SiblingRefusal(request.OrchId, refusal.Value.Label, (refusal.Value.Subject, refusal.Value.Body));
+            Tell_SiblingRefusal(request.Sibling!, world, refusal.Value.Label, (refusal.Value.Subject, refusal.Value.Body), unlessPaused: false);
             Archive_ResolvedRequest_BestEffort(parkedPath, refusal.Value.Label);
             return true;
         }
@@ -6780,13 +6798,54 @@ internal sealed class BridgeEngineModel(
     /// <summary>
     /// ONE ROUTE FOR A SIBLING REFUSAL — at arrival, at prompt time and at the tap. Always the Agent
     /// audience (decision 15); <c>unspawnable</c> has no requester channel, so it goes to General.
+    ///
+    /// <para>
+    /// <paramref name="unlessPaused"/> is the TAP's (final review I1): the owner can tap a prompt drawn
+    /// before they paused the requester, and a refusal written then would wake it. Arrival is answering a
+    /// request the session has just written, so it is awake; prompt time never reaches here for a paused
+    /// requester — the ask sweep waits for the unpause.
+    /// </para>
+    /// <para>
+    /// AND THE ONE PLACE A CRASH MID-BIRTH IS REPAIRED (final review M2): <c>handover-already-used</c> names
+    /// a child that exists, and if its parent was never linked, <see cref="SiblingBirth_Step.Repair_ParentLink_OrNull"/>
+    /// links it now — at whichever of the three checks the retry meets first.
+    /// </para>
     /// </summary>
-    void Tell_SiblingRefusal(string requesterOrchId, string label, (string Subject, string Body) notice)
+    void Tell_SiblingRefusal(ISpawnSiblingRequest request, SiblingWorld world, string label, (string Subject, string Body) notice, bool unlessPaused)
     {
+        if (label == SiblingRefusals.HANDOVER_ALREADY_USED)
+        {
+            var repaired = SiblingBirth_Step.Repair_ParentLink_OrNull(_store, request.OrchId, request.HandoverIndex, world.Sessions);
+
+            if (repaired != null)
+                _log.Log_Warning(request.OrchId, repaired);
+        }
+
         if (label == SiblingRefusals.UNSPAWNABLE)
             Append_GeneralAppEntry(AppEntryAudiences.Agent, notice.Subject, notice.Body);
+        else if (unlessPaused)
+            Append_SiblingNotice_UnlessPaused(request.OrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
         else
-            Append_OrchestrationAppEntry(requesterOrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
+            Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
+    }
+
+    /// <summary>
+    /// THE PAUSE GATE FOR WHAT THE SIBLING LIFECYCLE WRITES INTO ANOTHER ORCHESTRATION'S CHANNEL (final review
+    /// I1, spec §7.2) — the survivors' close notice, the parent's "sibling started" line, a refusal at the tap.
+    /// CLAUDE.md's PAUSE rule: each waker asks for itself, because no delivery mode governs a channel write,
+    /// and a solo's watcher fires on any foreign append to its owner channel. A paused recipient gets NOTHING
+    /// appended — the other wakers' rule — and the log says what it missed; what these entries carry stays on
+    /// disk (the closed sibling's PLAN.md, the child's own topic), and <c>.siblings</c> is reconciled either way.
+    /// </summary>
+    bool Append_SiblingNotice_UnlessPaused(string orchId, AppEntryAudiences audience, string subject, string body)
+    {
+        if (Is_Paused(orchId))
+        {
+            _log.Log_Info(orchId, $"paused — '{subject}' was not appended, so it does not wake the session");
+            return false;
+        }
+
+        return Append_OrchestrationAppEntry(orchId, audience, subject, body);
     }
 
     /// <summary>
@@ -6822,7 +6881,7 @@ internal sealed class BridgeEngineModel(
             if (refusal != null)
             {
                 _log.Log_Info(sibling.OrchId, $"spawn-sibling refused at the owner's tap — {refusal.Value.Label}; nothing was started");
-                Tell_SiblingRefusal(sibling.OrchId, refusal.Value.Label, SiblingNotice_Wording.Restate_AtTheTap((refusal.Value.Subject, refusal.Value.Body)));
+                Tell_SiblingRefusal(sibling, world, refusal.Value.Label, SiblingNotice_Wording.Restate_AtTheTap((refusal.Value.Subject, refusal.Value.Body)), unlessPaused: true);
                 return refusal.Value.Label;
             }
 
@@ -6849,7 +6908,7 @@ internal sealed class BridgeEngineModel(
                 Append_GeneralAppEntry(AppEntryAudiences.Owner, withoutJob.Subject, withoutJob.Body);
             }
 
-            Append_OrchestrationAppEntry(sibling.OrchId, AppEntryAudiences.Owner, birth.ParentNotice.Subject, birth.ParentNotice.Body);
+            Append_SiblingNotice_UnlessPaused(sibling.OrchId, AppEntryAudiences.Owner, birth.ParentNotice.Subject, birth.ParentNotice.Body);
             Append_GeneralAppEntry(AppEntryAudiences.Agent, birth.GeneralLine.Subject, birth.GeneralLine.Body);
 
             _log.Log_Info(childId, $"SIBLING started on the owner's tap — '{sibling.Name}', a sibling of '{sibling.OrchId}'");

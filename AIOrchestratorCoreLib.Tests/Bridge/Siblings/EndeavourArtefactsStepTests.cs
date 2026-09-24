@@ -76,11 +76,15 @@ public sealed class EndeavourArtefactsStepTests : IDisposable
         Assert.False(File.Exists(_tree.Paths.Get_EndeavourDigestFile(FIRST)));
     }
 
-    /// <summary>§7.4: the first tick after a restart is the same code as every other, so a crash's leftovers go on it.</summary>
+    /// <summary>
+    /// §7.4: the first tick after a restart is the same code as every other, so a crash's leftovers go on it.
+    /// The leftover belongs to a LINKED session whose siblings are gone — the only kind that can own one: the
+    /// files are written only for a linked session, and v1 never unlinks (final review M3).
+    /// </summary>
     [Fact]
     public void AStaleFileFromACrash_IsRemovedOnTheFirstReconcile()
     {
-        _tree.Add_Solo(FIRST, "AI-Orch · settings work", endeavourId: null);
+        _tree.Add_Solo(FIRST, "AI-Orch · settings work", endeavourId: FIRST);
         File.WriteAllText(_tree.Paths.Get_SiblingsListFile(FIRST), "aiorchestrator-9\t/x\tlive\tghost\n");
         File.WriteAllText(_tree.Paths.Get_EndeavourDigestFile(FIRST), "# stale\n");
 
@@ -88,6 +92,23 @@ public sealed class EndeavourArtefactsStepTests : IDisposable
 
         Assert.False(File.Exists(_tree.Paths.Get_SiblingsListFile(FIRST)));
         Assert.False(File.Exists(_tree.Paths.Get_EndeavourDigestFile(FIRST)));
+    }
+
+    /// <summary>
+    /// AN UNLINKED SESSION IS NEVER VISITED (final review M3, 2026-09-24): the reconcile runs every 2 s over
+    /// every session, and on the owner's machine that was ~250 stats a tick for 124 folders that cannot own
+    /// these files — they are written only for a linked session, and v1 never unlinks. So nothing is looked
+    /// at for an unlinked one; the proof is a file planted there by hand, which the reconcile leaves alone.
+    /// </summary>
+    [Fact]
+    public void AnUnlinkedSession_IsNotVisited()
+    {
+        _tree.Add_Solo(FIRST, "AI-Orch · settings work", endeavourId: null);
+        File.WriteAllText(_tree.Paths.Get_SiblingsListFile(FIRST), "hand-written");
+
+        Assert.Empty(EndeavourArtefacts_Step.Reconcile(_tree.Paths, _tree.Sessions()));
+
+        Assert.True(File.Exists(_tree.Paths.Get_SiblingsListFile(FIRST)));
     }
 
     [Fact]

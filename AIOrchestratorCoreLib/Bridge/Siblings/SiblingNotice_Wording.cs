@@ -297,9 +297,14 @@ public static class SiblingNotice_Wording
             + NOTHING_CHANGED);
     }
 
-    /// <summary>The owner's <c>/switch</c> in a linked topic (§7.6) — the spec's sentence, verbatim.</summary>
+    /// <summary>
+    /// The owner's <c>/switch</c> in a linked topic (§7.6). NOT the spec's sentence any more (final review M1,
+    /// 2026-09-24): it said "close them or keep one session", and closing them changes nothing — v1 never
+    /// unlinks, so a survivor whose siblings had all closed got the same answer for ever. Rewording was the
+    /// smaller correct change; allowing /switch once the others close would be an unlink in all but name.
+    /// </summary>
     public static string Describe_LinkedSwitchRefusal()
     {
-        return "this topic is linked to siblings — close them or keep one session.";
+        return "this topic is linked to siblings, and siblings stay linked for the life of the endeavour — close this one or keep working.";
     }
 }

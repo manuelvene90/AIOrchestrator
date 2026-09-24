@@ -128,5 +128,6 @@ lines: the endeavour bar already counts them.
 ### What the app refuses while you are linked
 
 A linked orchestration cannot be promoted to a crew (`promote-orchestration` is refused as
-`linked-orchestration`), and the owner's `/switch` is answered "this topic is linked to siblings —
-close them or keep one session." A second sibling is a second `spawn-sibling` with a second HANDOVER.
+`linked-orchestration`), and the owner's `/switch` is answered "this topic is linked to siblings, and
+siblings stay linked for the life of the endeavour — close this one or keep working." The link is for good
+in this version: it outlives every other sibling's close. A second sibling is a second `spawn-sibling` with a second HANDOVER.

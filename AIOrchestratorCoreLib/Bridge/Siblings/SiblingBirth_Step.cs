@@ -91,6 +91,44 @@ public static class SiblingBirth_Step
             SiblingNotice_Wording.Describe_GeneralStarted(child.OrchId, request.Name, parent.OrchId, parentName, request.WorktreePath));
     }
 
+    /// <summary>
+    /// THE WEDGE A CRASH MID-BIRTH LEAVES, repaired where it is found (final review M2, 2026-09-24). The
+    /// launcher links and spawns the child BEFORE <see cref="Link_Parent_IfUnlinked"/> runs, so an app that
+    /// dies between the two leaves a live child alone in endeavour <c>&lt;parent&gt;</c> and an unlinked parent.
+    /// The parked request survives the restart and is re-checked — and refused
+    /// <see cref="SiblingRefusals.HANDOVER_ALREADY_USED"/>, correctly, because the child exists. Nothing else
+    /// would ever link the parent: neither would read the other's outbox for the rest of their lives.
+    ///
+    /// <para>
+    /// So that refusal also links the parent to the child its handover already started — the same
+    /// <see cref="Link_Parent_IfUnlinked"/> the birth uses, so the end state is exactly the birth's. Only when
+    /// the child is OPEN (a closed child's parent has nothing left to be linked to) and the parent is open and
+    /// still unlinked; otherwise null and nothing is written. Idempotent: the second call finds the parent
+    /// linked. Returns the line for the caller's log when it repaired something.
+    /// </para>
+    /// </summary>
+    public static string? Repair_ParentLink_OrNull(
+        IOrchestrationSessionStore store,
+        string parentOrchId,
+        int handoverIndex,
+        IReadOnlyList<IOrchestrationSession> sessions)
+    {
+        var key = SiblingRequest_Validator.Format_HandoverKey(parentOrchId, handoverIndex);
+        var child = sessions.FirstOrDefault(session => string.Equals(session.BornFromHandover, key, StringComparison.Ordinal));
+
+        if (child == null || child.ClosedUtc != null || child.EndeavourId == null)
+            return null;
+
+        var parent = store.Get_Session_OrNull(parentOrchId);
+
+        if (parent == null || parent.ClosedUtc != null || parent.EndeavourId != null)
+            return null;
+
+        Link_Parent_IfUnlinked(store, parentOrchId, child);
+
+        return $"'{parentOrchId}' was not linked to '{child.OrchId}', the sibling its HANDOVER [{handoverIndex}] already started (a birth interrupted between the spawn and the parent's link) — linked now to endeavour '{child.EndeavourId}'";
+    }
+
     /// <summary>Stamps the parent with the endeavour id the CHILD carries — never a second derivation of it.</summary>
     static void Link_Parent_IfUnlinked(IOrchestrationSessionStore store, string parentOrchId, IOrchestrationSession child)
     {

@@ -8,10 +8,10 @@ namespace AIOrchestratorCoreLib.Bridge.Siblings;
 /// THE TICK'S RECONCILE OF EVERY ENDEAVOUR ARTEFACT (spec 2026-09-23 §3.3 compaction, §3.4, §7.4), called once
 /// per mirror tick with the tick's session snapshot, open and closed alike:
 /// <list type="bullet">
-/// <item><c>.siblings</c> and <c>ENDEAVOUR.md</c> for EVERY session — written for an open linked one with open
-/// siblings, removed for anything else. Closed and unlinked sessions are visited too, because that is how a
-/// file a crash left behind is removed on the first tick back, by the same code as every other tick (§7.4);
-/// for them it costs two stats.</item>
+/// <item><c>.siblings</c> and <c>ENDEAVOUR.md</c> for every LINKED session — written for an open one with open
+/// siblings, removed for anything else. Closed linked sessions are visited too, because that is how a file a
+/// crash left behind is removed on the first tick back, by the same code as every other tick (§7.4). Unlinked
+/// sessions are not visited at all: they cannot own these files (final review M3, see the loop).</item>
 /// <item>COMPACTION of every open linked orchestration's outbox, through <see cref="Compact_Outboxes"/> — a
 /// separate call the engine places after the poll, for the owner's lock allowance. The outbox is not tailed, so the tailer's
 /// compaction step never sees it; the NO-GUARD overload of <see cref="Channel_Compactor.Compact_IfNeeded(string)"/>
@@ -44,7 +44,12 @@ public static class EndeavourArtefacts_Step
 
         var inputs = Read_InputsOnce(paths, openLinked, failures);
 
-        foreach (var session in sessions)
+        // LINKED SESSIONS ONLY, open and closed (final review M3, 2026-09-24). Every session used to be visited
+        // — two stats each, every 2 s, ~250 on the owner's machine of 124 folders — for files that only a
+        // linked session can own: they are written only for one, and v1 never unlinks, so there is no
+        // "just unlinked" session whose files need removing. A closed linked session is still visited, which
+        // is how its files go on the tick after its close and a crash's leftovers on the first tick back.
+        foreach (var session in sessions.Where(session => session.EndeavourId != null))
         {
             var siblings = Open_Siblings_Of(session, openLinked);
 

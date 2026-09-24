@@ -74,6 +74,29 @@ public class EndeavourArtefactsTickScanTests
     }
 
     /// <summary>
+    /// A NEW CHILD'S FILES ON THE TICK THAT BORE IT (final review M4, 2026-09-24). The tick's roster is read
+    /// at its top and the birth runs inside it, so the reconcile further down saw neither the child nor its
+    /// newly linked parent until the NEXT tick — and a print child's first turn could run with no
+    /// <c>ENDEAVOUR.md</c> in its state pack. The birth loop re-reads the roster once, only when it ran a
+    /// birth. A scan, the weaker claim: which of two adjacent ticks wrote a file is a race a behavioural test
+    /// could only lose or win by luck.
+    /// </summary>
+    [Fact]
+    public void ATickThatRunsABirth_RereadsTheRoster_BeforeTheReconcile()
+    {
+        var engine = BranchSource.Read_Code(ENGINE_FILE);
+        var births = BranchSource.Extract_Method(engine, "async Task Run_ApprovedSiblingBirths_Async");
+
+        Assert.Contains("_sessionsThisTick = _store.Load_All()", births, StringComparison.Ordinal);
+
+        var tick = BranchSource.Extract_Method(engine, "async Task Execute_MirrorTick_Inside_Snapshot_Async");
+        var birth = tick.IndexOf("Run_ApprovedSiblingBirths_Async(", StringComparison.Ordinal);
+        var reconcile = tick.IndexOf("Sync_EndeavourArtefacts()", StringComparison.Ordinal);
+
+        Assert.True(birth >= 0 && reconcile > birth, "the reconcile no longer runs after the births in the tick, so re-reading the roster there buys nothing");
+    }
+
+    /// <summary>
     /// THE OWNER'S DELIVERY GOES FIRST IN THE SHARED LOCK ALLOWANCE — the engine's own rule, stated where
     /// the announcements drain. Outbox compaction takes the channel lock with a 1 s budget, so run before
     /// <c>Flush_OwnerDeliveries_Async</c> a stale <c>sibling-outbox.md.lock</c> (broken only after 60 s) left

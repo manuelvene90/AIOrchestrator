@@ -308,3 +308,72 @@ What is NOT proven here, and waits on the owner:
   (`SiblingOnlyReplyIsNotTextedTests.AnAgentTaggedSoloReply_…`, a precondition timing window under load).
   Plan 03's deferred Task 11 campaign still owns the family. D12's bar (three local full runs + CI) is not
   met here either, and CI has not run on this branch.
+
+---
+
+## Final review fixes (ruling S7, one commit, base 7cc479a)
+
+The final whole-branch review (`.superpowers/sdd/…/final-review.md`, 2026-09-24) gave the verdict "Ready to merge — with fixes". Ruling S7 fixes I1, I2 and M1–M4 together. M5 and M6 are accepted as the trust model, and M7 is parked.
+
+**Which copy (decision 18):** only the branch source in `C:\Users\Gianpiero\source\repos\AIOrchestrator-siblings`, plus this worktree's own build output. I did not touch the installed kit, `~/.claude/supervision` or the running app. The kit edit (below) is unverified against a restarted session (decision 17).
+
+**Scratch:** `%TEMP%\sib-final-*`. I made no git writes. The commit is prepared in `final-fix1-commit.txt`.
+
+### What changed
+- **I1: the pause gates.** A new engine helper, `Append_SiblingNotice_UnlessPaused`, calls `Is_Paused(orchId)` before it appends, and logs what a paused recipient missed. It is used by:
+  - the survivors' close notice in `Execute_Close`;
+  - the parent's "sibling started" line in `Execute_SiblingBirth`;
+  - the refusal found at the tap (`Tell_SiblingRefusal(…, unlessPaused: true)`).
+
+  Arrival stays ungated: that refusal answers a request the session has just written, so it is awake.
+  In the ask sweep, a Sibling request whose requester is paused is now neither refused nor asked (`session.Paused || Refuse_ParkedSibling_IfNoLongerValid(…)`). It waits for the unpause, and the 12 h lapse still applies.
+  **Behaviour change to note:** the owner is not asked about a paused requester's birth while it is paused.
+- **I2: the working path.** `Approve_OwnerFile` also allows `WorkingPath_Resolver.Resolve(session)`, added only when it differs from the roots already listed, and nothing wider.
+- **M1: I chose the WORDING.** `/switch` now answers: "this topic is linked to siblings, and siblings stay linked for the life of the endeavour — close this one or keep working."
+  - Allowing `/switch` once the other siblings close would be an unlink in all but name, which v1 rules out.
+  - `kit/skills/solo/reference/siblings.md` quotes the new sentence.
+  - The row-11 sentence in the table above is superseded by it.
+- **M2: the crash repair.** `SiblingBirth_Step.Repair_ParentLink_OrNull(store, parentOrchId, handoverIndex, sessions)` links an open, unlinked parent to the open child its handover already started, through the birth's own `Link_Parent_IfUnlinked`. It is idempotent.
+  - `Tell_SiblingRefusal` now takes the request and the world, and runs the repair on every `handover-already-used`, at arrival, at prompt time and at the tap. It logs a warning naming the repair.
+- **M3: linked sessions only.** `EndeavourArtefacts_Step.Reconcile` visits only sessions with `EndeavourId != null`, open and closed.
+  - There is no "just unlinked" case to clean up: v1 never unlinks, and the files are only ever written for a linked session.
+  - `AStaleFileFromACrash_IsRemovedOnTheFirstReconcile` now plants its leftover on a linked session, the only kind that can own one.
+  - The new `AnUnlinkedSession_IsNotVisited` pins the filter.
+  - `TurnSources_Resolver.Resolve_WithSiblings` is unchanged: it already returns before `Load_All` for an unlinked solo, and its one `Get_Session_OrNull` is a stamp-cache hit.
+- **M4: the roster re-read.** `Run_ApprovedSiblingBirths_Async` re-reads `_sessionsThisTick` once, only on a tick that ran a birth. The endeavour reconcile later in the same tick then sees the child and its parent's new link. I chose this over a second `Load_All` on every tick.
+
+### `BridgeEngineModel.cs`: every change (post-edit line numbers)
+| Lines | Where | Change |
+|---|---|---|
+| 4844-4851 | `Approve_OwnerFile` | the working path joins `allowedRoots` (I2) |
+| 5542 | `Process_SpawnSiblingRequests` | `Tell_SiblingRefusal(request, world, …, unlessPaused: false)` (new signature) |
+| 5862 | `Execute_Close` post-step | `Append_SiblingNotice_UnlessPaused(notice.OrchId, …)` (I1) |
+| 6115-6119 | `Ask_OwnerToConfirmClose_Async` | `session.Paused ||` before the prompt-time re-run (I1) |
+| 6751-6757 | `Run_ApprovedSiblingBirths_Async` | roster re-read after a birth (M4) |
+| 6787 | `Refuse_ParkedSibling_IfNoLongerValid` | new `Tell_SiblingRefusal` signature |
+| 6801-6849 | `Tell_SiblingRefusal` | rewritten: repair on `handover-already-used` (M2), `unlessPaused` branch; plus the new `Append_SiblingNotice_UnlessPaused` |
+| 6884 | `Execute_SiblingBirth` | tap refusal `unlessPaused: true` (I1) |
+| 6911 | `Execute_SiblingBirth` | parent notice through the gate (I1) |
+
+CRLF is preserved, and the engine diff is +68/−9 lines. Where there was logic, it went into the step: the repair itself is `SiblingBirth_Step`'s.
+
+### Tests (RED first, then GREEN)
+- **RED** (`sib-final-red.log`): **13 of 68 failed**, every new or changed case. `AFileOutsideTheRepoAndTheWorktree_IsStillRefused` passed, as a regression pin should.
+  - Scans (6): `PauseGatesEveryWakerScanTests` ×5 (three site rows, the gate order, the prompt-time gate) and `EndeavourArtefactsTickScanTests.ATickThatRunsABirth_RereadsTheRoster_…`.
+  - Behaviour (7):
+    - `SiblingLifecycleTests.ClosingOneSibling_WhileASurvivorIsPaused_WakesOnlyTheOneAwake`
+    - `SiblingLifecycleTests.ARetryAfterACrashMidBirth_IsRefused_AndLinksTheParent`
+    - `SiblingLifecycleTests.SwitchInALinkedTopic_…` (the wording)
+    - `SiblingConfirmationTests.TapYes_WhileTheParentIsPaused_…`
+    - `SiblingConfirmationTests.AParkedRequestOfAPausedRequester_WaitsForTheUnpause_ThenIsJudged`
+    - `SiblingOwnerFileTests.AFileFromTheSiblingsOwnWorktree_IsDelivered`
+    - `EndeavourArtefactsStepTests.AnUnlinkedSession_IsNotVisited`
+- **GREEN:** 68/68 on the same six classes.
+- **Coordinator filter** (`Siblings|Endeavour|PauseGates|Switch|OwnerFile|Attach|PrintTurn`): **352 passed, 1 skipped (by design), 0 failed of 353**.
+- **Kit prose tests** (`SoloIsToldAboutSiblingsTests|NoProtocolFileIsOrphanedTests`): 17/17.
+- **`dotnet build AIOrchestrator.slnx`:** 0 errors. The 2 warnings are the pre-existing xUnit2031 warnings in `tools/claude-contract`.
+
+### Concerns
+- **A paused sibling loses its notices for good.** One that was paused during a sibling's close never gets that close notice, even after the unpause: the other wakers skip rather than defer, and I followed that pattern. What the notice carried stays on disk: the closed sibling's PLAN.md, and `.siblings`, which is reconciled regardless. The same applies to the parent's "sibling started" line when the owner taps while the parent is paused.
+- **Unlinked leftovers are no longer cleaned.** An unlinked session that somehow holds a `.siblings` file (only a hand edit can cause this) keeps it now. That is by design (M3).
+- **The kit edit is unverified live.** It is verified only by the kit prose tests, not against a restarted session (decision 17).

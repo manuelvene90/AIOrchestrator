@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Bridge.Siblings;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 using AIOrchestratorCoreLib.Git;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Spawning;
@@ -327,6 +328,82 @@ public class SiblingConfirmationTests
 
         await Task.Delay(BridgeTestTiming.Window_ForTicks(5));
         Assert.Null(harness.Telegram.Find_ButtonFor("Start it"));
+    }
+
+    /// <summary>
+    /// THE OWNER'S TAP STARTS THE CHILD, BUT DOES NOT WAKE A PAUSED PARENT (final review I1). The owner can tap
+    /// ✅ on a prompt drawn before they paused the requester; the child is what they asked for, and the parent's
+    /// "sibling started" line is a foreign append its watcher fires on. The tap edits the prompt either way, so
+    /// the owner still sees that it worked.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TapYes_WhileTheParentIsPaused_StartsTheChild_WithoutWakingTheParent()
+    {
+        using var harness = new SiblingEngine_Harness();
+        var (solo, _, _) = await Arrange_Asked_Async(harness);
+        harness.Store.Set_Paused(solo, true);
+        var parentBefore = harness.Channel(solo);
+
+        await harness.Tap_Async("Start it");
+        var child = await Wait_ForChild_Async(harness, solo);
+
+        Assert.True(Has_Archived(harness, CloseTapOutcome_Decider.SIBLING_STARTED), $"the birth did not run: [{string.Join(", ", harness.Archived_Names())}]{Environment.NewLine}{harness.Log.Dump()}");
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(() => Find_AppEntry_OrNull(harness.Paths.GeneralChannelFile, $"orchestration '{child.OrchId}' started") != null, WAIT_MILLISECONDS),
+            "General was never told, so the parent's silence below would prove nothing");
+
+        Assert.Equal(parentBefore, harness.Channel(solo));
+    }
+
+    /// <summary>
+    /// A PAUSED REQUESTER'S PARKED REQUEST WAITS — neither refused into its channel nor put to the owner — and
+    /// is judged the moment it wakes (final review I1). The prompt-time re-run of the table is a waker of its
+    /// own: its refusal is a foreign append. Deferring, not dropping, is what keeps the request's "you will get
+    /// an entry here either way" true.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AParkedRequestOfAPausedRequester_WaitsForTheUnpause_ThenIsJudged()
+    {
+        using var harness = new SiblingEngine_Harness();
+
+        // As ARequesterPromotedToACrewWhileParked_…: no topic until the world is arranged.
+        await harness.Start_Solo_Async("AI-Orch · loop starter");
+
+        var solo = harness.Launcher.Start_BasicOrchestration(SiblingEngine_Harness.REPO_NAME, harness.RepoPath).OrchId;
+        harness.Store.Set_DisplayName(solo, PARENT_NAME);
+        var handover = harness.Append_Outbox(solo, $"{HandoverEntry_Detector.HANDOVER_MARKER} limits");
+
+        harness.Drop_Request(Build_Request(solo, handover, harness.WorktreePath));
+
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(() => CloseConfirmation_Parking.Find_Parked(harness.Paths).Count == 1, WAIT_MILLISECONDS),
+            $"the request was never parked.{Environment.NewLine}{harness.Log.Dump()}");
+
+        // The topic guard's one "cannot be put to the owner yet" notice lands before the pause, so the
+        // channel captured below is final unless something the pause should have stopped writes to it.
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(() => harness.Channel(solo).Contains("cannot be put to the owner yet", StringComparison.Ordinal), WAIT_MILLISECONDS),
+            $"the topic guard never spoke.{Environment.NewLine}{harness.Channel(solo)}");
+
+        harness.Launcher.Promote_ToFullCrew(solo);
+        harness.Store.Set_Paused(solo, true);
+        var pausedChannel = harness.Channel(solo);
+        harness.Store.Set_TelegramTopicId(solo, 7999);
+
+        await Task.Delay(BridgeTestTiming.Window_ForTicks(6));
+
+        Assert.False(Has_Archived(harness, SiblingRefusals.NOT_A_SOLO), "a paused requester's request was refused into its channel");
+        Assert.Equal(pausedChannel, harness.Channel(solo));
+        Assert.Null(harness.Telegram.Find_ButtonFor("Start it"));
+        Assert.Single(CloseConfirmation_Parking.Find_Parked(harness.Paths));
+
+        harness.Store.Set_Paused(solo, false);
+
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(() => Has_Archived(harness, SiblingRefusals.NOT_A_SOLO), WAIT_MILLISECONDS),
+            $"never judged after the unpause. Archived: [{string.Join(", ", harness.Archived_Names())}]{Environment.NewLine}{harness.Log.Dump()}");
     }
 
     /// <summary>Review Focus 3. One HANDOVER, one child, however many times it is asked.</summary>

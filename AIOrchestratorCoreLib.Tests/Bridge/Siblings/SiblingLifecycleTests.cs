@@ -107,6 +107,62 @@ public class SiblingLifecycleTests : IDisposable
         Assert.Contains(reports, Read_OrNull(list) ?? string.Empty, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A PAUSED SURVIVOR IS NOT WOKEN (final review I1, spec §7.2, CLAUDE.md PAUSE: "miss one and dormancy is
+    /// a word"). The notice is a foreign append to its owner channel, which the solo's watcher fires on, so a
+    /// paused sibling would wake and act on it. The unpaused survivor beside it is the positive control: the
+    /// post-step ran, and skipped only the sleeper.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ClosingOneSibling_WhileASurvivorIsPaused_WakesOnlyTheOneAwake()
+    {
+        var (settings, limits, reports) = await Start_ThreeLinkedSolos_Async();
+        _harness.Store.Set_Paused(reports, true);
+        var pausedBefore = _harness.Channel(reports);
+
+        _harness.Engine.Close_Orchestration_ByOwner(limits, "done");
+
+        Assert.Contains(SURVIVOR_FRAGMENT, _harness.Channel(settings), StringComparison.Ordinal);
+        Assert.Equal(pausedBefore, _harness.Channel(reports));
+    }
+
+    /// <summary>
+    /// THE WEDGE A CRASH MID-BIRTH LEAVES IS REPAIRED BY THE RETRY (final review M2). The child exists and is
+    /// linked — the launcher links it before it spawns — but the app died before the parent was stamped, so
+    /// the retry is refused <c>handover-already-used</c>, correctly, and that refusal now also links the
+    /// parent, exactly as the birth would have.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ARetryAfterACrashMidBirth_IsRefused_AndLinksTheParent()
+    {
+        var parent = await _harness.Start_Solo_Async("AI-Orch · settings work");
+        var child = await _harness.Start_Solo_Async("AI-Orch · limits work");
+        var handover = _harness.Append_Outbox(parent, $"{HandoverEntry_Detector.HANDOVER_MARKER} limits");
+        _harness.Store.Set_SiblingLink(child, parent, parent, $"{parent}#{handover}", _harness.WorktreePath);
+
+        Assert.Null(_harness.Read_Session(parent).EndeavourId);
+
+        _harness.Drop_Request(System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["action"] = OrchestrationRequests_Reader.SPAWN_SIBLING_ACTION,
+            ["orchId"] = parent,
+            ["name"] = "AI-Orch · limits work",
+            ["job"] = "Rework the usage-limit pause",
+            ["handover"] = handover,
+            ["worktree"] = _harness.WorktreePath,
+            ["reason"] = "the retry after a crash",
+        }));
+
+        Assert.True(
+            await SiblingEngine_Harness.Wait_Until_Async(() => _harness.Archived_Names().Any(name => name.StartsWith($"{SiblingRefusals.HANDOVER_ALREADY_USED}-", StringComparison.Ordinal)), 20_000),
+            $"the retry was never refused as {SiblingRefusals.HANDOVER_ALREADY_USED}: [{string.Join(", ", _harness.Archived_Names())}]{Environment.NewLine}{_harness.Log.Dump()}");
+
+        Assert.Equal(parent, _harness.Read_Session(parent).EndeavourId);
+        Assert.Contains($"linked now to endeavour '{parent}'", _harness.Log.Dump(), StringComparison.Ordinal);
+    }
+
     /// <summary>§7.5: the owner may close anything — open ledger lines are reported, never a reason to refuse.</summary>
     [Fact]
     [Trait("Speed", "Slow")]
@@ -184,7 +240,11 @@ public class SiblingLifecycleTests : IDisposable
         await Type_Switch_Async(topic, 9302);
 
         Assert.Equal(2, _harness.Telegram.Sent_InTopic(topic).Count(text => text == SiblingNotice_Wording.Describe_LinkedSwitchRefusal()));
-        Assert.Equal("this topic is linked to siblings — close them or keep one session.", SiblingNotice_Wording.Describe_LinkedSwitchRefusal());
+        // FINAL REVIEW M1: the §7.6 sentence said "close them", and closing them changes nothing — v1 never
+        // unlinks, so the survivor's /switch answered it for ever. The reply now says what is true.
+        Assert.Equal(
+            "this topic is linked to siblings, and siblings stay linked for the life of the endeavour — close this one or keep working.",
+            SiblingNotice_Wording.Describe_LinkedSwitchRefusal());
         Assert.DoesNotContain(_harness.Telegram.Sent_InTopic(topic), text => text.Contains("FULL CREW", StringComparison.Ordinal));
         Assert.Null(_harness.Read_Session(settings).SupervisorSpawnedUtc);
     }

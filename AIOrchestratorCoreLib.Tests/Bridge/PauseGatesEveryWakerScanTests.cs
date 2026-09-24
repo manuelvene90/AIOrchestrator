@@ -173,6 +173,63 @@ public class PauseGatesEveryWakerScanTests
     }
 
     /// <summary>
+    /// THE SIBLING LIFECYCLE'S OWN APPENDS (final review I1, 2026-09-24) — three writers into ANOTHER
+    /// orchestration's owner channel that shipped with no gate: the survivors' close notice, the parent's
+    /// "sibling started" line, and a refusal re-found at the tap. They share one gate,
+    /// <c>Append_SiblingNotice_UnlessPaused</c>, which must ask before it appends (its own case below); here
+    /// each site is pinned to go THROUGH it rather than around it.
+    /// </summary>
+    public static TheoryData<string, string> TheSiblingNoticeSites => new()
+    {
+        { "void Execute_Close(", "Append_SiblingNotice_UnlessPaused(notice.OrchId" },
+        { "string Execute_SiblingBirth(", "Append_SiblingNotice_UnlessPaused(sibling.OrchId, AppEntryAudiences.Owner, birth.ParentNotice" },
+        { "string Execute_SiblingBirth(", "unlessPaused: true" },
+    };
+
+    [Theory]
+    [MemberData(nameof(TheSiblingNoticeSites))]
+    public void EverySiblingNoticeSite_GoesThroughThePauseGate(string signatureMark, string gatedCall)
+    {
+        Assert.Contains(gatedCall, Extract_Method(signatureMark), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheSiblingNoticeGate_AsksBeforeItAppends()
+    {
+        var body = Extract_Method("bool Append_SiblingNotice_UnlessPaused(");
+
+        var gate = body.IndexOf("Is_Paused(orchId)", StringComparison.Ordinal);
+        var append = body.IndexOf("Append_OrchestrationAppEntry(", StringComparison.Ordinal);
+
+        Assert.True(gate >= 0 && append >= 0, "the sibling notice gate no longer reads as this scan expects");
+        Assert.True(gate < append, "the pause is checked AFTER the append — the sleeper is already awake");
+
+        var refusal = Extract_Method("void Tell_SiblingRefusal(");
+        Assert.Contains("Append_SiblingNotice_UnlessPaused(", refusal, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE PROMPT-TIME RE-RUN OF THE SIBLING TABLE WAITS FOR A PAUSED REQUESTER (final review I1): its
+    /// refusal is an append into the requester's channel, so the pause is asked BEFORE the re-run — a
+    /// paused requester's request is neither refused nor put to the owner until it wakes.
+    /// <c>SiblingConfirmationTests.AParkedRequestOfAPausedRequester_…</c> carries the behavioural half.
+    /// </summary>
+    [Fact]
+    public void ThePromptTimeSiblingCheck_WaitsForAPausedRequester()
+    {
+        var body = Extract_Method("async Task Ask_OwnerToConfirmClose_Async");
+
+        var check = body.IndexOf("Refuse_ParkedSibling_IfNoLongerValid(", StringComparison.Ordinal);
+
+        Assert.True(check >= 0, "the ask sweep no longer re-runs the sibling table — this scan is reading a method it does not understand");
+
+        var gate = body.LastIndexOf("session.Paused", check, StringComparison.Ordinal);
+        var lineStart = body.LastIndexOf('\n', check);
+
+        Assert.True(gate > lineStart, "the prompt-time sibling check is not gated on the requester's pause in the same condition");
+    }
+
+    /// <summary>
     /// AND THE WATCHDOG, which is the one waker that does not write to a channel at all: it respawns
     /// a dead terminal. A session booted back up reads its role command, arms a watcher and starts
     /// working — the pause silently over, with nothing on screen saying so.
