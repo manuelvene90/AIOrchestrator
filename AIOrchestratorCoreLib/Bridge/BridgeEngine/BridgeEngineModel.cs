@@ -7863,6 +7863,11 @@ internal sealed class BridgeEngineModel(
             // In General the machine menu; in a topic that orchestration's rows, read-only (plan 04 D3).
             await _settingsMenu.Send_Menu_Async(client, this, messageThreadId, cancellationToken);
         }
+        else if (command == "endeavour")
+        {
+            // Sibling traffic is never pushed (O3); this is where the owner sees it, asked (spec 2026-09-23 §2.4).
+            await Send_EndeavourReport_Async(client, messageThreadId, cancellationToken);
+        }
         else if (command == "context")
         {
             await Send_ContextReport_Async(client, messageThreadId, cancellationToken);
@@ -8041,6 +8046,15 @@ internal sealed class BridgeEngineModel(
     async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, string command, CancellationToken cancellationToken)
     {
         var text = Build_ProgressReportText(messageThreadId, unfinishedOnly: command == "left");
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    /// <summary>/endeavour — the text is <see cref="Siblings.EndeavourReport_Builder"/>'s; this only sends it, chunked like /progress.</summary>
+    async Task Send_EndeavourReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Siblings.EndeavourReport_Builder.Build_ForTopic(_paths, _store.Load_All(), messageThreadId);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
