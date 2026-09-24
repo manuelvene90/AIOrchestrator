@@ -70,6 +70,10 @@ MEMBER="rev-1"
 REAL_HOME="$HOME"
 TEMP_HOME=$(mktemp -d)
 export HOME="$TEMP_HOME"
+# The hooks read AIORCH_SUPERVISION_ROOT BEFORE $HOME (hook-log.sh writes its markers there), so a run
+# from inside a live session, where it is set, would evaluate — and write into — the REAL tree. Pinned
+# to the temp tree, as watcher-behaviour-check.sh now pins it (review of f2a6b02, M1, 2026-09-24).
+export AIORCH_SUPERVISION_ROOT="$TEMP_HOME/.claude/supervision"
 
 SUPERVISION="$TEMP_HOME/.claude/supervision/$ORCH"
 mkdir -p "$SUPERVISION/imp-1" "$SUPERVISION/imp-2" "$SUPERVISION/$MEMBER"

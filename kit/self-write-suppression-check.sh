@@ -216,7 +216,8 @@ sib_line_of() {
 
 # Sets SIB_LIST (the lines of .siblings), SIB_FP (one "<path>|<size> <hash>" line per outbox) and
 # SIB_ERR (what failed, or empty). An outbox that cannot be read keeps its PREVIOUS line: unknown,
-# never a change. One that does not exist yet is "absent", so its first entry IS a change.
+# never a change. One that does not exist yet, or is still EMPTY (the taught `touch` before a first
+# append), is "absent" - so its first entry IS a change, and the touch alone is not.
 read_sib_fp() {
   SIB_LIST=""; SIB_FP=""; SIB_ERR=""
   [ -f "$sibs" ] || return 0
@@ -226,7 +227,7 @@ read_sib_fp() {
   local id path rest size hash kept
   while IFS=$'\t' read -r id path rest; do
     [ -n "$id" ] && [ -n "$path" ] || continue
-    if [ ! -e "$path" ]; then SIB_FP="$SIB_FP$path|absent"$'\n'; continue; fi
+    if [ ! -s "$path" ]; then SIB_FP="$SIB_FP$path|absent"$'\n'; continue; fi
     # Hashed from stdin, not from a file argument: md5sum escapes its whole output line when the
     # path holds a backslash, which every Windows path in .siblings does.
     if ! size="$(wc -c < "$path" 2>/dev/null)" || [ -z "$size" ] \
@@ -299,6 +300,57 @@ read_fp || { echo "cannot fingerprint A's owner channel — REFUSING TO REPORT" 
 prev="$FP"
 AIORCH_ROLE=solo bash "$HELPER" --channel "$ch" --author solo --subject "status" --body-file "$WORK/body.txt" > /dev/null
 poll; check "A's own append to its owner channel is still suppressed by its owner half" quiet
+
+# ---- THE TAUGHT CREATE STEP, RUN FOR REAL (review of f2a6b02, C1) --------------------------------
+#
+# Nothing in the app creates `sibling-outbox.md`, and the helper refuses a channel that does not exist
+# (exit 2) — so the recipe's HANDOVER, and a newborn child's first ASK, died on first use. The skill
+# now teaches `touch "$ORCH/sibling-outbox.md"` before the first append. This takes that line OUT OF
+# THE SHIPPED PROSE (both places it is taught), runs it, and then runs the real helper: a copy typed
+# here would certify a command no session is told to run.
+echo
+echo "-- solo siblings (the outbox does not exist yet) --"
+
+SOLO_SKILL="$(dirname "$0")/skills/solo/SKILL.md"
+SIBLINGS_MD="$(dirname "$0")/skills/solo/reference/siblings.md"
+TAUGHT_TOUCH='touch "$ORCH/sibling-outbox.md"'
+
+for taught_in in "$SOLO_SKILL" "$SIBLINGS_MD"; do
+  if [ ! -f "$taught_in" ]; then
+    echo "self-write-suppression-check.sh: cannot find $taught_in — REFUSING TO RUN" >&2
+    exit 2
+  fi
+  if grep -qF -- "$TAUGHT_TOUCH" "$taught_in"; then
+    echo "PASS  $(basename "$taught_in") teaches the create step: $TAUGHT_TOUCH"
+  else
+    echo "FAIL  $(basename "$taught_in") does not teach $TAUGHT_TOUCH — a first append to a new outbox is refused"
+    FAILURES=$((FAILURES + 1))
+  fi
+done
+
+ORCH="$WORK/newborn"
+mkdir -p "$ORCH"
+
+# The control: WHY the step exists. Without it the real helper refuses, nothing is written.
+if AIORCH_ROLE=solo bash "$HELPER" --channel "$ORCH/sibling-outbox.md" --author solo --subject "HANDOVER — the limits job" --body-file "$WORK/body.txt" > /dev/null 2>&1; then
+  RESULT="accepted"
+else
+  RESULT="refused"
+fi
+check "control: the helper refuses an outbox that does not exist yet" refused
+
+eval "$TAUGHT_TOUCH"
+printf 'keep me\n' > "$WORK/sentinel.md"; ORCH_SAVE="$ORCH"; ORCH="$WORK"
+cp "$WORK/sentinel.md" "$WORK/sibling-outbox.md"; eval "$TAUGHT_TOUCH"; ORCH="$ORCH_SAVE"
+if cmp -s "$WORK/sentinel.md" "$WORK/sibling-outbox.md"; then RESULT="kept"; else RESULT="truncated"; fi
+check "the taught step never truncates an outbox that already has entries" kept
+
+if printed="$(AIORCH_ROLE=solo bash "$HELPER" --channel "$ORCH/sibling-outbox.md" --author solo --subject "HANDOVER — the limits job" --body-file "$WORK/body.txt" 2>/dev/null)"; then
+  RESULT="accepted $printed"
+else
+  RESULT="refused"
+fi
+check "after the taught step the real helper appends the HANDOVER and prints its bare index" "accepted 1"
 
 if [ "$FAILURES" -gt 0 ]; then
   echo "$FAILURES case(s) FAILED"

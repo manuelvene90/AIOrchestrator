@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Bridge.Siblings;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using Xunit;
@@ -52,6 +53,39 @@ public class SoloIsToldAboutSiblingsTests
         Assert.Contains("\"handover\": ", solo);
         Assert.Contains("sibling-$ARGUMENTS-<timestamp>.json", solo);
         Assert.Contains("Do not re-drop", solo);
+    }
+
+    /// <summary>
+    /// NOBODY CREATES THE OUTBOX (review of f2a6b02, C1): the app only reads it, and
+    /// <c>channel-append.sh</c> refuses a channel that does not exist, so the recipe's HANDOVER and a
+    /// child's first ASK both died on first use. Both places that teach an append teach the create step.
+    /// <c>kit/self-write-suppression-check.sh</c> runs this exact line and then the real helper.
+    /// </summary>
+    [Fact]
+    public void TheOutboxIsCreatedBeforeTheFirstAppend_InBothPlaces()
+    {
+        const string TOUCH = "touch \"$ORCH/sibling-outbox.md\"";
+
+        Assert.Contains(TOUCH, Read(SKILL));
+        Assert.Contains(TOUCH, Read(SIBLINGS));
+    }
+
+    /// <summary>
+    /// THE ANSWERS A SESSION WILL ACTUALLY SEE (review M2, M3): a malformed file is answered by the
+    /// reader's <c>request REJECTED</c>, not a <c>sibling REFUSED</c>; a refusal re-found at the tap ends
+    /// with <see cref="SiblingNotice_Wording.REFUSED_AT_THE_TAP"/>; and the helper prints a bare number.
+    /// </summary>
+    [Fact]
+    public void TheRefusalShapes_AreTheOnesTheAppWrites()
+    {
+        var solo = Read(SKILL);
+
+        Assert.Contains("**`request REJECTED`**", solo);
+        Assert.Contains("Fix it and drop a new file (same action string).", solo);
+        Assert.Contains(SiblingNotice_Wording.NOTHING_CHANGED.TrimEnd('.'), Flatten(solo));
+        Assert.Contains(SiblingNotice_Wording.REFUSED_AT_THE_TAP, Flatten(solo));
+        Assert.DoesNotContain("Note the `[n]` the helper prints", solo);
+        Assert.Contains("before your first outbox entry after the HANDOVER", Flatten(solo));
     }
 
     /// <summary>
@@ -159,6 +193,12 @@ public class SoloIsToldAboutSiblingsTests
 
         Assert.Contains("never start a sibling", general);
         Assert.Contains("🔗", general);
+    }
+
+    /// <summary>Prose wraps at ~100 columns; a quoted sentence may cross a line and its indent.</summary>
+    static string Flatten(string text)
+    {
+        return System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ");
     }
 
     /// <summary>Refuses rather than passing about prose it never read (decision 20).</summary>

@@ -17,6 +17,10 @@ one Bash call, as at boot.
   The app rewrites it on its tick; nothing watches it, so reading it wakes nobody.
 - Both files are DERIVED by the app, never authored: never edit them, and `.siblings` disappears when
   you have no open sibling left.
+- **Create your outbox before your first append — nobody else does.** The helper refuses a channel
+  that does not exist (`channel … does not exist`, exit 2), and a child's outbox does not exist until
+  it writes one. `touch` never truncates, so run it before any append, every time:
+  `touch "$ORCH/sibling-outbox.md"`. Never fall back to `>>`: the helper allocates the `[n]`.
 - **Append with the helper, always:**
   `channel-append.sh --channel "$ORCH/sibling-outbox.md" --author solo --subject "<subject>" --body-file <file>`.
   It signs `FROM solo`; the FILE says which sibling wrote it. This holds under `AIORCH_RUNNER=print`

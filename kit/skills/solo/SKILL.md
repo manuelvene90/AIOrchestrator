@@ -702,12 +702,15 @@ a spend increase, exactly like promotion — and the owner confirms it with a ta
    the request's `worktree`. It must be a worktree of your repo, and never your own tree or another
    sibling's — siblings never share a tree.
 2. **A `HANDOVER` entry in YOUR OUTBOX** — not in your owner channel. Resolve the folder once with
-   `ORCH="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS"` and append with
+   `ORCH="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS"`. **Nobody creates the
+   outbox for you, and the helper refuses a channel that does not exist** (`channel … does not exist`,
+   exit 2), so create it first — `touch` never truncates, so it is safe every time:
+   `touch "$ORCH/sibling-outbox.md"`. Then append with
    `channel-append.sh --channel "$ORCH/sibling-outbox.md" --author solo --subject "HANDOVER — <job>" --body-file <file>`.
    The body is the child's whole brief, because it starts with nothing else: the job, the files it
    owns, the files you keep, the ambient files nobody owns (`.csproj`, DI registrations, shared
-   constants, `CLAUDE.md`), the traps, and the base branch. **Note the `[n]` the helper prints** — it
-   is the one index you never guess, and the request cites it.
+   constants, `CLAUDE.md`), the traps, and the base branch. **Note the number the helper prints** (a
+   bare `14`, no brackets) — it is the one index you never guess, and the request cites it.
 3. **The request.** Write `$AIORCH_SUPERVISION_ROOT/.requests/sibling-$ARGUMENTS-<timestamp>.json`
    (your orch id and a timestamp in the filename, as for a close):
 
@@ -728,21 +731,32 @@ a spend increase, exactly like promotion — and the owner confirms it with a ta
      characters, and not the name of an open sibling. One word after the code is refused.
    - `job` is one line of at most 200 characters — a headline the owner reads on the prompt; the
      brief is your HANDOVER entry.
-   - `handover` is the `[n]` from step 2, a whole number. `worktree` is absolute. `reason` is
+   - `handover` is the number from step 2, a whole number (never a string). `worktree` is absolute. `reason` is
      required and relayed to the owner — they are being asked to spend, so say on what.
 4. **One line to the owner** that you have asked, and why.
 5. **Back to work.** Nothing has started; you are still the only session on this job.
 
 **Do not re-drop the request. The app answers with a `FROM app` entry either way** — `sibling HELD`
-while the owner decides, then started, declined, or lapsed (12 hours unanswered). A `sibling REFUSED`
-entry names the one rule the request broke and ends "The owner has NOT been asked and nothing was
-changed": fix that and file a fresh request. A retry citing the same HANDOVER is answered with what
+while the owner decides, then started, declined, or lapsed (12 hours unanswered). A refusal comes in
+one of three shapes, and each means nothing started:
+- **`request REJECTED`** — the FILE itself is malformed (a one-word name, a missing `reason`,
+  `"handover": "14"` as a string, a job over 200 characters): "Your request file was rejected:
+  <reason>. Fix it and drop a new file (same action string)." This is the commonest one.
+- **`sibling REFUSED — …`** — the file is well-formed and the world says no (no such HANDOVER entry,
+  a worktree that is missing, shared or not of your repo, the name taken, the cap reached). It names
+  the one rule broken and ends "The owner has NOT been asked and nothing was changed".
+- **The same `sibling REFUSED — …` found at the tap** — it held when asked and not when the owner
+  tapped, so it ends instead "The owner tapped Start, but the request no longer held at that moment,
+  so nothing was started. File a fresh request if it still applies."
+
+Fix what it names and file a fresh request. A retry citing the same HANDOVER is answered with what
 already happened, never with a second sibling — **one HANDOVER entry starts at most one sibling**, so
 a second sibling needs a second HANDOVER entry with its own brief. During a usage-limit pause the
 request, and a tap the owner already gave, wait until the pause lifts.
 
-**Once you are linked, the protocol lives in `reference/siblings.md` — READ it before your first
-outbox entry.** It is inside the plugin, and a bare `reference/...` is NOT a path your tools can
+**Once you are linked, the protocol lives in `reference/siblings.md` — READ it as soon as the app
+says the sibling started, before your first outbox entry after the HANDOVER** (the HANDOVER itself
+is written before you are linked, by this recipe). A child reads it at boot. It is inside the plugin, and a bare `reference/...` is NOT a path your tools can
 open; resolve the folder with this and read from it:
 
 ```bash

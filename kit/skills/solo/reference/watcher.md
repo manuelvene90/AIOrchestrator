@@ -70,7 +70,8 @@ sib_line_of() {
 
 # Sets SIB_LIST (the lines of .siblings), SIB_FP (one "<path>|<size> <hash>" line per outbox) and
 # SIB_ERR (what failed, or empty). An outbox that cannot be read keeps its PREVIOUS line: unknown,
-# never a change. One that does not exist yet is "absent", so its first entry IS a change.
+# never a change. One that does not exist yet, or is still EMPTY (the taught `touch` before a first
+# append), is "absent" - so its first entry IS a change, and the touch alone is not.
 read_sib_fp() {
   SIB_LIST=""; SIB_FP=""; SIB_ERR=""
   [ -f "$sibs" ] || return 0
@@ -80,7 +81,7 @@ read_sib_fp() {
   local id path rest size hash kept
   while IFS=$'\t' read -r id path rest; do
     [ -n "$id" ] && [ -n "$path" ] || continue
-    if [ ! -e "$path" ]; then SIB_FP="$SIB_FP$path|absent"$'\n'; continue; fi
+    if [ ! -s "$path" ]; then SIB_FP="$SIB_FP$path|absent"$'\n'; continue; fi
     # Hashed from stdin, not from a file argument: md5sum escapes its whole output line when the
     # path holds a backslash, which every Windows path in .siblings does.
     if ! size="$(wc -c < "$path" 2>/dev/null)" || [ -z "$size" ] \

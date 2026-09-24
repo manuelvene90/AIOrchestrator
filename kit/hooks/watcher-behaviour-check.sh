@@ -52,16 +52,22 @@ check() {
 
 # ---------------------------------------------------------------------------------------------
 # Per-role facts. Only paths differ: which channel file the loop watches, which folder receives the
-# marker, and what the wake line says.
+# marker, what the wake line says, and the reason the marker gives for a failed read.
 #
-#   role | channel path under the fake HOME | orchestration folder | wake phrase
+#   role | channel path under the fake HOME | orchestration folder | wake phrase | marker reason
+#
+# THE REASON IS PER ROLE, EXACT, and never a loose match (decision 20: a check with two routes to green
+# pins neither). One-file watchers say `md5sum failed`. The SUPERVISOR watches a SET of channels and has
+# said WHICH one is blind since 9ba1c372 (2026-08-14 23:47, one fingerprint line per channel) — this
+# column used to hold the single-file wording for it too and was red from that commit until 2026-09-24.
+# `<channel>` is replaced with the absolute path of the role's watched channel.
 # ---------------------------------------------------------------------------------------------
 ROLES="
-implementer|.claude/supervision/<orch-id>/<member-id>/channel.md|.claude/supervision/<orch-id>|YOUR CHANNEL CHANGED
-reviewer|.claude/supervision/<orch-id>/<member-id>/channel.md|.claude/supervision/<orch-id>|YOUR CHANNEL CHANGED
-solo|.claude/supervision/orch-under-test/owner-channel.md|.claude/supervision/orch-under-test|OWNER WROTE
-supervisor|.claude/supervision/orch-under-test/imp-1/channel.md|.claude/supervision/orch-under-test|CHANNELS CHANGED
-general-supervisor|.claude/supervision/general/channel.md|.claude/supervision/general|GENERAL CHANNEL CHANGED
+implementer|.claude/supervision/<orch-id>/<member-id>/channel.md|.claude/supervision/<orch-id>|YOUR CHANNEL CHANGED|md5sum failed
+reviewer|.claude/supervision/<orch-id>/<member-id>/channel.md|.claude/supervision/<orch-id>|YOUR CHANNEL CHANGED|md5sum failed
+solo|.claude/supervision/orch-under-test/owner-channel.md|.claude/supervision/orch-under-test|OWNER WROTE|md5sum failed
+supervisor|.claude/supervision/orch-under-test/imp-1/channel.md|.claude/supervision/orch-under-test|CHANNELS CHANGED|md5sum on <channel> failed
+general-supervisor|.claude/supervision/general/channel.md|.claude/supervision/general|GENERAL CHANNEL CHANGED|md5sum failed
 "
 
 # Pulls the fenced bash block that defines read_fp out of a role command.
@@ -83,7 +89,7 @@ extract_block() {
 }
 
 run_role() {
-  local role="$1" channel_rel="$2" orch_rel="$3" phrase="$4"
+  local role="$1" channel_rel="$2" orch_rel="$3" phrase="$4" reason_template="$5"
   # The watcher loop lives in the role's reference file since the protocols were split; the
   # SKILL.md that owns it only carries the imperative pointer to read it.
   local src="$SKILLS_DIR/$role/reference/watcher.md"
@@ -165,7 +171,12 @@ PREAMBLE
   # AIORCH_ID and ARGUMENTS are DERIVED from the folder rather than typed, so the environment and the
   # tree can never disagree. Typing them cost this harness two false failures: the marker landed in a
   # folder that did not exist, and the loop correctly declined to create it.
-  } | HOME="$home" ARGUMENTS="$(basename "$orch_rel")" AIORCH_ID="$(basename "$orch_rel")" AIORCH_MEMBER="imp-under-test" \
+  #
+  # AIORCH_SUPERVISION_ROOT IS PINNED TO THE TEMP TREE, not left to HOME: every watcher reads it FIRST.
+  # Run from inside a live session (where it is set) this loop used to watch the REAL tree and — worse —
+  # WRITE into it: the general supervisor's mark_unreadable dropped a false `.guard-not-in-force` into
+  # the real `general/` folder (review of f2a6b02, 2026-09-24). A harness must never reach the live root.
+  } | HOME="$home" AIORCH_SUPERVISION_ROOT="$home/.claude/supervision" ARGUMENTS="$(basename "$orch_rel")" AIORCH_ID="$(basename "$orch_rel")" AIORCH_MEMBER="imp-under-test" \
       bash "$home/driven.sh" > "$out" 2>"$home/err.txt"
 
   local fires blind marker_reason
@@ -182,7 +193,7 @@ PREAMBLE
 
   if [ -f "$orch/.guard-not-in-force" ]; then
     marker_reason="$(sed -n '3p' "$orch/.guard-not-in-force")"
-    check "$role: the marker names the command that failed" "md5sum failed" "$marker_reason"
+    check "$role: the marker names the command that failed" "${reason_template//<channel>/$channel}" "$marker_reason"
     check "$role: the marker names the watcher" "watcher" "$(sed -n '1p' "$orch/.guard-not-in-force")"
     # Line 6 is the consequence. Without it the app renders every marker as "ALLOWED the call", which
     # is the hooks' contract and false of a watcher — there is no call.
@@ -202,13 +213,24 @@ PREAMBLE
 # the loop here. The owner half runs alongside it, untouched, and must stay silent in this stream.
 #
 # Steps, on top of run_role's ok/fail:
-#   sibappend  an entry lands in sibling B's outbox
+#   sibappend  sibling B appends to its outbox THROUGH THE REAL bin/channel-append.sh, as a solo
+#              (AIORCH_ROLE=solo) — so `sibling-outbox.md.self-write.solo` exists beside it, the exact
+#              record a "helpful" self-write suppression in the sibling loop would read and obey. A bare
+#              printf never wrote that record, so such a mutant stayed green (review of f2a6b02, I2).
 #   sibadd     sibling C joins .siblings, its outbox already holding one entry (first sight)
+#   sibaddd    sibling D joins .siblings with NO outbox yet — a newborn child (review I3)
+#   sibdfirst  D creates its outbox as taught (touch) and appends its first entry in the same gap:
+#              the `absent` state is the only thing that makes that first entry a wake
+#   sibadde    sibling E joins, no outbox yet
+#   sibetouch  E runs the taught `touch` and writes nothing: an empty outbox is still `absent`
 #   pause      "$orch/.paused" appears — the owner put this solo to sleep
 #   unpause    it goes again
 #   sibfail    reads fail (md5sum cannot run), as run_role's `fail`
 # ---------------------------------------------------------------------------------------------
 run_sibling_case() {
+  local helper="$SCRIPT_DIR/../bin/channel-append.sh"
+  [ -f "$helper" ] || die "bin/channel-append.sh is not beside the hooks ($helper) — the sibling appends must go through the real helper"
+
   local src="$SKILLS_DIR/solo/reference/watcher.md"
   [ -f "$src" ] || die "solo/reference/watcher.md is not in $SKILLS_DIR — cannot test the sibling half it ships"
 
@@ -231,7 +253,7 @@ run_sibling_case() {
   local home; home="$(mktemp -d)"
   local root="$home/.claude/supervision"
   local orch="$root/orch-under-test"
-  mkdir -p "$orch" "$home/B" "$home/C"
+  mkdir -p "$orch" "$home/B" "$home/C" "$home/D" "$home/E"
   printf '## [1] FROM owner — subject\n' > "$orch/owner-channel.md"
   printf '## [1] FROM solo — HANDOVER — the limits job\n' > "$home/B/sibling-outbox.md"
   printf '## [1] FROM solo — HANDOVER — the settings job\n' > "$home/C/sibling-outbox.md"
@@ -251,12 +273,28 @@ run_sibling_case() {
     printf 'ORCH_UNDER_TEST="%s"\n' "$orch"
     printf 'B_OUTBOX="%s"\n' "$home/B/sibling-outbox.md"
     printf 'C_OUTBOX="%s"\n' "$home/C/sibling-outbox.md"
+    printf 'D_OUTBOX="%s"\n' "$home/D/sibling-outbox.md"
+    printf 'E_OUTBOX="%s"\n' "$home/E/sibling-outbox.md"
+    printf 'HELPER="%s"\n' "$helper"
     cat <<'PREAMBLE'
+# As a sibling solo writes: the real helper, signed by the session identity. The body comes on the
+# helper's stdin from printf, never from the loop's stdin, which carries the steps. A refusal is marked
+# in the timeline so the harness can tell "no wake" from "no write".
+sibling_writes() {
+  printf 'which DTO do you want?\n' \
+    | PATH="$REAL_PATH" AIORCH_ROLE=solo bash "$HELPER" --channel "$1" --author solo --subject "ASK — which DTO" --body-file - > /dev/null 2>&1 \
+    || echo "@helper-refused $1"
+}
+
 apply_step() {
   echo "@step $1"   # a timeline mark, so WHEN a wake happened can be checked, not only how many
   case "$1" in
-    sibappend) printf '## [n] FROM solo — ASK — which DTO\n' >> "$B_OUTBOX" ;;
+    sibappend) sibling_writes "$B_OUTBOX" ;;
     sibadd)    printf 'C\t%s\tlive\tAI-Orch · settings rows\n' "$C_OUTBOX" >> "$ORCH_UNDER_TEST/.siblings" ;;
+    sibaddd)   printf 'D\t%s\tlive\tAI-Orch · newborn child job\n' "$D_OUTBOX" >> "$ORCH_UNDER_TEST/.siblings" ;;
+    sibdfirst) touch "$D_OUTBOX"; sibling_writes "$D_OUTBOX" ;;
+    sibadde)   printf 'E\t%s\tlive\tAI-Orch · quiet child job\n' "$E_OUTBOX" >> "$ORCH_UNDER_TEST/.siblings" ;;
+    sibetouch) touch "$E_OUTBOX" ;;
     pause)     : > "$ORCH_UNDER_TEST/.paused" ;;
     unpause)   rm -f "$ORCH_UNDER_TEST/.paused" ;;
   esac
@@ -277,15 +315,22 @@ PREAMBLE
     echo sibadd; echo ok        # C seen for the first time: baseline, never a fire
     echo pause; echo sibappend; echo ok   # paused: quiet, and the baseline does not move
     echo unpause; echo ok       # FIRE 2 — the traffic that waited for the owner
+    echo sibaddd; echo ok       # D listed, no outbox: absent, not a failure, not a wake
+    echo sibdfirst; echo ok     # D FIRE 1 — a newborn's first entry is a change from absent
+    echo sibadde; echo ok       # E listed, no outbox
+    echo sibetouch; echo ok     # E touched and empty: still absent, no wake
     echo sibfail; echo ok       # a failed read is not a change
     for _ in $(seq 1 12); do echo sibfail; done   # twelve consecutive failed sibling reads
     echo ok
   } | HOME="$home" AIORCH_SUPERVISION_ROOT="$root" ARGUMENTS="orch-under-test" AIORCH_ID="orch-under-test" \
       bash "$home/driven.sh" > "$out" 2>"$home/err.txt"
 
-  local b_fires c_fires owner_fires sib_blind
+  local b_fires c_fires d_fires e_fires refused owner_fires sib_blind
   b_fires="$(grep -c "SIBLING B WROTE" "$out" 2>/dev/null || true)"
   c_fires="$(grep -c "SIBLING C WROTE" "$out" 2>/dev/null || true)"
+  d_fires="$(grep -c "SIBLING D WROTE" "$out" 2>/dev/null || true)"
+  e_fires="$(grep -c "SIBLING E WROTE" "$out" 2>/dev/null || true)"
+  refused="$(grep -c "^@helper-refused" "$out" 2>/dev/null || true)"
   owner_fires="$(grep -c "OWNER WROTE" "$out" 2>/dev/null || true)"
   sib_blind="$(grep -c "WATCHER BLIND — a sibling outbox" "$out" 2>/dev/null || true)"
 
@@ -299,7 +344,12 @@ PREAMBLE
   check "solo siblings: B's appends wake it, once live and once after the pause (2)" "2" "$b_fires"
   check "solo siblings: silent while paused" "0" "$during_pause"
   check "solo siblings: the traffic that waited fires on the first read after unpause" "1" "$after_unpause"
+  check "solo siblings: the real helper accepted every sibling append" "0" "$refused"
+  check "solo siblings: B's appends left the solo self-write record the loop must NOT obey" \
+    "present" "$([ -f "$home/B/sibling-outbox.md.self-write.solo" ] && echo present || echo absent)"
   check "solo siblings: a sibling seen for the first time is baseline, never a wake" "0" "$c_fires"
+  check "solo siblings: a newborn's first entry into a just-created outbox wakes it once" "1" "$d_fires"
+  check "solo siblings: a touched, empty outbox is still absent — no wake" "0" "$e_fires"
   check "solo siblings: the owner half is not disturbed by sibling traffic" "0" "$owner_fires"
   check "solo siblings: says it is blind to the outboxes once after twelve failed reads" "1" "$sib_blind"
 
@@ -310,9 +360,10 @@ printf 'watcher behaviour — running the loop shipped in %s\n\n' "$SKILLS_DIR"
 
 # A herestring, never a pipe: a piped `while` runs in a subshell and its FAILURES count would be
 # discarded, which is this harness certifying itself green by losing the evidence.
-while IFS='|' read -r role channel orch phrase; do
+while IFS='|' read -r role channel orch phrase reason; do
   [ -n "$role" ] || continue
-  run_role "$role" "$channel" "$orch" "$phrase"
+  [ -n "$reason" ] || die "ROLES row for '$role' has no expected marker reason — every role states its own"
+  run_role "$role" "$channel" "$orch" "$phrase" "$reason"
 done <<< "$(printf '%s\n' "$ROLES")"
 
 run_sibling_case
