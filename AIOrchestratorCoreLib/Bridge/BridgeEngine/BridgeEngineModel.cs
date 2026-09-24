@@ -8045,20 +8045,8 @@ internal sealed class BridgeEngineModel(
             return Build_OrchestrationLedgerText(session.OrchId, session.DisplayName ?? session.OrchId, unfinishedOnly);
         }
 
-        List<string> blocks = [];
-
-        foreach (var session in _store.Load_All())
-        {
-            if (session.ClosedUtc != null)
-                continue;
-
-            blocks.Add(Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId));
-        }
-
-        if (blocks.Count == 0)
-            return "no open orchestrations";
-
-        return string.Join('\n', blocks);
+        // General's body — moved out with the sibling plan (2026-09-23, Task 11), which groups an endeavour.
+        return Telegram.ProgressReport_Builder.Build_OpenOrchestrationsText(_paths, _store.Load_All());
     }
 
     /// <summary>Full ledger for one orchestration — the raw '- [x]' lines are the point of the command.</summary>
@@ -8091,19 +8079,10 @@ internal sealed class BridgeEngineModel(
         return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{ledger}";
     }
 
-    /// <summary>
-    /// <paramref name="previous"/> is passed by the PERIODIC push alone. `/status` is on demand and
-    /// answers "where is this now", so a delta against a message the owner may not have been looking
-    /// at would be a number with no visible baseline.
-    /// </summary>
+    /// <summary>One spelling of the counts line (decision 12): see <see cref="Telegram.ProgressReport_Builder.Build_CountsLine"/>.</summary>
     string Build_OrchestrationCountsLine(string orchId, string displayName, Planning.PlanProgressSnapshot? previous = null)
     {
-        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
-
-        if (progress == null)
-            return $"{displayName}: no task ledger yet";
-
-        return $"{displayName}: {Planning.PlanProgress_Formatter.Describe_Counts(progress, previous)}";
+        return Telegram.ProgressReport_Builder.Build_CountsLine(_paths, orchId, displayName, previous);
     }
 
     /// <summary>
