@@ -195,6 +195,117 @@ PREAMBLE
   rm -rf "$home"
 }
 
+# ---------------------------------------------------------------------------------------------
+# THE SOLO'S SIBLING HALF (spec 2026-09-23 §5.3). A linked solo also watches every outbox listed in
+# "$orch/.siblings", in the SAME loop and the SAME fenced block as its owner half, so it is driven by
+# the same two rewrites and extracted by the same extract_block — there is still no second copy of
+# the loop here. The owner half runs alongside it, untouched, and must stay silent in this stream.
+#
+# Steps, on top of run_role's ok/fail:
+#   sibappend  an entry lands in sibling B's outbox
+#   sibadd     sibling C joins .siblings, its outbox already holding one entry (first sight)
+#   pause      "$orch/.paused" appears — the owner put this solo to sleep
+#   unpause    it goes again
+#   sibfail    reads fail (md5sum cannot run), as run_role's `fail`
+# ---------------------------------------------------------------------------------------------
+run_sibling_case() {
+  local src="$SKILLS_DIR/solo/reference/watcher.md"
+  [ -f "$src" ] || die "solo/reference/watcher.md is not in $SKILLS_DIR — cannot test the sibling half it ships"
+
+  local block
+  block="$(extract_block "$src")"
+  [ -n "$block" ] || die "no fenced bash block defining read_fp in solo/reference/watcher.md"
+
+  local driven
+  driven="$(printf '%s' "$block" | sed -e 's/^while true; do$/while read -r step; do/' -e 's/^  sleep 5$/  apply_step "$step"/')"
+
+  case "$driven" in
+    *'while read -r step; do'*) : ;;
+    *) die "solo sibling case: the 'while true; do' rewrite did not apply — the loop shape changed and this harness would have tested nothing" ;;
+  esac
+  case "$driven" in
+    *'apply_step "$step"'*) : ;;
+    *) die "solo sibling case: the 'sleep 5' rewrite did not apply — the loop shape changed and this harness would have tested nothing" ;;
+  esac
+
+  local home; home="$(mktemp -d)"
+  local root="$home/.claude/supervision"
+  local orch="$root/orch-under-test"
+  mkdir -p "$orch" "$home/B" "$home/C"
+  printf '## [1] FROM owner — subject\n' > "$orch/owner-channel.md"
+  printf '## [1] FROM solo — HANDOVER — the limits job\n' > "$home/B/sibling-outbox.md"
+  printf '## [1] FROM solo — HANDOVER — the settings job\n' > "$home/C/sibling-outbox.md"
+  printf 'B\t%s\tlive\tAI-Orch · limits rework\n' "$home/B/sibling-outbox.md" > "$orch/.siblings"
+
+  local shim="$home/shim"
+  mkdir -p "$shim"
+  # md5 as well as md5sum: the sibling half falls back to BSD `md5 -q` as the kit rule requires, and on
+  # macOS a shim of md5sum alone would leave the read succeeding and the failure branch untested.
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$shim/md5sum"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$shim/md5"
+  chmod +x "$shim/md5sum" "$shim/md5"
+
+  {
+    printf 'REAL_PATH="%s"\n' "$PATH"
+    printf 'SHIM_DIR="%s"\n' "$shim"
+    printf 'ORCH_UNDER_TEST="%s"\n' "$orch"
+    printf 'B_OUTBOX="%s"\n' "$home/B/sibling-outbox.md"
+    printf 'C_OUTBOX="%s"\n' "$home/C/sibling-outbox.md"
+    cat <<'PREAMBLE'
+apply_step() {
+  echo "@step $1"   # a timeline mark, so WHEN a wake happened can be checked, not only how many
+  case "$1" in
+    sibappend) printf '## [n] FROM solo — ASK — which DTO\n' >> "$B_OUTBOX" ;;
+    sibadd)    printf 'C\t%s\tlive\tAI-Orch · settings rows\n' "$C_OUTBOX" >> "$ORCH_UNDER_TEST/.siblings" ;;
+    pause)     : > "$ORCH_UNDER_TEST/.paused" ;;
+    unpause)   rm -f "$ORCH_UNDER_TEST/.paused" ;;
+  esac
+  case "$1" in
+    sibfail) PATH="$SHIM_DIR:$REAL_PATH" ;;
+    *)       PATH="$REAL_PATH" ;;
+  esac
+}
+PREAMBLE
+    printf '%s\n' "$driven"
+  } > "$home/driven.sh"
+
+  local out="$home/out.txt"
+
+  {
+    echo ok; echo ok            # quiet baseline
+    echo sibappend; echo ok     # FIRE 1 — B wrote
+    echo sibadd; echo ok        # C seen for the first time: baseline, never a fire
+    echo pause; echo sibappend; echo ok   # paused: quiet, and the baseline does not move
+    echo unpause; echo ok       # FIRE 2 — the traffic that waited for the owner
+    echo sibfail; echo ok       # a failed read is not a change
+    for _ in $(seq 1 12); do echo sibfail; done   # twelve consecutive failed sibling reads
+    echo ok
+  } | HOME="$home" AIORCH_SUPERVISION_ROOT="$root" ARGUMENTS="orch-under-test" AIORCH_ID="orch-under-test" \
+      bash "$home/driven.sh" > "$out" 2>"$home/err.txt"
+
+  local b_fires c_fires owner_fires sib_blind
+  b_fires="$(grep -c "SIBLING B WROTE" "$out" 2>/dev/null || true)"
+  c_fires="$(grep -c "SIBLING C WROTE" "$out" 2>/dev/null || true)"
+  owner_fires="$(grep -c "OWNER WROTE" "$out" 2>/dev/null || true)"
+  sib_blind="$(grep -c "WATCHER BLIND — a sibling outbox" "$out" 2>/dev/null || true)"
+
+  # The COUNT alone cannot tell "silent while paused, fires on unpause" from "fires during the pause,
+  # silent after": both make two. So the wakes are read against the step marks as well.
+  local during_pause after_unpause
+  during_pause="$(awk '/^@step pause$/ { on = 1; next } /^@step unpause$/ { on = 0 } on && /SIBLING B WROTE/ { n++ } END { print n + 0 }' "$out")"
+  after_unpause="$(awk '/^@step unpause$/ { on = 1; next } /^@step / { on = 0 } on && /SIBLING B WROTE/ { n++ } END { print n + 0 }' "$out")"
+
+  printf 'solo (siblings)\n'
+  check "solo siblings: B's appends wake it, once live and once after the pause (2)" "2" "$b_fires"
+  check "solo siblings: silent while paused" "0" "$during_pause"
+  check "solo siblings: the traffic that waited fires on the first read after unpause" "1" "$after_unpause"
+  check "solo siblings: a sibling seen for the first time is baseline, never a wake" "0" "$c_fires"
+  check "solo siblings: the owner half is not disturbed by sibling traffic" "0" "$owner_fires"
+  check "solo siblings: says it is blind to the outboxes once after twelve failed reads" "1" "$sib_blind"
+
+  rm -rf "$home"
+}
+
 printf 'watcher behaviour — running the loop shipped in %s\n\n' "$SKILLS_DIR"
 
 # A herestring, never a pipe: a piped `while` runs in a subshell and its FAILURES count would be
@@ -203,6 +314,8 @@ while IFS='|' read -r role channel orch phrase; do
   [ -n "$role" ] || continue
   run_role "$role" "$channel" "$orch" "$phrase"
 done <<< "$(printf '%s\n' "$ROLES")"
+
+run_sibling_case
 
 printf '\n%s checks, %s failures\n' "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ] || exit 1
