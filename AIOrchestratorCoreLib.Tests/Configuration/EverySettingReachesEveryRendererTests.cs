@@ -327,6 +327,58 @@ public class EverySettingReachesEveryRendererTests : IDisposable
     }
 
     /// <summary>
+    /// THE TWO TELEGRAM IDS SAY "RESTART" EVERYWHERE (final review I1, 2026-09-24). The bridge reads both once, at
+    /// startup — the factory builds the client with the startup chat id, the inbound loop captures both before its
+    /// first poll — and they were labelled "applies at once", so a move to a new supergroup read as landed in all
+    /// three renderers while the bridge kept talking to the old one. The labels are compared across renderers above;
+    /// this pins them to the truth for the rows whose reader is known to run only at startup, and the token's own
+    /// Save line (not a catalogue row, so no label reaches it) to master's sentence.
+    /// </summary>
+    [Fact]
+    public void TheRowsTheBridgeReadsOnlyAtStartup_SayRestartInAllThree()
+    {
+        var (readings, presetName) = Read_Snapshot();
+        var webRows = Get_WebRows();
+
+        foreach (var path in new[] { "telegramSupergroupChatId", "telegramOwnerUserId", "telegramInbound" })
+        {
+            var reading = Find(readings, path);
+            var web = webRows.Single(row => row["path"]!.GetValue<string>() == path);
+
+            Assert.Equal(RestartKinds.Host, reading.Definition.Restart);
+            Assert.Equal(RestartKind_Labels.HOST, SettingEditor_Factory.Create_ForReading(reading).Reading.RestartLabel);
+            Assert.Equal(RestartKind_Labels.HOST, web["restartLabel"]!.GetValue<string>());
+            Assert.Contains(RestartKind_Labels.HOST, Build_SettingView(reading, readings, presetName), StringComparison.Ordinal);
+        }
+
+        Assert.Contains("need an app restart", SettingsRow_Builder.BOT_TOKEN_SAVED_NOTE, StringComparison.Ordinal);
+        Assert.Contains("SettingsRow_Builder.BOT_TOKEN_SAVED_NOTE", Strip_Comments(Read_RepoFile("AIOrchestrator", "SettingsWindow.xaml.cs")), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ONE "DID IT TAKE EFFECT" (final review M2, 2026-09-24). Every PUT/DELETE result carries the writer's own
+    /// <c>Took_Effect</c> verdict, and the page reads that flag — it holds no switch over outcome words of its own,
+    /// so an outcome added later is classified once, in C#, for all three renderers (decision 12).
+    /// </summary>
+    [Fact]
+    public void ThePage_ReadsTheServersTookEffectVerdict_AndKeepsNoCopyOfIt()
+    {
+        var applied = Read_SingleResult(Put(new JsonObject { [NUMBER_PATH] = 45 }).Body);
+        var refused = Read_SingleResult(Put(new JsonObject { [NUMBER_PATH] = 500 }).Body);
+        var reset = Read_SingleResult(Handle("DELETE", $"{SettingsRequest_Handler.SETTINGS_PATH}?{SettingsRequest_Handler.RESET_QUERY_KEY}={NUMBER_PATH}", "").Body);
+
+        Assert.True(applied["tookEffect"]!.GetValue<bool>());
+        Assert.False(refused["tookEffect"]!.GetValue<bool>());
+        Assert.True(reset["tookEffect"]!.GetValue<bool>());
+
+        var page = SettingsPage_Reader.Read_Html();
+
+        Assert.Contains("result.tookEffect === true", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("function tookEffect(", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("=== 'Applied'", page, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// AND ALL THREE REFUSE THE SAME THINGS, for the same reason and with the same message — because none of
     /// them decides: Settings_Writer asks the definition (CLAUDE.md decision 21).
     /// </summary>

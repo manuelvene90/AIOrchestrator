@@ -345,3 +345,83 @@ The limits:
 - Neither Linux nor CI has run this branch.
 - The owner's running app is the "- Copia" copy and holds none of this. Nothing here is live until the branch is
   merged, rebuilt and re-copied, and the app is restarted (decision 23).
+
+---
+
+## 11. Final review fixes (`task-10-fix2-commit.txt`, on top of `6ba4efe`)
+
+The final review is `.superpowers/sdd/2026-09-12-settings-renderers-04/final-review.md`. This round fixes I1 and M2.
+It does not touch I2 (CLAUDE.md decision 25; the owner has to ask for that edit), M1, M3 or M4. **Copy read:** the
+branch source of this worktree at `6ba4efe`, built into this worktree's `bin\Debug`.
+
+### I1 — rows labelled "applies at once" whose reader only runs at startup
+
+- **`telegramSupergroupChatId` and `telegramOwnerUserId` changed from `RestartKinds.None` to `Host`**, each with a
+  comment giving the reason:
+  - `BridgeEngine_Factory.Create_WithTiming` builds the Telegram client from the startup config, and builds no
+    client at all when these were absent.
+  - `BridgeEngineModel.Run_InboundLoop_Async` captures both ids before its first poll.
+  - All three renderers draw `reading.RestartLabel`, so each one now shows "applies after the app or daemon
+    restarts — nothing restarts it for you":
+    - the WPF RowTemplate, on the Connection tab and in Kernel;
+    - the web page's `restartLabel`;
+    - the menu's Setting view.
+- **The token's Save no longer says a bare "Saved.".** There is a new `SettingsRow_Builder.BOT_TOKEN_SAVED_NOTE`: "Saved.
+  Telegram bridge changes need an app restart — the running bridge keeps the old token until then, and nothing
+  restarts it for you." This restores master's `RestartNoteText` meaning. The window binds it, and the sentence
+  lives in CoreLib so a test can reach it.
+- **What I checked, so no other row is mislabelled the same way.** I grepped every `Get_Current()` read in
+  CoreLib, the app and the daemon for a value captured once and kept, whether in `startupConfig`, a field, or a
+  loop-start local:
+  - The only startup captures are `BridgeEngine_Factory:53` (token + chat id → the client) and
+    `BridgeEngineModel:7126` (chat id, owner id, `telegramInbound`). `telegramInbound` was already `Host`.
+  - Every other `None` row is read per use. For each, the call site:
+    - `telegramStatusScreenshots` (:3611, :14463)
+    - `voiceTranscribeCommand` (:16160)
+    - `orchestrationTokenBudget` (:3389)
+    - `highRiskConfirmation` (via `Guardrails` at :4529 / :11753)
+    - `defaults.orchestrationMode` (:5247)
+    - `web.token` (the host re-reads it when the provider instance changes)
+    - `session.*` (read from session.json)
+    - `phone.push` (:15705)
+    - `phone.status.*` (the sweep at :14410 takes `Phone` each tick)
+    - `away.afterMinutes` (:15067, :15094)
+    - `phone.appMessagesRing` and `phone.fold` / `phone.attach` (via `Phone` per append, :3943)
+    - `phone.aggregationSeconds` / `phone.finishedMessageSeconds` (the resolver lambda at :653, per take)
+    - `topic.onClose` (:5741)
+    - `topic.modeGlyphs` (:10097)
+    - `topic.repoColours` (:5186)
+    - `phone.receipts` (:14241, :8707)
+    - `pulse.*` and `general.buttons` (:8707, :8719, :10650)
+  - The `NextSpawn` rows are read by the launcher at each spawn (`OrchestrationLauncherModel:333-605`).
+  - The `Host` rows that are actually read live (`highRiskPatterns`, `highRiskCodeExpiryMinutes`,
+    `buttonExpiryMinutes`, `dispatchPauseThresholdPercent`) over-warn. That is harmless, and I left them as they are.
+- **Pinned by** `EverySettingReachesEveryRendererTests.TheRowsTheBridgeReadsOnlyAtStartup_SayRestartInAllThree`.
+  For the two ids and `telegramInbound`, it checks the `Host` kind and the HOST label in the WPF reading, the GET
+  and the menu, plus the token note's words and that the window uses the note. **Mutation:** turning
+  `telegramOwnerUserId` back to `None` turned it red. It passed again after the file was restored with `cmp`.
+
+### M2 — one "did it take effect"
+
+- `SettingsRequest_Handler.Answer_Results` puts `"tookEffect": Settings_Writer.Took_Effect(outcome)` on every
+  result, for both PUT and DELETE. The wire-shape doc names the new field.
+- The page's own `tookEffect(outcome)` switch is deleted. It reads `result.tookEffect === true`. It still picks
+  *which* ok sentence to show from the outcome ('Reset' → the writer's message or "Reset."), but it no longer decides
+  whether the write took effect.
+- **Pinned by** `ThePage_ReadsTheServersTookEffectVerdict_AndKeepsNoCopyOfIt`:
+  - Applied → true, RefusedInvalid → false, Reset → true, all on the wire.
+  - The page holds `result.tookEffect === true`, and neither `function tookEffect(` nor `=== 'Applied'`.
+- **Mutation:** hard-coding `tookEffect = true` in the handler turned it red. It passed again after the file was
+  restored with `cmp`. No existing test pinned the old page string.
+
+### Verification (with the jq PATH and `env -u AIORCH_*` on every command)
+
+```
+dotnet build AIOrchestrator.slnx -c Debug                                  → Errori: 0 (the warnings are the pre-existing xUnit analyzer set; none in touched files)
+dotnet build AIOrchestrator/AIOrchestrator.csproj -c Debug -warnaserror:CS → Avvisi: 0 · Errori: 0
+dotnet test … --filter "EverySettingReachesEveryRenderer|SettingsRequestHandler|SettingsWebHost|SettingsPageAsset|
+               SettingsCatalog|SettingsPresentation|SettingsWriting|SettingsMenu|SettingsReplyStep|SettingsButtonData"
+                                                                           → Superati: 518 · Ignorati: 2 · Non superati: 0
+```
+
+The full suite was not re-run, as the brief ruled.

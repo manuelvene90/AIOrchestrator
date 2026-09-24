@@ -249,10 +249,6 @@ function resetRow(path) {
   return send('DELETE', API + '?' + query.toString(), null, path);
 }
 
-function tookEffect(outcome) {
-  return outcome === 'Applied' || outcome === 'Reset';
-}
-
 async function send(method, url, body, path) {
   if (state.busy) return;
   state.busy = true;
@@ -272,7 +268,8 @@ async function send(method, url, body, path) {
     // own, never the status alone. Anything else carries one "error" for the whole request.
     if (Array.isArray(answer.results)) {
       for (const result of answer.results) {
-        state.notes[result.path] = tookEffect(result.outcome)
+        // The server's verdict (result.tookEffect), never the page's own reading of the outcome word.
+        state.notes[result.path] = result.tookEffect === true
           ? { kind: 'ok', text: result.outcome === 'Reset' ? (result.message || 'Reset.') : 'Saved.' }
           : { kind: 'err', text: result.message || ('Not applied (' + result.outcome + ').') };
       }

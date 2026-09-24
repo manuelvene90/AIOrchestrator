@@ -400,7 +400,10 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Telegram supergroup chat id",
             description: "The forum supergroup every topic is created in. Absent until the installer or the owner sets it.",
-            restart: RestartKinds.None,
+            // HOST, NOT NONE (final review I1, 2026-09-24): read ONCE at startup — BridgeEngine_Factory builds the client
+            // with the startup chat id (and no client at all when it was absent), and the inbound loop captures both ids
+            // before its first poll. "applies at once" here told the owner a move to a new group had landed when it had not.
+            restart: RestartKinds.Host,
             nullable: true));
 
         kernel.Add(SettingDefinition_Factory.Create_Int(
@@ -412,7 +415,9 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Telegram owner user id",
             description: "The one Telegram user whose messages the bridge accepts as the owner's. Absent until set.",
-            restart: RestartKinds.None,
+            // HOST, NOT NONE (final review I1): the inbound loop captures this id before its first poll and filters every
+            // update with it for the life of the process — the same startup read as telegramSupergroupChatId above.
+            restart: RestartKinds.Host,
             nullable: true));
 
         kernel.Add(SettingDefinition_Factory.Create_Bool(
