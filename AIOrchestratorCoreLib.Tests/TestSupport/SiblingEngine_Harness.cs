@@ -292,10 +292,17 @@ internal sealed class SiblingEngine_Harness : IDisposable
             : [];
     }
 
-    /// <summary>The orchestration's owner channel as it is on disk now.</summary>
+    /// <summary>
+    /// The orchestration's owner channel as it is on disk now, read through the production
+    /// <see cref="Tolerant_FileReader"/> for the reason <see cref="Read_Session"/> gives. Observed
+    /// 2026-09-24 (Task 15 run): <c>SiblingLifecycleTests.ClosingASiblingWithOpenLines_IsNotRefused</c>
+    /// failed with <c>IOException: … being used by another process</c> thrown from THIS read, while the
+    /// running engine appended to the same channel — the notice was never missing, the test's raw read
+    /// lost the sharing race. The tolerant reader retries that window and still throws when it gives up.
+    /// </summary>
     public string Channel(string orchId)
     {
-        return File.ReadAllText(Paths.Get_OwnerChannelFile(orchId));
+        return Tolerant_FileReader.Read_AllText(Paths.Get_OwnerChannelFile(orchId));
     }
 
     void Start_Loop_IfNotRunning()
