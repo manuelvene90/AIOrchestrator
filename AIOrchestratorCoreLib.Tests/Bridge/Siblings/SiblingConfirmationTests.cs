@@ -7,6 +7,7 @@ using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.Git;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Spawning;
+using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
@@ -450,7 +451,9 @@ public class SiblingConfirmationTests
         await harness.Tap_Async("Start it");
         var child = await Wait_ForChild_Async(harness, solo);
 
-        string Read_OrEmpty_Now(string path) => File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        // Every read below races the running engine's atomic rewrite of the same file, so it goes through
+        // Read_OrEmpty (the tolerant reader), never a raw File.ReadAllText — see Read_OrEmpty's doc.
+        string Read_OrEmpty_Now(string path) => Read_OrEmpty(path);
 
         Assert.True(
             await SiblingEngine_Harness.Wait_Until_Async(
@@ -466,7 +469,7 @@ public class SiblingConfirmationTests
                 WAIT_MILLISECONDS),
             $"the tick never wrote ENDEAVOUR.md for both.{Environment.NewLine}{harness.Log.Dump()}");
 
-        Assert.Contains($"branch {GitHead_Reader.Read_Branch_OrNull(harness.WorktreePath)}", File.ReadAllText(harness.Paths.Get_EndeavourDigestFile(solo)));
+        Assert.Contains($"branch {GitHead_Reader.Read_Branch_OrNull(harness.WorktreePath)}", Read_OrEmpty(harness.Paths.Get_EndeavourDigestFile(solo)));
     }
 
     /// <summary>
@@ -615,13 +618,21 @@ public class SiblingConfirmationTests
         if (!File.Exists(channelFilePath))
             return null;
 
-        return ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFilePath))
+        return ChannelEntry_Parser.Parse_All(Read_OrEmpty(channelFilePath))
             .LastOrDefault(entry => entry.Author == ChannelAuthors.App && entry.Subject.Contains(subjectFragment, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A file the running engine writes, read through the production <see cref="Tolerant_FileReader"/>
+    /// (the harness's <c>Channel</c> and <c>Read_Session</c> precedent, Tasks 13c and 15). Observed
+    /// 2026-09-24 (Task 18 gate, focused filter): <c>ABornSibling_AndItsParent_GetTheDerivedFilesOnTheTick</c>
+    /// failed with <c>IOException: … .siblings … being used by another process</c> thrown from a raw
+    /// <c>File.ReadAllText</c> here, while the tick's <c>Atomic_FileWriter</c> replaced the same file — the
+    /// file was being written correctly; the test's read lost the sharing race.
+    /// </summary>
     static string Read_OrEmpty(string path)
     {
-        return File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        return File.Exists(path) ? Tolerant_FileReader.Read_AllText(path) : string.Empty;
     }
 
     /// <summary>The statusline probe shape <c>DispatchPauseAcrossRestartTests</c> writes.</summary>

@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Bridge.Siblings;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
@@ -64,7 +65,7 @@ public class SpawnSiblingArrivalTests
         var channel = requester == null ? harness.Paths.GeneralChannelFile : harness.Paths.Get_OwnerChannelFile(requester);
         var entry = Find_AppEntry_OrNull(channel, expectedSubject);
 
-        Assert.True(entry != null, $"no FROM app entry naming '{expectedSubject}' in '{channel}':{Environment.NewLine}{File.ReadAllText(channel)}");
+        Assert.True(entry != null, $"no FROM app entry naming '{expectedSubject}' in '{channel}':{Environment.NewLine}{Tolerant_FileReader.Read_AllText(channel)}");
         Assert.True(AppEntryAudience_Tag.Is_AgentTagged(entry!.Subject), $"the refusal must be an [agent] entry (decision 15), got '{entry.Subject}'");
 
         // "Never" needs a window: long enough for the ask sweep to have reached a parked file.
@@ -99,7 +100,13 @@ public class SpawnSiblingArrivalTests
 
         Assert.False(File.Exists(dropped));
 
-        var held = Find_AppEntry_OrNull(harness.Paths.Get_OwnerChannelFile(solo), "sibling HELD");
+        // The engine PARKS first and appends the HELD notice after (Process_SpawnSiblingRequests), so the
+        // parked file is visible a moment before the entry is. Observed 2026-09-24 (Task 18 gate): read at
+        // once, under load, the channel still held only its seed. Wait for the entry; never read it once.
+        IChannelEntry? held = null;
+        await SiblingEngine_Harness.Wait_Until_Async(
+            () => (held = Find_AppEntry_OrNull(harness.Paths.Get_OwnerChannelFile(solo), "sibling HELD")) != null,
+            WAIT_MILLISECONDS);
         Assert.True(held != null, $"the requester was not told its request is HELD:{Environment.NewLine}{harness.Channel(solo)}");
         Assert.True(AppEntryAudience_Tag.Is_AgentTagged(held!.Subject), $"the HELD notice is for the solo, not the owner's phone (decision 15), got '{held.Subject}'");
 
@@ -273,7 +280,7 @@ public class SpawnSiblingArrivalTests
         if (!File.Exists(channelFilePath))
             return null;
 
-        return ChannelEntry_Parser.Parse_All(File.ReadAllText(channelFilePath))
+        return ChannelEntry_Parser.Parse_All(Tolerant_FileReader.Read_AllText(channelFilePath))
             .LastOrDefault(entry => entry.Author == ChannelAuthors.App && entry.Subject.Contains(subjectFragment, StringComparison.Ordinal));
     }
 
