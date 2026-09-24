@@ -932,7 +932,8 @@ public static class SettingsCatalog
                     "Which fields the pulse line carries, in this order, under its header. 'modelEffort' is a legal field and " +
                     "is not shipped on the line — an owner who wants it adds it, and it rides the supervisor and member rows " +
                     "rather than drawing a line of its own. 'progress' is the task count alone, '1/12 (8%)' — the reading " +
-                    "'merged' carries without its label or its 'unchanged for' clause — and it is the one field with a place " +
+                    "'merged' carries without its label, and with the 'unchanged for' clause when pulse.unchangedFor is on " +
+                    "('1/12 (8%) · unchanged 25 min') — and it is the one field with a place " +
                     "outside this order: listed FIRST, it is drawn above the header, so it is the first line of the message and " +
                     "of a notification preview; listed anywhere else, it sits in its place like any other field. " +
                     "Omitting 'updated' removes the heartbeat, which is what tells the " +
@@ -954,6 +955,24 @@ public static class SettingsCatalog
                     "is EDITED at all. THE FLOOR IS NOT LOWER BY DEFAULT because of the 429 evidence of 2026-09-10: an " +
                     "edit per minute across every open topic is a rate-limit, and a status line that is rate-limited tells " +
                     "the owner nothing at all.",
+                restart: RestartKinds.None),
+
+            // THE "UNCHANGED FOR" CLAUSE (plan 03 task 19; owner 2026-09-24, ai-orchestrator-29 entry [100]: "my
+            // brother removed the indication ... of how long the progress and completion percentage have stayed
+            // identical in minutes. It's useful to get an idea if the session is working or not."). Shipped ON,
+            // today's behaviour for the shipped list, where `merged` carries it (ruling R14); quiet states false
+            // (ruling R26). The wording and the ten-minute silence are UnchangedFor_Formatter's, one copy.
+            SettingDefinition_Factory.Create_Bool(
+                path: PulseSettings.PulseSettings_Json.UNCHANGED_FOR_PATH,
+                shippedDefault: true,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Pulse,
+                label: "Say how long progress has stood still",
+                description:
+                    "Whether the pulse's progress reading says how long the task count and completion percentage have " +
+                    "stayed identical — 'unchanged 25 min', shown only once they have stood still for 10 minutes and " +
+                    "stepped by pulse.stepMinutes. A useful hint of whether the session is working. It rides whichever " +
+                    "of the 'progress' and 'merged' fields is drawn; off, neither says it.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_StringList(

@@ -113,7 +113,8 @@ public class CommandBarsTests
             stepMinutes: 5,
             buttons: buttons,
             generalButtons: generalButtons ?? TopicCommandButtons.GeneralCommands,
-            holdToggle: holdToggle);
+            holdToggle: holdToggle,
+            unchangedFor: true);
     }
 
     int Count_Warnings(string fragment)

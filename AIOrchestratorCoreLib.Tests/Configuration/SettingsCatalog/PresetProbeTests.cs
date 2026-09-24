@@ -98,6 +98,7 @@ public class PresetProbeTests
 
     // THE COUNT ON TOP, COMPACT (owner, 2026-09-23, plan 03 task 16): `progress` replaced `merged`.
     [InlineData("pulse.fields", """["progress","supervisor","members","modelEffort","updated"]""")]
+    [InlineData("pulse.unchangedFor", "true")]
     [InlineData("general.buttons", "[]")]
 
     // DELETE, NOT MASTER'S "close": the owner's answer to D2 (2026-09-14) is delete as the shipped
@@ -153,6 +154,10 @@ public class PresetProbeTests
     [InlineData("runners.general.resume", "\"fresh\"")]
     [InlineData("highRiskConfirmation", "true")]
     [InlineData("away.afterMinutes", "15")]
+
+    // THE ONE ROW QUIET STATES THAT IS NOT THE FORK'S TODAY (ruling R26, owner entry [100]): "my brother
+    // removed the indication" — so quiet reads it off.
+    [InlineData("pulse.unchangedFor", "false")]
     public void UnderQuiet_TheMachineResolvesToTheForksWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.QUIET, path));

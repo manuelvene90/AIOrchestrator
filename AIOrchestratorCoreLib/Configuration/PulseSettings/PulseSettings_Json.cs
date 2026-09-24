@@ -9,7 +9,7 @@ namespace AIOrchestratorCoreLib.Configuration.PulseSettings;
 /// The <c>pulse</c> rows and <c>general.buttons</c>, read:
 ///
 /// <code>
-/// "pulse": { "fields": ["supervisor", "merged", "updated"], "stepMinutes": 5, "holdToggle": false },
+/// "pulse": { "fields": ["supervisor", "merged", "updated"], "stepMinutes": 5, "holdToggle": false, "unchangedFor": true },
 /// "general": { "buttons": [] }
 /// </code>
 ///
@@ -44,6 +44,9 @@ public static class PulseSettings_Json
     /// <inheritdoc cref="BUTTONS_PATH"/>
     public const string HOLD_TOGGLE_PATH = "pulse.holdToggle";
 
+    /// <summary>Public because the catalogue row registers this spelling — one copy of the path.</summary>
+    public const string UNCHANGED_FOR_PATH = "pulse.unchangedFor";
+
     /// <summary>Both trees null is the catalogue's own shipped defaults — see <c>PhoneSettings_Json.Parse</c>.</summary>
     public static IPulseSettings Parse(JsonObject? configRoot, JsonObject? presetTree)
     {
@@ -52,7 +55,8 @@ public static class PulseSettings_Json
             (int)Settings_Resolver.Resolve_Long(Definition(STEP_MINUTES_PATH), presetTree, configRoot, session: null)!.Value,
             Read_StringList(BUTTONS_PATH, configRoot, presetTree),
             Read_StringList(GENERAL_BUTTONS_PATH, configRoot, presetTree),
-            Settings_Resolver.Resolve_Bool(Definition(HOLD_TOGGLE_PATH), presetTree, configRoot, session: null));
+            Settings_Resolver.Resolve_Bool(Definition(HOLD_TOGGLE_PATH), presetTree, configRoot, session: null),
+            Settings_Resolver.Resolve_Bool(Definition(UNCHANGED_FOR_PATH), presetTree, configRoot, session: null));
     }
 
     /// <summary>

@@ -1,5 +1,5 @@
 {
-  "_comment": "Nathan's way. Keys are flat dotted catalogue paths (SettingsJson_Path), deliberately not nested, so 'does this preset name only catalogue paths' is a one-line test. Only keys whose value differs from the shipped default appear here — a preset that restates a default is a default that can never move.",
+  "_comment": "Nathan's way. Keys are flat dotted catalogue paths (SettingsJson_Path), deliberately not nested, so 'does this preset name only catalogue paths' is a one-line test. Only keys whose value differs from the shipped default appear here — a preset that restates a default is a default that can never move. pulse.unchangedFor is false, the one row here that is not the fork's shipped behaviour (ruling R26): the owner said on 2026-09-24 (ai-orchestrator-29 entry [100]) that his brother removed the 'unchanged N min' reading from the pulse, so quiet keeps it off while the shipped default brings it back.",
   "phone.push": "everything",
   "phone.status.periodic": false,
   "phone.appMessagesRing": false,
@@ -11,5 +11,6 @@
   "runners.general.runner": "print",
   "runners.implementer.resume": "fresh",
   "runners.reviewer.resume": "fresh",
-  "runners.solo.resume": "fresh"
+  "runners.solo.resume": "fresh",
+  "pulse.unchangedFor": false
 }

@@ -49,14 +49,18 @@ public class PulseSettingsJsonTests : IDisposable
         Assert.Equal(UnchangedFor_Formatter.STEP_MINUTES, pulse.StepMinutes);
         Assert.Equal(["screen", "show", "merge", "test", "pc", "close", "pause", "progress"], pulse.Buttons);
         Assert.Empty(pulse.GeneralButtons);
+
+        // Not stated by classic: the shipped ON (task 19) — the owner wants the clause back.
+        Assert.True(pulse.UnchangedFor);
     }
 
     /// <summary>
-    /// Quiet states nothing in this block, so every row is the catalogue's own — the fork's seven
+    /// Quiet states ONE row in this block — <c>pulse.unchangedFor</c> false, ruling R26 (owner, entry [100]:
+    /// "my brother removed the indication") — so every other row is the catalogue's own: the fork's seven
     /// fields, the toggle on the bar, and both of the fork's button bars.
     /// </summary>
     [Fact]
-    public void UnderTheQuietPreset_ThePulseBlockIsTheCataloguesDefaults()
+    public void UnderTheQuietPreset_ThePulseBlockIsTheCataloguesDefaults_ButTheUnchangedClauseIsOff()
     {
         File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
 
@@ -72,6 +76,22 @@ public class PulseSettingsJsonTests : IDisposable
         Assert.Equal(UnchangedFor_Formatter.STEP_MINUTES, pulse.StepMinutes);
         Assert.Equal(["pending", "left", "tail sup", "limits", "merge", "close"], pulse.Buttons);
         Assert.Equal(TopicCommandButtons.GeneralCommands, pulse.GeneralButtons);
+        Assert.False(pulse.UnchangedFor);
+    }
+
+    /// <summary>
+    /// <c>pulse.unchangedFor</c> on the third rung, both ways round, and a word where a boolean belongs
+    /// costs the key its preset value, never the load.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"repos":[],"pulse":{"unchangedFor":false}}""", false)]
+    [InlineData("""{"repos":[],"preset":"quiet","pulse":{"unchangedFor":true}}""", true)]
+    [InlineData("""{"repos":[],"preset":"quiet","pulse":{"unchangedFor":"yes"}}""", false)]
+    public void TheUnchangedClauseInConfigJson_BeatsThePreset(string configJson, bool expected)
+    {
+        File.WriteAllText(_paths.ConfigFile, configJson);
+
+        Assert.Equal(expected, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Pulse.UnchangedFor);
     }
 
     /// <summary>config.json beats the preset — the third rung, for a list and for a bool.</summary>

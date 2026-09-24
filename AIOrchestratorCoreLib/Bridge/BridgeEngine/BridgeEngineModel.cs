@@ -10666,14 +10666,20 @@ internal sealed class BridgeEngineModel(
                 // button-only change itself, under its own back-off (plan 03 Task 17). The branch that
                 // used to promote None to Edit here compared a render key with raw text and moved out.
                 commandButtonRows,
-                lastWritten?.RenderKey);
+                lastWritten?.RenderKey,
+
+                // What the owner last saw at the bottom (ruling R27) — decided by the planner, stored here.
+                lastWritten?.SeenAtBottomKey,
+
+                // `pulse.unchangedFor` (plan 03 task 19), off the same single read as the fields and step.
+                pulse.UnchangedFor);
 
             var action = plan.Action;
             var text = plan.Text;
 
             // Remembered only once the write succeeds — a FAILED edit leaves the last one SENT standing,
             // so the next tick still sees the difference and retries it behind the back-off.
-            var written = new Telegram.WrittenTopicStatusLine(text, plan.RenderKey);
+            var written = new Telegram.WrittenTopicStatusLine(text, plan.RenderKey, plan.SeenAtBottomKey);
 
             if (action == Telegram.TopicStatusActions.None)
                 continue;
