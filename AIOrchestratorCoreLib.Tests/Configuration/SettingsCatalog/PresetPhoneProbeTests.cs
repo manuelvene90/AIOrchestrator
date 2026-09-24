@@ -396,6 +396,32 @@ public class PresetPhoneProbeTests : IDisposable
     }
 
     /// <summary>
+    /// THE COMMON CASE (ruling R27, 2026-09-24): the supervisor's answer both buries PULSE and changes it —
+    /// its STATE: line redraws the sup row. Inside the ten-second window the line is edited in place; once
+    /// the topic is quiet it has changed since the owner last saw it at the bottom, so it comes back ONCE
+    /// and nothing follows. Task 17 as first committed edited it in place and then left it buried for good,
+    /// because by the time the topic was quiet it had "nothing new to say" against its own last write.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_AnAnswerThatBuriesAndChangesPulse_BringsItBackOnce()
+    {
+        var (timeline, mark) = await Run_Pulse_Async(channelFile =>
+            Bury_Pulse_UnderAnExchange_Async(channelFile, $"{ANSWER_TEXT}\nSTATE: {DECLARED_STATE}"));
+
+        var activity = Pulse_Activity(timeline, mark);
+        var moves = activity.Where(line => !line.StartsWith("edit", StringComparison.Ordinal)).ToList();
+
+        Assert.True(moves.Count == 2, Describe_PulseActivity(timeline, mark));
+        Assert.Equal("delete", moves[0]);
+        Assert.StartsWith("post", moves[1], StringComparison.Ordinal);
+        Assert.Contains(DECLARED_STATE, moves[1], StringComparison.Ordinal);
+
+        // Nothing after it: the reposted line is last, and it says what it said.
+        Assert.Equal(moves[1], activity[^1]);
+    }
+
+    /// <summary>
     /// A CHANGE TO THE BAR ALONE STILL REACHES THE PHONE, as one edit. The render key exists for this
     /// (brief D): a quiet orchestration's text does not move for hours, so a bar compared by text would
     /// never be repainted. The fix compares text with text and must not lose it.
@@ -450,7 +476,10 @@ public class PresetPhoneProbeTests : IDisposable
     /// The owner asks, the supervisor answers — both land below PULSE — and then the topic stays quiet for
     /// longer than the repost window, so a line that had anything new to say would move.
     /// </summary>
-    async Task Bury_Pulse_UnderAnExchange_Async(string channelFile)
+    async Task Bury_Pulse_UnderAnExchange_Async(string channelFile) => await Bury_Pulse_UnderAnExchange_Async(channelFile, ANSWER_TEXT);
+
+    /// <inheritdoc cref="Bury_Pulse_UnderAnExchange_Async(string)"/>
+    async Task Bury_Pulse_UnderAnExchange_Async(string channelFile, string answerBody)
     {
         // The id comes from the fake's own sequence, as a real one comes from the chat's: above PULSE, so it
         // buries the line, and below whatever the bot sends next, so a reposted line is not buried by it.
@@ -458,7 +487,7 @@ public class PresetPhoneProbeTests : IDisposable
 
         await Require_Async(() => Channel_Contains(channelFile, OWNER_TEXT), 30_000, "the owner's message was never delivered", 0);
 
-        Append_SupervisorEntry(channelFile, 2, "the rebuild", ANSWER_TEXT);
+        Append_SupervisorEntry(channelFile, 2, "the rebuild", answerBody);
 
         await Require_Async(() => _telegram.Has_Sent_Containing(ANSWER_TEXT), 20_000, "the answer never reached the phone", 0);
         await Wait_Until_Async(() => false, (TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS + 3) * 1000);
