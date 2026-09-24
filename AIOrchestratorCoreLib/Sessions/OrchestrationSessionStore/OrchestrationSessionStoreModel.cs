@@ -79,7 +79,15 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
 
         // A file that cannot be deserialised THROWS, exactly as before, and nothing is remembered —
         // so a session.json repaired on disk is picked up by the next call rather than by a restart.
-        var session = SessionJson_Serializer.Deserialize(File.ReadAllText(sessionFile.FullName), sessionFile.FullName);
+        //
+        // READ THROUGH Tolerant_FileReader, never File.ReadAllText (plan 2026-09-23 Task 14b): every
+        // Save replaces this file with Atomic_FileWriter's rename, and on Windows a plain read that meets
+        // the rename throws "being used by another process" — a sibling's close notice was lost to it
+        // (Task 14, 2026-09-24), and the sibling tests had to route around it (Task 13c). The tolerant
+        // read shares Delete (so it never blocks the rename) and retries the delete-pending window for
+        // ~200 ms. When every retry loses it still THROWS the same exception type as before, and a
+        // missing file still throws FileNotFoundException at once — only the transient case changed.
+        var session = SessionJson_Serializer.Deserialize(Tolerant_FileReader.Read_AllText(sessionFile.FullName), sessionFile.FullName);
 
         _parsedByOrchId[orchId] = (stamp, session);
 

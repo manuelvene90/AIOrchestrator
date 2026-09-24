@@ -1,6 +1,7 @@
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Sessions;
@@ -522,5 +523,83 @@ eposrb");
         Assert.Null(parent.BornFromHandover);
         Assert.Null(parent.WorkingPath);
         Assert.Equal(_repo, parent.RepoPath);
+    }
+
+    // ------------------------------------------------------------ reading a session.json being replaced
+    //
+    // THE READ RACES THE ENGINE'S OWN WRITE (plan 2026-09-23 Task 14b, ruling S5). A store read opened
+    // session.json with a plain File.ReadAllText, which loses to Atomic_FileWriter's rename on Windows with
+    // "being used by another process": seen in the sibling tests (Task 13c) and as a survivor's close notice
+    // lost once in Task 14. An exclusive handle released inside Tolerant_FileReader's retry budget stands in
+    // for the rename — the same window, made deterministic. Each read goes through a FRESH store, so the
+    // stamp cache cannot answer without opening the file.
+
+    const int RELEASED_AFTER_MILLISECONDS = 30;
+
+    [RequiresExclusiveOpenEnforcementFact]
+    public void Get_Session_WhileTheFileIsHeldBriefly_ReturnsTheSession()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+
+        var session = Read_WhileHeld(TimeSpan.FromMilliseconds(RELEASED_AFTER_MILLISECONDS), store => store.Get_Session("arb-fix"));
+
+        Assert.Equal("arb-fix", session.OrchId);
+    }
+
+    [RequiresExclusiveOpenEnforcementFact]
+    public void Load_All_WhileOneFileIsHeldBriefly_ReturnsEverySession()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+        _store.Create_Orchestration("crm-4", "CRM", @"C:\repos\crm");
+
+        var all = Read_WhileHeld(TimeSpan.FromMilliseconds(RELEASED_AFTER_MILLISECONDS), store => store.Load_All());
+
+        Assert.Equal(["arb-fix", "crm-4"], all.Select(session => session.OrchId).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// PAST THE RETRIES THE READ FAILS EXACTLY AS IT ALWAYS DID — an <see cref="IOException"/> out of the
+    /// store, nothing remembered — so a genuinely locked file is still a loud failure, never a null that
+    /// would read as "no such orchestration".
+    /// </summary>
+    [RequiresExclusiveOpenEnforcementFact]
+    public void Get_Session_OrNull_WhileTheFileStaysHeld_ThrowsTheIOException_AsBefore()
+    {
+        _store.Create_Orchestration("arb-fix", "Arb Studio", @"C:\repos\arb");
+        var store = Reload();
+
+        using (new FileStream(_paths.Get_SessionFile("arb-fix"), FileMode.Open, FileAccess.Read, FileShare.None))
+            Assert.Throws<IOException>(() => store.Get_Session_OrNull("arb-fix"));
+
+        Assert.Equal("arb-fix", store.Get_Session("arb-fix").OrchId);
+    }
+
+    /// <summary>
+    /// Holds session.json exclusively and releases it on a DEDICATED THREAD after <paramref name="heldFor"/>,
+    /// while <paramref name="read"/> runs here. Not <c>Task.Run</c> + <c>Task.Delay</c>: under the parallel
+    /// suite a starved thread pool released the handle after the reader's whole ~200 ms budget, and the test
+    /// failed for its own timing's sake (first run of the Task 14b filter, 2026-09-24).
+    /// </summary>
+    T Read_WhileHeld<T>(TimeSpan heldFor, Func<IOrchestrationSessionStore, T> read)
+    {
+        var store = Reload();
+        var holder = new FileStream(_paths.Get_SessionFile("arb-fix"), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var release = new Thread(() =>
+        {
+            Thread.Sleep(heldFor);
+            holder.Dispose();
+        }) { IsBackground = true };
+
+        release.Start();
+
+        try
+        {
+            return read(store);
+        }
+        finally
+        {
+            release.Join();
+        }
     }
 }
