@@ -261,4 +261,45 @@ public static class SiblingNotice_Wording
             $"'{childId}' ({childName}) was started on the owner's tap as a sibling of '{parentId}' ({parentName}), in its own worktree '{workingPath}' and its own topic. "
             + "They share an endeavour: closing one never closes the other.");
     }
+
+    // ------------------------------------------------------------------------ the lifecycle (§7.5, §7.6)
+    //
+    // Agent-audience, all but the /switch reply: the survivors' notice follows a close the owner just
+    // tapped (decision 15), and the promote refusal is the promote precedent's "to the SOLO rather than to
+    // them". /switch is different in kind — the OWNER typed it, so the answer is theirs, in their topic.
+
+    /// <summary>What a survivor is told when the closed sibling had no PLAN.md to read.</summary>
+    public const string NO_UNFINISHED_LINES = "none";
+
+    /// <summary>
+    /// A SIBLING CLOSED (§2.3), told to each survivor. The subject is the spec's line; the body is what the
+    /// survivor may now have to pick up or stop waiting on — the closed one's unfinished ledger lines.
+    /// </summary>
+    public static (string Subject, string Body) Describe_SiblingClosed(string closedName, string unfinished)
+    {
+        var separator = unfinished.Contains('\n') ? "\n" : " ";
+
+        return (
+            $"sibling '{closedName}' closed — its outbox and PLAN.md stay on disk",
+            $"unfinished lines:{separator}{unfinished}");
+    }
+
+    /// <summary>
+    /// A PROMOTION OF A LINKED ORCHESTRATION (§7.6, refused in v1). The supervisor role has no sibling
+    /// protocol, so a crew beside a solo would be a member of an endeavour it cannot read — and v1 never
+    /// unlinks, even once every other sibling has closed, so this answer does not change with time.
+    /// </summary>
+    public static (string Subject, string Body) Describe_LinkedPromoteRefusal()
+    {
+        return (
+            "promotion REFUSED — this orchestration is linked to siblings",
+            "A promotion replaces you with a supervisor, and the supervisor role has no sibling protocol: it could not read or answer your siblings' outboxes. This orchestration stays linked to its endeavour even after every sibling has closed, so asking again will be refused the same way. Carry on as a solo, or tell the owner the job needs a crew in a topic of its own.\n\n"
+            + NOTHING_CHANGED);
+    }
+
+    /// <summary>The owner's <c>/switch</c> in a linked topic (§7.6) — the spec's sentence, verbatim.</summary>
+    public static string Describe_LinkedSwitchRefusal()
+    {
+        return "this topic is linked to siblings — close them or keep one session.";
+    }
 }

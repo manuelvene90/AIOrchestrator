@@ -5434,6 +5434,17 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
+                // A LINKED ORCHESTRATION IS NEVER PROMOTED IN v1 (spec 2026-09-23 §7.6): the supervisor role has
+                // no sibling protocol. "Linked" is the endeavour id alone — v1 never unlinks, even once every
+                // other sibling has closed. Refused to the solo, before the owner is involved, like the rest.
+                if (session.EndeavourId != null)
+                {
+                    var linked = SiblingNotice_Wording.Describe_LinkedPromoteRefusal();
+                    Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Agent, linked.Subject, linked.Body);
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, SiblingRefusals.LINKED_ORCHESTRATION);
+                    continue;
+                }
+
                 // THE SAME RULE THE EXECUTION USES, so the answer at park time and the answer at tap
                 // time cannot differ in kind — only in how stale they are. A half-promoted
                 // orchestration (stamped, solo still running) is INCOMPLETE rather than "already a
@@ -5844,6 +5855,20 @@ internal sealed class BridgeEngineModel(
                 $"orchestration '{orchId}' closed — {reason}",
                 $"{authorisation} Asked by: {requester}. Sessions ended; folder kept as audit trail; "
                 + (onClose == TopicCloseActions.Close ? "Telegram topic closed and kept in the list." : "Telegram topic deleted."));
+
+            // THE SURVIVING SIBLINGS ARE TOLD (spec 2026-09-23 §7.5), after both topic branches so it holds
+            // under either `topic.onClose`. ITS OWN CATCH: the close has already happened, and the catch
+            // below reports "close-orchestration FAILED" and rethrows — a notice that threw would tell the
+            // owner a successful close had failed.
+            try
+            {
+                foreach (var notice in SiblingClose_Step.Build_SurvivorNotices(_paths, _store.Load_All(), session))
+                    Append_OrchestrationAppEntry(notice.OrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
+            }
+            catch (Exception noticeException)
+            {
+                _log.Log_Warning(orchId, $"closed, but its surviving siblings could not be told: {noticeException.Message}");
+            }
         }
         catch (Exception ex)
         {
@@ -9416,6 +9441,14 @@ internal sealed class BridgeEngineModel(
                 "/switch changes an orchestration between one session and a full crew — there is nothing here to switch.",
                 cancellationToken);
 
+            return;
+        }
+
+        // §7.6 (spec 2026-09-23): a linked topic is neither promoted nor demoted in v1 — before the handover
+        // gate, so the owner is not sent to ask a session for a HANDOVER that would buy nothing.
+        if (session.EndeavourId != null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, SiblingNotice_Wording.Describe_LinkedSwitchRefusal(), cancellationToken);
             return;
         }
 
