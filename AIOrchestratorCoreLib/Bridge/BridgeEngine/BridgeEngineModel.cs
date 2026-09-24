@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using AIOrchestratorCoreLib.Bridge.PeriodicStatus;
+using AIOrchestratorCoreLib.Bridge.QuestionAppButtons;
 using AIOrchestratorCoreLib.Bridge.ReceiptRegistry;
 using AIOrchestratorCoreLib.Bridge.Siblings;
 using AIOrchestratorCoreLib.Bridge.SuppressedEntries;
@@ -798,12 +799,13 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, DateTime> _topicNameRetryAfterUtc = [];
 
     /// <summary>
-    /// The status-line text last WRITTEN to each topic, so an unchanged line costs no API call.
-    /// In memory on purpose, unlike the message id: after a restart the first tick edits once with
-    /// whatever is current, which is correct, and the id — the thing that must not be lost — lives
+    /// The status line last WRITTEN to each topic — its text AND its whole rendering, one value (see
+    /// <see cref="Telegram.WrittenTopicStatusLine"/>, plan 03 Task 17) — so an unchanged line costs no
+    /// API call. In memory on purpose, unlike the message id: after a restart the first tick edits once
+    /// with whatever is current, which is correct, and the id — the thing that must not be lost — lives
     /// in session.json.
     /// </summary>
-    readonly Dictionary<string, string> _statusLineTextByOrchId = [];
+    readonly Dictionary<string, Telegram.WrittenTopicStatusLine> _statusLineWrittenByOrchId = [];
 
     /// <summary>
     /// The idle member SET last flagged, per orchestration, so the reminder is written ONCE per quiet
@@ -822,7 +824,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// The progress artefact last written per orchestration, so an unchanged ledger costs no disk
-    /// write. Same shape and same reasoning as <see cref="_statusLineTextByOrchId"/> above: in memory,
+    /// write. Same shape and same reasoning as <see cref="_statusLineWrittenByOrchId"/> above: in memory,
     /// so the first tick after a restart rewrites once with whatever is current.
     /// </summary>
     readonly Dictionary<string, string> _progressArtefactByOrchId = [];
@@ -1088,8 +1090,12 @@ internal sealed class BridgeEngineModel(
     /// <summary>Which stale-in-progress SET was last reported, so a fix to one line still leaves the rest heard.</summary>
     readonly Dictionary<string, string> _reportedStaleInProgress = [];
 
-    /// <summary>The owner's last message in ANY topic — presence anywhere counts everywhere.</summary>
-    DateTime _lastOwnerMessageUtc = DateTime.UtcNow;
+    /// <summary>
+    /// The owner's last message in ANY topic — presence anywhere counts everywhere. On the injected
+    /// clock, like the away check that reads it (plan 03 task 18): the two must share one clock, and it
+    /// is the one a test can move across an hour of silence.
+    /// </summary>
+    DateTime _lastOwnerMessageUtc = clock.UtcNow;
 
     /// <summary>
     /// Guards _pendingOwnerReplies (and the other owner-facing state noted at each field). GO flushes from
@@ -4761,37 +4767,19 @@ internal sealed class BridgeEngineModel(
                 buttons.Add((data, buttonLabels[index]));
             }
 
-            // Every question also offers ONE way to ask back — and it used to offer two. "❔ Explain
-            // the options" spent the buttons and asked the supervisor to explain and re-ask; this
-            // one left the question and its keyboard untouched. Now that a tap here closes the
-            // question like any other, the two are the same gesture under two labels, and the owner
-            // had to pick between synonyms before they could ask their real question.
-            //
-            // The button's label is short; the text the supervisor receives is the full instruction,
-            // which is why the two differ here.
-            var talkData = CallbackToken.Build(nonce, optionTexts.Count);
+            // THE APP'S OWN BUTTONS, AS THE OWNER CHOSE THEM — `questions.appButtons`, read HERE at the
+            // point of effect and never cached (plan 04 task 11, entry [123]). Built by
+            // QuestionAppButtons_Builder, which holds everything that differs between Explain and Let's talk.
+            var appButtons = QuestionAppButtons_Builder.Build(
+                _configProvider.Get_Current().Phone.QuestionAppButtons,
+                nonce, optionTexts.Count, threadId, questionText, _buttonGroupSequence, expiresUtc);
 
-            _buttonOptions[talkData] = new PendingButtonRecord
+            foreach (var (record, label) in appButtons)
             {
-                Data = talkData,
-                ThreadId = threadId,
-                OptionText = OwnerPush_Policy.TALK_REQUEST,
-                QuestionText = questionText,
-                GroupId = _buttonGroupSequence,
-                ExpiresUtc = expiresUtc,
-
-                // ASKING TO TALK IS NEVER HIGH RISK, whatever the question is about. It takes no
-                // decision — it asks the supervisor to explain — so putting a code in front of it
-                // would make the safe way out of a dangerous question the hardest button to press.
-                IsHighRisk = false,
-
-                // It consumes the group and closes the question exactly like an option; what it does
-                // not do is record a choice.
-                AnswersNothing = true,
-            };
-
-            _buttonOrder.Enqueue(talkData);
-            buttons.Add((talkData, OwnerPush_Policy.TALK_LABEL));
+                _buttonOptions[record.Data] = record;
+                _buttonOrder.Enqueue(record.Data);
+                buttons.Add((record.Data, label));
+            }
 
             while (_buttonOrder.Count > BUTTON_REGISTRY_CAP)
                 _buttonOptions.Remove(_buttonOrder.Dequeue());
@@ -10996,7 +10984,7 @@ internal sealed class BridgeEngineModel(
             // with no disable_notification, so a topic the owner had explicitly silenced could put
             // a push on their phone the first time it needed a status line. Silenced means
             // DISCARDED, not quiet, and this code drew no distinction.
-            _statusLineTextByOrchId.TryGetValue(session.OrchId, out var lastText);
+            _statusLineWrittenByOrchId.TryGetValue(session.OrchId, out var lastWritten);
             _statusLineFailedAtByOrchId.TryGetValue(session.OrchId, out var lastFailedAttemptAt);
 
             // EVERY decision is made in Telegram.TopicStatusLine_Planner, which the suite can reach.
@@ -11047,7 +11035,7 @@ internal sealed class BridgeEngineModel(
                 members,
                 DateTime.Now,
                 session.StatusLineMessageId,
-                lastText,
+                lastWritten?.Text,
                 Resolve_EffectiveMode(session.OrchId),
                 _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
                 _timing.MirrorRetryBackoffSeconds,
@@ -11059,38 +11047,26 @@ internal sealed class BridgeEngineModel(
                 UsageTotals_Reader.Read_ModelReading_OrNull(supervisorUsageFile),
                 pulse.Fields,
                 pulse.StepMinutes,
-                current.Phone.TopicModeGlyphs);
+                current.Phone.TopicModeGlyphs,
+
+                // THE BAR AND THE WHOLE RENDERING LAST WRITTEN go in, and the planner decides a
+                // button-only change itself, under its own back-off (plan 03 Task 17). The branch that
+                // used to promote None to Edit here compared a render key with raw text and moved out.
+                commandButtonRows,
+                lastWritten?.RenderKey,
+
+                // What the owner last saw at the bottom (ruling R27) — decided by the planner, stored here.
+                lastWritten?.SeenAtBottomKey,
+
+                // `pulse.unchangedFor` (plan 03 task 19), off the same single read as the fields and step.
+                pulse.UnchangedFor);
 
             var action = plan.Action;
             var text = plan.Text;
 
-            // WHAT IS REMEMBERED IS THE WHOLE RENDERING, text and button labels, and the planner is
-            // told "unchanged" only when the whole rendering is unchanged. It still decides on, and
-            // sends, the text alone. Without this a button-only change is swallowed: the count the
-            // owner is meant to read never leaves this process, and a bar that ends up wrong for
-            // any reason is never repainted, because a quiet orchestration's text does not move.
-            var renderKey = Telegram.TopicStatusLine_RenderKey.Build(text, commandButtonRows);
-
-            // UNDER THE SAME BACK-OFF AS THE PLANNER'S OWN DECISION. This promotion used to consult
-            // only the rendering, and a FAILED edit leaves `lastText` at the last text that was sent
-            // (the catch below keeps it stale on purpose) — so after one 429 the text "differed" on
-            // every tick and the planner's None was overruled every 2 s for as long as Telegram kept
-            // refusing. Measured 2026-09-10, 20:56–21:52 on the VPS: 357 of 382 rate-limit refusals
-            // were this line, retried at the tick rate with `retry_after` counting down 34, 31, 29 …
-            // The 30-second back-off existed, was tested, and never reached this branch.
-            var attemptDue = Telegram.TopicStatusLine_Planner.Is_AttemptDue(
-                _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
-                DateTime.Now,
-                _timing.MirrorRetryBackoffSeconds);
-
-            if (action == Telegram.TopicStatusActions.None
-                && attemptDue
-                && session.StatusLineMessageId != null
-                && lastText != null
-                && renderKey != lastText)
-            {
-                action = Telegram.TopicStatusActions.Edit;
-            }
+            // Remembered only once the write succeeds — a FAILED edit leaves the last one SENT standing,
+            // so the next tick still sees the difference and retries it behind the back-off.
+            var written = new Telegram.WrittenTopicStatusLine(text, plan.RenderKey, plan.SeenAtBottomKey);
 
             if (action == Telegram.TopicStatusActions.None)
                 continue;
@@ -11186,7 +11162,7 @@ internal sealed class BridgeEngineModel(
                     _store.Set_StatusLineMessageId(session.OrchId, messageId.Value);
                 }
 
-                _statusLineTextByOrchId[session.OrchId] = renderKey;
+                _statusLineWrittenByOrchId[session.OrchId] = written;
                 _statusLineFailedAtByOrchId.Remove(session.OrchId);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -11226,7 +11202,7 @@ internal sealed class BridgeEngineModel(
                 if (oldStatusMessageDeleted)
                     Forget_StatusLineMessage(session.OrchId);
                 else
-                    _statusLineTextByOrchId[session.OrchId] = renderKey;
+                    _statusLineWrittenByOrchId[session.OrchId] = written;
             }
             catch (Exception exception) when (Telegram.TopicStatusLine_Decider.Is_MessageGone(exception.Message))
             {
@@ -11288,7 +11264,7 @@ internal sealed class BridgeEngineModel(
     void Forget_StatusLineMessage(string orchId)
     {
         _store.Clear_StatusLineMessageId(orchId);
-        _statusLineTextByOrchId.Remove(orchId);
+        _statusLineWrittenByOrchId.Remove(orchId);
     }
 
 
@@ -11745,7 +11721,7 @@ internal sealed class BridgeEngineModel(
             // mechanism, which is where it belongs: substring-against-a-sentence is the class this
             // repo has now hit four times.
             _store.Clear_StatusLineMessageId(session.OrchId);
-            _statusLineTextByOrchId.Remove(session.OrchId);
+            _statusLineWrittenByOrchId.Remove(session.OrchId);
             _statusLineFailedAtByOrchId.Remove(session.OrchId);
 
             // The undeletable message went with the old topic — the new one starts unlatched.
@@ -12027,8 +12003,8 @@ internal sealed class BridgeEngineModel(
         }
 
         // Rewrite the question message to RECORD what the tap did — "❓ … / ✅ deep" for a choice,
-        // and the acknowledgement for "💬 Let's talk", which records no choice because none was
-        // made. Telegram's tap acknowledgement is a transient toast and the keyboard vanishes, so
+        // and the acknowledgement of whichever app button was tapped ("❔ Explain the options" or
+        // "💬 Let's talk"), which records no choice because none was made. Telegram's tap acknowledgement is a transient toast and the keyboard vanishes, so
         // without this the chat keeps no trace of what was picked — the owner scrolls back and
         // cannot tell what they answered. Editing the text also drops the keyboard, so it replaces
         // the strip step.
@@ -12042,20 +12018,12 @@ internal sealed class BridgeEngineModel(
             lock (_ownerStateLock)
             {
                 if (_openQuestions.Remove(tap.MessageId.Value))
-                {
-                    Note_QuestionClosed(
-                        tap.MessageId.Value,
-                        registered.AnswersNothing
-                            ? QuestionClosure_Wording.TALK_REQUEST
-                            : QuestionClosure_Wording.TAPPED_OPTION);
-                }
+                    Note_QuestionClosed(tap.MessageId.Value, QuestionAppButtons_Builder.Describe_Closure(registered));
             }
 
             // The stored QuestionText is the MARKDOWN that was sent, so the rewrite must render
             // it again — an HTML send followed by a plain edit would put the markers back.
-            var rewrite = registered.AnswersNothing
-                ? QuestionPrompt_Builder.Build_TalkText(registered.QuestionText)
-                : QuestionPrompt_Builder.Build_AnsweredText(registered.QuestionText, registered.OptionText);
+            var rewrite = QuestionAppButtons_Builder.Build_Rewrite(registered);
 
             await Rewrite_AnsweredQuestion_WithRetry_Async(client, tap.MessageId.Value, rewrite, cancellationToken);
         }
@@ -15209,7 +15177,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// A supervisor message reached the owner's phone and is so far unanswered. The 3rd one makes
-    /// this orchestration go QUIET immediately — waiting out the 15-minute clock before reacting is
+    /// this orchestration go QUIET immediately — waiting out the away delay before reacting is
     /// exactly how the owner ended up with a hundred questions from a single flight.
     /// </summary>
     bool Note_SupervisorSpokeToOwner_AndJustWentQuiet(string orchId)
@@ -15244,7 +15212,7 @@ internal sealed class BridgeEngineModel(
         {
             var wasAway = _awayActive;
 
-            _lastOwnerMessageUtc = DateTime.UtcNow;
+            _lastOwnerMessageUtc = _clock.UtcNow;
             _awayActive = false;
 
             // The next away spell starts from null, so its FIRST digest always sends rather than
@@ -15461,11 +15429,10 @@ internal sealed class BridgeEngineModel(
         Announce(orchId,
             _paths.Get_OwnerChannelFile(orchId), AppEntryAudiences.Agent,
             "HOLD — the owner has not answered your last messages",
-            $"{AwayMode_Policy.QUIET_THRESHOLD} of your messages are unanswered. They may simply be mid-task, so nothing is being "
-            + "assumed yet — but STOP sending them anything more for now: no questions, no options, no updates.\n\n"
-            + "Park what you would have asked (keep the list; you will re-ask from it) and carry on with what you can "
-            + $"decide and delegate yourself. If they stay silent for {AwayMode_Policy.AWAY_AFTER_MINUTES} minutes you will get an "
-            + "AWAY MODE ON entry; if they reply, everything returns to normal on its own.");
+
+            // The delay it promises is the one IN FORCE, read here (plan 03 task 18); the wording moved
+            // to the policy with it, so the number has one home.
+            AwayMode_Policy.Build_HoldNotice(_configProvider.Get_Current().Phone.AwayAfterMinutes));
 
         Raise_OrchestrationActivity(orchId);
 
@@ -15489,6 +15456,11 @@ internal sealed class BridgeEngineModel(
         // tick and an owner's message come to wait on each other.
         var ownerAtAPc = Is_OwnerAtThePc();
 
+        // `away.afterMinutes`, READ HERE AT THE POINT OF EFFECT and never cached — the provider re-reads
+        // config.json on its write stamp, so a change from /settings is obeyed on the next tick (plan 03
+        // task 18). Outside the lock for the reason above. 0 is "never by itself", decided by the policy.
+        var awayAfterMinutes = _configProvider.Get_Current().Phone.AwayAfterMinutes;
+
         bool shouldEnter;
         bool shouldLeave;
 
@@ -15496,7 +15468,7 @@ internal sealed class BridgeEngineModel(
         {
             var anyQuiet = _awayTrackers.Values.Any(tracker => tracker.IsQuiet);
 
-            shouldEnter = !_awayActive && AwayMode_Policy.Should_EnterAway(anyQuiet, ownerAtAPc, _lastOwnerMessageUtc, DateTime.UtcNow);
+            shouldEnter = !_awayActive && AwayMode_Policy.Should_EnterAway(anyQuiet, ownerAtAPc, _lastOwnerMessageUtc, _clock.UtcNow, awayAfterMinutes);
             shouldLeave = AwayMode_Policy.Should_LeaveAway(_awayActive, ownerAtAPc);
 
             if (shouldEnter)
@@ -15551,7 +15523,7 @@ internal sealed class BridgeEngineModel(
             Raise_OrchestrationActivity(session.OrchId);
 
             await Park_OpenQuestions_Async(session.OrchId, cancellationToken);
-            // AWAY MODE FIRES AFTER FIFTEEN MINUTES OF THE OWNER'S OWN SILENCE — which is to say,
+            // AWAY MODE FIRES AFTER `away.afterMinutes` OF THE OWNER'S OWN SILENCE — which is to say,
             // usually because they are asleep. Waking them to say "you seem to be away" is the
             // purest possible case of an alert they cannot act on.
             await Send_AwayNotice_Async(session, AwayMode_Policy.AWAY_ON_NOTICE, TelegramSendSounds.Silent, cancellationToken);

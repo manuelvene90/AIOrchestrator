@@ -10,7 +10,8 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 ///
 /// The three-state shape is the owner's own correction: a single 15-minute timer would let a
 /// hundred questions arrive and only THEN react. QUIET fires at the third unanswered message,
-/// immediately; AWAY is the conclusion drawn 15 minutes later.
+/// immediately; AWAY is the conclusion drawn after the away delay (`away.afterMinutes`: 15 shipped,
+/// 60 under classic, 0 = never by itself).
 /// </summary>
 public class AwayModePolicyTests
 {
@@ -27,6 +28,12 @@ public class AwayModePolicyTests
         Assert.Equal(expected, AwayMode_Policy.Should_GoQuiet(unanswered));
     }
 
+    /// <summary>
+    /// Today's delay, the shipped default of <c>away.afterMinutes</c> — every case below that is not about
+    /// the delay itself runs on it. A literal, so the cases pin a number and not whatever the constant says.
+    /// </summary>
+    const int FIFTEEN = 15;
+
     /// <summary>AT_THE_PC / AT_THE_PHONE name the ownerAtAPc argument at every call below.</summary>
     const bool AT_THE_PC = true;
 
@@ -35,7 +42,7 @@ public class AwayModePolicyTests
     [Fact]
     public void Away_NeedsBothSomeoneWaitingAndFifteenMinutesOfSilence()
     {
-        Assert.True(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(AwayMode_Policy.AWAY_AFTER_MINUTES)));
+        Assert.True(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(FIFTEEN), FIFTEEN));
     }
 
     /// <summary>
@@ -45,7 +52,7 @@ public class AwayModePolicyTests
     [Fact]
     public void Silence_WithNoOrchestrationWaiting_IsNotAway()
     {
-        Assert.False(AwayMode_Policy.Should_EnterAway(false, AT_THE_PHONE, T0, T0.AddHours(6)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(false, AT_THE_PHONE, T0, T0.AddHours(6), FIFTEEN));
     }
 
     /// <summary>
@@ -56,8 +63,8 @@ public class AwayModePolicyTests
     public void ABurstOfQuestions_GoesQuietButDoesNotGoAway()
     {
         Assert.True(AwayMode_Policy.Should_GoQuiet(3));
-        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(1)));
-        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(14)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(1), FIFTEEN));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(14), FIFTEEN));
     }
 
     /// <summary>
@@ -69,7 +76,7 @@ public class AwayModePolicyTests
     {
         var chattedRecently = T0.AddMinutes(14);
 
-        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, chattedRecently, T0.AddMinutes(20)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, chattedRecently, T0.AddMinutes(20), FIFTEEN));
     }
 
     // -----------------------------------------------------------------------------------
@@ -91,8 +98,8 @@ public class AwayModePolicyTests
     [Fact]
     public void AtThePc_NeverGoesAway_HoweverLongTheTelegramSilence()
     {
-        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PC, T0, T0.AddMinutes(AwayMode_Policy.AWAY_AFTER_MINUTES)));
-        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PC, T0, T0.AddHours(9)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PC, T0, T0.AddMinutes(FIFTEEN), FIFTEEN));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PC, T0, T0.AddHours(9), FIFTEEN));
     }
 
     /// <summary>
@@ -107,7 +114,7 @@ public class AwayModePolicyTests
         foreach (var anyQuiet in new[] { true, false })
         {
             foreach (var minutes in new[] { 0, 14, 15, 600 })
-                Assert.False(AwayMode_Policy.Should_EnterAway(anyQuiet, AT_THE_PC, T0, T0.AddMinutes(minutes)));
+                Assert.False(AwayMode_Policy.Should_EnterAway(anyQuiet, AT_THE_PC, T0, T0.AddMinutes(minutes), FIFTEEN));
         }
     }
 
@@ -134,6 +141,82 @@ public class AwayModePolicyTests
     public void LeavingAway_IsOnlyForAnActiveSpellAndAnOwnerAtAPc(bool awayActive, bool ownerAtAPc)
     {
         Assert.False(AwayMode_Policy.Should_LeaveAway(awayActive, ownerAtAPc));
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The delay is a setting — owner, 2026-09-23 (entry [95]), plan 03 task 18
+    // -----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// THE OWNER'S REPORT: <i>"the away mode is triggered too soon all the time. That also should be a
+    /// setting."</i> The delay is handed in, and the policy obeys whatever it is given: today's 15, the
+    /// owner's 60 (classic), one minute short of either holds and the minute itself starts away.
+    /// </summary>
+    [Theory]
+    [InlineData(15, 14, false)]
+    [InlineData(15, 15, true)]
+    [InlineData(60, 15, false)]
+    [InlineData(60, 20, false)]
+    [InlineData(60, 59, false)]
+    [InlineData(60, 60, true)]
+    [InlineData(60, 600, true)]
+    public void Away_StartsAfterTheConfiguredSilence(int awayAfterMinutes, int silentMinutes, bool expected)
+    {
+        Assert.Equal(expected, AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(silentMinutes), awayAfterMinutes));
+    }
+
+    /// <summary>
+    /// ZERO IS "NEVER BY ITSELF", NOT "AT ONCE". Read literally, a zero-minute delay would put the owner in
+    /// away mode on the first tick after the third unanswered message — the opposite of what someone
+    /// setting it to zero is asking for. No silence, however long, starts it.
+    /// </summary>
+    [Fact]
+    public void AZeroDelay_NeverStartsAway_HoweverLongTheSilence()
+    {
+        foreach (var minutes in new[] { 0, 1, 15, 60, 1440, 14 * 1440 })
+            Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(minutes), awayAfterMinutes: 0));
+    }
+
+    /// <summary>
+    /// THE SHIPPED DEFAULT IS TODAY'S BEHAVIOUR (ruling R14): fifteen minutes, read by the catalogue row
+    /// from the one constant — and the row is the only reader, so the constant is not the rule.
+    /// </summary>
+    [Fact]
+    public void TheShippedDelay_IsTodaysFifteenMinutes()
+    {
+        Assert.Equal(FIFTEEN, AwayMode_Policy.DEFAULT_AWAY_AFTER_MINUTES);
+        Assert.Equal(
+            "15",
+            AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog.Find_OrNull("away.afterMinutes")!.Default_OrNull!.ToJsonString());
+    }
+
+    /// <summary>
+    /// THE HOLD ENTRY QUOTES THE DELAY IN FORCE. The session is told how long the owner has before away
+    /// mode starts, and a number that is not the configured one is a promise the app then breaks.
+    /// </summary>
+    [Fact]
+    public void TheHoldNotice_QuotesTheConfiguredDelay()
+    {
+        var notice = AwayMode_Policy.Build_HoldNotice(60);
+
+        Assert.Contains("If they stay silent for 60 minutes you will get an AWAY MODE ON entry", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain("15 minutes", notice, StringComparison.Ordinal);
+        Assert.StartsWith("3 of your messages are unanswered.", notice, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// AND AT ZERO IT SAYS NONE WILL COME, rather than promising an AWAY MODE ON entry "after 0 minutes"
+    /// that the app will never write.
+    /// </summary>
+    [Fact]
+    public void TheHoldNotice_AtZero_SaysAwayModeWillNotStartByItself()
+    {
+        var notice = AwayMode_Policy.Build_HoldNotice(0);
+
+        Assert.DoesNotContain("0 minutes", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain("you will get an AWAY MODE ON entry", notice, StringComparison.Ordinal);
+        Assert.Contains("away mode does not start by itself", notice, StringComparison.Ordinal);
+        Assert.Contains("if they reply, everything returns to normal on its own", notice, StringComparison.Ordinal);
     }
 
     [Fact]

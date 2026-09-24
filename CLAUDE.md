@@ -198,25 +198,30 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     written before the owner's message even landed spent it; and the suppressed memo was one slot, so
     the status line written after the answer overwrote it and the turn-ended receipt delivered the
     wrong text. The busy notice is gated on `!pending.Answered`.
-    **What is NOT here, and the diagnostic that goes with it.** The narration FILTER is gone — the
-    fork abolished it on 2026-09-09 on the owner's ruling (*"if the supervisor writes to me, I must
-    know it — that rings"*), and this merge kept that. So on this build `OwnerPush_Policy.Should_Push`
-    pushes EVERY supervisor entry on the owner channel except an empty body and the owner's own words
-    quoted back (`Is_OwnerRestatement`); its `ownerIsWaitingForAReply` parameter is **unread**, which
-    means the credit is live in the engine and INERT at the push. There is no `_suppressedEntries`
-    list anywhere in `AIOrchestratorCoreLib/` and no turn-end digest: `Build_TurnEndedText` says so
-    itself, its "last words" half deleted with the filter. `OwnerAnswerSurvivesFailedSendTests` still
-    pins that the answer survives a failed send, but its "narration after the answer is not pushed"
-    oracle was RETIRED with the filter — the file's own comment records it — and it now pins the
-    opposite: the channel is not wedged afterwards. **So the old recipe "entry #N present with no
-    `mirror send failed` line means the push policy suppressed it" WOULD MISDIAGNOSE a live incident
-    on this tree.** Read a missing entry this way instead: absent from the log entirely ⇒ never
-    tailed; `[owner] entry #N FROM …` present with no `mirror send failed` ⇒ look at the QUESTION
-    HOLD, not at the filter — `QuestionHold_Policy` parks an owner channel whose orchestration is
-    awaiting an answer (a `held entry #N` line says so), the topic may be Silenced or Deferred, or
-    the entry was an owner restatement. The filter, the suppression list and the turn-end digest are
-    **plan 03's (`phone.push = filtered`) to restore as a per-user setting** — the protective half of
-    the credit landed here precisely so it is correct the day they return.
+    **The narration filter is a PER-USER SETTING now, `phone.push`** (plan 03 Task 2; this paragraph
+    rewritten 2026-09-24 on the owner's instruction, ai-orchestrator-29 entry [119] — it used to say
+    the filter was gone, which stopped being true when plan 03 merged). One decision point,
+    `OwnerPush_Policy.Decide(mode, text, ownerIsWaitingForAReply, subject)`, called from the mirror
+    under `Resolve_ModeForChannel` (General is always `everything`, D8), with three outcomes:
+    `Drop` (empty body, or the owner's own words quoted back — both modes), `SendNow`, `HoldForDigest`.
+    - **`everything`** — the fork's ruling of 2026-09-09 (*"if the supervisor writes to me, I must know
+      it — that rings"*): every other entry is sent. Stated by `quiet` (the brother's preset).
+    - **`filtered`** — master's (*"I answer the sup a question, and then the sup doesn't disturb me
+      anymore unless it has another question"*); the SHIPPED default, so `classic` (the owner's preset)
+      states nothing and gets it. Sent now: a question
+      (marked or in prose), `BLOCKED ON OWNER`, a file for the owner, the boot greeting, and THE answer
+      while the owner's credit is open and the subject is not a turn-end declaration. Everything else is
+      HELD into `_suppressedEntries` (`Bridge/SuppressedEntries/`) and handed over by
+      `Build_TurnEndedText` as the turn-end digest; a send clears what was held before it (ruling R7).
+    `Should_Push` survives only as the `everything` arm the policy tests pin — **no production code
+    calls it**; read `Decide`. **The diagnostic for a missing entry:** absent from the log entirely ⇒
+    never tailed; `[owner] entry #N FROM …` present with no `mirror send failed` ⇒ in this order:
+    (1) the channel's `phone.push` — under `filtered` a held entry writes NO log line of its own, it
+    waits for the turn-end digest; (2) the QUESTION HOLD (`QuestionHold_Policy`, a `held entry #N`
+    line says so); (3) the topic Silenced or Deferred; (4) an owner restatement. **Known gap under
+    `filtered`:** narration held OUTSIDE any reply turn has no digest to ride and never reaches the
+    phone — the release net `Break_SilentDeadlock_Async` does not exist in this tree (plan 03 report
+    §5, PARKED).
     **And the compaction guard is asked INSIDE the channel gate**
     (`Channel_Compactor.Compact_IfNeeded(path, mayRewrite)`): the compactor queues behind a session's
     append, so a guard answered before that wait describes a file that has since grown — entry 137

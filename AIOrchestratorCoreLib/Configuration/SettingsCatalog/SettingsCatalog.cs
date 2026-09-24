@@ -404,7 +404,10 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Telegram supergroup chat id",
             description: "The forum supergroup every topic is created in. Absent until the installer or the owner sets it.",
-            restart: RestartKinds.None,
+            // HOST, NOT NONE (final review I1, 2026-09-24): read ONCE at startup — BridgeEngine_Factory builds the client
+            // with the startup chat id (and no client at all when it was absent), and the inbound loop captures both ids
+            // before its first poll. "applies at once" here told the owner a move to a new group had landed when it had not.
+            restart: RestartKinds.Host,
             nullable: true));
 
         kernel.Add(SettingDefinition_Factory.Create_Int(
@@ -416,7 +419,9 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Telegram owner user id",
             description: "The one Telegram user whose messages the bridge accepts as the owner's. Absent until set.",
-            restart: RestartKinds.None,
+            // HOST, NOT NONE (final review I1): the inbound loop captures this id before its first poll and filters every
+            // update with it for the life of the process — the same startup read as telegramSupergroupChatId above.
+            restart: RestartKinds.Host,
             nullable: true));
 
         kernel.Add(SettingDefinition_Factory.Create_Bool(
@@ -704,6 +709,29 @@ public static class SettingsCatalog
                     "midnight, shared by every topic. Moves the periodic status only; the away digest stays on 30.",
                 restart: RestartKinds.None),
 
+            // THE AWAY DELAY (plan 03 task 18; owner 2026-09-23, ai-orchestrator-29 entry [95]: "the away mode
+            // is triggered too soon all the time. That also should be a setting."). The shipped value is
+            // today's 15 (ruling R14) and classic states the owner's 60. Read by the engine each time it asks
+            // AwayMode_Policy.Should_EnterAway, which is also where 0 is read as "never", not "at once".
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.AWAY_AFTER_MINUTES_PATH,
+                shippedDefault: Bridge.AwayMode_Policy.DEFAULT_AWAY_AFTER_MINUTES,
+
+                // 0 IS LEGAL AND IS THE OFF SWITCH; a day is the ceiling, because a silence longer than
+                // that is not a delay any more — it is the switch, and 0 already says so plainly.
+                minimum: 0,
+                maximum: 1440,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Away mode after (minutes)",
+                description:
+                    "How long you can be silent — no message or tap in ANY topic — while an orchestration is holding " +
+                    "its questions for you, before the app decides you are away: it tells you once, parks the " +
+                    "questions already asked, tells every session to ask nothing more, and sends a short update per " +
+                    "orchestration every 30 minutes until you write again. Any message you send ends it everywhere, " +
+                    "and it never starts while you are at a PC (/pc). 0 means away mode never starts by itself.",
+                restart: RestartKinds.None),
+
             SettingDefinition_Factory.Create_Bool(
                 path: "phone.appMessagesRing",
                 shippedDefault: true,
@@ -864,6 +892,27 @@ public static class SettingsCatalog
                     "icon_color), so a change reaches topics created afterwards — existing topics keep the colour they " +
                     "have. Turning it off erases no assignment: on again, each repository gets its old colour back.",
                 restart: RestartKinds.None),
+
+            // THE BUTTONS UNDER A QUESTION (plan 04 task 11; owner 2026-09-24, ai-orchestrator-29 entry [123]: "Can
+            // we have a setting that lets us decide what buttons we want under the questions? I'd add all 2 or just
+            // one of the two."). The shipped value is today's — the fork's Let's talk alone (ruling R14) — and
+            // classic states the owner's ["explain","talk"]. Read by the engine each time it builds a question's
+            // keyboard, so a change reaches the next question asked and never re-draws one already on the phone.
+            SettingDefinition_Factory.Create_StringList(
+                path: PhoneSettings.PhoneSettings_Json.QUESTION_APP_BUTTONS_PATH,
+                shippedDefault: [QuestionAppButton_Names.TALK],
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Buttons under a question",
+                description:
+                    "The app's own buttons under every question, after its options, in this order. 'explain' is " +
+                    $"\"{Bridge.OwnerPush_Policy.EXPLAIN_LABEL}\": the session explains what each option means in practice, what it costs " +
+                    $"to get wrong and which it recommends, then asks the question again. 'talk' is \"{Bridge.OwnerPush_Policy.TALK_LABEL}\": the " +
+                    "session explains in prose and answers whatever you ask next, then asks again once you are done. " +
+                    "Either tap closes the question — its buttons go — without choosing anything. An empty list adds no " +
+                    "button: the options alone. A change reaches the next question asked.",
+                restart: RestartKinds.None,
+                validator: SettingValidators.QUESTION_APP_BUTTONS),
         ];
     }
 
@@ -933,7 +982,8 @@ public static class SettingsCatalog
                     "Which fields the pulse line carries, in this order, under its header. 'modelEffort' is a legal field and " +
                     "is not shipped on the line — an owner who wants it adds it, and it rides the supervisor and member rows " +
                     "rather than drawing a line of its own. 'progress' is the task count alone, '1/12 (8%)' — the reading " +
-                    "'merged' carries without its label or its 'unchanged for' clause — and it is the one field with a place " +
+                    "'merged' carries without its label, and with the 'unchanged for' clause when pulse.unchangedFor is on " +
+                    "('1/12 (8%) · unchanged 25 min') — and it is the one field with a place " +
                     "outside this order: listed FIRST, it is drawn above the header, so it is the first line of the message and " +
                     "of a notification preview; listed anywhere else, it sits in its place like any other field. " +
                     "Omitting 'updated' removes the heartbeat, which is what tells the " +
@@ -955,6 +1005,26 @@ public static class SettingsCatalog
                     "is EDITED at all. THE FLOOR IS NOT LOWER BY DEFAULT because of the 429 evidence of 2026-09-10: an " +
                     "edit per minute across every open topic is a rate-limit, and a status line that is rate-limited tells " +
                     "the owner nothing at all.",
+                restart: RestartKinds.None),
+
+            // THE "UNCHANGED FOR" CLAUSE (plan 03 task 19; owner 2026-09-24, ai-orchestrator-29 entry [100]: "my
+            // brother removed the indication ... of how long the progress and completion percentage have stayed
+            // identical in minutes. It's useful to get an idea if the session is working or not."). Shipped ON,
+            // today's behaviour for the shipped list, where `merged` carries it (ruling R14). Neither preset states
+            // it (ruling R28, superseding R26): the fork never removed the clause — quiet draws the shipped list,
+            // whose `merged` carries it — and it was lost only on classic, through Task 16's `progress`. The
+            // wording and the ten-minute silence are UnchangedFor_Formatter's, one copy.
+            SettingDefinition_Factory.Create_Bool(
+                path: PulseSettings.PulseSettings_Json.UNCHANGED_FOR_PATH,
+                shippedDefault: true,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Pulse,
+                label: "Say how long progress has stood still",
+                description:
+                    "Whether the pulse's progress reading says how long the task count and completion percentage have " +
+                    "stayed identical — 'unchanged 25 min', shown only once they have stood still for 10 minutes and " +
+                    "stepped by pulse.stepMinutes. A useful hint of whether the session is working. It rides whichever " +
+                    "of the 'progress' and 'merged' fields is drawn; off, neither says it.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_StringList(

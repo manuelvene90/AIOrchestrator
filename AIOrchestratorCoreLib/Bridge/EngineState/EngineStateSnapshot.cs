@@ -51,8 +51,21 @@ public sealed record PendingButtonRecord
     /// minute, because the only feedback was Telegram's transient toast. Keeping the question open
     /// also left the app holding a live question the owner had visibly stopped answering.
     /// </para>
+    /// <para>
+    /// DERIVED, NOT STORED, since there are two such buttons (plan 04 task 11): a record answers nothing
+    /// exactly when it is one of the app's own buttons, so a second flag could only ever disagree with
+    /// <see cref="AppButton"/>.
+    /// </para>
     /// </summary>
-    public bool AnswersNothing { get; init; }
+    public bool AnswersNothing => AppButton != null;
+
+    /// <summary>
+    /// Which of the app's own buttons this is — a word of <c>QuestionAppButton_Names</c>
+    /// (<c>explain</c> or <c>talk</c>) — or null for one of the asker's options. It decides the
+    /// acknowledgement a tap edits onto the message and the closure reason the log remembers, so an
+    /// Explain tap after a restart still says "explaining the options" rather than the talk line.
+    /// </summary>
+    public string? AppButton { get; init; }
 }
 
 /// <summary>

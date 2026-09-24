@@ -193,6 +193,8 @@ public static class SettingsSnapshot_Reader
     /// <list type="bullet">
     /// <item><c>pulse.fields</c> offers <see cref="PulseField_Names.ALL"/> — the list its validator reads, so
     /// a new field is offered the day it is registered.</item>
+    /// <item><c>questions.appButtons</c> offers <see cref="QuestionAppButton_Names.ALL"/>, its validator's list, for
+    /// the same reason (plan 04 task 11).</item>
     /// <item><c>pulse.buttons</c> and <c>general.buttons</c> offer the verbs a bar can actually DRAW (ruling
     /// P5): every configurable verb — the "/" menu's and the shipped bars', which is where "tail sup" comes
     /// from — kept only when <see cref="TopicCommandButtons.Has_TapRoute"/> says a tap can run it. Plan 03
@@ -229,6 +231,7 @@ public static class SettingsSnapshot_Reader
         return definition.Path switch
         {
             PULSE_FIELDS_PATH => PulseField_Names.ALL,
+            PhoneSettings.PhoneSettings_Json.QUESTION_APP_BUTTONS_PATH => QuestionAppButton_Names.ALL,
             PULSE_BUTTONS_PATH or GENERAL_BUTTONS_PATH => Drawable_Verbs(),
             _ => [],
         };

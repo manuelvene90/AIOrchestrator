@@ -18,8 +18,9 @@ public static class PulseSettings_Factory
         int stepMinutes,
         IReadOnlyList<string> buttons,
         IReadOnlyList<string> generalButtons,
-        bool holdToggle)
+        bool holdToggle,
+        bool unchangedFor)
     {
-        return new PulseSettingsModel([.. fields], stepMinutes, [.. buttons], [.. generalButtons], holdToggle);
+        return new PulseSettingsModel([.. fields], stepMinutes, [.. buttons], [.. generalButtons], holdToggle, unchangedFor);
     }
 }

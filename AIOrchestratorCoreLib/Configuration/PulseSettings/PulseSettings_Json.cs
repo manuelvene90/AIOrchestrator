@@ -9,7 +9,7 @@ namespace AIOrchestratorCoreLib.Configuration.PulseSettings;
 /// The <c>pulse</c> rows and <c>general.buttons</c>, read:
 ///
 /// <code>
-/// "pulse": { "fields": ["supervisor", "merged", "updated"], "stepMinutes": 5, "holdToggle": false },
+/// "pulse": { "fields": ["supervisor", "merged", "updated"], "stepMinutes": 5, "holdToggle": false, "unchangedFor": true },
 /// "general": { "buttons": [] }
 /// </code>
 ///
@@ -44,6 +44,9 @@ public static class PulseSettings_Json
     /// <inheritdoc cref="BUTTONS_PATH"/>
     public const string HOLD_TOGGLE_PATH = "pulse.holdToggle";
 
+    /// <summary>Public because the catalogue row registers this spelling — one copy of the path.</summary>
+    public const string UNCHANGED_FOR_PATH = "pulse.unchangedFor";
+
     /// <summary>Both trees null is the catalogue's own shipped defaults — see <c>PhoneSettings_Json.Parse</c>.</summary>
     public static IPulseSettings Parse(JsonObject? configRoot, JsonObject? presetTree)
     {
@@ -52,21 +55,14 @@ public static class PulseSettings_Json
             (int)Settings_Resolver.Resolve_Long(Definition(STEP_MINUTES_PATH), presetTree, configRoot, session: null)!.Value,
             Read_StringList(BUTTONS_PATH, configRoot, presetTree),
             Read_StringList(GENERAL_BUTTONS_PATH, configRoot, presetTree),
-            Settings_Resolver.Resolve_Bool(Definition(HOLD_TOGGLE_PATH), presetTree, configRoot, session: null));
+            Settings_Resolver.Resolve_Bool(Definition(HOLD_TOGGLE_PATH), presetTree, configRoot, session: null),
+            Settings_Resolver.Resolve_Bool(Definition(UNCHANGED_FOR_PATH), presetTree, configRoot, session: null));
     }
 
-    /// <summary>
-    /// THROUGH <see cref="Settings_Resolver.Resolve"/> BECAUSE THERE IS NO LIST ACCESSOR, and the cast
-    /// is safe for a reason worth naming: every StringList row is non-nullable, and whatever layer
-    /// answers has passed the definition's own check that it is an array of strings — the shipped
-    /// default included (<c>SettingsCatalogTests</c>). The elements are COPIED out rather than the node
-    /// kept: a preset tree is shared by every load in the process, so nothing downstream may hold it.
-    /// </summary>
+    /// <summary>Through <see cref="Settings_Resolver.Resolve_StringList"/>, the one list accessor — its doc says why the read is safe.</summary>
     static IReadOnlyList<string> Read_StringList(string path, JsonObject? configRoot, JsonObject? presetTree)
     {
-        var (value, _) = Settings_Resolver.Resolve(Definition(path), presetTree, configRoot, session: null);
-
-        return value!.AsArray().Select(element => element!.GetValue<string>()).ToArray();
+        return Settings_Resolver.Resolve_StringList(Definition(path), presetTree, configRoot, session: null);
     }
 
     /// <summary>A path this class names and the catalogue does not is a broken build, and it says which path.</summary>

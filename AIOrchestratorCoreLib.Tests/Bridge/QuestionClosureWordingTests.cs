@@ -66,6 +66,7 @@ public class QuestionClosureWordingTests
         [
             QuestionClosure_Wording.TAPPED_OPTION,
             QuestionClosure_Wording.TALK_REQUEST,
+            QuestionClosure_Wording.EXPLAIN_REQUEST,
             QuestionClosure_Wording.TYPED_ANSWER,
             QuestionClosure_Wording.CONFIRMED_HIGH_RISK,
             QuestionClosure_Wording.DEADLINE,

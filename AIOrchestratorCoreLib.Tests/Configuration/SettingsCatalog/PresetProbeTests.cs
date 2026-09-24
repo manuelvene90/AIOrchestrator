@@ -15,6 +15,12 @@ namespace AIOrchestratorCoreLib.Tests.Configuration.SettingsCatalog;
 /// lines has changed the owner's phone without anyone deciding to.
 ///
 /// <para>
+/// EXTENDED TO THE PHONE BY PLAN 03 (Task 12, 2026-09-23), not replaced: <see cref="PresetPhoneProbeTests"/>
+/// drives the real engine under each preset and asserts what reaches the owner's phone — the sends, edits
+/// and reactions in order, and which of them rang. These rows stay the value half of the gate; a row here
+/// that moves without its phone probe moving says the engine stopped reading the key.
+/// </para>
+/// <para>
 /// SPELLED OUT RATHER THAN COMPUTED. Deriving the expected values from the preset files would make
 /// this test assert that a file equals itself; spec §12 names <c>quiet</c> reproducing the fork's
 /// phone exactly as a top risk, and a risk is not mitigated by a tautology.
@@ -92,6 +98,7 @@ public class PresetProbeTests
 
     // THE COUNT ON TOP, COMPACT (owner, 2026-09-23, plan 03 task 16): `progress` replaced `merged`.
     [InlineData("pulse.fields", """["progress","supervisor","members","modelEffort","updated"]""")]
+    [InlineData("pulse.unchangedFor", "true")]
     [InlineData("general.buttons", "[]")]
 
     // DELETE, NOT MASTER'S "close": the owner's answer to D2 (2026-09-14) is delete as the shipped
@@ -108,6 +115,14 @@ public class PresetProbeTests
 
     // NO CODE ON A HIGH-RISK QUESTION (owner, 2026-09-23, plan 03 task 15): "I don't want that."
     [InlineData("highRiskConfirmation", "false")]
+
+    // AWAY MODE AFTER AN HOUR, NOT FIFTEEN MINUTES (owner, 2026-09-23 entry [95], plan 03 task 18):
+    // "the away mode is triggered too soon all the time". 60 is the controller's value, announced in [97].
+    [InlineData("away.afterMinutes", "60")]
+
+    // BOTH BUTTONS UNDER A QUESTION, EXPLAIN FIRST (owner, 2026-09-24 entry [123]): "I more often use the
+    // explain in more details feature". Master's one button is back, beside the fork's Let's talk.
+    [InlineData("questions.appButtons", """["explain","talk"]""")]
     public void UnderClassic_TheMachineResolvesToMastersWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.CLASSIC, path));
@@ -142,6 +157,14 @@ public class PresetProbeTests
     [InlineData("runners.implementer.resume", "\"fresh\"")]
     [InlineData("runners.general.resume", "\"fresh\"")]
     [InlineData("highRiskConfirmation", "true")]
+    [InlineData("away.afterMinutes", "15")]
+
+    // ON, THE SHIPPED VALUE (ruling R28, superseding R26): quiet states nothing — the fork never removed the
+    // clause, its `merged` line always carried it.
+    [InlineData("pulse.unchangedFor", "true")]
+
+    // LET'S TALK ALONE, THE SHIPPED VALUE (ruling R14): the fork's one button, and quiet states nothing.
+    [InlineData("questions.appButtons", """["talk"]""")]
     public void UnderQuiet_TheMachineResolvesToTheForksWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.QUIET, path));

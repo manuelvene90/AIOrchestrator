@@ -39,4 +39,12 @@ public interface IPulseSettings
     /// Never both: this one value is the single fact that says which place.
     /// </summary>
     bool HoldToggle { get; }
+
+    /// <summary>
+    /// <c>pulse.unchangedFor</c> — whether the progress reading says how long the task count and percent
+    /// have stood still ("unchanged 25 min", after 10 min, stepped), on whichever of <c>progress</c> and
+    /// <c>merged</c> is drawn (plan 03 task 19, owner 2026-09-24 entry [100]). Read by the engine per topic
+    /// per tick and handed to the builder.
+    /// </summary>
+    bool UnchangedFor { get; }
 }

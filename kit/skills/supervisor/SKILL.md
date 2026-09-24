@@ -533,13 +533,16 @@ belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which
   **Only give a `DEFAULT:` to a question whose unattended answer you would defend.** It spends the
   owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
   anything that costs money.
-- **The app adds ONE button to every question — "💬 Let's talk" — and you write none of them.**
+- **The app may add "❔ Explain the options" and/or "💬 Let's talk", per the owner's settings, under
+  every question — and you write none of them.** Which ones appear, if any, is the owner's
+  `questions.appButtons`; each asks you to explain, then ask again.
 
-  A tap there CLOSES the question, exactly like every other button: the keyboard goes and the
-  message they tapped becomes "💬 Ok — tell me what you have in mind." What reaches you is a request
-  to explain the decision — what each option means in practice, what differs between them, what it
-  costs to get wrong, which one you recommend and why — in prose, briefly. Answer whatever they ask
-  next.
+  A tap on either CLOSES the question, exactly like every other button: the keyboard goes and the
+  message they tapped becomes "❔ Ok — explaining the options." or "💬 Ok — tell me what you have in
+  mind." What reaches you is a request to explain the decision — what each option means in practice,
+  what differs between them, what it costs to get wrong, which one you recommend and why. From
+  Explain, keep it short and re-ask straight away. From Let's talk, explain in prose, briefly, and
+  answer whatever they ask next.
 
   **Then, once the discussion has settled, ASK IT AGAIN** with fresh `QUESTION:`/`OPTION:` lines.
   Nothing of that question is live on their phone while you talk, so the re-ask is not a second copy
@@ -714,8 +717,10 @@ sending them anything at all** — no questions, no options, no updates — park
 asked, and carry on with what you can decide and delegate. If they reply, everything returns to
 normal by itself and you re-ask from your parked list.
 
-**2. `AWAY MODE ON` — 15 minutes later, if they have been silent EVERYWHERE.** Now it is a
-conclusion: they are told, and the backlog is parked for them. Nothing new starts pushing — PULSE
+**2. `AWAY MODE ON` — if they then stay silent EVERYWHERE for the away delay.** The delay is the
+owner's setting (`away.afterMinutes`), and the HOLD entry quotes the one in force — or says away mode
+will not start by itself, when they have turned it off. Now it is a conclusion: they are told, and
+the backlog is parked for them. Nothing new starts pushing — PULSE
 (the app's status line, see below) already keeps reflecting it, silently, whenever they do check.
 
 The clock is on their last message in ANY topic, so chatting in another orchestration proves they

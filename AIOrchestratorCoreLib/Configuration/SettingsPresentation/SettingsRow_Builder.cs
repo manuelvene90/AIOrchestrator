@@ -65,6 +65,15 @@ public static class SettingsRow_Builder
         "Read when the app starts: restart the app after saving a new one.";
 
     /// <summary>
+    /// WHAT THE TOKEN'S SAVE ANSWERS — never a bare "Saved." (final review I1, 2026-09-24). The token is read once, when
+    /// the bridge builds its Telegram client, so a saved token changes nothing until the app restarts; master's window
+    /// said "Telegram bridge changes need an app restart" and plan 04's first cut lost the sentence. The token is not a
+    /// catalogue row, so no restart label reaches it — this line is its restart label.
+    /// </summary>
+    public const string BOT_TOKEN_SAVED_NOTE =
+        "Saved. Telegram bridge changes need an app restart — the running bridge keeps the old token until then, and nothing restarts it for you.";
+
+    /// <summary>
     /// The readings for <see cref="CONNECTION_PATHS"/>, in that order. A path with no reading is simply absent —
     /// a partial snapshot draws what it has — and a catalogue that renamed one of them is caught by the test that
     /// asserts each path is a catalogue row.

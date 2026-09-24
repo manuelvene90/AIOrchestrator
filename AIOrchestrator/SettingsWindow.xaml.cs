@@ -250,7 +250,7 @@ public partial class SettingsWindow : Window
         try
         {
             BotTokenTextBox.Text = OrchestratorConfig_Loader.Save_BotToken(_paths, BotTokenTextBox.Text) ?? string.Empty;
-            TokenNoteText.DataContext = new SettingNoteView(SettingWriteNote_Formatter.Describe(SettingsWriteOutcomes.Applied, null));
+            TokenNoteText.DataContext = new SettingNoteView((SettingsRow_Builder.BOT_TOKEN_SAVED_NOTE, false));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

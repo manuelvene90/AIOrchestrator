@@ -65,7 +65,8 @@ namespace AIOrchestratorCoreLib.Web;
 ///     the writer's rule), and in both cases:
 /// { "results": [ { "path": "&lt;as sent&gt;",
 ///                  "outcome": "Applied" | "Reset" | "RefusedUnknownPath" | "RefusedReadOnly" | "RefusedInvalid",
-///                  "message": null | "&lt;the definition's own words&gt;" } ] }
+///                  "message": null | "&lt;the definition's own words&gt;",
+///                  "tookEffect": true | false } ] }
 ///
 /// Anything else → { "error": "…" } with 400 (unreadable body, DELETE without ?path=), 401 (web.token set and
 /// the header absent or wrong), 403 (web.token empty and the request touches a fenced row — nothing applied),
@@ -576,16 +577,23 @@ public static class SettingsRequest_Handler
 
         foreach (var (path, outcome, message) in results)
         {
+            // WriteFailed never reaches here — Refuse_WriteFailed_OrNull answers it as a 500 first — and is
+            // honest if it ever did: the one predicate classifies it as not having taken effect.
+            var tookEffect = Settings_Writer.Took_Effect(outcome);
+
             resultsJson.Add(new JsonObject
             {
                 ["path"] = path,
                 ["outcome"] = outcome.ToString(),
                 ["message"] = message,
+
+                // THE VERDICT TRAVELS WITH THE RESULT (final review M2, 2026-09-24): the page used to keep its own
+                // switch over the outcome words, a second copy of Took_Effect that a new outcome would have left
+                // printing "Saved." while C# classified it as a refusal (decision 12). The page reads this instead.
+                ["tookEffect"] = tookEffect,
             });
 
-            // WriteFailed never reaches here — Refuse_WriteFailed_OrNull answers it as a 500 first — and is
-            // honest if it ever did: the one predicate classifies it as not having taken effect.
-            everyEditTookEffect &= Settings_Writer.Took_Effect(outcome);
+            everyEditTookEffect &= tookEffect;
         }
 
         var status = everyEditTookEffect ? HttpStatusCode.OK : HttpStatusCode.UnprocessableContent;

@@ -12,7 +12,9 @@ namespace AIOrchestratorCoreLib.Configuration.PhoneSettings;
 ///
 /// <code>
 /// "phone": { "push": "everything", "receipts": "reactions", "status": { "periodic": false } },
-/// "topic": { "onClose": "delete" }
+/// "topic": { "onClose": "delete" },
+/// "away": { "afterMinutes": 60 },
+/// "questions": { "appButtons": ["explain", "talk"] }
 /// </code>
 ///
 /// <para>
@@ -58,6 +60,12 @@ public static class PhoneSettings_Json
     /// <summary>Public because the catalogue row registers this spelling — one copy of the path.</summary>
     public const string TOPIC_REPO_COLOURS_PATH = "topic.repoColours";
 
+    /// <summary>Public because the catalogue row registers this spelling — one copy of the path.</summary>
+    public const string AWAY_AFTER_MINUTES_PATH = "away.afterMinutes";
+
+    /// <summary>Public because the catalogue row registers this spelling — one copy of the path.</summary>
+    public const string QUESTION_APP_BUTTONS_PATH = "questions.appButtons";
+
     /// <summary>
     /// A null <paramref name="configRoot"/> and a null <paramref name="presetTree"/> together are the
     /// catalogue's own shipped defaults — which is how <c>OrchestratorConfig_Factory</c> fills the block
@@ -77,7 +85,9 @@ public static class PhoneSettings_Json
             ModeGlyph_Placements.Parse_OrPulseHeader(Read_Word_OrNull(TOPIC_MODE_GLYPHS_PATH, configRoot, presetTree)),
             Read_Int(AGGREGATION_SECONDS_PATH, configRoot, presetTree),
             Read_Int(FINISHED_MESSAGE_SECONDS_PATH, configRoot, presetTree),
-            Settings_Resolver.Resolve_Bool(Definition(TOPIC_REPO_COLOURS_PATH), presetTree, configRoot, session: null));
+            Settings_Resolver.Resolve_Bool(Definition(TOPIC_REPO_COLOURS_PATH), presetTree, configRoot, session: null),
+            Read_Int(AWAY_AFTER_MINUTES_PATH, configRoot, presetTree),
+            Settings_Resolver.Resolve_StringList(Definition(QUESTION_APP_BUTTONS_PATH), presetTree, configRoot, session: null));
     }
 
     static string? Read_Word_OrNull(string path, JsonObject? configRoot, JsonObject? presetTree)

@@ -249,10 +249,6 @@ function resetRow(path) {
   return send('DELETE', API + '?' + query.toString(), null, path);
 }
 
-function tookEffect(outcome) {
-  return outcome === 'Applied' || outcome === 'Reset';
-}
-
 async function send(method, url, body, path) {
   if (state.busy) return;
   state.busy = true;
@@ -272,8 +268,9 @@ async function send(method, url, body, path) {
     // own, never the status alone. Anything else carries one "error" for the whole request.
     if (Array.isArray(answer.results)) {
       for (const result of answer.results) {
-        state.notes[result.path] = tookEffect(result.outcome)
-          ? { kind: 'ok', text: result.outcome === 'Reset' ? 'Reset.' : 'Saved.' }
+        // The server's verdict (result.tookEffect), never the page's own reading of the outcome word.
+        state.notes[result.path] = result.tookEffect === true
+          ? { kind: 'ok', text: result.outcome === 'Reset' ? (result.message || 'Reset.') : 'Saved.' }
           : { kind: 'err', text: result.message || ('Not applied (' + result.outcome + ').') };
       }
     } else {
@@ -382,7 +379,7 @@ function renderSections(data) {
   host.replaceChildren();
   for (const section of data.sections) {
     const node = el('section', { class: 'cat', id: anchorFor(section.category) }, [el('h2', { text: section.title })]);
-    if (!section.rows || section.rows.length === 0) node.append(el('p', { class: 'empty', text: 'Nothing to set here yet.' }));
+    if (!section.rows || section.rows.length === 0) node.append(el('p', { class: 'empty', text: 'Nothing to set here yet — this section fills in with a later plan.' }));
     for (const row of section.rows || []) node.append(renderRow(row, data.editing || {}));
     host.append(node);
   }

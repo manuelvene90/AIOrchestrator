@@ -484,6 +484,13 @@ public class TopicStatusLinePlannerTests
     /// text, which is the state the engine is in immediately after a successful repost. It must go
     /// quiet — otherwise a changed line reposts on every tick for as long as it stays buried, which
     /// is the waterfall by another door.
+    ///
+    /// "CHANGED" MEANS CHANGED SINCE THE OWNER LAST SAW IT AT THE BOTTOM (ruling R27, 2026-09-24), not
+    /// since the last write. Here no edit happens in between, so the text last written IS what was seen
+    /// at the bottom and the outcomes are the ones this case always pinned; the third call now hands in
+    /// the rendering the repost put at the bottom, which is what the engine remembers after it.
+    /// `ABuriedLineEditedInPlaceDuringTheWindow_IsBroughtBackOnceTheTopicIsQuiet` is the case where the
+    /// two meanings part.
     /// </summary>
     [Fact]
     public void BuriedAndUnchangedStaysPut_BuriedAndChangedMovesOnce()
@@ -507,8 +514,135 @@ public class TopicStatusLinePlannerTests
 
         Assert.Equal(
             TopicStatusActions.None,
-            Plan(existingMessageId: STATUS_ID, lastWrittenText: afterAChange.Text,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: afterAChange.Text, lastSeenAtBottomKey: afterAChange.SeenAtBottomKey,
                  newestTopicMessage: buriedUnderThree).Action);
+    }
+
+    // ── CHANGED SINCE THE OWNER LAST SAW IT AT THE BOTTOM (ruling R27, plan 03 Task 17 fix round 1) ────
+    //
+    // With "changed" read as "changed since the last write", the common case never came back: an
+    // answer that both buries PULSE and changes its STATE is EDITED IN PLACE inside the ten-second
+    // window, so once the topic is quiet the line has "nothing new to say" and stays buried. The
+    // planner now also takes the rendering the line had when it was last unburied, and an edit made
+    // while buried does not move that memory.
+
+    static readonly IReadOnlyList<ITopicStatusMember> AFTER_THE_ANSWER = [Member("imp-1", "run the integration suite", "2026-08-12 14:50")];
+
+    /// <summary>
+    /// THE COMMON CASE, step by step: seen at the bottom → buried and edited in place inside the window
+    /// (the memory does not move) → quiet: reposted ONCE → the fresh line is at the bottom and says the
+    /// same thing: nothing more.
+    /// </summary>
+    [Fact]
+    public void ABuriedLineEditedInPlaceDuringTheWindow_IsBroughtBackOnceTheTopicIsQuiet()
+    {
+        var atTheBottom = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
+
+        var justBuried = Newest(STATUS_ID + 2, NOW.AddSeconds(-2));
+
+        var inTheWindow = Plan(
+            members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
+            lastWrittenText: atTheBottom.Text, lastWrittenRenderKey: atTheBottom.RenderKey, lastSeenAtBottomKey: atTheBottom.SeenAtBottomKey,
+            newestTopicMessage: justBuried);
+
+        Assert.Equal(TopicStatusActions.Edit, inTheWindow.Action);
+        Assert.Equal(atTheBottom.SeenAtBottomKey, inTheWindow.SeenAtBottomKey);
+
+        var quiet = Newest(STATUS_ID + 2, NOW.AddSeconds(-TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+
+        var onceQuiet = Plan(
+            members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
+            lastWrittenText: inTheWindow.Text, lastWrittenRenderKey: inTheWindow.RenderKey, lastSeenAtBottomKey: inTheWindow.SeenAtBottomKey,
+            newestTopicMessage: quiet);
+
+        Assert.Equal(TopicStatusActions.Repost, onceQuiet.Action);
+        Assert.NotEqual(atTheBottom.SeenAtBottomKey, onceQuiet.SeenAtBottomKey);
+
+        // The fresh line carries an id above the traffic that buried the old one.
+        var afterTheRepost = Plan(
+            members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID + 3, commandButtonRows: THREE_VERB_BAR,
+            lastWrittenText: onceQuiet.Text, lastWrittenRenderKey: onceQuiet.RenderKey, lastSeenAtBottomKey: onceQuiet.SeenAtBottomKey,
+            newestTopicMessage: quiet);
+
+        Assert.Equal(TopicStatusActions.None, afterTheRepost.Action);
+    }
+
+    /// <summary>
+    /// AND STILL BURIED AFTERWARDS, one tick later with the same memory handed back, it does not move
+    /// again: what was just put at the bottom is what the owner now sees there.
+    /// </summary>
+    [Fact]
+    public void ALineReposted_IsNotRepostedAgainOnTheNextTick()
+    {
+        var atTheBottom = Plan(existingMessageId: STATUS_ID);
+        var quiet = Newest(STATUS_ID + 2, NOW.AddMinutes(-1));
+
+        var reposted = Plan(
+            members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID,
+            lastWrittenText: atTheBottom.Text, lastSeenAtBottomKey: atTheBottom.SeenAtBottomKey, newestTopicMessage: quiet);
+
+        Assert.Equal(TopicStatusActions.Repost, reposted.Action);
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID,
+                 lastWrittenText: reposted.Text, lastSeenAtBottomKey: reposted.SeenAtBottomKey, newestTopicMessage: quiet).Action);
+    }
+
+    /// <summary>
+    /// AN UNCHANGED BURIED LINE STAYS PUT with the memory handed in, and a line at the bottom takes the
+    /// rendering it shows as the new memory — which is what makes a LATER burial compare against it.
+    /// </summary>
+    [Fact]
+    public void AnUnchangedBuriedLine_StaysPut_AndALineAtTheBottomIsWhatWasSeen()
+    {
+        var atTheBottom = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
+
+        Assert.NotNull(atTheBottom.SeenAtBottomKey);
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
+                 lastWrittenText: atTheBottom.Text, lastWrittenRenderKey: atTheBottom.RenderKey, lastSeenAtBottomKey: atTheBottom.SeenAtBottomKey,
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddHours(-1))).Action);
+
+        // Changed while NOT buried: an edit, and the edit IS seen — the memory moves with it.
+        var editedAtTheBottom = Plan(
+            members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
+            lastWrittenText: atTheBottom.Text, lastWrittenRenderKey: atTheBottom.RenderKey, lastSeenAtBottomKey: atTheBottom.SeenAtBottomKey,
+            newestTopicMessage: Newest(STATUS_ID - 1, NOW.AddHours(-1)));
+
+        Assert.Equal(TopicStatusActions.Edit, editedAtTheBottom.Action);
+        Assert.NotEqual(atTheBottom.SeenAtBottomKey, editedAtTheBottom.SeenAtBottomKey);
+
+        // So burying it afterwards, unchanged, does not move it.
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
+                 lastWrittenText: editedAtTheBottom.Text, lastWrittenRenderKey: editedAtTheBottom.RenderKey,
+                 lastSeenAtBottomKey: editedAtTheBottom.SeenAtBottomKey,
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-1))).Action);
+    }
+
+    /// <summary>
+    /// THE HEARTBEAT IS STILL NOT NEWS against the remembered rendering: a buried line whose only
+    /// difference from what was seen at the bottom is `updated HH:MM` is edited in place, not moved.
+    /// </summary>
+    [Fact]
+    public void AHeartbeatOnlyDifferenceFromWhatWasSeen_DoesNotMoveABuriedLine()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var seen = TopicStatusLine_Planner.Plan(
+            A_Ledger(), [], NOW, STATUS_ID, null, TelegramDeliveryModes.Normal, null, BACKOFF, null, repostIsImpossible: false);
+
+        var later = TopicStatusLine_Planner.Plan(
+            A_Ledger(), [], NOW.AddMinutes(5), STATUS_ID, seen.Text, TelegramDeliveryModes.Normal, null, BACKOFF, buried, repostIsImpossible: false,
+            lastSeenAtBottomKey: seen.SeenAtBottomKey);
+
+        Assert.NotEqual(seen.Text, later.Text);
+        Assert.Equal(TopicStatusActions.Edit, later.Action);
+        Assert.Equal(seen.SeenAtBottomKey, later.SeenAtBottomKey);
     }
 
     /// <summary>
@@ -831,6 +965,117 @@ public class TopicStatusLinePlannerTests
                  newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), lastFailedAttemptAt: NOW.AddSeconds(-BACKOFF)).Action);
     }
 
+    // ── TEXT AGAINST TEXT, AND THE BAR BESIDE IT (plan 03 Task 17, 2026-09-23) ──────────────────────
+    //
+    // The engine remembered only the render key and handed it in as `lastWrittenText`, so the planner
+    // compared "<length>:<text>|…" with the raw text: every tick answered Edit and every buried line
+    // counted as news (plan 03 report §5.3). The engine now remembers both and hands in both; these
+    // pin what the planner does with them. The engine half is PresetPhoneProbeTests' PULSE facts.
+
+    static readonly IReadOnlyList<IReadOnlyList<(string Data, string Label)>> THREE_VERB_BAR =
+        [[("cmd:screen", "📸 /screen"), ("cmd:show", "👁 /show"), ("cmd:merge", "🔀 /merge")]];
+
+    static readonly IReadOnlyList<IReadOnlyList<(string Data, string Label)>> TWO_VERB_BAR =
+        [[("cmd:screen", "📸 /screen"), ("cmd:show", "👁 /show")]];
+
+    /// <summary>
+    /// WHAT WAS WRITTEN, HANDED BACK AS IT WAS WRITTEN, IS NOT NEWS — buried and quiet included. This is
+    /// the state the engine is in on every tick after a successful write, and the defect answered Edit
+    /// (not buried) or Repost (buried) to it for ever.
+    /// </summary>
+    [Fact]
+    public void TheRenderingJustWritten_IsNotWrittenAgain_EvenWhenBuried()
+    {
+        var written = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
+
+        Assert.Equal(TopicStatusLine_RenderKey.Build(written.Text, THREE_VERB_BAR), written.RenderKey);
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
+                 commandButtonRows: THREE_VERB_BAR).Action);
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
+                 commandButtonRows: THREE_VERB_BAR, newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// THE BAR ALONE CHANGED, the line is still last: one edit. The text is identical, so a text
+    /// comparison says nothing moved — the render key is what sees it (brief D: the held count lives on
+    /// a label, and a quiet orchestration's text does not move for hours).
+    /// </summary>
+    [Fact]
+    public void AChangeToTheBarAlone_IsAnEdit()
+    {
+        var written = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
+
+        var plan = Plan(existingMessageId: STATUS_ID, lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
+                        commandButtonRows: TWO_VERB_BAR);
+
+        Assert.Equal(written.Text, plan.Text);
+        Assert.Equal(TopicStatusActions.Edit, plan.Action);
+        Assert.Equal(TopicStatusLine_RenderKey.Build(written.Text, TWO_VERB_BAR), plan.RenderKey);
+    }
+
+    /// <summary>
+    /// THE BAR ALONE CHANGED UNDER A BURIED LINE IN A QUIET TOPIC: it moves. The owner reads the labels,
+    /// so a changed bar is news for the repost gate exactly as a changed row is.
+    /// </summary>
+    [Fact]
+    public void AChangeToTheBarAlone_MovesABuriedLine()
+    {
+        var written = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
+
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
+                 commandButtonRows: TWO_VERB_BAR, newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// AND THE BAR'S EDIT OBEYS THE BACK-OFF. It used to be an engine branch after the plan, and a
+    /// FAILED edit leaves the last rendering SENT standing on purpose — so without the back-off a 429
+    /// is retried at the tick rate (2026-09-10 on the VPS: 357 of 382 refusals were that branch).
+    /// </summary>
+    [Fact]
+    public void AChangeToTheBarAlone_WaitsForTheBackOff()
+    {
+        var written = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
+                 commandButtonRows: TWO_VERB_BAR, lastFailedAttemptAt: NOW.AddSeconds(-5)).Action);
+
+        Assert.Equal(
+            TopicStatusActions.Edit,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
+                 commandButtonRows: TWO_VERB_BAR, lastFailedAttemptAt: NOW.AddSeconds(-BACKOFF)).Action);
+    }
+
+    /// <summary>
+    /// THE HEARTBEAT, UNDER AN UNCHANGED BAR, IS STILL NOT NEWS: across a five-minute step a buried line
+    /// is edited in place, never moved. Handing the bar in must not turn the clock into a reason to move.
+    /// </summary>
+    [Fact]
+    public void AHeartbeatStep_UnderTheSameBar_EditsABuriedLineInPlace()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var written = TopicStatusLine_Planner.Plan(
+            A_Ledger(), [], NOW, STATUS_ID, null, TelegramDeliveryModes.Normal, null, BACKOFF, buried, repostIsImpossible: false,
+            commandButtonRows: THREE_VERB_BAR);
+
+        var fiveMinutesLater = TopicStatusLine_Planner.Plan(
+            A_Ledger(), [], NOW.AddMinutes(5), STATUS_ID, written.Text, TelegramDeliveryModes.Normal, null, BACKOFF, buried, repostIsImpossible: false,
+            commandButtonRows: THREE_VERB_BAR, lastWrittenRenderKey: written.RenderKey);
+
+        Assert.NotEqual(written.Text, fiveMinutesLater.Text);
+        Assert.Equal(TopicStatusActions.Edit, fiveMinutesLater.Action);
+    }
+
     /// <summary>
     /// The predicate on its own, at the three edges Plan cannot show as clearly. EQUAL ids are the
     /// subtle one: the newest message the app knows of IS the status line itself, which means nothing
@@ -964,7 +1209,10 @@ public class TopicStatusLinePlannerTests
         TelegramDeliveryModes mode = TelegramDeliveryModes.Normal,
         DateTime? lastFailedAttemptAt = null,
         TopicStatusLine_Planner.TopicNewestMessage? newestTopicMessage = null,
-        bool repostIsImpossible = false)
+        bool repostIsImpossible = false,
+        IReadOnlyList<IReadOnlyList<(string Data, string Label)>>? commandButtonRows = null,
+        string? lastWrittenRenderKey = null,
+        string? lastSeenAtBottomKey = null)
     {
         return TopicStatusLine_Planner.Plan(
             progress,
@@ -976,7 +1224,10 @@ public class TopicStatusLinePlannerTests
             lastFailedAttemptAt,
             BACKOFF,
             newestTopicMessage,
-            repostIsImpossible);
+            repostIsImpossible,
+            commandButtonRows: commandButtonRows,
+            lastWrittenRenderKey: lastWrittenRenderKey,
+            lastSeenAtBottomKey: lastSeenAtBottomKey);
     }
 
     /// <summary>

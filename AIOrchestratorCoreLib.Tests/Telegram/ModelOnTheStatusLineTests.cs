@@ -136,8 +136,9 @@ public class ModelOnTheStatusLineTests
     /// <summary>
     /// WAS TheLeadLineFieldOrderWithEverythingPresent, then TheSupAndMergedRowFieldOrderWithEverythingPresent
     /// until classic swapped `merged` for `progress` (2026-09-23). The field ORDER with all three optional
-    /// fields present: the ledger reading stays together (count, percent) on its own line — the compact
-    /// one, which carries no "unchanged" clause by the owner's "just 1/23 (4%)" — and the supervisor's row
+    /// fields present: the ledger reading stays together (count, percent, and since plan 03 task 19 the
+    /// "unchanged" clause the owner asked back for, entry [100]) on its own line — the compact one, with no
+    /// "merged" label by the owner's "just 1/23 (4%)" — and the supervisor's row
     /// carries its model then its context: the same facts-then-alarm order as a member row, with `ctx`
     /// keeping its place at the very end so ContextOnTheStatusLineTests' expectations still hold.
     /// </summary>
@@ -148,7 +149,7 @@ public class ModelOnTheStatusLineTests
             Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false, pulseFields: CLASSIC,
             figuresUnchangedFor: TimeSpan.FromMinutes(25), supervisorContext: Reading(41), supervisorModel: Fable("xhigh"));
 
-        Assert.Equal("3/4 (75%)\nPULSE\nsup · Fable 5.1 xhigh · ctx 41%\nupdated 20:30", line);
+        Assert.Equal("3/4 (75%) · unchanged 25 min\nPULSE\nsup · Fable 5.1 xhigh · ctx 41%\nupdated 20:30", line);
     }
 
     /// <summary>

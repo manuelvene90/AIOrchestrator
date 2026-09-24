@@ -253,6 +253,36 @@ public class OwnerPushPolicyTests
         Assert.DoesNotContain("✅", OwnerPush_Policy.TALK_ACKNOWLEDGEMENT, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// MASTER'S BUTTON, VERBATIM (owner, 2026-09-24 entry [123]: "I more often use the explain in more details
+    /// feature"). The label and the request are master's words at <c>a58ef7e</c> — <c>MORE_DETAIL_LABEL</c> and
+    /// <c>MORE_DETAIL_REQUEST</c> there — pinned as literals so a paraphrase cannot pass as a restoration.
+    /// </summary>
+    [Fact]
+    public void TheExplainButton_IsMastersLabelAndMastersRequest_Verbatim()
+    {
+        Assert.Equal("❔ Explain the options", OwnerPush_Policy.EXPLAIN_LABEL);
+        Assert.Equal(
+            "Explain this decision before I choose: what each option actually means in practice, what "
+            + "differs between them, what it costs to get wrong, and which one you recommend and why. "
+            + "Keep it short. Then ask the question again.",
+            OwnerPush_Policy.EXPLAIN_REQUEST);
+
+        Assert.True(OwnerPush_Policy.EXPLAIN_LABEL.Length <= 30, "the label has to fit a phone button");
+        Assert.NotEqual(OwnerPush_Policy.TALK_LABEL, OwnerPush_Policy.EXPLAIN_LABEL);
+        Assert.NotEqual(OwnerPush_Policy.TALK_REQUEST, OwnerPush_Policy.EXPLAIN_REQUEST);
+    }
+
+    /// <summary>The Explain tap closes its question like Let's talk does, so it leaves a record in the same style — and no ✅.</summary>
+    [Fact]
+    public void TheExplainAcknowledgement_IsInTheTalkStyle_AndRecordsNoChoice()
+    {
+        Assert.StartsWith("❔ Ok — ", OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+        Assert.Contains("explaining the options", OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+        Assert.DoesNotContain("✅", OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+        Assert.NotEqual(OwnerPush_Policy.TALK_ACKNOWLEDGEMENT, OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT);
+    }
+
     [Fact]
     public void Carries_Question_SpotsEitherMarker()
     {
