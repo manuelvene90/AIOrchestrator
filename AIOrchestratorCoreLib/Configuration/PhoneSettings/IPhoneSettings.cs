@@ -17,6 +17,8 @@ namespace AIOrchestratorCoreLib.Configuration.PhoneSettings;
 /// <c>IPulseSettings</c>. Regrouping these into three blocks by category would put
 /// <c>phone.receipts</c> in a block that is not where config.json writes it, and move
 /// <c>pulse.holdToggle</c> away from the bar it decides — breaking both halves at once.
+/// The one <c>away.*</c> row lives here as well (plan 03 task 18): it decides what the phone gets once
+/// the owner goes silent, and a block of its own would be a triple around a single integer.
 /// </para>
 /// <para>
 /// THE TWO RE-HOMED PROSE ROWS ARE NOT HERE. <c>phone.foldLongEntriesAbove</c> and
@@ -75,4 +77,12 @@ public interface IPhoneSettings
     /// persists nothing. Telegram takes a colour only at creation, so it never repaints an existing topic.
     /// </summary>
     bool TopicRepoColours { get; }
+
+    /// <summary>
+    /// <c>away.afterMinutes</c> — minutes of silence from the owner, in every topic, before a quiet
+    /// orchestration hardens into app-wide away mode (0–1440; 0 = away mode never starts by itself). Read
+    /// by the engine each time it asks <c>AwayMode_Policy.Should_EnterAway</c>, and quoted in the HOLD
+    /// entry a quiet session gets (plan 03 task 18, owner 2026-09-23 entry [95]).
+    /// </summary>
+    int AwayAfterMinutes { get; }
 }

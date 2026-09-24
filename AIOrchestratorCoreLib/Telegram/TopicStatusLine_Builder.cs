@@ -188,6 +188,11 @@ public static class TopicStatusLine_Builder
     /// `pulse.stepMinutes` as resolved — the ONE step the member durations, the "unchanged" clause and
     /// the heartbeat all round to. Null is the catalogue's shipped step.
     /// </param>
+    /// <param name="unchangedFor">
+    /// `pulse.unchangedFor` as the engine resolved it: whether the progress reading — <c>progress</c> or
+    /// <c>merged</c>, whichever is drawn — carries "unchanged N min". NULL IS THE CATALOGUE'S SHIPPED VALUE
+    /// (on), read from the catalogue, for the reason <paramref name="pulseFields"/>'s is.
+    /// </param>
     /// <param name="modeGlyphs">
     /// `topic.modeGlyphs` as the engine resolved it: the header draws the five mode glyphs only under
     /// <see cref="ModeGlyphPlacements.PulseHeader"/>, because under <c>name</c> the topic name carries
@@ -206,9 +211,17 @@ public static class TopicStatusLine_Builder
         ISessionModelReading? supervisorModel = null,
         IReadOnlyList<string>? pulseFields = null,
         int? stepMinutes = null,
-        ModeGlyphPlacements? modeGlyphs = null)
+        ModeGlyphPlacements? modeGlyphs = null,
+        bool? unchangedFor = null)
     {
         var (fieldList, step) = Resolve_FieldsAndStep(pulseFields, stepMinutes);
+
+        // THE CLAUSE, BUILT ONCE for whichever of the two progress fields is drawn (task 19) — so `progress`
+        // on top, `progress` in its place and `merged` cannot come to say it three ways.
+        var unchangedPart = Build_UnchangedPart(
+            unchangedFor ?? PulseSettings_Json.Parse(configRoot: null, presetTree: null).UnchangedFor,
+            figuresUnchangedFor,
+            step);
 
         // Resolved ONCE per member and carried, rather than asked again per field. The state decides
         // the reading order, the row's state word, the collapsed line's grouping AND whether the
@@ -306,12 +319,12 @@ public static class TopicStatusLine_Builder
                     : [],
 
                 PulseField_Names.MERGED => progress != null && progress.Total > 0
-                    ? [Build_MergedLine(progress, figuresUnchangedFor, step)]
+                    ? [Build_MergedLine(progress, unchangedPart)]
                     : [],
 
                 // THE SAME GUARD AS `merged`, for the same reason: Total 0 is the say-nothing message.
                 PulseField_Names.PROGRESS => progress != null && progress.Total > 0
-                    ? [Build_ProgressLine(progress)]
+                    ? [Build_ProgressLine(progress, unchangedPart)]
                     : [],
 
                 PulseField_Names.MODEL_EFFORT => [],
@@ -708,15 +721,23 @@ public static class TopicStatusLine_Builder
     /// to 0."*
     /// </para>
     /// </summary>
-    static string Build_MergedLine(IPlanProgress progress, TimeSpan? figuresUnchangedFor, int stepMinutes)
+    static string Build_MergedLine(IPlanProgress progress, string unchangedPart)
     {
-        var unchanged = figuresUnchangedFor == null
-            ? null
-            : UnchangedFor_Formatter.Describe_OrNull(figuresUnchangedFor.Value, stepMinutes);
-
-        var unchangedPart = unchanged == null ? "" : $"{FIELD_SEPARATOR}{unchanged}";
-
         return $"{progress.Done}/{progress.Total} merged{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)} %{unchangedPart}";
+    }
+
+    /// <summary>
+    /// " · unchanged 25 min", or nothing: off, no reading, or under ten minutes — the wording, the silence
+    /// and the step are all <see cref="UnchangedFor_Formatter"/>'s, the one copy (CLAUDE.md decision 12).
+    /// </summary>
+    static string Build_UnchangedPart(bool show, TimeSpan? figuresUnchangedFor, int stepMinutes)
+    {
+        if (!show || figuresUnchangedFor == null)
+            return "";
+
+        var unchanged = UnchangedFor_Formatter.Describe_OrNull(figuresUnchangedFor.Value, stepMinutes);
+
+        return unchanged == null ? "" : $"{FIELD_SEPARATOR}{unchanged}";
     }
 
     /// <summary>
@@ -729,12 +750,13 @@ public static class TopicStatusLine_Builder
     /// `/progress` cannot quote one ledger three ways.
     ///
     /// <para>
-    /// NO "UNCHANGED FOR" CLAUSE, which `merged` keeps. The clause would turn the owner's bare
-    /// reading back into a sentence (`1/12 (8%) · unchanged 25 min`) on the one line they asked to be
-    /// bare — and as the first line it is the notification preview, where a clause that moves every
-    /// step would read as the news. An owner who wants the clause lists `merged`, which is unchanged.
-    /// A side effect, and a welcome one: the count only changes when the ledger does, so a still
-    /// orchestration no longer differs from itself at every step boundary on this line.
+    /// THE "UNCHANGED FOR" CLAUSE RIDES HERE TOO WHEN `pulse.unchangedFor` IS ON (plan 03 task 19,
+    /// 2026-09-24) — `1/12 (8%) · unchanged 25 min`. Task 16 drew this field bare, reasoning that the clause
+    /// would turn the reading back into a sentence; the owner answered that the words they called useless
+    /// were the "merged" label, not this: *"It's useful to get an idea if the session is working or not"*
+    /// (entry [100]). The cost Task 16 named is real and is the owner's to pay: the clause moves at each
+    /// step, so a still ledger's first line — the notification preview — changes every step once it has
+    /// stood still ten minutes, and a buried PULSE then moves once per step. Off, the line is bare again.
     /// </para>
     /// <para>
     /// FIRST IN THE LIST, IT IS A LINE ABOVE THE HEADER — option (a) of the task brief, chosen over
@@ -748,9 +770,9 @@ public static class TopicStatusLine_Builder
     /// line the owner asked for.
     /// </para>
     /// </summary>
-    static string Build_ProgressLine(IPlanProgress progress)
+    static string Build_ProgressLine(IPlanProgress progress, string unchangedPart)
     {
-        return $"{progress.Done}/{progress.Total} ({PlanProgress_Formatter.Percent(progress)}%)";
+        return $"{progress.Done}/{progress.Total} ({PlanProgress_Formatter.Percent(progress)}%){unchangedPart}";
     }
 
     /// <summary>

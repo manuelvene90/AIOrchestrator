@@ -22,7 +22,8 @@ public static class PhoneSettings_Factory
         ModeGlyphPlacements topicModeGlyphs,
         int aggregationSeconds,
         int finishedMessageSeconds,
-        bool topicRepoColours)
+        bool topicRepoColours,
+        int awayAfterMinutes)
     {
         return new PhoneSettingsModel(
             push,
@@ -35,6 +36,7 @@ public static class PhoneSettings_Factory
             topicModeGlyphs,
             aggregationSeconds,
             finishedMessageSeconds,
-            topicRepoColours);
+            topicRepoColours,
+            awayAfterMinutes);
     }
 }

@@ -17,6 +17,13 @@ namespace AIOrchestratorCoreLib.Time.Clock;
 /// and the dispatcher pause, and for nothing else. Widening it later is a change to make on purpose,
 /// not by drift.
 /// </para>
+/// <para>
+/// WIDENED ON PURPOSE ONCE, for the same reason (plan 03 task 18, 2026-09-23): the away check and the
+/// owner-silence stamp it reads. Away mode is a deadline the engine notices on its own, and once its
+/// delay became a setting (<c>away.afterMinutes</c>, 60 under classic) the claim "twenty minutes is not
+/// away, an hour is" could only be asserted by moving a clock. Both halves moved together — a stamp on
+/// one clock compared against a reading of another is how the status-line back-off once went inert.
+/// </para>
 /// </summary>
 public interface IClock
 {

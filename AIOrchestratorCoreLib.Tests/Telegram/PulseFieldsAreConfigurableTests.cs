@@ -84,14 +84,16 @@ public class PulseFieldsAreConfigurableTests
     /// every session's model and effort — the supervisor's on its own row, each member's after its
     /// duration. The model is a FACT about the row and the context figure is an ALARM, so the fact comes
     /// first and the alarm keeps the end of the row, where a glance lands (master's
-    /// ModelOnTheStatusLineTests). The count is `72/113 (63%)` and nothing else — owner, 2026-09-23:
-    /// *"I don't want to have useless words like 1/23 merged 4%. Just 1/23 (4%)."*
+    /// ModelOnTheStatusLineTests). The count is `72/113 (63%)` with no label — owner, 2026-09-23:
+    /// *"I don't want to have useless words like 1/23 merged 4%. Just 1/23 (4%)."* — and, since task 19,
+    /// the "unchanged" clause the owner asked back for (entry [100]): classic states nothing for
+    /// <c>pulse.unchangedFor</c>, so the shipped ON applies.
     /// </summary>
     [Fact]
     public void ClassicsList_LeadsWithTheCount_DropsWaitingOnYouAndClosedCount_AndAddsModelEffort()
     {
         Assert.Equal(
-            "72/113 (63%)\n" +
+            "72/113 (63%) · unchanged 25 min\n" +
             "PULSE\n" +
             "sup · waiting for the review · declared 12:12 · Fable 5.1 xhigh · ctx 41%\n" +
             "• imp-1 · committing the marker fix · working · 10 min · Opus 5 high\n" +
@@ -101,11 +103,11 @@ public class PulseFieldsAreConfigurableTests
     }
 
     /// <summary>
-    /// THE COMPACT READING, IN ITS LISTED PLACE — `72/113 (63%)`, with no label and NO "unchanged"
-    /// clause even though the fixture's ledger has stood still for 25 minutes. The clause is what
-    /// <c>merged</c> carries; on this field it would turn the owner's bare reading back into a
-    /// sentence. The percent is <c>PlanProgress_Formatter.Percent</c>'s, which truncates: 75 of 76 reads
-    /// 98%, never a rounded 99%, so this line and `/progress` cannot quote the ledger differently.
+    /// THE COMPACT READING, IN ITS LISTED PLACE — `72/113 (63%)`, with no label. With
+    /// <c>pulse.unchangedFor</c> off there is no "unchanged" clause either, even though the fixture's
+    /// ledger has stood still for 25 minutes (with it on, <c>TheCountInItsListedPlace_CarriesTheClauseToo</c>).
+    /// The percent is <c>PlanProgress_Formatter.Percent</c>'s, which truncates: 75 of 76 reads 98%, never a
+    /// rounded 99%, so this line and `/progress` cannot quote the ledger differently.
     /// </summary>
     [Fact]
     public void TheProgressField_ReadsJustTheCountAndThePercent_InItsListedPlace()
@@ -115,7 +117,7 @@ public class PulseFieldsAreConfigurableTests
             "sup · waiting for the review · declared 12:12 · ctx 41%\n" +
             "72/113 (63%)\n" +
             "updated 12:30",
-            Build_Rich(pulseFields: [PulseField_Names.SUPERVISOR, PulseField_Names.PROGRESS, PulseField_Names.UPDATED]));
+            Build_Rich(pulseFields: [PulseField_Names.SUPERVISOR, PulseField_Names.PROGRESS, PulseField_Names.UPDATED], unchangedFor: false));
 
         Assert.Equal(
             "PULSE\n75/76 (98%)",
@@ -169,13 +171,14 @@ public class PulseFieldsAreConfigurableTests
     /// <summary>
     /// <c>merged</c> IS UNTOUCHED BY THE NEW WORD: an owner who lists both reads the compact count on top
     /// and the labelled reading, clause and all, where they put it. Two renderings of one ledger and ONE
-    /// arithmetic under both — the percents agree because they are the same call.
+    /// arithmetic under both — the percents agree because they are the same call. Since task 19 the count
+    /// carries the clause too, built once for both, so the two cannot disagree about it either.
     /// </summary>
     [Fact]
     public void TheMergedField_IsUnchanged_BesideTheProgressField()
     {
         Assert.Equal(
-            "72/113 (63%)\n" +
+            "72/113 (63%) · unchanged 25 min\n" +
             "PULSE\n" +
             "72/113 merged · 63 % · unchanged 25 min",
             Build_Rich(pulseFields: [PulseField_Names.PROGRESS, PulseField_Names.MERGED]));
@@ -185,8 +188,10 @@ public class PulseFieldsAreConfigurableTests
     /// THE COUNT ON TOP DOES NOT MAKE A STILL ORCHESTRATION READ AS NEWS. The repost rule compares the
     /// line with its heartbeat stripped, and <c>Strip_Heartbeat</c> matches whole lines by their opening:
     /// the count opens with a digit, so it is never taken for the heartbeat and never stripped with it.
-    /// And because the field carries no "unchanged" clause, a ledger that stands still for another step
-    /// leaves its text identical — where the <c>merged</c> clause moves at every step.
+    /// With <c>pulse.unchangedFor</c> OFF the field carries no clause, so a ledger that stands still for
+    /// another step leaves its text identical. With it ON (task 19, the shipped value and classic's) the
+    /// clause moves at each step exactly as <c>merged</c>'s always has — that is the reading the owner
+    /// asked back for, and a step is then news to the repost gate.
     /// </summary>
     [Fact]
     public void TheCountOnTop_IsNotTheHeartbeat_AndAStepLaterIsNotNews()
@@ -195,14 +200,24 @@ public class PulseFieldsAreConfigurableTests
 
         var before = TopicStatusLine_Builder.Build(
             Progress(1, 12), [], null, NOW, aMessageIsAlreadyPosted: false,
-            figuresUnchangedFor: TimeSpan.FromMinutes(25), pulseFields: countFirst);
+            figuresUnchangedFor: TimeSpan.FromMinutes(25), pulseFields: countFirst, unchangedFor: false);
         var aStepLater = TopicStatusLine_Builder.Build(
             Progress(1, 12), [], null, NOW.AddMinutes(5), aMessageIsAlreadyPosted: false,
-            figuresUnchangedFor: TimeSpan.FromMinutes(30), pulseFields: countFirst);
+            figuresUnchangedFor: TimeSpan.FromMinutes(30), pulseFields: countFirst, unchangedFor: false);
 
         Assert.NotEqual(before, aStepLater);
         Assert.Equal("1/12 (8%)\nPULSE", TopicStatusLine_Builder.Strip_Heartbeat(before));
         Assert.Equal(TopicStatusLine_Builder.Strip_Heartbeat(before), TopicStatusLine_Builder.Strip_Heartbeat(aStepLater));
+
+        var onBefore = TopicStatusLine_Builder.Build(
+            Progress(1, 12), [], null, NOW, aMessageIsAlreadyPosted: false,
+            figuresUnchangedFor: TimeSpan.FromMinutes(25), pulseFields: countFirst, unchangedFor: true);
+        var onAStepLater = TopicStatusLine_Builder.Build(
+            Progress(1, 12), [], null, NOW.AddMinutes(5), aMessageIsAlreadyPosted: false,
+            figuresUnchangedFor: TimeSpan.FromMinutes(30), pulseFields: countFirst, unchangedFor: true);
+
+        Assert.Equal("1/12 (8%) · unchanged 25 min\nPULSE", TopicStatusLine_Builder.Strip_Heartbeat(onBefore));
+        Assert.Equal("1/12 (8%) · unchanged 30 min\nPULSE", TopicStatusLine_Builder.Strip_Heartbeat(onAStepLater));
     }
 
     /// <summary>
@@ -391,6 +406,127 @@ public class PulseFieldsAreConfigurableTests
         Assert.Equal(
             "PULSE\nsup · Opus 5 high\n• imp-1 · committing the marker fix · working · 30 min · Fable 5.1 xhigh\nupdated 12:45",
             plan.Text);
+    }
+
+    // ── THE "UNCHANGED FOR" READING ON THE COMPACT COUNT (plan 03 task 19) ────────────────────────────
+    //
+    // Owner, 2026-09-24 (ai-orchestrator-29 entry [100]): "my brother removed the indication, in the
+    // pulse message, of how long the progress and completion percentage have stayed identical in minutes.
+    // It's useful to get an idea if the session is working or not." Task 16 gave classic the bare
+    // `progress` count, and the clause went with the `merged` label the owner had called useless. It is
+    // `pulse.unchangedFor` now: shipped on, and it rides whichever of the two fields is drawn.
+
+    /// <summary>
+    /// SILENT UNDER TEN MINUTES, THEN STEPPED — `UnchangedFor_Formatter`'s rule, the one `merged` has
+    /// always followed, now on the count too, after `FIELD_SEPARATOR`. Listed first, the count is the
+    /// line above the header, so the clause rides the first line of the message: "at the very top".
+    /// </summary>
+    [Theory]
+    [InlineData(0, "1/12 (8%)")]
+    [InlineData(9, "1/12 (8%)")]
+    [InlineData(10, "1/12 (8%) · unchanged 10 min")]
+    [InlineData(26, "1/12 (8%) · unchanged 25 min")]
+    public void TheCountOnTop_SaysHowLongItHasStoodStill_AfterTenMinutes_Stepped(int minutes, string firstLine)
+    {
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 12), [], null, NOW, aMessageIsAlreadyPosted: false,
+            figuresUnchangedFor: TimeSpan.FromMinutes(minutes),
+            pulseFields: [PulseField_Names.PROGRESS, PulseField_Names.UPDATED],
+            unchangedFor: true);
+
+        Assert.Equal($"{firstLine}\nPULSE\nupdated 12:30", line);
+    }
+
+    /// <summary>In its listed place the count carries the clause the same way — one switch, one reading.</summary>
+    [Fact]
+    public void TheCountInItsListedPlace_CarriesTheClauseToo()
+    {
+        Assert.Equal(
+            "PULSE\n" +
+            "sup · waiting for the review · declared 12:12 · ctx 41%\n" +
+            "72/113 (63%) · unchanged 25 min",
+            Build_Rich(pulseFields: [PulseField_Names.SUPERVISOR, PulseField_Names.PROGRESS], unchangedFor: true));
+    }
+
+    /// <summary>
+    /// OFF DROPS IT FROM BOTH FIELDS — the fork's choice for quiet. `merged` keeps its label and its
+    /// percent, and loses only the clause.
+    /// </summary>
+    [Fact]
+    public void WithTheSettingOff_NeitherFieldSaysHowLongItHasStoodStill()
+    {
+        Assert.Equal(
+            "72/113 (63%)\n" +
+            "PULSE\n" +
+            "72/113 merged · 63 %",
+            Build_Rich(pulseFields: [PulseField_Names.PROGRESS, PulseField_Names.MERGED], unchangedFor: false));
+    }
+
+    /// <summary>
+    /// NULL IS THE CATALOGUE'S SHIPPED VALUE, which is ON (ruling R14: today's behaviour for the shipped
+    /// field list, where `merged` carries the clause) — so a caller that predates the setting keeps it.
+    /// </summary>
+    [Fact]
+    public void NoSettingHandedIn_IsTheShippedValue_On()
+    {
+        Assert.Equal(
+            "72/113 (63%) · unchanged 25 min\n" +
+            "PULSE\n" +
+            "72/113 merged · 63 % · unchanged 25 min",
+            Build_Rich(pulseFields: [PulseField_Names.PROGRESS, PulseField_Names.MERGED]));
+    }
+
+    /// <summary>
+    /// THROUGH THE REAL PRESETS: both resolve the setting on (neither states it — ruling R28, superseding
+    /// R26). Classic's count on top says how long it has stood still, which is what Task 16 had lost; quiet's
+    /// `merged` line says it as it always did — the fork never removed it. Resolved through the loader's own
+    /// preset rung, so an edit to either file reaches this.
+    /// </summary>
+    [Fact]
+    public void UnderEachPreset_TheProgressReadingSaysHowLongItHasStoodStill()
+    {
+        var classic = PulseSettings_Json.Parse(configRoot: null, Presets_Loader.Load_Embedded(Presets_Loader.CLASSIC));
+        var quiet = PulseSettings_Json.Parse(configRoot: null, Presets_Loader.Load_Embedded(Presets_Loader.QUIET));
+
+        Assert.StartsWith(
+            "72/113 (63%) · unchanged 25 min\n",
+            Build_Rich(pulseFields: classic.Fields, unchangedFor: classic.UnchangedFor),
+            StringComparison.Ordinal);
+
+        var quietLine = Build_Rich(pulseFields: quiet.Fields, unchangedFor: quiet.UnchangedFor);
+
+        Assert.Contains("72/113 merged · 63 % · unchanged 25 min", quietLine, StringComparison.Ordinal);
+    }
+
+    /// <summary>The planner is the engine's only way in, so the setting must survive the trip through it.</summary>
+    [Fact]
+    public void ThePlanner_ThreadsTheSettingThrough()
+    {
+        var on = TopicStatusLine_Planner.Plan(
+            Progress(1, 12), [], NOW, existingMessageId: null, lastWrittenText: null, TelegramDeliveryModes.Normal,
+            lastFailedAttemptAt: null, backoffSeconds: 30, newestTopicMessage: null, repostIsImpossible: false,
+            figuresUnchangedFor: TimeSpan.FromMinutes(25), pulseFields: [PulseField_Names.PROGRESS], unchangedFor: true);
+
+        var off = TopicStatusLine_Planner.Plan(
+            Progress(1, 12), [], NOW, existingMessageId: null, lastWrittenText: null, TelegramDeliveryModes.Normal,
+            lastFailedAttemptAt: null, backoffSeconds: 30, newestTopicMessage: null, repostIsImpossible: false,
+            figuresUnchangedFor: TimeSpan.FromMinutes(25), pulseFields: [PulseField_Names.PROGRESS], unchangedFor: false);
+
+        Assert.Equal("1/12 (8%) · unchanged 25 min\nPULSE", on.Text);
+        Assert.Equal("1/12 (8%)\nPULSE", off.Text);
+    }
+
+    static string Build_Rich(IReadOnlyList<string>? pulseFields, bool? unchangedFor)
+    {
+        return TopicStatusLine_Builder.Build(
+            EveryFieldHasSomethingToSay(), RichMembers(), new TopicLastEvent("gate cleared on 34e5515", new DateTime(2026, 8, 12, 12, 20, 0)), NOW,
+            aMessageIsAlreadyPosted: false,
+            figuresUnchangedFor: TimeSpan.FromMinutes(25),
+            supervisorContext: Reading(41),
+            fields: SupervisorDeclared(),
+            supervisorModel: Fable(),
+            pulseFields: pulseFields,
+            unchangedFor: unchangedFor);
     }
 
     static string Build_Rich(IReadOnlyList<string>? pulseFields)

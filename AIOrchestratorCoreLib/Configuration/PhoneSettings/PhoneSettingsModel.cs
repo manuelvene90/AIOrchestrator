@@ -14,7 +14,8 @@ internal sealed class PhoneSettingsModel(
     ModeGlyphPlacements topicModeGlyphs,
     int aggregationSeconds,
     int finishedMessageSeconds,
-    bool topicRepoColours) : IPhoneSettings
+    bool topicRepoColours,
+    int awayAfterMinutes) : IPhoneSettings
 {
     public PhonePushModes Push { get; } = push;
     public bool PeriodicStatus { get; } = periodicStatus;
@@ -27,4 +28,5 @@ internal sealed class PhoneSettingsModel(
     public int AggregationSeconds { get; } = aggregationSeconds;
     public int FinishedMessageSeconds { get; } = finishedMessageSeconds;
     public bool TopicRepoColours { get; } = topicRepoColours;
+    public int AwayAfterMinutes { get; } = awayAfterMinutes;
 }

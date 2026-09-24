@@ -251,6 +251,56 @@ public class PhoneSettingsJsonTests : IDisposable
         Assert.Equal(expected, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone.TopicRepoColours);
     }
 
+    /// <summary>
+    /// AWAY MODE AFTER AN HOUR UNDER CLASSIC (plan 03 task 18). Owner, 2026-09-23 (entry [95]): <i>"the away
+    /// mode is triggered too soon all the time. That also should be a setting."</i> Classic states 60 — the
+    /// controller's value, announced in entry [97] — and no config file at all is classic.
+    /// </summary>
+    [Fact]
+    public void WithNoConfigFileAtAll_AwayModeStartsAfterAnHour()
+    {
+        Assert.Equal(60, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone.AwayAfterMinutes);
+    }
+
+    /// <summary>Quiet states nothing: the shipped default IS today's behaviour, fifteen minutes.</summary>
+    [Fact]
+    public void UnderTheQuietPreset_AwayModeStartsAfterTodaysFifteenMinutes()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
+
+        Assert.Equal(15, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone.AwayAfterMinutes);
+    }
+
+    /// <summary>
+    /// The third rung, in config.json's nested spelling, both ways round — and 0, which is legal: it is
+    /// "away mode never starts by itself", not a value to refuse.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"repos":[],"away":{"afterMinutes":0}}""", 0)]
+    [InlineData("""{"repos":[],"away":{"afterMinutes":1440}}""", 1440)]
+    [InlineData("""{"repos":[],"preset":"quiet","away":{"afterMinutes":45}}""", 45)]
+    public void AnAwayDelayInConfigJson_BeatsThePreset(string configJson, int expected)
+    {
+        File.WriteAllText(_paths.ConfigFile, configJson);
+
+        Assert.Equal(expected, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone.AwayAfterMinutes);
+    }
+
+    /// <summary>
+    /// A BAD DELAY COSTS THE KEY ITS PRESET VALUE, NEVER THE LOAD — a negative, a value past the row's day,
+    /// a word. Each falls to classic's 60, the way <c>phone.aggregationSeconds</c> does (task 13).
+    /// </summary>
+    [Theory]
+    [InlineData("""{"repos":[],"away":{"afterMinutes":-1}}""")]
+    [InlineData("""{"repos":[],"away":{"afterMinutes":1441}}""")]
+    [InlineData("""{"repos":[],"away":{"afterMinutes":"an hour"}}""")]
+    public void AMisspelledOrOutOfRangeAwayDelay_FallsToThePresetsValue_AndDoesNotThrow(string configJson)
+    {
+        File.WriteAllText(_paths.ConfigFile, configJson);
+
+        Assert.Equal(60, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Phone.AwayAfterMinutes);
+    }
+
     static IReadOnlyList<string> Words(string path)
     {
         return Sorted(Catalog.Find_OrNull(path)!.EnumValues);

@@ -49,11 +49,15 @@ public class PulseSettingsJsonTests : IDisposable
         Assert.Equal(UnchangedFor_Formatter.STEP_MINUTES, pulse.StepMinutes);
         Assert.Equal(["screen", "show", "merge", "test", "pc", "close", "pause", "progress"], pulse.Buttons);
         Assert.Empty(pulse.GeneralButtons);
+
+        // Not stated by classic: the shipped ON (task 19) — the owner wants the clause back.
+        Assert.True(pulse.UnchangedFor);
     }
 
     /// <summary>
-    /// Quiet states nothing in this block, so every row is the catalogue's own — the fork's seven
-    /// fields, the toggle on the bar, and both of the fork's button bars.
+    /// Quiet states nothing in this block, so every row is the catalogue's own — the fork's seven fields,
+    /// the toggle on the bar, both of the fork's button bars, and <c>pulse.unchangedFor</c> on (ruling R28,
+    /// superseding R26: the fork never removed the clause; its <c>merged</c> line carries it).
     /// </summary>
     [Fact]
     public void UnderTheQuietPreset_ThePulseBlockIsTheCataloguesDefaults()
@@ -72,6 +76,22 @@ public class PulseSettingsJsonTests : IDisposable
         Assert.Equal(UnchangedFor_Formatter.STEP_MINUTES, pulse.StepMinutes);
         Assert.Equal(["pending", "left", "tail sup", "limits", "merge", "close"], pulse.Buttons);
         Assert.Equal(TopicCommandButtons.GeneralCommands, pulse.GeneralButtons);
+        Assert.True(pulse.UnchangedFor);
+    }
+
+    /// <summary>
+    /// <c>pulse.unchangedFor</c> on the third rung, both ways round, and a word where a boolean belongs
+    /// costs the key its preset value, never the load.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"repos":[],"pulse":{"unchangedFor":false}}""", false)]
+    [InlineData("""{"repos":[],"preset":"quiet","pulse":{"unchangedFor":false}}""", false)]
+    [InlineData("""{"repos":[],"pulse":{"unchangedFor":"yes"}}""", true)]
+    public void TheUnchangedClauseInConfigJson_BeatsThePreset(string configJson, bool expected)
+    {
+        File.WriteAllText(_paths.ConfigFile, configJson);
+
+        Assert.Equal(expected, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Pulse.UnchangedFor);
     }
 
     /// <summary>config.json beats the preset — the third rung, for a list and for a bool.</summary>
