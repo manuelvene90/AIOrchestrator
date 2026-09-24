@@ -273,7 +273,7 @@ async function send(method, url, body, path) {
     if (Array.isArray(answer.results)) {
       for (const result of answer.results) {
         state.notes[result.path] = tookEffect(result.outcome)
-          ? { kind: 'ok', text: result.outcome === 'Reset' ? 'Reset.' : 'Saved.' }
+          ? { kind: 'ok', text: result.outcome === 'Reset' ? (result.message || 'Reset.') : 'Saved.' }
           : { kind: 'err', text: result.message || ('Not applied (' + result.outcome + ').') };
       }
     } else {
@@ -382,7 +382,7 @@ function renderSections(data) {
   host.replaceChildren();
   for (const section of data.sections) {
     const node = el('section', { class: 'cat', id: anchorFor(section.category) }, [el('h2', { text: section.title })]);
-    if (!section.rows || section.rows.length === 0) node.append(el('p', { class: 'empty', text: 'Nothing to set here yet.' }));
+    if (!section.rows || section.rows.length === 0) node.append(el('p', { class: 'empty', text: 'Nothing to set here yet — this section fills in with a later plan.' }));
     for (const row of section.rows || []) node.append(renderRow(row, data.editing || {}));
     host.append(node);
   }
