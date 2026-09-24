@@ -42,6 +42,7 @@ public static class OrchestrationSession_Factory
         string? supervisorEffortOverride = null,
         string? implementerEffortOverride = null,
         bool paused = false,
+        DateTime? telegramTopicFinalNameUtc = null,
 
         // The four sibling fields (spec §3.2), trailing and optional so that every existing call
         // site — and every session that is not part of an endeavour — reads exactly as before.
@@ -58,7 +59,7 @@ public static class OrchestrationSession_Factory
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
             telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done,
             telegramTopicDeletePendingUtc, telegramTopicDeletedUtc, telegramTopicDeleteFailureReported,
-            supervisorEffortOverride, implementerEffortOverride, paused,
+            supervisorEffortOverride, implementerEffortOverride, paused, telegramTopicFinalNameUtc,
             endeavourId, bornFromOrchId, bornFromHandover, workingPath);
     }
 
@@ -222,6 +223,12 @@ public static class OrchestrationSession_Factory
         return CreateFrom_Existing(existing, telegramTopicDeletedUtc: deletedUtc);
     }
 
+    /// <summary>A closed orchestration's topic carries its final name; the name sync never touches it again. Never unset.</summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithTopicFinalName(IOrchestrationSession existing, DateTime finalNameUtc)
+    {
+        return CreateFrom_Existing(existing, telegramTopicFinalNameUtc: finalNameUtc);
+    }
+
     /// <summary>The owner has been told once that this topic will not delete. Never unset.</summary>
     public static IOrchestrationSession CreateFrom_Existing_WithTopicDeleteFailureReported(IOrchestrationSession existing)
     {
@@ -325,6 +332,9 @@ public static class OrchestrationSession_Factory
         // needs the wasSet dance, and it needs it for the same reason `done` does.
         bool telegramTopicDeleteFailureReportedWasSet = false,
 
+        // Set once and never cleared, like the two delete stamps — so no wasSet dance.
+        DateTime? telegramTopicFinalNameUtc = null,
+
         // The four sibling fields are set once at a birth and NEVER cleared (closing a sibling keeps
         // it in the endeavour's sum, spec §3.5), so a plain `?? existing` is correct and no wasSet
         // flag is needed. What IS load-bearing is that they are carried at all: every Set_* in the
@@ -361,6 +371,7 @@ public static class OrchestrationSession_Factory
             supervisorEffortWasSet ? supervisorEffortOverride : existing.SupervisorEffortOverride,
             implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride,
             pausedWasSet ? paused : existing.Paused,
+            telegramTopicFinalNameUtc ?? existing.TelegramTopicFinalNameUtc,
             endeavourId ?? existing.EndeavourId,
             bornFromOrchId ?? existing.BornFromOrchId,
             bornFromHandover ?? existing.BornFromHandover,

@@ -4,7 +4,6 @@
   "phone.status.periodic": false,
   "phone.appMessagesRing": false,
   "phone.receipts": "reactions",
-  "topic.onClose": "delete",
   "runners.supervisor.runner": "stream",
   "runners.implementer.runner": "print",
   "runners.reviewer.runner": "print",

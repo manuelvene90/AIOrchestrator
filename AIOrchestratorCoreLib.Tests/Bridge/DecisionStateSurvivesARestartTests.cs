@@ -662,6 +662,7 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
     public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => Task.FromResult(1L);
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)

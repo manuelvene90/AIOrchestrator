@@ -509,30 +509,68 @@ public static class SettingsMenu_Builder
         return edit switch
         {
             SettingsMenuEdits.Set or SettingsMenuEdits.ApplyHeldReply when word != null =>
-                $"Change it to {SettingValue_Formatter.Describe(definition, SettingValue_Parser.Parse(definition, word))}?",
+                $"Change it to {SettingValue_Formatter.Describe(definition, Build_EditedValue(reading, edit, word).Value)}?",
             SettingsMenuEdits.Set or SettingsMenuEdits.ApplyHeldReply => "Change it to the value you typed?",
             SettingsMenuEdits.Add when word != null =>
-                $"Add \"{word}\" to it? It becomes: {SettingValue_Formatter.Describe(definition, editor.Build_Added_OrNull(word) ?? reading.Value_OrNull)}",
+                $"Add \"{word}\" to it? It becomes: {SettingValue_Formatter.Describe(definition, Build_EditedValue(reading, edit, word).Value)}",
             SettingsMenuEdits.Remove when word != null =>
-                $"Take \"{word}\" out of it? It becomes: {SettingValue_Formatter.Describe(definition, Build_Without(editor, word))}",
+                $"Take \"{word}\" out of it? It becomes: {SettingValue_Formatter.Describe(definition, Build_EditedValue(reading, edit, word).Value)}",
             SettingsMenuEdits.Reset => RESET_QUESTION,
             _ => throw new ArgumentException($"a {edit} confirm needs the word it changes", nameof(word)),
         };
     }
 
-    /// <summary>The list without <paramref name="word"/> — through the editor's own removal, so the element itself goes, never a re-parsed caption.</summary>
-    static JsonNode? Build_Without(ISettingEditor editor, string word)
+    /// <summary>
+    /// THE VALUE ONE CHANGE PRODUCES — what a Confirm draws AND what the engine writes (plan 04 Task 5), so the
+    /// question the owner confirms and the value that lands can never be two computations (CLAUDE.md decision
+    /// 12). Set and ApplyHeldReply parse the word through the editor (<see cref="SettingValue_Parser"/>, P13); a
+    /// Secret row takes its typed text raw through <see cref="ISettingEditor.Build_Secret_OrNull"/>; Add and
+    /// Remove change one word of the current list (P39). <c>IsEdit</c> is false when there is nothing to write —
+    /// a blank secret, a word already absent, a text holding no word to add — and the caller writes nothing.
+    /// It never judges the value: the definition does, at the writer (decision 21).
+    /// </summary>
+    public static (bool IsEdit, JsonNode? Value) Build_EditedValue(ISettingReading reading, SettingsMenuEdits edit, string word)
     {
-        if (editor.Reading.Value_OrNull is not JsonArray array)
-            return editor.Reading.Value_OrNull;
+        var editor = SettingEditor_Factory.Create_ForReading(reading);
 
-        for (var position = 0; position < array.Count; position++)
+        switch (edit)
         {
-            if (array[position] is JsonValue element && element.TryGetValue<string>(out var text) && text == word)
-                return editor.Build_Removed(position);
-        }
+            case SettingsMenuEdits.Set:
+            case SettingsMenuEdits.ApplyHeldReply:
+            {
+                if (editor.Kind != SettingEditorKinds.Secret)
+                    return (true, editor.Build_FromText(word));
 
-        return editor.Reading.Value_OrNull;
+                var secret = editor.Build_Secret_OrNull(word);
+
+                return (secret != null, secret);
+            }
+
+            case SettingsMenuEdits.Add:
+            {
+                var added = editor.Build_Added_OrNull(word);
+
+                return (added != null, added ?? reading.Value_OrNull);
+            }
+
+            // THE ELEMENT ITSELF GOES, through the editor's own removal — never a re-parsed caption.
+            case SettingsMenuEdits.Remove:
+            {
+                if (reading.Value_OrNull is JsonArray array)
+                {
+                    for (var position = 0; position < array.Count; position++)
+                    {
+                        if (array[position] is JsonValue element && element.TryGetValue<string>(out var text) && text == word)
+                            return (true, editor.Build_Removed(position));
+                    }
+                }
+
+                return (false, reading.Value_OrNull);
+            }
+
+            default:
+                throw new ArgumentException($"a {edit} produces no value — only Set, ApplyHeldReply, Add and Remove carry one", nameof(edit));
+        }
     }
 
     static IReadOnlyList<string> Describe_SettingHead(ISettingReading reading, string presetName)

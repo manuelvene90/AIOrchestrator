@@ -54,6 +54,7 @@ public static class SessionJson_Serializer
             ["telegramTopicDeletePendingUtc"] = session.TelegramTopicDeletePendingUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicDeletedUtc"] = session.TelegramTopicDeletedUtc?.ToString("O", CultureInfo.InvariantCulture),
             ["telegramTopicDeleteFailureReported"] = session.TelegramTopicDeleteFailureReported,
+            ["telegramTopicFinalNameUtc"] = session.TelegramTopicFinalNameUtc?.ToString("O", CultureInfo.InvariantCulture),
         };
 
         return root.ToJsonString(JsonWriting.INDENTED);
@@ -141,6 +142,10 @@ public static class SessionJson_Serializer
             // would put every pre-existing orchestration to sleep on the first load.
             root["paused"]?.GetValue<bool>() ?? false,
 
+            // Absent in every session written before plan 03 Task 10's fix round, and null is the
+            // right reading: a closed topic with no marker is renamed once more, to its final name,
+            // and then marked — one call per such topic, once.
+            Get_DateTime_OrNull(root, "telegramTopicFinalNameUtc"),
             // ABSENT IN EVERY SESSION WRITTEN BEFORE 2026-09-23, AND NULL IS THE ONLY SAFE READING:
             // not linked to any endeavour, born from nobody, and spawned at RepoPath — exactly what
             // every such orchestration always was. Any other reading of absence would either invent

@@ -456,6 +456,7 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
     readonly List<string> _attemptedTexts = [];
     readonly List<string> _sentTexts = [];
     readonly List<string> _sentPhotoPaths = [];
+    readonly List<(string Name, int? IconColor)> _createdTopics = [];
     string? _queuedUpdatesJson;
     string? _failFragment;
     string? _timeoutFragment;
@@ -628,15 +629,31 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
+    /// <summary>
+    /// RECORDED, with the colour the engine asked for (plan 03 task 14): whether a topic is created with a
+    /// per-repo colour is a setting now, and a fake that swallowed the argument could not tell the two apart.
+    /// </summary>
     public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
+        lock (_lock)
+            _createdTopics.Add((topicName, iconColor));
+
         return Task.FromResult(7777L);
+    }
+
+    /// <summary>Every topic the engine created, in order, with the colour it passed (null = Telegram's default).</summary>
+    public IReadOnlyList<(string Name, int? IconColor)> Created_Topics()
+    {
+        lock (_lock)
+            return [.. _createdTopics];
     }
 
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
     }
+
+    public Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
     {

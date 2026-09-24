@@ -81,6 +81,17 @@ public sealed record OpenQuestionRecord
     public int? DefaultOptionIndex { get; init; }
     public bool IsHighRisk { get; init; }
 
+    /// <summary>
+    /// Whether a tap on this question opens the read-back CODE — decided ONCE, at ask time, by
+    /// <c>HighRiskLock_Policy.Needs_Code</c>, and the same value the question's buttons carry as their
+    /// <see cref="PendingButtonRecord.IsHighRisk"/>. Kept apart from <see cref="IsHighRisk"/> since the
+    /// <c>highRiskConfirmation</c> switch (plan 03 task 15): IsHighRisk is what the question IS (no
+    /// default, denied on timeout), this is what a tap COSTS. /pending draws 🔐 from THIS (task 14b) —
+    /// drawn from the classification it promised classic's owner a code that never came. A question asked
+    /// while the code was on keeps its lock after the switch flips, so it keeps its 🔐 too.
+    /// </summary>
+    public bool NeedsCode { get; init; }
+
     /// <summary>Set once the half-window reminder edit has been applied, so it happens once.</summary>
     public bool ReminderSent { get; init; }
 
@@ -243,6 +254,21 @@ public sealed record EngineStateSnapshot
     /// would pause again on its first tick. See <see cref="Limits.DispatchPause_Gate.Is_CoveredByLift"/>.
     /// </summary>
     public DateTime? DispatchPauseLiftedUntilUtc { get; init; }
+
+    /// <summary>
+    /// The live /settings menu message, or null (plan 04 Task 5). Persisted so the menu the owner left open
+    /// keeps its edit-gap exemption across a restart (D7) — its taps are stateless and would work anyway, but
+    /// under the thirty-second gap.
+    /// </summary>
+    public long? SettingsMenuMessageId { get; init; }
+
+    /// <summary>
+    /// The pending "reply with the value" steps (D9, ruling P23): persisted so a restart leaves no invisible
+    /// trap — a step survives with its ORIGINAL deadline and lapses at it. A held Kernel value is kept with its
+    /// step, <c>web.token</c> included: this file sits beside the config.json the value is about to be written
+    /// to, and is never shown.
+    /// </summary>
+    public IReadOnlyList<SettingsMenu.ISettingsReplyStep> SettingsReplySteps { get; init; } = [];
 
     public static EngineStateSnapshot Empty => new();
 }

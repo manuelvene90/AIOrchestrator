@@ -27,6 +27,7 @@ internal sealed class OrchestrationSessionModel(
     string? supervisorEffortOverride,
     string? implementerEffortOverride,
     bool paused,
+    DateTime? telegramTopicFinalNameUtc,
     string? endeavourId,
     string? bornFromOrchId,
     string? bornFromHandover,
@@ -40,6 +41,7 @@ internal sealed class OrchestrationSessionModel(
     public DateTime? TelegramTopicDeletePendingUtc { get; } = telegramTopicDeletePendingUtc;
     public DateTime? TelegramTopicDeletedUtc { get; } = telegramTopicDeletedUtc;
     public bool TelegramTopicDeleteFailureReported { get; } = telegramTopicDeleteFailureReported;
+    public DateTime? TelegramTopicFinalNameUtc { get; } = telegramTopicFinalNameUtc;
 
     public long? StatusLineMessageId { get; } = statusLineMessageId;
     public int? SupervisorPid { get; } = supervisorPid;

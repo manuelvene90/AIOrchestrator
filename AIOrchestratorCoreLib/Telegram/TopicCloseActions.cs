@@ -4,7 +4,9 @@ namespace AIOrchestratorCoreLib.Telegram;
 
 /// <summary>
 /// WHAT CLOSING AN ORCHESTRATION DOES TO ITS TELEGRAM TOPIC — the catalogue's <c>topic.onClose</c>.
-/// The fork deletes it (a tidy phone); master closed it, keeping the thread as an audit trail.
+/// The fork deletes it (a tidy phone); master closed it, keeping the thread as an audit trail. The
+/// owner answered D2 on 2026-09-14 with <c>delete</c> as the shipped default for both presets, and
+/// <c>close</c> stays available (plan 03 Task 10 made it work, through <c>closeForumTopic</c>).
 /// </summary>
 public enum TopicCloseActions
 {
@@ -30,11 +32,11 @@ public static class TopicClose_Actions
     /// UNRECOGNISED word reads as the catalogue's shipped default.
     ///
     /// <para>
-    /// <c>_OrDefault</c> AND NOT <c>_OrClose</c>, unlike its four siblings, because this default is
-    /// RULED TO MOVE: the owner answered D2 on 2026-09-14 with <c>delete</c>, and plan 03's Task 10 is
-    /// the task that moves the catalogue row. A member named here would be a second copy of that fact,
-    /// wrong for as long as the two were out of step (CLAUDE.md decision 12) — so the fallback is READ
-    /// from the catalogue at call time, and moving the row is the whole of the change.
+    /// <c>_OrDefault</c> AND NOT <c>_OrDelete</c>, unlike its four siblings, because this default has
+    /// MOVED ONCE ALREADY: the owner answered D2 on 2026-09-14 with <c>delete</c>, and plan 03's Task 10
+    /// moved the catalogue row from <c>close</c>. A member named here would be a second copy of that
+    /// fact, wrong for as long as the two were out of step (CLAUDE.md decision 12) — so the fallback is
+    /// READ from the catalogue at call time, and moving the row was the whole of that change.
     /// </para>
     /// </summary>
     public static TopicCloseActions Parse_OrDefault(string? word)

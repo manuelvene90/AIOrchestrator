@@ -91,6 +91,8 @@ internal sealed class LoadAllCounting_Store_Fake(IOrchestrationSessionStore inne
 
     public void Mark_TopicDeleteFailureReported(string orchId) => _inner.Mark_TopicDeleteFailureReported(orchId);
 
+    public void Mark_TopicFinalName(string orchId) => _inner.Mark_TopicFinalName(orchId);
+
     public void Close_Member(string orchId, string memberId) => _inner.Close_Member(orchId, memberId);
 
     public void Close_Orchestration(string orchId) => _inner.Close_Orchestration(orchId);

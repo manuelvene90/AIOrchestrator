@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Configuration.PhoneSettings;
 using AIOrchestratorCoreLib.Configuration.PulseSettings;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Formatting;
@@ -187,6 +188,12 @@ public static class TopicStatusLine_Builder
     /// `pulse.stepMinutes` as resolved — the ONE step the member durations, the "unchanged" clause and
     /// the heartbeat all round to. Null is the catalogue's shipped step.
     /// </param>
+    /// <param name="modeGlyphs">
+    /// `topic.modeGlyphs` as the engine resolved it: the header draws the five mode glyphs only under
+    /// <see cref="ModeGlyphPlacements.PulseHeader"/>, because under <c>name</c> the topic name carries
+    /// them and one fact in two places is one the owner has to reconcile. NULL IS THE CATALOGUE'S
+    /// SHIPPED VALUE, read from the catalogue, for the same reason <paramref name="pulseFields"/>'s is.
+    /// </param>
     public static string Build(
         IPlanProgress? progress,
         IReadOnlyList<ITopicStatusMember> members,
@@ -198,7 +205,8 @@ public static class TopicStatusLine_Builder
         TopicStatusFields fields = default,
         ISessionModelReading? supervisorModel = null,
         IReadOnlyList<string>? pulseFields = null,
-        int? stepMinutes = null)
+        int? stepMinutes = null,
+        ModeGlyphPlacements? modeGlyphs = null)
     {
         var (fieldList, step) = Resolve_FieldsAndStep(pulseFields, stepMinutes);
 
@@ -258,11 +266,11 @@ public static class TopicStatusLine_Builder
         if (countLeads)
             lines.AddRange(Draw_Field(PulseField_Names.PROGRESS));
 
-        // THE HEADER, UNCONDITIONAL — the lead word and every MODE glyph, 🌙 🔕 ✈ 🤐 💻, all five of
-        // which left the topic name on 2026-09-10 — then THE FIELDS IN THE LISTED ORDER. Every field
-        // omits itself when it has nothing to say; none of them substitutes a placeholder. A count
-        // with no ledger draws nothing above it, so the header leads again rather than a blank line.
-        lines.Add(Build_HeaderLine(fields));
+        // THE HEADER, UNCONDITIONAL — the lead word and, under the shipped `topic.modeGlyphs`, every
+        // MODE glyph, 🌙 🔕 ✈ 🤐 💻 — then THE FIELDS IN THE LISTED ORDER. Every field omits itself
+        // when it has nothing to say; none of them substitutes a placeholder. A count with no ledger
+        // draws nothing above it, so the header leads again rather than a blank line.
+        lines.Add(Build_HeaderLine(fields, modeGlyphs ?? PhoneSettings_Json.Parse(configRoot: null, presetTree: null).TopicModeGlyphs));
 
         // A REPEAT IS DRAWN AS OFTEN AS IT IS LISTED. The validator refuses a repeated word, and a
         // de-duplication here would be a second copy of that rule (CLAUDE.md decision 12). Skipping the
@@ -350,45 +358,34 @@ public static class TopicStatusLine_Builder
     }
 
     /// <summary>
-    /// PULSE'S HEADER — the lead word, and every MODE glyph the topic name used to carry: `✈ 💻 PULSE`.
+    /// PULSE'S HEADER — the lead word, and under the shipped `topic.modeGlyphs` every MODE glyph:
+    /// `✈ 💻 PULSE`.
     ///
     /// <para>
-    /// ALL FIVE LIVE HERE NOW (owner, 2026-09-10): 🌙 deferred, 🔕 silenced, ✈ away, 🤐 quiet,
+    /// ALL FIVE LIVE HERE BY DEFAULT (owner, 2026-09-10): 🌙 deferred, 🔕 silenced, ✈ away, 🤐 quiet,
     /// 💻 terminal. They describe how the app is DELIVERING, which is not what a topic list is read
     /// to answer — and two of them are app-wide, so on a name they renamed every open topic at once
     /// and wrote a service message into each one. Here the same fact costs one silent edit of a
     /// message that was being edited anyway.
     /// </para>
     /// <para>
-    /// THE PRECEDENCE IS THE TOPIC NAME'S, MOVED VERBATIM, because it was right and because changing
-    /// it in the same commit as the move would make a behaviour change look like a relocation. AWAY
-    /// SUPERSEDES QUIET: away already means every orchestration has stopped asking, so both together
-    /// state one fact twice. TERMINAL REPLACES THE DELIVERY GLYPH: sitting in the terminal is what
-    /// silences the topic, so 💻 🔕 says the same thing in two characters. Away still shows beside
-    /// terminal — it is about the owner's PHONE, which is a different fact from where they are
-    /// sitting for this one endeavour.
+    /// UNDER <see cref="ModeGlyphPlacements.Name"/> THE HEADER IS THE BARE LEAD WORD (plan 03 Task 7):
+    /// classic puts the five on the topic name, as master drew them, and never in both places. What
+    /// they say and in what precedence — away over quiet, terminal over the delivery glyph — is
+    /// <see cref="TelegramDeliveryMode_Glyphs.Compose_ModeGlyphs"/>'s, the one implementation both
+    /// surfaces call; the precedence's own argument moved there with it.
     /// </para>
     /// </summary>
-    static string Build_HeaderLine(TopicStatusFields fields)
+    static string Build_HeaderLine(TopicStatusFields fields, ModeGlyphPlacements modeGlyphs)
     {
-        var presenceOrMode = fields.Presence == OwnerPresenceModes.Terminal
-            ? $"{TelegramDeliveryMode_Glyphs.TERMINAL} "
-            : fields.Mode switch
-            {
-                TelegramDeliveryModes.Normal => "",
-                TelegramDeliveryModes.Deferred => $"{TelegramDeliveryMode_Glyphs.DEFERRED} ",
-                TelegramDeliveryModes.Silenced => $"{TelegramDeliveryMode_Glyphs.SILENCED} ",
-                _ => throw new Exception($"Unhandled TelegramDeliveryModes: {fields.Mode}"),
-            };
-
-        var ownerAttention = fields switch
+        var modePrefix = modeGlyphs switch
         {
-            { IsAway: true } => $"{TelegramDeliveryMode_Glyphs.AWAY} ",
-            { IsQuiet: true } => $"{TelegramDeliveryMode_Glyphs.QUIET} ",
-            _ => "",
+            ModeGlyphPlacements.PulseHeader => TelegramDeliveryMode_Glyphs.Compose_ModeGlyphs(fields.Mode, fields.IsAway, fields.IsQuiet, fields.Presence, deliveryGlyphReplacedByState: false),
+            ModeGlyphPlacements.Name => "",
+            _ => throw new Exception($"Unhandled ModeGlyphPlacements: {modeGlyphs}"),
         };
 
-        return $"{ownerAttention}{presenceOrMode}{LEAD_WORD}";
+        return $"{modePrefix}{LEAD_WORD}";
     }
 
     /// <summary>

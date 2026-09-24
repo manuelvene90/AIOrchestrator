@@ -68,4 +68,11 @@ public interface IPhoneSettings
     /// buffer at the point of use, so this property never pretends to know which window is in force.
     /// </summary>
     int FinishedMessageSeconds { get; }
+
+    /// <summary>
+    /// <c>topic.repoColours</c> — whether a new topic is created with its repository's colour (the fork's
+    /// brief F1). Read by <c>RepoTopicColour_Resolver</c> at each topic creation; off assigns nothing and
+    /// persists nothing. Telegram takes a colour only at creation, so it never repaints an existing topic.
+    /// </summary>
+    bool TopicRepoColours { get; }
 }

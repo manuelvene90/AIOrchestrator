@@ -62,6 +62,22 @@ public interface ITelegramSendBudget
     TimeSpan Reserve_MessageEdit(long messageId, DateTime nowUtc);
 
     /// <summary>
+    /// EXEMPTS ONE MESSAGE FROM THE PER-MESSAGE GAP — the live <c>/settings</c> menu, and nothing else
+    /// (plan 04 D7). ONE id at a time: exempting a second releases the first, so "narrow" is a property of
+    /// this budget rather than of every caller's care. The control bucket still governs every edit of it;
+    /// only the thirty-second floor between two edits of the same message is lifted. See
+    /// <see cref="TelegramSendBudgetModel"/> for the two traffic shapes and why only one of them is exempt.
+    /// </summary>
+    void Exempt_FromEditGap(long messageId);
+
+    /// <summary>
+    /// Ends the exemption when the menu it covered is closed or replaced — a no-op unless
+    /// <paramref name="messageId"/> IS the exempt one, so a late release of an old menu cannot take the
+    /// exemption away from the menu that replaced it. The message's last edit still counts afterwards.
+    /// </summary>
+    void Release_EditGapExemption(long messageId);
+
+    /// <summary>
     /// The send bucket as it stands, for persistence. The CONTROL bucket is deliberately not here:
     /// it starts empty at every start by design, so there is nothing about it worth carrying over.
     /// </summary>

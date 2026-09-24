@@ -93,8 +93,14 @@ public class PresetProbeTests
     // THE COUNT ON TOP, COMPACT (owner, 2026-09-23, plan 03 task 16): `progress` replaced `merged`.
     [InlineData("pulse.fields", """["progress","supervisor","members","modelEffort","updated"]""")]
     [InlineData("general.buttons", "[]")]
-    [InlineData("topic.onClose", "\"close\"")]
+
+    // DELETE, NOT MASTER'S "close": the owner's answer to D2 (2026-09-14) is delete as the shipped
+    // default with classic following it (ruling R4), so classic states nothing and reads the catalogue.
+    [InlineData("topic.onClose", "\"delete\"")]
     [InlineData("topic.modeGlyphs", "\"name\"")]
+
+    // NO PER-REPO TOPIC COLOUR (owner, 2026-09-23, plan 03 task 14): "colored without any context of why".
+    [InlineData("topic.repoColours", "false")]
     [InlineData("runners.supervisor.runner", "\"terminal\"")]
     [InlineData("runners.implementer.runner", "\"terminal\"")]
     [InlineData("runners.implementer.resume", "\"transcript\"")]
@@ -126,6 +132,7 @@ public class PresetProbeTests
     [InlineData("pulse.holdToggle", "true")]
     [InlineData("topic.onClose", "\"delete\"")]
     [InlineData("topic.modeGlyphs", "\"pulseHeader\"")]
+    [InlineData("topic.repoColours", "true")]
     [InlineData("runners.supervisor.runner", "\"stream\"")]
     [InlineData("runners.implementer.runner", "\"print\"")]
     [InlineData("runners.reviewer.runner", "\"print\"")]
