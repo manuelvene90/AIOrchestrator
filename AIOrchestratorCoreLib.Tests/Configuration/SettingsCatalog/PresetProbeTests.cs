@@ -155,9 +155,9 @@ public class PresetProbeTests
     [InlineData("highRiskConfirmation", "true")]
     [InlineData("away.afterMinutes", "15")]
 
-    // THE ONE ROW QUIET STATES THAT IS NOT THE FORK'S TODAY (ruling R26, owner entry [100]): "my brother
-    // removed the indication" — so quiet reads it off.
-    [InlineData("pulse.unchangedFor", "false")]
+    // ON, THE SHIPPED VALUE (ruling R28, superseding R26): quiet states nothing — the fork never removed the
+    // clause, its `merged` line always carried it.
+    [InlineData("pulse.unchangedFor", "true")]
     public void UnderQuiet_TheMachineResolvesToTheForksWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.QUIET, path));

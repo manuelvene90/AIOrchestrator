@@ -150,7 +150,10 @@ before committing; per the global constraints no task before Task 12 ran the who
 | 7 — mode glyphs | `topic.modeGlyphs` name / pulseHeader, one composer; R23 ✅/🧪 replace the delivery glyph | `d54954b`, `a9050e9` | 338/338; 371/372 | `ADeleteTelegramWillNeverAccept_TellsTheOwnerOnce…` red under load, 4/4 alone |
 | 10 — topic close | `topic.onClose` default `delete` (D2, R4), `close` via `closeForumTopic`; a kept closed topic renamed once (`TelegramTopicFinalNameUtc`) | `dc163d5`, `a9050e9` | with 7 | same as 7 |
 | 11 — flakiness campaign | **DEFERRED, not run** (R13, R24): it needs ~1 h of exclusive machine time; every red seen during the plan passed alone | — | — | — |
-| 12 — the gate | §1 above | this commit | §1.4 | §1.4 |
+| 12 — the gate | §1 above | `3b65b05` | §1.4 | §1.4 |
+| 17 — PULSE only when changed (owner [94], "Fix it") | fixes §5.3: the engine remembers the text AND the render key (`WrittenTopicStatusLine`); the planner compares text with text and sees a bar-only change itself, under its one back-off; fix round (R27): a third value, what the owner last saw at the bottom — an answer that buries and changes PULSE brings it back once | `64f1b27`, `d415e33` (probe), `6276616` (R27 fix, shared files) | 232/232; fix round 236/237 | `UnderQuiet_TheTopicLooksLikeTheForksTopic` duplicate rename under load, 3/3 alone; `64f1b27` and `d415e33` each red alone on their engine probes until the next commit (shared engine file) |
+| 18 — away delay (owner [95]) | `away.afterMinutes` (0–1440, 0 = never by itself), shipped 15, classic 60 (R25); read at the point of effect; HOLD prose built by `AwayMode_Policy.Build_HoldNotice`; the away check and the owner-silence stamp on the injected clock | `891e5fb` | 312/312 | `HighRiskAndDeadlineProbeTests…WithNoCode` (file lock) and `TheSameCallbackDeliveredTwice_IsActedOnOnce` under load, 2/2 alone |
+| 19 — "unchanged N min" back (owner [100]) | `pulse.unchangedFor`, shipped on, rides whichever of `progress` / `merged` is drawn — the count on top included; fix round: R28, neither preset states it | `6276616`, this fix commit | 423/423 | `EntriesTheMirrorGaveUpOn…` under load, alone green (known flake) |
 
 ---
 
@@ -171,7 +174,7 @@ before committing; per the global constraints no task before Task 12 ran the who
 | D11 | move verbatim, then a second commit drops `telegramItalianLayer` | coordinator |
 | D12 | three consecutive local full runs + two CI runs of both legs — R3: CI not run by this plan (needs a push, the owner's call); the local bar belongs to Task 11, which is deferred (R24) | coordinator; R3/R24 controller |
 
-## 4. Rulings (controller, binding) — R1–R24
+## 4. Rulings (controller, binding) — R1–R28
 
 R1 classic stops stating `replyKeyboard: on` in Task 1 · R2 receipt buttons follow the hold-toggle
 placement ([Wait, Send now] or [Send now]) · R3 CI legs not run by this plan · R4 `onClose` default
@@ -184,7 +187,14 @@ execution order · R16 any command on a bar, master's labels back · R17 no buil
 Task 6 goes into the running app · R18 the held-✓✓ gap is Task 6c · R19 a typed GO releasing a hold
 gets no ✓ of its own · R20 the periodic status keeps master's channel path · R21 a high-risk question
 never takes a default, code or not · R22 history not rewritten; the fix commit corrects the record ·
-R23 ✅/🧪 replace the delivery glyph on the name · R24 Task 11 to its own session.
+R23 ✅/🧪 replace the delivery glyph on the name · R24 Task 11 to its own session · R25
+`away.afterMinutes` is 60 under classic — the owner said only "too soon"; announced in entry [97] and
+changeable from /settings · R26 (SUPERSEDED by R28) quiet stated `pulse.unchangedFor` false · R27
+"buried AND changed" means changed since the owner last saw PULSE at the bottom: the line remembers the
+rendering it had when last unburied, in-place edits while buried do not move it, and at quiet a buried
+line that differs is reposted once · R28 neither preset states `pulse.unchangedFor`: the fork never
+removed the clause (quiet's shipped list draws `merged`, which carries it); it was lost only on classic,
+through Task 16's `progress`.
 
 ## 5. Standing questions this plan could not close — inherited by the next plan
 
@@ -195,8 +205,12 @@ R23 ✅/🧪 replace the delivery glyph on the name · R24 Task 11 to its own se
    `ClosingTurnReviewFixTests`, `TheSameCallbackDeliveredTwice_IsActedOnOnce`, `APausedOrchestrationIsDormant`.
    D12's bar (three local full runs + CI) is therefore NOT met by this plan.
 2. **CI has not run on this branch** (R3): a Linux-only red would surface at merge.
-3. **PULSE is re-edited on every tick and reposted after every burst even when unchanged — found by
-   this gate, pre-existing (on master since the fork's `2143db8`), NOT fixed (decision 22).** The
+3. **FIXED (2026-09-24, Task 17: `64f1b27` + `6276616`, ruling R27) — kept here as the record of what
+   the gate found.** The owner answered "Fix it" (entry [94]); the engine now remembers the text and the
+   render key and hands the planner the text, and R27 made "changed" mean "since the owner last saw it
+   at the bottom". The original finding follows. **PULSE is re-edited on every tick and reposted after
+   every burst even when unchanged — found by this gate, pre-existing (on master since the fork's
+   `2143db8`).** The
    engine stores `TopicStatusLine_RenderKey.Build(text, buttons)` in `_statusLineTextByOrchId` and
    hands it to `TopicStatusLine_Planner.Plan` as `lastWrittenText`; the planner's
    `TopicStatusLine_Decider.Decide` compares it with the RAW text, so they never match: every tick
@@ -233,6 +247,7 @@ R23 ✅/🧪 replace the delivery glyph on the name · R24 Task 11 to its own se
 - T16: `figuresUnchangedFor` still computed under classic.
 - T15/9: `replyKeyboard on` installs nothing; four older guardrail keys a preset could state and the loader ignores; `HighRiskLockPolicyTests` folder drift; `UnderClassic_` tests can false-red on two config writes in one clock tick.
 - T7/10: `/clear` on a closed-kept topic writes `_appliedTopicNames` directly (self-heals).
+- T19 (M1): the engine's `pulse.UnchangedFor` argument to the planner is untested — the unchanged-for tracker (`_figuresSinceByOrchId`) runs on the wall clock, so an engine test would wait 10 real minutes; the planner and builder threading is pinned.
 
 ## 7. Verdict
 

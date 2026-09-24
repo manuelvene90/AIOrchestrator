@@ -477,12 +477,13 @@ public class PulseFieldsAreConfigurableTests
     }
 
     /// <summary>
-    /// THROUGH THE REAL PRESETS: classic resolves the setting on and its count says how long it has stood
-    /// still; quiet resolves it off and its `merged` line no longer does. Resolved through the loader's own
+    /// THROUGH THE REAL PRESETS: both resolve the setting on (neither states it — ruling R28, superseding
+    /// R26). Classic's count on top says how long it has stood still, which is what Task 16 had lost; quiet's
+    /// `merged` line says it as it always did — the fork never removed it. Resolved through the loader's own
     /// preset rung, so an edit to either file reaches this.
     /// </summary>
     [Fact]
-    public void UnderEachPreset_OnlyClassicSaysHowLongTheCountHasStoodStill()
+    public void UnderEachPreset_TheProgressReadingSaysHowLongItHasStoodStill()
     {
         var classic = PulseSettings_Json.Parse(configRoot: null, Presets_Loader.Load_Embedded(Presets_Loader.CLASSIC));
         var quiet = PulseSettings_Json.Parse(configRoot: null, Presets_Loader.Load_Embedded(Presets_Loader.QUIET));
@@ -494,8 +495,7 @@ public class PulseFieldsAreConfigurableTests
 
         var quietLine = Build_Rich(pulseFields: quiet.Fields, unchangedFor: quiet.UnchangedFor);
 
-        Assert.Contains("72/113 merged · 63 %", quietLine, StringComparison.Ordinal);
-        Assert.DoesNotContain("unchanged", quietLine, StringComparison.Ordinal);
+        Assert.Contains("72/113 merged · 63 % · unchanged 25 min", quietLine, StringComparison.Ordinal);
     }
 
     /// <summary>The planner is the engine's only way in, so the setting must survive the trip through it.</summary>

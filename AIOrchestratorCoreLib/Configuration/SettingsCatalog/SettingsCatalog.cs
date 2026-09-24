@@ -960,8 +960,10 @@ public static class SettingsCatalog
             // THE "UNCHANGED FOR" CLAUSE (plan 03 task 19; owner 2026-09-24, ai-orchestrator-29 entry [100]: "my
             // brother removed the indication ... of how long the progress and completion percentage have stayed
             // identical in minutes. It's useful to get an idea if the session is working or not."). Shipped ON,
-            // today's behaviour for the shipped list, where `merged` carries it (ruling R14); quiet states false
-            // (ruling R26). The wording and the ten-minute silence are UnchangedFor_Formatter's, one copy.
+            // today's behaviour for the shipped list, where `merged` carries it (ruling R14). Neither preset states
+            // it (ruling R28, superseding R26): the fork never removed the clause — quiet draws the shipped list,
+            // whose `merged` carries it — and it was lost only on classic, through Task 16's `progress`. The
+            // wording and the ten-minute silence are UnchangedFor_Formatter's, one copy.
             SettingDefinition_Factory.Create_Bool(
                 path: PulseSettings.PulseSettings_Json.UNCHANGED_FOR_PATH,
                 shippedDefault: true,

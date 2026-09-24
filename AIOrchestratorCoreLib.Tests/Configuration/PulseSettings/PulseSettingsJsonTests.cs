@@ -55,12 +55,12 @@ public class PulseSettingsJsonTests : IDisposable
     }
 
     /// <summary>
-    /// Quiet states ONE row in this block — <c>pulse.unchangedFor</c> false, ruling R26 (owner, entry [100]:
-    /// "my brother removed the indication") — so every other row is the catalogue's own: the fork's seven
-    /// fields, the toggle on the bar, and both of the fork's button bars.
+    /// Quiet states nothing in this block, so every row is the catalogue's own — the fork's seven fields,
+    /// the toggle on the bar, both of the fork's button bars, and <c>pulse.unchangedFor</c> on (ruling R28,
+    /// superseding R26: the fork never removed the clause; its <c>merged</c> line carries it).
     /// </summary>
     [Fact]
-    public void UnderTheQuietPreset_ThePulseBlockIsTheCataloguesDefaults_ButTheUnchangedClauseIsOff()
+    public void UnderTheQuietPreset_ThePulseBlockIsTheCataloguesDefaults()
     {
         File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
 
@@ -76,7 +76,7 @@ public class PulseSettingsJsonTests : IDisposable
         Assert.Equal(UnchangedFor_Formatter.STEP_MINUTES, pulse.StepMinutes);
         Assert.Equal(["pending", "left", "tail sup", "limits", "merge", "close"], pulse.Buttons);
         Assert.Equal(TopicCommandButtons.GeneralCommands, pulse.GeneralButtons);
-        Assert.False(pulse.UnchangedFor);
+        Assert.True(pulse.UnchangedFor);
     }
 
     /// <summary>
@@ -85,8 +85,8 @@ public class PulseSettingsJsonTests : IDisposable
     /// </summary>
     [Theory]
     [InlineData("""{"repos":[],"pulse":{"unchangedFor":false}}""", false)]
-    [InlineData("""{"repos":[],"preset":"quiet","pulse":{"unchangedFor":true}}""", true)]
-    [InlineData("""{"repos":[],"preset":"quiet","pulse":{"unchangedFor":"yes"}}""", false)]
+    [InlineData("""{"repos":[],"preset":"quiet","pulse":{"unchangedFor":false}}""", false)]
+    [InlineData("""{"repos":[],"pulse":{"unchangedFor":"yes"}}""", true)]
     public void TheUnchangedClauseInConfigJson_BeatsThePreset(string configJson, bool expected)
     {
         File.WriteAllText(_paths.ConfigFile, configJson);
