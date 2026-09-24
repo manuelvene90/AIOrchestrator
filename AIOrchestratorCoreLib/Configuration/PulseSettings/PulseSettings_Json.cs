@@ -59,18 +59,10 @@ public static class PulseSettings_Json
             Settings_Resolver.Resolve_Bool(Definition(UNCHANGED_FOR_PATH), presetTree, configRoot, session: null));
     }
 
-    /// <summary>
-    /// THROUGH <see cref="Settings_Resolver.Resolve"/> BECAUSE THERE IS NO LIST ACCESSOR, and the cast
-    /// is safe for a reason worth naming: every StringList row is non-nullable, and whatever layer
-    /// answers has passed the definition's own check that it is an array of strings — the shipped
-    /// default included (<c>SettingsCatalogTests</c>). The elements are COPIED out rather than the node
-    /// kept: a preset tree is shared by every load in the process, so nothing downstream may hold it.
-    /// </summary>
+    /// <summary>Through <see cref="Settings_Resolver.Resolve_StringList"/>, the one list accessor — its doc says why the read is safe.</summary>
     static IReadOnlyList<string> Read_StringList(string path, JsonObject? configRoot, JsonObject? presetTree)
     {
-        var (value, _) = Settings_Resolver.Resolve(Definition(path), presetTree, configRoot, session: null);
-
-        return value!.AsArray().Select(element => element!.GetValue<string>()).ToArray();
+        return Settings_Resolver.Resolve_StringList(Definition(path), presetTree, configRoot, session: null);
     }
 
     /// <summary>A path this class names and the catalogue does not is a broken build, and it says which path.</summary>

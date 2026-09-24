@@ -29,11 +29,37 @@ public class KitProseCarriesTheOwnersRulesTests
     [InlineData("supervisor", "the APP HOLDS THE CHANNEL as well")]
     [InlineData("supervisor", "You may also have been RESUMED")]
     [InlineData("solo", "You may also have been RESUMED")]
+
+    // THE BUTTONS UNDER A QUESTION ARE THE OWNER'S SETTING (plan 04 Task 11, entry [123]): the skills name both
+    // and promise neither.
+    [InlineData("supervisor", "\"❔ Explain the options\" and/or \"💬 Let's talk\", per the owner's settings")]
+    [InlineData("solo", "\"❔ Explain the options\" and/or \"💬 Let's talk\", per the owner's settings")]
     public void TheSkill_CarriesTheOwnersRule(string role, string sentence)
+    {
+        Assert.Contains(sentence, Read_Protocol(role), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// "The app adds ONE button … Let's talk" was true of the fork's build and is not of a machine whose owner chose
+    /// Explain, both, or none (<c>questions.appButtons</c>). A session told it will always find Let's talk would
+    /// describe a button its owner's phone does not show.
+    /// </summary>
+    [Theory]
+    [InlineData("supervisor")]
+    [InlineData("solo")]
+    public void NoSkill_PromisesASingleFixedAppButton(string role)
+    {
+        var protocol = Read_Protocol(role);
+
+        Assert.DoesNotContain("adds ONE button", protocol, StringComparison.Ordinal);
+        Assert.DoesNotContain("ONE button of its own", protocol, StringComparison.Ordinal);
+    }
+
+    static string Read_Protocol(string role)
     {
         var path = KitRepoFiles.Find_RoleProtocol(role)
             ?? throw new Exception($"kit/skills/{role}/SKILL.md was not found — REFUSING to pass about prose this test never read.");
 
-        Assert.Contains(sentence, File.ReadAllText(path), StringComparison.OrdinalIgnoreCase);
+        return File.ReadAllText(path);
     }
 }

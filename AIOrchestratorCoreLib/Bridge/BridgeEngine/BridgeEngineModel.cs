@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using AIOrchestratorCoreLib.Bridge.PeriodicStatus;
+using AIOrchestratorCoreLib.Bridge.QuestionAppButtons;
 using AIOrchestratorCoreLib.Bridge.ReceiptRegistry;
 using AIOrchestratorCoreLib.Bridge.SuppressedEntries;
 using AIOrchestratorCoreLib.Bridge.TopicDeletion;
@@ -4741,37 +4742,19 @@ internal sealed class BridgeEngineModel(
                 buttons.Add((data, buttonLabels[index]));
             }
 
-            // Every question also offers ONE way to ask back — and it used to offer two. "❔ Explain
-            // the options" spent the buttons and asked the supervisor to explain and re-ask; this
-            // one left the question and its keyboard untouched. Now that a tap here closes the
-            // question like any other, the two are the same gesture under two labels, and the owner
-            // had to pick between synonyms before they could ask their real question.
-            //
-            // The button's label is short; the text the supervisor receives is the full instruction,
-            // which is why the two differ here.
-            var talkData = CallbackToken.Build(nonce, optionTexts.Count);
+            // THE APP'S OWN BUTTONS, AS THE OWNER CHOSE THEM — `questions.appButtons`, read HERE at the
+            // point of effect and never cached (plan 04 task 11, entry [123]). Built by
+            // QuestionAppButtons_Builder, which holds everything that differs between Explain and Let's talk.
+            var appButtons = QuestionAppButtons_Builder.Build(
+                _configProvider.Get_Current().Phone.QuestionAppButtons,
+                nonce, optionTexts.Count, threadId, questionText, _buttonGroupSequence, expiresUtc);
 
-            _buttonOptions[talkData] = new PendingButtonRecord
+            foreach (var (record, label) in appButtons)
             {
-                Data = talkData,
-                ThreadId = threadId,
-                OptionText = OwnerPush_Policy.TALK_REQUEST,
-                QuestionText = questionText,
-                GroupId = _buttonGroupSequence,
-                ExpiresUtc = expiresUtc,
-
-                // ASKING TO TALK IS NEVER HIGH RISK, whatever the question is about. It takes no
-                // decision — it asks the supervisor to explain — so putting a code in front of it
-                // would make the safe way out of a dangerous question the hardest button to press.
-                IsHighRisk = false,
-
-                // It consumes the group and closes the question exactly like an option; what it does
-                // not do is record a choice.
-                AnswersNothing = true,
-            };
-
-            _buttonOrder.Enqueue(talkData);
-            buttons.Add((talkData, OwnerPush_Policy.TALK_LABEL));
+                _buttonOptions[record.Data] = record;
+                _buttonOrder.Enqueue(record.Data);
+                buttons.Add((record.Data, label));
+            }
 
             while (_buttonOrder.Count > BUTTON_REGISTRY_CAP)
                 _buttonOptions.Remove(_buttonOrder.Dequeue());
@@ -11627,8 +11610,8 @@ internal sealed class BridgeEngineModel(
         }
 
         // Rewrite the question message to RECORD what the tap did — "❓ … / ✅ deep" for a choice,
-        // and the acknowledgement for "💬 Let's talk", which records no choice because none was
-        // made. Telegram's tap acknowledgement is a transient toast and the keyboard vanishes, so
+        // and the acknowledgement of whichever app button was tapped ("❔ Explain the options" or
+        // "💬 Let's talk"), which records no choice because none was made. Telegram's tap acknowledgement is a transient toast and the keyboard vanishes, so
         // without this the chat keeps no trace of what was picked — the owner scrolls back and
         // cannot tell what they answered. Editing the text also drops the keyboard, so it replaces
         // the strip step.
@@ -11642,20 +11625,12 @@ internal sealed class BridgeEngineModel(
             lock (_ownerStateLock)
             {
                 if (_openQuestions.Remove(tap.MessageId.Value))
-                {
-                    Note_QuestionClosed(
-                        tap.MessageId.Value,
-                        registered.AnswersNothing
-                            ? QuestionClosure_Wording.TALK_REQUEST
-                            : QuestionClosure_Wording.TAPPED_OPTION);
-                }
+                    Note_QuestionClosed(tap.MessageId.Value, QuestionAppButtons_Builder.Describe_Closure(registered));
             }
 
             // The stored QuestionText is the MARKDOWN that was sent, so the rewrite must render
             // it again — an HTML send followed by a plain edit would put the markers back.
-            var rewrite = registered.AnswersNothing
-                ? QuestionPrompt_Builder.Build_TalkText(registered.QuestionText)
-                : QuestionPrompt_Builder.Build_AnsweredText(registered.QuestionText, registered.OptionText);
+            var rewrite = QuestionAppButtons_Builder.Build_Rewrite(registered);
 
             await Rewrite_AnsweredQuestion_WithRetry_Async(client, tap.MessageId.Value, rewrite, cancellationToken);
         }

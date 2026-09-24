@@ -259,13 +259,15 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         // (a nudge already sent, a crash-loop count already reached), and — asserted above, in the
         // only window where it is outstanding — the owner's own wait.
         //
-        // COUNTED, not spot-checked, so a partial save cannot pass. Six buttons for two questions:
-        // two options each, plus the ONE the app adds to every question — "💬 Let's talk". It was
-        // eight until the app's two buttons collapsed into one: "❔ Explain the options" and
-        // "💬 Let's talk" became the same gesture the moment a talk tap started closing its
-        // question, which is what the owner asked for on 2026-09-09.
+        // COUNTED, not spot-checked, so a partial save cannot pass. Eight buttons for two questions:
+        // two options each, plus the TWO the app adds under classic (this fixture names no preset) —
+        // "❔ Explain the options" and "💬 Let's talk". It was six while the app added only Let's talk;
+        // `questions.appButtons` (plan 04 Task 11, owner entry [123]) made the pair a setting, and
+        // classic states both, so both are persisted and both must survive.
         Assert.Equal(2, snapshotBeforeTheCrash.OpenQuestions.Count);
-        Assert.Equal(6, snapshotBeforeTheCrash.PendingButtons.Count);
+        Assert.Equal(8, snapshotBeforeTheCrash.PendingButtons.Count);
+        Assert.Equal(2, snapshotBeforeTheCrash.PendingButtons.Count(button => button.AppButton == "explain"));
+        Assert.Equal(2, snapshotBeforeTheCrash.PendingButtons.Count(button => button.AppButton == "talk"));
         Assert.Equal(NUDGED_ABOUT, Assert.Contains(NUDGED_MEMBER_KEY, snapshotBeforeTheCrash.NudgedAboutEntry));
         Assert.Equal(2, Assert.Contains(RESPAWN_SLOT_KEY, snapshotBeforeTheCrash.ConsecutiveRespawns));
 
@@ -518,6 +520,9 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
     /// </summary>
     public long? LastButtonMessageId { get; private set; }
 
+    /// <summary>The labels of that same message's keyboard, IN ORDER — the order is what <c>questions.appButtons</c> decides.</summary>
+    public IReadOnlyList<string>? LastDecisionLabels { get; private set; }
+
     public void Queue_Updates(string updatesJson)
     {
         lock (_lock)
@@ -613,7 +618,10 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
             _sentWithIds.Add((messageId, text));
 
             if (buttons.Any(button => button.Data.StartsWith(CallbackToken.PREFIX, StringComparison.Ordinal)))
+            {
                 LastButtonMessageId = messageId;
+                LastDecisionLabels = [.. buttons.Select(button => button.Label)];
+            }
 
             return Task.FromResult<long?>(messageId);
         }

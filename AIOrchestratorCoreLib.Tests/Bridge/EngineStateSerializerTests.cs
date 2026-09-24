@@ -428,4 +428,85 @@ public class EngineStateSerializerTests
         Assert.Equal(0, dropped);
         Assert.Equal("Rename", Assert.Single(snapshot.CloseConfirmations).Kind);
     }
+
+    /// <summary>
+    /// THE TWO APP BUTTONS SURVIVE A RESTART AS THEMSELVES (plan 04 Task 11, owner entry [123]). Since
+    /// <c>questions.appButtons</c> a question may carry "❔ Explain the options" as well as "💬 Let's talk", and
+    /// the tap rewrites the message with the acknowledgement of the button actually tapped — so which one it
+    /// was must be on disk, or a restart would answer an Explain tap with the talk line.
+    /// </summary>
+    [Fact]
+    public void TheAppButtonKind_RoundTrips_ForBothButtons_AndAnOptionCarriesNone()
+    {
+        var snapshot = new EngineStateSnapshot
+        {
+            PendingButtons =
+            [
+                new PendingButtonRecord { Data = "opt-a1:0", OptionText = "Merge", QuestionText = "Merge?", ExpiresUtc = T0.AddMinutes(30) },
+                new PendingButtonRecord { Data = "opt-a1:1", OptionText = "explain it", QuestionText = "Merge?", ExpiresUtc = T0.AddMinutes(30), AppButton = "explain" },
+                new PendingButtonRecord { Data = "opt-a1:2", OptionText = "let us talk", QuestionText = "Merge?", ExpiresUtc = T0.AddMinutes(30), AppButton = "talk" },
+            ],
+        };
+
+        var (parsed, dropped) = EngineState_Serializer.Parse(EngineState_Serializer.To_Json(snapshot));
+
+        Assert.Equal(0, dropped);
+        Assert.Equal(snapshot.PendingButtons, parsed.PendingButtons);
+        Assert.Equal([null, "explain", "talk"], parsed.PendingButtons.Select(button => button.AppButton));
+        Assert.Equal([false, true, true], parsed.PendingButtons.Select(button => button.AnswersNothing));
+    }
+
+    /// <summary>
+    /// STATE WRITTEN BEFORE THIS CHANGE LOADS AS WHAT IT WAS. Every app button a previous build wrote was a
+    /// "💬 Let's talk" — it was the only one — so <c>answersNothing: true</c> (and the older
+    /// <c>keepsGroupOpen: true</c>) with no <c>appButton</c> reads as talk, and a record with neither is an
+    /// option. An <c>appButton</c> word this build does not know (a later build's) still answers nothing: the
+    /// safe direction, because a record read as an OPTION would stamp its instruction text as the owner's choice.
+    /// </summary>
+    [Fact]
+    public void StateWrittenBeforeTheAppButtonKind_LoadsAsLetsTalk_AndAnOptionStaysAnOption()
+    {
+        var expires = new DateTimeOffset(T0.AddMinutes(30)).ToUnixTimeSeconds();
+
+        var json = $$"""
+        {
+          "pendingButtons": [
+            { "data": "opt-b1:0", "optionText": "Merge", "questionText": "Merge?", "expiresUtc": {{expires}}, "isHighRisk": false, "answersNothing": false },
+            { "data": "opt-b1:1", "optionText": "talk text", "questionText": "Merge?", "expiresUtc": {{expires}}, "isHighRisk": false, "answersNothing": true },
+            { "data": "opt-b2:1", "optionText": "talk text", "questionText": "Deploy?", "expiresUtc": {{expires}}, "keepsGroupOpen": true },
+            { "data": "opt-b3:0", "optionText": "Hold", "questionText": "Hold?", "expiresUtc": {{expires}} },
+            { "data": "opt-b4:2", "optionText": "future", "questionText": "Hold?", "expiresUtc": {{expires}}, "appButton": "someLaterButton" }
+          ]
+        }
+        """;
+
+        var (snapshot, dropped) = EngineState_Serializer.Parse(json);
+
+        Assert.Equal(0, dropped);
+        Assert.Equal([null, "talk", "talk", null, "talk"], snapshot.PendingButtons.Select(button => button.AppButton));
+        Assert.Equal([false, true, true, false, true], snapshot.PendingButtons.Select(button => button.AnswersNothing));
+    }
+
+    /// <summary>
+    /// AND THE OTHER DIRECTION: a file this build writes still carries <c>answersNothing</c>, so a build from
+    /// before this change — a rollback, or the "- Copia" app the owner runs beside a rebuild (CLAUDE.md decision
+    /// 23) — reads an Explain button as a button that records no choice, never as an option.
+    /// </summary>
+    [Fact]
+    public void TheWrittenFile_StillCarriesAnswersNothing_ForABuildThatPredatesTheKind()
+    {
+        var snapshot = new EngineStateSnapshot
+        {
+            PendingButtons =
+            [
+                new PendingButtonRecord { Data = "opt-c1:1", OptionText = "explain it", QuestionText = "Merge?", ExpiresUtc = T0.AddMinutes(30), AppButton = "explain" },
+            ],
+        };
+
+        var written = System.Text.Json.Nodes.JsonNode.Parse(EngineState_Serializer.To_Json(snapshot))!;
+        var button = written["pendingButtons"]![0]!;
+
+        Assert.True(button["answersNothing"]!.GetValue<bool>());
+        Assert.Equal("explain", button["appButton"]!.GetValue<string>());
+    }
 }

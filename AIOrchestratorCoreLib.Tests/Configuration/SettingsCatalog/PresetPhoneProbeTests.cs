@@ -135,7 +135,8 @@ public class PresetPhoneProbeTests : IDisposable
     /// carrying ⏸ Wait and ▶ Send now (Task 6, 6b, ruling R2 — the hold toggle is not on PULSE), which
     /// becomes ✓✓ no sooner than six seconds later (Task 13: 6 s, no discount for a finished message).
     /// The narration is never sent at all. The answer, the question's prose and the question ring. The
-    /// question carries no 🔐, says DENIED on timeout, and one tap decides it.
+    /// question carries no 🔐, says DENIED on timeout, and one tap decides it. Under its options sit master's
+    /// ❔ Explain the options and then 💬 Let's talk — classic's <c>questions.appButtons</c> (entry [123]).
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
@@ -150,7 +151,7 @@ public class PresetPhoneProbeTests : IDisposable
                 "edit ✓ → ✓✓",
                 "send [Rings] answer",
                 "send [Rings] question prose",
-                "send [Rings] question {Advanced | Ultimate | 💬 Let's talk}",
+                "send [Rings] question {Advanced | Ultimate | ❔ Explain the options | 💬 Let's talk}",
                 "tap answered: ✓",
                 "edit question → ✅ Advanced",
             ],

@@ -870,6 +870,27 @@ public static class SettingsCatalog
                     "icon_color), so a change reaches topics created afterwards — existing topics keep the colour they " +
                     "have. Turning it off erases no assignment: on again, each repository gets its old colour back.",
                 restart: RestartKinds.None),
+
+            // THE BUTTONS UNDER A QUESTION (plan 04 task 11; owner 2026-09-24, ai-orchestrator-29 entry [123]: "Can
+            // we have a setting that lets us decide what buttons we want under the questions? I'd add all 2 or just
+            // one of the two."). The shipped value is today's — the fork's Let's talk alone (ruling R14) — and
+            // classic states the owner's ["explain","talk"]. Read by the engine each time it builds a question's
+            // keyboard, so a change reaches the next question asked and never re-draws one already on the phone.
+            SettingDefinition_Factory.Create_StringList(
+                path: PhoneSettings.PhoneSettings_Json.QUESTION_APP_BUTTONS_PATH,
+                shippedDefault: [QuestionAppButton_Names.TALK],
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Buttons under a question",
+                description:
+                    "The app's own buttons under every question, after its options, in this order. 'explain' is " +
+                    $"\"{Bridge.OwnerPush_Policy.EXPLAIN_LABEL}\": the session explains what each option means in practice, what it costs " +
+                    $"to get wrong and which it recommends, then asks the question again. 'talk' is \"{Bridge.OwnerPush_Policy.TALK_LABEL}\": the " +
+                    "session explains in prose and answers whatever you ask next, then asks again once you are done. " +
+                    "Either tap closes the question — its buttons go — without choosing anything. An empty list adds no " +
+                    "button: the options alone. A change reaches the next question asked.",
+                restart: RestartKinds.None,
+                validator: SettingValidators.QUESTION_APP_BUTTONS),
         ];
     }
 

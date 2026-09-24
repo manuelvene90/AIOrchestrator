@@ -119,6 +119,10 @@ public class PresetProbeTests
     // AWAY MODE AFTER AN HOUR, NOT FIFTEEN MINUTES (owner, 2026-09-23 entry [95], plan 03 task 18):
     // "the away mode is triggered too soon all the time". 60 is the controller's value, announced in [97].
     [InlineData("away.afterMinutes", "60")]
+
+    // BOTH BUTTONS UNDER A QUESTION, EXPLAIN FIRST (owner, 2026-09-24 entry [123]): "I more often use the
+    // explain in more details feature". Master's one button is back, beside the fork's Let's talk.
+    [InlineData("questions.appButtons", """["explain","talk"]""")]
     public void UnderClassic_TheMachineResolvesToMastersWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.CLASSIC, path));
@@ -158,6 +162,9 @@ public class PresetProbeTests
     // ON, THE SHIPPED VALUE (ruling R28, superseding R26): quiet states nothing — the fork never removed the
     // clause, its `merged` line always carried it.
     [InlineData("pulse.unchangedFor", "true")]
+
+    // LET'S TALK ALONE, THE SHIPPED VALUE (ruling R14): the fork's one button, and quiet states nothing.
+    [InlineData("questions.appButtons", """["talk"]""")]
     public void UnderQuiet_TheMachineResolvesToTheForksWay(string path, string? expected)
     {
         Assert.Equal(expected, Resolve(Presets_Loader.QUIET, path));

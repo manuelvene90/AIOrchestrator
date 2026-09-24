@@ -23,7 +23,8 @@ public static class PhoneSettings_Factory
         int aggregationSeconds,
         int finishedMessageSeconds,
         bool topicRepoColours,
-        int awayAfterMinutes)
+        int awayAfterMinutes,
+        IReadOnlyList<string> questionAppButtons)
     {
         return new PhoneSettingsModel(
             push,
@@ -37,6 +38,7 @@ public static class PhoneSettings_Factory
             aggregationSeconds,
             finishedMessageSeconds,
             topicRepoColours,
-            awayAfterMinutes);
+            awayAfterMinutes,
+            questionAppButtons);
     }
 }

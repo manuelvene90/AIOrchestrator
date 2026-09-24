@@ -85,4 +85,12 @@ public interface IPhoneSettings
     /// entry a quiet session gets (plan 03 task 18, owner 2026-09-23 entry [95]).
     /// </summary>
     int AwayAfterMinutes { get; }
+
+    /// <summary>
+    /// <c>questions.appButtons</c> — the words of <c>QuestionAppButton_Names</c> the app draws under every question,
+    /// after its options, in this order; empty draws none (plan 04 task 11, owner entry [123]). Read by the engine
+    /// each time it builds a question's keyboard. Like <c>away.*</c>, a one-row prefix that lives here rather than in
+    /// a block of its own: it decides what reaches the phone.
+    /// </summary>
+    IReadOnlyList<string> QuestionAppButtons { get; }
 }

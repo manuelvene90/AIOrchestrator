@@ -235,10 +235,13 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   keep it on, type back a 4-digit code; `low` unlocks nothing — the app also treats as high risk
   anything naming a push, a deploy, a release, production or a destructive command), and `ROW:` (the plan row, or the word `none`). Miss one and the body still reaches them
   while the question does not, with an entry here naming every line you left out.
-  The app adds ONE button of its own, "💬 Let's talk": a tap CLOSES the question like any other
-  button (keyboard gone, the message becomes "💬 Ok — tell me what you have in mind"), and you get a
-  request to explain the decision in prose, briefly — then **ask it again** with fresh lines once
-  the discussion has settled, or the decision silently never gets taken. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` — `IMAGE:` is pictures only, an HTML file sent that way is refused. Both read from the repo, your channel folder or `~/mockups/`; 10 MB a picture, 50 MB a file; a refusal is written here with its fix, never texted.
+  The app may add "❔ Explain the options" and/or "💬 Let's talk", per the owner's settings
+  (`questions.appButtons`); each asks you to explain, then ask again. A tap on either CLOSES the
+  question like any other button (keyboard gone, the message becomes "❔ Ok — explaining the
+  options." or "💬 Ok — tell me what you have in mind"), and you get a request to explain the
+  decision — from Explain, short and then re-ask at once; from Let's talk, in prose, briefly — then
+  **ask it again** with fresh lines once the discussion has settled, or the decision silently never
+  gets taken. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` — `IMAGE:` is pictures only, an HTML file sent that way is refused. Both read from the repo, your channel folder or `~/mockups/`; 10 MB a picture, 50 MB a file; a refusal is written here with its fix, never texted.
 - **A question that can wait for ever usually does. Bound it: `--deadline` and `--default`.** Two
   more flags on the same call:
 

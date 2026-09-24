@@ -40,6 +40,13 @@ public static class SettingValidators
     /// </summary>
     public const string BOT_COMMANDS = "botCommands";
 
+    /// <summary>
+    /// Every element is one of <see cref="QuestionAppButton_Names.ALL"/>, with no repeats — ordinal, because the
+    /// engine matches the word ordinally when it builds a question's keyboard. The EMPTY list is accepted: no app
+    /// button under a question is the owner's to choose (entry [123]: "all 2 or just one of the two").
+    /// </summary>
+    public const string QUESTION_APP_BUTTONS = "questionAppButtons";
+
     /// <summary>The message, or null when the value is acceptable.</summary>
     public static string? Validate_OrNull(string validatorName, JsonNode? value)
     {
@@ -49,6 +56,7 @@ public static class SettingValidators
             MODEL_WORD => Validate_ModelWord_OrNull(value),
             PULSE_FIELDS => Validate_PulseFields_OrNull(value),
             BOT_COMMANDS => Validate_BotCommands_OrNull(value),
+            QUESTION_APP_BUTTONS => Validate_KnownWords_OrNull(value, QuestionAppButton_Names.ALL, "an app button under a question"),
             LISTEN_ADDRESS => Validate_ListenAddress_OrNull(value),
 
             // Defensive only: every name this switch's own constants can produce has a case above. An
@@ -62,6 +70,16 @@ public static class SettingValidators
 
     static string? Validate_PulseFields_OrNull(JsonNode? value)
     {
+        return Validate_KnownWords_OrNull(value, PulseField_Names.ALL, "a pulse field");
+    }
+
+    /// <summary>
+    /// A list drawn from a fixed vocabulary, each word at most once — <c>pulse.fields</c> and
+    /// <c>questions.appButtons</c>. ONE body for both so the two refusals read alike on every renderer; the
+    /// pulse-field sentences are unchanged by the extraction (<c>SettingValidatorsTests</c> pins them).
+    /// </summary>
+    static string? Validate_KnownWords_OrNull(JsonNode? value, IReadOnlyList<string> legalWords, string whatAWordIs)
+    {
         if (!Try_ReadWords(value, out var words))
             return "Expected a list of text values";
 
@@ -69,11 +87,11 @@ public static class SettingValidators
 
         foreach (var word in words)
         {
-            if (!PulseField_Names.ALL.Contains(word, StringComparer.Ordinal))
-                return $"'{word}' is not a pulse field — must be one of: {string.Join(", ", PulseField_Names.ALL)}";
+            if (!legalWords.Contains(word, StringComparer.Ordinal))
+                return $"'{word}' is not {whatAWordIs} — must be one of: {string.Join(", ", legalWords)}";
 
             if (!seen.Add(word))
-                return $"'{word}' appears more than once — a pulse field may be listed only once";
+                return $"'{word}' appears more than once — {whatAWordIs} may be listed only once";
         }
 
         return null;

@@ -15,7 +15,8 @@ internal sealed class PhoneSettingsModel(
     int aggregationSeconds,
     int finishedMessageSeconds,
     bool topicRepoColours,
-    int awayAfterMinutes) : IPhoneSettings
+    int awayAfterMinutes,
+    IReadOnlyList<string> questionAppButtons) : IPhoneSettings
 {
     public PhonePushModes Push { get; } = push;
     public bool PeriodicStatus { get; } = periodicStatus;
@@ -29,4 +30,5 @@ internal sealed class PhoneSettingsModel(
     public int FinishedMessageSeconds { get; } = finishedMessageSeconds;
     public bool TopicRepoColours { get; } = topicRepoColours;
     public int AwayAfterMinutes { get; } = awayAfterMinutes;
+    public IReadOnlyList<string> QuestionAppButtons { get; } = questionAppButtons;
 }

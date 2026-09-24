@@ -363,15 +363,16 @@ public static class OwnerPush_Policy
     }
 
     /// <summary>
-    /// Added to EVERY question automatically, and it is now the ONLY button the app contributes.
+    /// One of the two buttons the app may add under a question — which ones, and in what order, is
+    /// <c>questions.appButtons</c> (<see cref="Configuration.SettingsCatalog.QuestionAppButton_Names.TALK"/>;
+    /// shipped alone, ruling R14).
     ///
     /// <para>
-    /// THERE WERE TWO, AND THE SECOND ONE EARNED ITS REMOVAL. "❔ Explain the options" spent the
-    /// buttons and asked the supervisor to explain and re-ask; "💬 Let's talk" left the question and
-    /// its keyboard exactly where they were. Once a tap on "Let's talk" also closes its question —
-    /// which is what the owner asked for, having tapped a mute button twelve times in one afternoon
-    /// — the two are the same gesture with two labels, and offering both only makes the owner
-    /// choose between synonyms before they can ask their real question.
+    /// THERE WERE TWO, THEN ONE, AND NOW THE OWNER CHOOSES. The fork removed "❔ Explain the options"
+    /// on 2026-09-09: once a tap on "Let's talk" also closed its question, it read the two as the same
+    /// gesture with two labels. The owner did not (2026-09-24, entry [123]): <i>"I more often use the
+    /// explain in more details feature. Can we have a setting that lets us decide what buttons we want
+    /// under the questions?"</i> — so <see cref="EXPLAIN_LABEL"/> is back, and neither is imposed.
     /// </para>
     /// <para>
     /// A question on a phone is compressed to a couple of lines, so the owner regularly needs the
@@ -413,6 +414,37 @@ public static class OwnerPush_Policy
     /// </para>
     /// </summary>
     public const string TALK_ACKNOWLEDGEMENT = "💬 Ok — tell me what you have in mind.";
+
+    /// <summary>
+    /// MASTER'S BUTTON, RESTORED VERBATIM (<c>a58ef7e</c>, where it was <c>MORE_DETAIL_LABEL</c>) — the other
+    /// word of <c>questions.appButtons</c>
+    /// (<see cref="Configuration.SettingsCatalog.QuestionAppButton_Names.EXPLAIN"/>), and the one the owner uses
+    /// more often (entry [123]). Master's reason for it stands: a question on a phone is compressed to a couple
+    /// of lines, so the owner regularly needs the reasoning behind it before they can choose — and without a
+    /// button the only way to ask is to type, which defeats the point of tappable options.
+    /// </summary>
+    public const string EXPLAIN_LABEL = "❔ Explain the options";
+
+    /// <summary>
+    /// What the SESSION receives when that button is tapped — master's <c>MORE_DETAIL_REQUEST</c>, word for word.
+    /// Fuller than the label because the button is one tap and the instruction behind it has to be unambiguous,
+    /// and it ends by re-asking so the decision is not left dangling. Unlike <see cref="TALK_REQUEST"/> it asks
+    /// for the explanation and the re-ask at once rather than opening a discussion — which is exactly the
+    /// difference the owner wants to keep.
+    /// </summary>
+    public const string EXPLAIN_REQUEST =
+        "Explain this decision before I choose: what each option actually means in practice, what "
+        + "differs between them, what it costs to get wrong, and which one you recommend and why. "
+        + "Keep it short. Then ask the question again.";
+
+    /// <summary>
+    /// What the question message is edited to on that tap, in <see cref="TALK_ACKNOWLEDGEMENT"/>'s style. MASTER
+    /// CLOSED THE QUESTION ON THIS TAP TOO — the button was an ordinary option there, so the tap consumed its
+    /// group, took the question off the open set and routed the request — but it recorded the tap by stamping
+    /// "✅ &lt;the request text&gt;" on the message, the answered-choice record, for a tap that chose nothing. This
+    /// line replaces that stamp; the closing is master's. English, like every string the app itself writes.
+    /// </summary>
+    public const string EXPLAIN_ACKNOWLEDGEMENT = "❔ Ok — explaining the options.";
 
     public static bool Carries_Question(string rawEntryText)
     {

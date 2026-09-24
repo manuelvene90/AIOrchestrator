@@ -50,16 +50,21 @@ namespace AIOrchestratorCoreLib.Tests.Configuration;
 /// </summary>
 public class EverySettingReachesEveryRendererTests : IDisposable
 {
-    /// <summary>The two rows plan 03 registered last (Tasks 18 and 19), asserted by name in every renderer.</summary>
-    static readonly IReadOnlyList<string> NEWEST_PATHS = [PhoneSettings_Json.AWAY_AFTER_MINUTES_PATH, PulseSettings_Json.UNCHANGED_FOR_PATH];
+    /// <summary>
+    /// The two rows plan 03 registered last (Tasks 18 and 19), and the one plan 04 Task 11 added after this gate
+    /// (<c>questions.appButtons</c>, owner entry [123]) — asserted by name in every renderer.
+    /// </summary>
+    static readonly IReadOnlyList<string> NEWEST_PATHS =
+        [PhoneSettings_Json.AWAY_AFTER_MINUTES_PATH, PulseSettings_Json.UNCHANGED_FOR_PATH, PhoneSettings_Json.QUESTION_APP_BUTTONS_PATH];
 
     /// <summary>
-    /// A config.json that makes the origins DIFFER row to row — a Phone toggle, the two newest rows, a nullable
+    /// A config.json that makes the origins DIFFER row to row — a Phone toggle, the three newest rows, a nullable
     /// Choice stated as null, a free-text list carrying markup characters, and the masked secret — so "the same
     /// origin label" is compared across shipped default, preset and "set here", not across one label 66 times.
     /// </summary>
     const string VARIED_CONFIG =
         "{\"repos\":[],\"phone\":{\"appMessagesRing\":false},\"away\":{\"afterMinutes\":30},\"pulse\":{\"unchangedFor\":false}," +
+        "\"questions\":{\"appButtons\":[\"talk\",\"explain\"]}," +
         "\"effort\":{\"supervisor\":null},\"highRiskPatterns\":[\"rm -rf\",\"<b>&amp;\"],\"web\":{\"token\":\"tok-SENTINEL\"}}";
 
     /// <summary>A Phone number (5 – 120) the phone takes without a Kernel confirm, so all three write paths are one step.</summary>
