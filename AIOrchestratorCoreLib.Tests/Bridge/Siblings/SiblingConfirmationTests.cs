@@ -75,7 +75,7 @@ public class SiblingConfirmationTests
         Assert.Equal(harness.WorktreePath, child.WorkingPath);
         Assert.Equal(SIBLING_NAME, child.DisplayName);
         Assert.Equal("sonnet", child.ImplementerModelOverride);
-        Assert.Equal(solo, harness.Store.Get_Session(solo).EndeavourId);
+        Assert.Equal(solo, harness.Read_Session(solo).EndeavourId);
 
         var spawn = harness.Spawner.SpawnedCommands.Skip(spawnsBefore).Single(command => command.WorkingDirectory == harness.WorktreePath);
         Assert.Equal(
@@ -206,7 +206,7 @@ public class SiblingConfirmationTests
         // Settle: whatever the tap was going to do has been archived by now.
         await SiblingEngine_Harness.Wait_Until_Async(() => harness.Archived_Names().Count > 0, WAIT_MILLISECONDS);
 
-        Assert.Null(harness.Store.Get_Session(solo).ClosedUtc);
+        Assert.Null(harness.Read_Session(solo).ClosedUtc);
         Assert.DoesNotContain(harness.Telegram.TextEdits, edit => edit.Text.Contains("Closed", StringComparison.Ordinal));
         Assert.False(Find_AppEntry_OrNull(harness.Paths.GeneralChannelFile, $"orchestration '{solo}' closed") != null, "the requester was closed");
         Assert.True(started, $"the confirmed sibling tap started nothing. Archived: [{string.Join(", ", harness.Archived_Names())}]{Environment.NewLine}{harness.Log.Dump()}");
@@ -218,7 +218,7 @@ public class SiblingConfirmationTests
     {
         using var harness = new SiblingEngine_Harness();
         var (solo, _, _) = await Arrange_Asked_Async(harness);
-        var sessionsBefore = harness.Store.Load_All().Count;
+        var sessionsBefore = harness.Read_Sessions().Count;
 
         await harness.Tap_Async("Keep one session");
 
@@ -231,9 +231,9 @@ public class SiblingConfirmationTests
         Assert.True(AppEntryAudience_Tag.Is_AgentTagged(declined!.Subject));
         Assert.Contains(SIBLING_NAME, declined.Subject);
 
-        Assert.Equal(sessionsBefore, harness.Store.Load_All().Count);
+        Assert.Equal(sessionsBefore, harness.Read_Sessions().Count);
         Assert.Empty(Children_Of(harness, solo));
-        Assert.Null(harness.Store.Get_Session(solo).ClosedUtc);
+        Assert.Null(harness.Read_Session(solo).ClosedUtc);
     }
 
     [Fact]
@@ -279,7 +279,7 @@ public class SiblingConfirmationTests
         Assert.True(AppEntryAudience_Tag.Is_AgentTagged(refusal!.Subject));
 
         Assert.Empty(Children_Of(harness, solo));
-        Assert.Null(harness.Store.Get_Session(solo).ClosedUtc);
+        Assert.Null(harness.Read_Session(solo).ClosedUtc);
 
         // RULING E: the owner's only record of the tap must not say it worked.
         Assert.True(
@@ -553,7 +553,7 @@ public class SiblingConfirmationTests
             await SiblingEngine_Harness.Wait_Until_Async(() => harness.Telegram.TextEdits.Any(edit => edit.Text.Contains("did not start cleanly", StringComparison.Ordinal)), WAIT_MILLISECONDS),
             $"the prompt was never edited to the uncertain line:{Environment.NewLine}{string.Join(Environment.NewLine, harness.Telegram.TextEdits.Select(edit => edit.Text))}");
         Assert.DoesNotContain(harness.Telegram.TextEdits, edit => edit.Text.Contains("✅", StringComparison.Ordinal));
-        Assert.Null(harness.Store.Get_Session(solo).ClosedUtc);
+        Assert.Null(harness.Read_Session(solo).ClosedUtc);
     }
 
     /// <summary>A solo with a HANDOVER entry, its request parked, and the prompt on the phone — returns the request JSON too, for re-drops.</summary>
@@ -588,7 +588,7 @@ public class SiblingConfirmationTests
 
     static IReadOnlyList<IOrchestrationSession> Children_Of(SiblingEngine_Harness harness, string parent)
     {
-        return [.. harness.Store.Load_All().Where(session => session.BornFromOrchId == parent)];
+        return [.. harness.Read_Sessions().Where(session => session.BornFromOrchId == parent)];
     }
 
     static string Build_Request(string orchId, int handover, string worktree)

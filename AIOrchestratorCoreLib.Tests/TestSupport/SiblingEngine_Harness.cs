@@ -5,7 +5,10 @@ using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
+using AIOrchestratorCoreLib.Sessions;
+using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Time.Clock;
 using AIOrchestratorCoreLib.Tests.Bridge;
@@ -164,7 +167,42 @@ internal sealed class SiblingEngine_Harness : IDisposable
     /// <summary>The topic <see cref="Start_Solo_Async"/> gave this solo, or the one the engine created for it.</summary>
     public long? TopicOf(string orchId)
     {
-        return Store.Get_Session(orchId).TelegramTopicId;
+        return Read_Session(orchId).TelegramTopicId;
+    }
+
+    /// <summary>
+    /// THE TEST'S OWN READ OF ONE <c>session.json</c>, through the production
+    /// <see cref="Tolerant_FileReader"/> — never <see cref="Store"/>'s <c>Get_Session</c>, which opens the
+    /// file with a plain <c>File.ReadAllText</c>.
+    ///
+    /// <para>
+    /// WHY (Task 13c, measured 2026-09-24): a test polls the store while the running engine rewrites the
+    /// same file through <c>Atomic_FileWriter</c>, and on Windows the plain read loses that race with
+    /// <c>IOException: … being used by another process</c>. Observed in 2 of 6 runs of
+    /// <c>SiblingConfirmationTests</c>, each time in a different test (<c>TapYes_TellsTheParent_AndGeneral</c>,
+    /// <c>ASecondRequestCitingTheSameHandover_…</c>; before them <c>AConfirmedTapWhoseRequestCannotBeReadOnce_…</c>):
+    /// the mechanism is racy, not any one test. The exception escaped the wait predicate and failed a test
+    /// whose assertion was sound. The tolerant reader retries exactly that window and still
+    /// THROWS when it gives up, so a genuinely unreadable file is still a red.
+    /// </para>
+    /// </summary>
+    public IOrchestrationSession Read_Session(string orchId)
+    {
+        var sessionFile = Paths.Get_SessionFile(orchId);
+
+        return SessionJson_Serializer.Deserialize(Tolerant_FileReader.Read_AllText(sessionFile), sessionFile);
+    }
+
+    /// <summary>Every orchestration that has a <c>session.json</c>, each read as <see cref="Read_Session"/> reads it.</summary>
+    public IReadOnlyList<IOrchestrationSession> Read_Sessions()
+    {
+        if (!Directory.Exists(Paths.Root))
+            return [];
+
+        return [.. Directory.EnumerateDirectories(Paths.Root)
+            .Select(folder => Path.GetFileName(folder))
+            .Where(orchId => File.Exists(Paths.Get_SessionFile(orchId)))
+            .Select(Read_Session)];
     }
 
     /// <summary>An entry written as the solo itself would write it, index allocated inside the channel lock.</summary>
