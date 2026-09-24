@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
@@ -156,13 +157,17 @@ public class PauseGatesEveryWakerScanTests
     [Fact]
     public void TheSiblingTurnSources_AreGatedOnPause()
     {
-        var source = Read_Source("TurnSources_Resolver.cs");
+        // SCOPED TO THE METHOD THAT MAKES THEM (review M4): a `.Paused` anywhere earlier in the file, in
+        // any other method, must not count as this method's gate.
+        var body = BranchSource.Extract_Method(
+            BranchSource.Read_Code("TurnSources_Resolver.cs"),
+            "static IReadOnlyList<ITurnSource> Resolve_WithSiblings(");
 
-        var create = source.IndexOf("Create_Sibling(", StringComparison.Ordinal);
+        var create = body.IndexOf("Create_Sibling(", StringComparison.Ordinal);
 
-        Assert.True(create >= 0, "the resolver makes no sibling source — this scan is reading a file it does not understand");
+        Assert.True(create >= 0, "Resolve_WithSiblings makes no sibling source — this scan is reading a method it does not understand");
 
-        var gate = source.LastIndexOf(".Paused", create, StringComparison.Ordinal);
+        var gate = body.LastIndexOf(".Paused", create, StringComparison.Ordinal);
 
         Assert.True(gate >= 0, "no pause check before the sibling sources are made, so a sibling's entry wakes a paused solo");
     }

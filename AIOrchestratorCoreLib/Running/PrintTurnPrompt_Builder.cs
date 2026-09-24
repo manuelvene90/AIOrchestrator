@@ -162,7 +162,7 @@ public static class PrintTurnPrompt_Builder
     /// that sibling — and answering the owner about a sibling's CLAIM is not answering the sibling.
     /// </summary>
     public const string SIBLING_SOURCES_NOTE =
-        "Entries under a `sibling:<id>` label come from that sibling's outbox. That file is theirs, and nothing you write this turn goes there: answer a sibling in YOUR OWN outbox, as your role command says. Your final message is still your entry in your own channel.\n";
+        "Entries under a `sibling:<id>` label come from that sibling's outbox. That file is theirs, and nothing you write this turn goes there: answer a sibling in YOUR OWN outbox, as your role command says. Your final message is still your entry in your own channel — and when only siblings woke you, it is filed there for the record and never texted to the owner.\n";
 
     const string SINGLE_SOURCE_CONTRACT =
         "Act on it per your role command. Your final message IS your channel entry — the bridge appends it under your author word with the header, the index and the time: first line the subject, then a blank line, then the body. A question ends the turn exactly as an answer does.\n";

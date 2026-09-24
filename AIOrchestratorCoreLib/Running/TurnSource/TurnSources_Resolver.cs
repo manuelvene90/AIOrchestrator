@@ -34,8 +34,13 @@ namespace AIOrchestratorCoreLib.Running.TurnSource;
 /// <item>a CLOSED or UNLINKED solo has only its own channel;</item>
 /// <item>a PAUSED solo resolves NO sibling source. That is the pause gate for this waker (the PAUSE bullet of
 /// CLAUDE.md: "miss one and dormancy is a word"), and the terminal watcher's "sibling traffic waits for them"
-/// (§5.3). Nothing is lost: the dispatcher never drops a cursor for a source that merely did not resolve,
-/// so on unpause the source comes back with its cursor and the backlog rides one turn.</item>
+/// (§5.3). The dispatcher never drops a cursor for a source that merely did not resolve, so on unpause the
+/// source comes back with its cursor and the backlog rides one turn — WITHIN THE LIVE FILE. The dispatcher
+/// reads only the live outbox, and compaction (above 90 entries, keeping 45) archives what the reader has
+/// not been handed: a sibling that writes that much during a long pause loses its oldest entries to
+/// <c>sibling-outbox.archive.md</c>, and all the dispatcher does is log a warning
+/// (<c>Warn_IfEntriesWereArchivedUndelivered</c>). The reader's recourse is the archive, which the solo's
+/// role prose teaches it to read (Task 16).</item>
 /// </list>
 /// A PAUSED SIBLING is still a source for a live one — pause is about waking the paused session, and a
 /// paused session writes nothing to wake anybody with.
