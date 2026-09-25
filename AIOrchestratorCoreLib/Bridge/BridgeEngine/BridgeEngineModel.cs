@@ -683,6 +683,12 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// Which rename outcome was last LOGGED per orchestration, so every rename that lands says so once
+    /// and the 5-minute revalidation re-sends say nothing. See <see cref="TopicNaming.ITopicRenameReporter"/>.
+    /// </summary>
+    readonly TopicNaming.ITopicRenameReporter _topicRenameReporter = TopicNaming.TopicRenameReporter_Factory.Create();
+
+    /// <summary>
     /// How many mirrorable entries of a HELD append were already DEALT WITH, per channel file. The
     /// tailer confirms whole appends, so a partially delivered one is re-emitted in full; without
     /// this the entries sent before the hold would be texted again on every poll for as long as the
@@ -6115,9 +6121,8 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var topicId = await _telegramClient.Create_ForumTopic_Async(orchId, Resolve_TopicColour_OrNull(session.RepoName), cancellationToken);
-            _store.Set_TelegramTopicId(orchId, topicId);
-            _log.Log_Info(orchId, $"Telegram topic created (thread id {topicId})");
+            var (topicId, topicName) = await Create_NamedTopic_Async(_telegramClient, session, cancellationToken);
+            _log.Log_Info(orchId, $"Telegram topic created (thread id {topicId}) as '{topicName}'");
             Remove_TopicCreationPin_FireAndForget(orchId, topicId);
             return topicId;
         }
@@ -6205,6 +6210,88 @@ internal sealed class BridgeEngineModel(
 
             await Resolve_ThreadId_OrNull_Async(session.OrchId, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// THE ONE WAY A TOPIC IS CREATED — the first mirror and /clear's recreate both come here, so the
+    /// two cannot drift on which name a topic is born with (decision 12).
+    ///
+    /// <para>
+    /// BORN WITH ITS NAME. The first-mirror site used to pass the bare orch id and leave the real name
+    /// to a later rename. Observed 2026-09-23 on `da-vinci-fintech-suite-33`: the solo set its name
+    /// four seconds before the topic existed, the topic was born with the id, and whether the rename
+    /// ever landed could not be read from any file. The recreate path already did this right.
+    /// </para>
+    /// <para>
+    /// CREATION IS AN OBSERVATION, so it is recorded as one: the applied name, a fresh revalidation
+    /// stamp (without it the very next sync drops the memo and re-sends the name it was just created
+    /// with), no retry stamp for a topic that did not exist, and the rename reporter's memo.
+    /// </para>
+    /// <para>
+    /// A REFUSED NAME FALLS BACK TO THE ORCH ID IN THE SAME CALL, because a creation that fails
+    /// mirrors to the General topic (see the caller's catch) while the orch id is the name Telegram
+    /// has always accepted. Only a genuine refusal: an outcome we could not learn may have created the
+    /// topic, and a second create would make two.
+    /// </para>
+    /// </summary>
+    async Task<(long TopicId, string TopicName)> Create_NamedTopic_Async(
+        ITelegramApiClient client,
+        Sessions.OrchestrationSession.IOrchestrationSession session,
+        CancellationToken cancellationToken)
+    {
+        var topicName = TopicNaming.TopicCreationName_Resolver.Resolve(session.OrchId, Build_WantedTopicName(session));
+        var colour = Resolve_TopicColour_OrNull(session.RepoName);
+        long topicId;
+
+        try
+        {
+            topicId = await client.Create_ForumTopic_Async(topicName, colour, cancellationToken);
+        }
+        // NARROWED after review (2026-09-23): the gate's Rejected also covers a plain Exception — the one
+        // the client throws after an HTTP 200 whose body it cannot read, when the topic may already
+        // EXIST. Only Telegram's own refusal proves nothing was created.
+        catch (Exception ex) when (topicName != session.OrchId
+            && TopicNaming.TopicCreationName_Resolver.Is_NameRefused(ex))
+        {
+            _log.Log_Warning(session.OrchId, $"Telegram refused to create the topic as '{topicName}' ({ex.Message}) — creating it as '{session.OrchId}' instead");
+
+            topicName = session.OrchId;
+            topicId = await client.Create_ForumTopic_Async(topicName, colour, cancellationToken);
+        }
+
+        // The id is stored BEFORE the gate: losing it to a cancelled wait would create a second topic
+        // on the next run, and a sync slipping in between only re-sends the same name.
+        _store.Set_TelegramTopicId(session.OrchId, topicId);
+
+        await _topicNameSyncGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            _appliedTopicNames[session.OrchId] = topicName;
+            _topicNameRevalidatedUtc[session.OrchId] = DateTime.UtcNow;
+
+            // THE RETRY STAMP GOES WITH THE TOPIC IT WAS ABOUT (rev-10's F2, first written for the
+            // recreate path). The stamp means "an attempt on this orchestration told us nothing"; a new
+            // topic is not that thing, and a leftover stamp would hold its first name sync for up to 30 s.
+            _topicNameRetryAfterUtc.Remove(session.OrchId);
+
+            _topicRenameReporter.Remember_Created(session.OrchId, topicId, topicName);
+        }
+        finally
+        {
+            _topicNameSyncGate.Release();
+        }
+
+        return (topicId, topicName);
+    }
+
+    /// <summary>One Info line per distinct rename outcome — the reporter decides what is news. Log only, never Telegram (decision 15).</summary>
+    void Log_TopicRenameOutcome(string orchId, long topicId, string name, TopicNaming.TopicRenameAnswers answer)
+    {
+        var line = _topicRenameReporter.Record_OrNull(orchId, topicId, name, answer);
+
+        if (line != null)
+            _log.Log_Info(orchId, line);
     }
 
     /// <summary>
@@ -10566,8 +10653,16 @@ internal sealed class BridgeEngineModel(
             var wantedName = Build_WantedTopicName(session);
             var applied = _appliedTopicNames.TryGetValue(session.OrchId, out var name) && name == wantedName;
 
+            // WHAT TELEGRAM ANSWERED, told apart. The sync's own line is deduplicated and so says
+            // nothing when this re-send repeats the last answer; the owner's explicit command always
+            // gets its line, and it should say which of the two "applied" answers it got.
+            var last = _topicRenameReporter.Last_OrNull(session.OrchId);
+            var answered = applied && last is { } outcome && outcome.Name == wantedName && outcome.TopicId == session.TelegramTopicId
+                ? $" ({TopicNaming.TopicRenameLine_Builder.Describe_ForRefresh(outcome.Answer)})"
+                : "";
+
             _log.Log_Info(session.OrchId, applied
-                ? $"/refresh — topic name re-asserted as '{wantedName}'"
+                ? $"/refresh — topic name re-asserted as '{wantedName}'{answered}"
                 : $"/refresh — topic name '{wantedName}' was NOT accepted by Telegram this attempt");
 
             // THE NAME IS QUOTED EITHER WAY. The owner is using this command precisely because they
@@ -11495,6 +11590,10 @@ internal sealed class BridgeEngineModel(
                 await _telegramClient.Edit_ForumTopic_Async(session.TelegramTopicId.Value, wantedName, cancellationToken);
                 _appliedTopicNames[session.OrchId] = wantedName;
                 _topicNameRetryAfterUtc.Remove(session.OrchId);
+
+                // LOGGED since 2026-09-23: a successful rename used to leave no trace, so dvfs-33's
+                // "the topic never got its name" could not be checked against anything.
+                Log_TopicRenameOutcome(session.OrchId, session.TelegramTopicId.Value, wantedName, TopicNaming.TopicRenameAnswers.Renamed);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
             // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -11538,6 +11637,9 @@ internal sealed class BridgeEngineModel(
                 // app ran. It happens on every restart, because the cache starts empty while
                 // Telegram already holds the correct names.
                 _appliedTopicNames[session.OrchId] = wantedName;
+
+                // Its OWN line, told apart from a 200 — the gate counts both as applied, the log must not.
+                Log_TopicRenameOutcome(session.OrchId, session.TelegramTopicId.Value, wantedName, TopicNaming.TopicRenameAnswers.AlreadyNamed);
             }
             catch (Exception ex)
             {
@@ -12603,27 +12705,15 @@ internal sealed class BridgeEngineModel(
             // `Build_WantedTopicName`'s argument list verbatim, which is the drift decision 12 is
             // about: the eight-argument call was written twice and the recreated topic would have
             // kept whichever glyph set the last editor forgot to change here.
-            var topicName = Build_WantedTopicName(session);
+            //
+            // And since 2026-09-23 the one CREATOR too: Create_NamedTopic_Async composes the name,
+            // records it as applied and drops the retry stamp (rev-10's F2) for both creation sites.
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
             await client.Delete_ForumTopic_Async(messageThreadId ?? throw new Exception($"orchestration '{session.OrchId}' has no topic id to clear"), cancellationToken);
 
-            var newTopicId = await client.Create_ForumTopic_Async(topicName, Resolve_TopicColour_OrNull(session.RepoName), cancellationToken);
-            _store.Set_TelegramTopicId(session.OrchId, newTopicId);
-
-            _appliedTopicNames[session.OrchId] = topicName;
-
-            // AND THE RETRY STAMP GOES WITH THE TOPIC IT WAS ABOUT (rev-10's F2). The stamp means "an
-            // attempt on this orchestration told us nothing"; once the topic has been deleted and
-            // recreated, the thing it was about no longer exists, and leaving it would gate the NEW
-            // topic's first name sync for up to the remainder of 30 s.
-            //
-            // It bites exactly when the glyph carries information: the name applied at creation is the
-            // two-argument decoration, so an away or quiet glyph still has to be synced afterwards —
-            // and that sync is the one being held. Bounded and self-healing, which is why it is LOW,
-            // but it is a stale memo about a deleted object and those do not improve with age.
-            _topicNameRetryAfterUtc.Remove(session.OrchId);
+            var (newTopicId, _) = await Create_NamedTopic_Async(client, session, cancellationToken);
 
             Take_KnownTopicMessageIds(messageThreadId);
             Take_ReceiptMessageId_OrNull(messageThreadId);
