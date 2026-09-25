@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.ClearDispatchPauseRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
+using AIOrchestratorCoreLib.GeneralSupervision.SpawnSiblingRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.StartOrchestrationRequest;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -41,6 +42,10 @@ namespace AIOrchestratorCoreLib.GeneralSupervision;
 ///                                       (a SOLO session, asking for its basic orchestration to
 ///                                        become a full crew — HELD until the owner taps, and
 ///                                        refused unless the solo has filed a HANDOVER entry)
+///   {"action":"spawn-sibling","orchId":"...","name":"<code> · <2-4 words>","job":"...","handover":n,
+///    "worktree":"...","reason":"..."}
+///                                       (a SOLO, asking for a sibling solo for a parallel job — HELD
+///                                        until the owner taps; spec 2026-09-23 §4.1)
 ///   {"action":"set-telegram-muted","muted":true|false}                (any supervisor — DND mode)
 ///   {"action":"set-orchestration-name","orchId":"...","name":"..."}   (orchestration supervisor; 2-4 words)
 ///   {"action":"set-model","orchId":"...","role":"supervisor|implementer","model":"..."}  (per-orchestration override)
@@ -62,6 +67,13 @@ public static class OrchestrationRequests_Reader
     public const string SET_TELEGRAM_MUTED_ACTION = "set-telegram-muted";
     public const string SET_ORCHESTRATION_NAME_ACTION = "set-orchestration-name";
     public const string SET_MODEL_ACTION = "set-model";
+    public const string SPAWN_SIBLING_ACTION = "spawn-sibling";
+
+    /// <summary>
+    /// A sibling's job is ONE LINE the owner reads on the prompt and in the birth note (spec §4.1) — a
+    /// headline, not a brief; the brief is the requester's HANDOVER entry.
+    /// </summary>
+    public const int SIBLING_JOB_MAX_CHARS = 200;
 
     /// <summary>
     /// Owner-confirmed: the file is archived as asked, the owner gets a button, and only the tap lifts.
@@ -105,6 +117,7 @@ public static class OrchestrationRequests_Reader
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
         List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
+        List<ISpawnSiblingRequest> spawnSiblingRequests = [];
         List<IMalformedRequest> malformedRequests = [];
 
         if (Directory.Exists(paths.RequestsFolder))
@@ -112,7 +125,7 @@ public static class OrchestrationRequests_Reader
             foreach (var file in Directory.EnumerateFiles(paths.RequestsFolder, "*.json"))
             {
                 var rejectionReason = Try_ParseInto_OrReason(
-                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, clearDispatchPauseRequests);
+                    file, startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, clearDispatchPauseRequests, spawnSiblingRequests);
 
                 if (rejectionReason != null)
                     malformedRequests.Add(MalformedRequest_Factory.Create(file, rejectionReason, Peek_OrchId_OrNull(file)));
@@ -120,7 +133,7 @@ public static class OrchestrationRequests_Reader
         }
 
         return PendingRequests_Factory.Create(
-            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, clearDispatchPauseRequests, malformedRequests);
+            startRequests, addImplementerRequests, closeImplementerRequests, closeOrchestrationRequests, setTelegramMutedRequests, setOrchestrationNameRequests, promoteOrchestrationRequests, setModelRequests, clearDispatchPauseRequests, spawnSiblingRequests, malformedRequests);
     }
 
     /// <summary>
@@ -140,6 +153,7 @@ public static class OrchestrationRequests_Reader
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
         List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
+        List<ISpawnSiblingRequest> spawnSiblingRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
             filePath,
@@ -151,7 +165,8 @@ public static class OrchestrationRequests_Reader
             setOrchestrationNameRequests,
             promoteOrchestrationRequests,
             setModelRequests,
-            clearDispatchPauseRequests);
+            clearDispatchPauseRequests,
+            spawnSiblingRequests);
 
         if (rejection != null)
             return null;
@@ -176,6 +191,7 @@ public static class OrchestrationRequests_Reader
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
         List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
+        List<ISpawnSiblingRequest> spawnSiblingRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
             filePath,
@@ -187,7 +203,8 @@ public static class OrchestrationRequests_Reader
             setOrchestrationNameRequests,
             promoteOrchestrationRequests,
             setModelRequests,
-            clearDispatchPauseRequests);
+            clearDispatchPauseRequests,
+            spawnSiblingRequests);
 
         if (rejection != null)
             return null;
@@ -211,6 +228,7 @@ public static class OrchestrationRequests_Reader
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
         List<ISetModelRequest> setModelRequests = [];
         List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
+        List<ISpawnSiblingRequest> spawnSiblingRequests = [];
 
         var rejection = Try_ParseInto_OrReason(
             filePath,
@@ -222,12 +240,49 @@ public static class OrchestrationRequests_Reader
             setOrchestrationNameRequests,
             promoteOrchestrationRequests,
             setModelRequests,
-            clearDispatchPauseRequests);
+            clearDispatchPauseRequests,
+            spawnSiblingRequests);
 
         if (rejection != null)
             return null;
 
         return promoteOrchestrationRequests.Count == 1 ? promoteOrchestrationRequests[0] : null;
+    }
+
+    /// <summary>
+    /// Re-reads ONE parked spawn-sibling request, through the SAME strict parse as everything else — the
+    /// promote contract: a parked file can never be honoured on terms the scanner would have refused.
+    /// </summary>
+    public static ISpawnSiblingRequest? Read_SpawnSiblingRequest_OrNull(string filePath)
+    {
+        List<IStartOrchestrationRequest> startRequests = [];
+        List<IAddImplementerRequest> addImplementerRequests = [];
+        List<ICloseImplementerRequest> closeImplementerRequests = [];
+        List<ICloseOrchestrationRequest> closeOrchestrationRequests = [];
+        List<ISetTelegramMutedRequest> setTelegramMutedRequests = [];
+        List<ISetOrchestrationNameRequest> setOrchestrationNameRequests = [];
+        List<IPromoteOrchestrationRequest> promoteOrchestrationRequests = [];
+        List<ISetModelRequest> setModelRequests = [];
+        List<IClearDispatchPauseRequest> clearDispatchPauseRequests = [];
+        List<ISpawnSiblingRequest> spawnSiblingRequests = [];
+
+        var rejection = Try_ParseInto_OrReason(
+            filePath,
+            startRequests,
+            addImplementerRequests,
+            closeImplementerRequests,
+            closeOrchestrationRequests,
+            setTelegramMutedRequests,
+            setOrchestrationNameRequests,
+            promoteOrchestrationRequests,
+            setModelRequests,
+            clearDispatchPauseRequests,
+            spawnSiblingRequests);
+
+        if (rejection != null)
+            return null;
+
+        return spawnSiblingRequests.Count == 1 ? spawnSiblingRequests[0] : null;
     }
 
     /// <summary>
@@ -257,7 +312,8 @@ public static class OrchestrationRequests_Reader
         List<ISetOrchestrationNameRequest> setOrchestrationNameRequests,
         List<IPromoteOrchestrationRequest> promoteOrchestrationRequests,
         List<ISetModelRequest> setModelRequests,
-        List<IClearDispatchPauseRequest> clearDispatchPauseRequests)
+        List<IClearDispatchPauseRequest> clearDispatchPauseRequests,
+        List<ISpawnSiblingRequest> spawnSiblingRequests)
     {
         JsonObject root;
         try
@@ -352,6 +408,60 @@ public static class OrchestrationRequests_Reader
                     // perfectly analysable line — because something it cannot see is not true yet —
                     // wears the safe posture without having it.
                     promoteOrchestrationRequests.Add(PromoteOrchestrationRequest_Factory.Create(orchId, reason.Trim(), filePath));
+                    return null;
+                }
+                case SPAWN_SIBLING_ACTION:
+                {
+                    if (string.IsNullOrWhiteSpace(orchId))
+                        return "missing 'orchId'";
+
+                    var name = root["name"]?.GetValue<string>()?.Trim();
+                    if (string.IsNullOrEmpty(name))
+                        return "missing 'name'";
+
+                    var nameRefusal = SiblingName_Rules.Describe_Refusal_OrNull(name);
+                    if (nameRefusal != null)
+                        return $"invalid 'name': {nameRefusal}";
+
+                    var job = root["job"]?.GetValue<string>()?.Trim();
+                    if (string.IsNullOrEmpty(job))
+                        return "missing 'job'";
+
+                    // ONE LINE (spec §4.1): the job is the prompt's line on the owner's phone and the
+                    // child's first FROM owner entry, so a newline is a second paragraph nobody asked for.
+                    if (job.Any(character => character < 0x20))
+                        return "invalid 'job': it must be ONE line — it contains a line break or another control character";
+
+                    if (job.Length > SIBLING_JOB_MAX_CHARS)
+                        return $"invalid 'job': at most {SIBLING_JOB_MAX_CHARS} characters, got {job.Length} — a headline, the brief is your HANDOVER entry";
+
+                    // A POSITIVE WHOLE NUMBER, AND A STRING "14" IS REFUSED RATHER THAN COERCED: the index
+                    // is the one number an agent does not guess — channel-append.sh allocated it inside
+                    // the lock (decision 12) — so anything else was not copied from the helper's output.
+                    var handoverNode = root["handover"];
+                    if (handoverNode == null)
+                        return "missing 'handover'";
+
+                    if (!(handoverNode is JsonValue handoverValue && handoverValue.TryGetValue<int>(out var handoverIndex) && handoverIndex > 0))
+                        return $"invalid 'handover': it must be the positive whole number channel-append.sh printed for your HANDOVER entry in your outbox, got {handoverNode.ToJsonString()}";
+
+                    var worktree = root["worktree"]?.GetValue<string>()?.Trim();
+                    if (string.IsNullOrEmpty(worktree))
+                        return "missing 'worktree'";
+
+                    var reason = root["reason"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(reason))
+                        return MISSING_REASON_MESSAGE;
+
+                    // JSON ONLY; FACTS ABOUT THE WORLD ARE THE EXECUTOR'S — the promote case's rule. Whether
+                    // the requester is an open solo, whether the endeavour is at its cap, whether entry
+                    // [handover] is a HANDOVER in the requester's outbox, whether the worktree exists and
+                    // belongs to the repo: the executor reads each and refuses WITH ITS OWN REASON.
+                    //
+                    // UNKNOWN FIELDS ARE IGNORED, and 'model'/'effort' in particular (§4.1): the child copies
+                    // the parent's overrides, the owner's dial on this endeavour. Ignored rather than
+                    // refused, because a harmless extra key must not cost a re-drop.
+                    spawnSiblingRequests.Add(SpawnSiblingRequest_Factory.Create(orchId, name, job, handoverIndex, worktree, reason.Trim(), filePath));
                     return null;
                 }
                 case CLOSE_IMPLEMENTER_ACTION:
@@ -456,6 +566,7 @@ public static class OrchestrationRequests_Reader
                         CLOSE_IMPLEMENTER_ACTION, PROMOTE_ORCHESTRATION_ACTION, CLOSE_ORCHESTRATION_ACTION,
                         SET_TELEGRAM_MUTED_ACTION, SET_ORCHESTRATION_NAME_ACTION, SET_MODEL_ACTION,
                         CLEAR_DISPATCH_PAUSE_ACTION,
+                        SPAWN_SIBLING_ACTION,
                     });
 
                     return $"unknown action '{action}' (known: {known}; retries must reuse the SAME action)";

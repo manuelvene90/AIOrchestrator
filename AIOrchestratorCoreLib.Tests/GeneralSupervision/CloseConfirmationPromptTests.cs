@@ -1,4 +1,6 @@
+using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
+using AIOrchestratorCoreLib.GeneralSupervision.SpawnSiblingRequest;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.GeneralSupervision;
@@ -250,6 +252,133 @@ public class CloseConfirmationPromptTests
             Assert.Contains("crm-2", CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", ORCHESTRATION, outcome));
             Assert.Contains("imp-2", CloseConfirmationPrompt_Builder.Describe_Decision("crm-2", MEMBER, outcome));
         }
+    }
+
+    static readonly IParkedCloseRequest SIBLING = ParkedCloseRequest_Factory.Create_ForSibling(
+        SpawnSiblingRequest_Factory.Create(
+            "ai-orchestrator-7", "AI-Orch · limits rework", "Rework the usage-limit pause per window", 14,
+            "C:/repos/AIOrchestrator-limits", "two jobs you want to steer separately", "request.json"),
+        ParkedCloseRequest_Reader.SIBLING_REQUESTER_DESCRIPTION,
+        "parked.json");
+
+    /// <summary>
+    /// THE SIBLING PROMPT IS SPEC 2026-09-23 §2.1 STEP 3, LINE FOR LINE: who asks — by the display name
+    /// the engine passes, not the file's description — the new topic's name, the job, and why. It comes
+    /// through <see cref="CloseConfirmationPrompt_Builder.Build"/>, the one route the engine uses
+    /// (pre-flight ruling H), and it is real from Task 8 because the per-tick ask sweep reaches it with no
+    /// tap (ruling A).
+    /// </summary>
+    [Fact]
+    public void TheSiblingPrompt_NamesWhoAsks_TheNewTopic_TheJob_AndWhy()
+    {
+        Assert.Equal(
+            "🔗 AI-Orch · settings work wants a sibling session for a parallel job\n"
+            + "New topic: AI-Orch · limits rework\n"
+            + "Job: Rework the usage-limit pause per window\n"
+            + "Why: two jobs you want to steer separately",
+            CloseConfirmationPrompt_Builder.Build(SIBLING, null, "AI-Orch · settings work"));
+    }
+
+    /// <summary>An unnamed requester is named by its id — never by the file's description of it.</summary>
+    [Fact]
+    public void TheSiblingPrompt_OfAnUnnamedRequester_UsesItsId()
+    {
+        Assert.StartsWith("🔗 ai-orchestrator-7 wants a sibling session", CloseConfirmationPrompt_Builder.Build(SIBLING, null));
+    }
+
+    [Fact]
+    public void TheSiblingButtons_StartIt_OrKeepOneSession()
+    {
+        Assert.Equal(("✅ Start it", "✋ Keep one session"), CloseConfirmationPrompt_Builder.Build_ButtonLabels(ParkedCloseKinds.Sibling));
+    }
+
+    /// <summary>
+    /// A SIBLING CLOSES NOTHING, and every sentence around its tap says so: the journal line, the
+    /// declined and lapsed notices, the General line, the toast, and the edit that replaces the prompt.
+    /// Each of these fell through to a close or neutral default before the kind existed — the family's
+    /// history (a promotion announced as a close) is why each is asserted here rather than trusted.
+    /// </summary>
+    [Fact]
+    public void EverySiblingSentence_NamesTheSibling_AndNeverSaysClose()
+    {
+        List<string> sentences =
+        [
+            CloseConfirmationPrompt_Builder.Describe_AskedFor(SIBLING),
+            CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(SIBLING, SIBLING.OrchId),
+            .. Enum.GetValues<CloseTapOutcomes>().Select(outcome => CloseConfirmationPrompt_Builder.Describe_Decision(SIBLING.OrchId, SIBLING, outcome)),
+        ];
+
+        foreach (var sentence in sentences)
+        {
+            Assert.Contains("AI-Orch · limits rework", sentence);
+            Assert.DoesNotContain("close", sentence, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Contains("ai-orchestrator-7", CloseConfirmationPrompt_Builder.Describe_AskedFor_ToGeneral(SIBLING, SIBLING.OrchId));
+        Assert.Equal("nothing was started", CloseConfirmationPrompt_Builder.Describe_NothingDone(ParkedCloseKinds.Sibling));
+        Assert.Equal("starting…", CloseConfirmationPrompt_Builder.Build_TapToast(ParkedCloseKinds.Sibling, confirms: true));
+        Assert.Equal("kept as one session", CloseConfirmationPrompt_Builder.Build_TapToast(ParkedCloseKinds.Sibling, confirms: false));
+    }
+
+    /// <summary>
+    /// Pre-flight ruling E's wording: the header asks the question the prompt asked, a confirm says
+    /// started, a decline says one session stays — and a failure claims neither.
+    /// </summary>
+    [Fact]
+    public void TheSiblingDecision_SaysStarted_KeptAsOne_OrNeither()
+    {
+        string Decide_Sibling(CloseTapOutcomes outcome) => CloseConfirmationPrompt_Builder.Describe_Decision(SIBLING.OrchId, SIBLING, outcome, CloseTapOutcome_Decider.SIBLING_STARTED);
+
+        Assert.StartsWith("🔗 Start sibling 'AI-Orch · limits rework'?", Decide_Sibling(CloseTapOutcomes.Closed));
+        Assert.Contains("✅ Started — you confirmed.", Decide_Sibling(CloseTapOutcomes.Closed));
+        Assert.Contains("✋ Kept as one session", Decide_Sibling(CloseTapOutcomes.Declined));
+
+        var uncertain = Decide_Sibling(CloseTapOutcomes.Uncertain);
+        Assert.DoesNotContain("✅", uncertain);
+        Assert.Contains("General topic", uncertain);
+    }
+
+    /// <summary>
+    /// RULING E, THE HALF THE OUTCOME CANNOT CARRY: a sibling refused at the tap completes cleanly —
+    /// outcome Closed — having started nothing. Only the "started" label may render "✅"; any other label,
+    /// or none, says NOT started and names what happened instead.
+    /// </summary>
+    [Theory]
+    [InlineData("worktree-shared")]
+    [InlineData("unexecuted")]
+    [InlineData(null)]
+    public void AConfirmedSiblingThatDidNotStart_NeverReadsStarted(string? archiveLabel)
+    {
+        var text = CloseConfirmationPrompt_Builder.Describe_Decision(SIBLING.OrchId, SIBLING, CloseTapOutcomes.Closed, archiveLabel);
+
+        Assert.DoesNotContain("✅", text);
+        Assert.Contains("Not started", text);
+        Assert.StartsWith("🔗 Start sibling 'AI-Orch · limits rework'?", text);
+        Assert.DoesNotContain("close", text, StringComparison.OrdinalIgnoreCase);
+
+        if (archiveLabel != null)
+            Assert.Contains(archiveLabel, text);
+    }
+
+    /// <summary>
+    /// §7.3: a yes tapped during a usage-limit pause is HELD — the prompt says when it starts, and claims
+    /// nothing yet. THE RE-ASK IS CONDITIONAL (Task 9 review, 2026-09-23): after a restart a request past
+    /// its expiry LAPSES instead of being asked again, and a pause can outlast the expiry — so the line
+    /// names the lapse and its hours rather than promising the re-ask unconditionally.
+    /// </summary>
+    [Fact]
+    public void TheSiblingHeldForAPause_SaysWhenItStarts_AndClaimsNothing()
+    {
+        var text = CloseConfirmationPrompt_Builder.Describe_SiblingHeldForPause(SIBLING);
+
+        Assert.StartsWith("🔗 Start sibling 'AI-Orch · limits rework'?", text);
+        Assert.Contains("usage-limit pause", text);
+        Assert.Contains("asked again", text);
+        Assert.Contains("lapse", text);
+        Assert.Contains($"{CloseConfirmation_Parking.EXPIRY_HOURS} hours", text);
+        Assert.DoesNotContain("✅", text);
+        Assert.DoesNotContain("close", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("usage-limit pause", CloseConfirmationPrompt_Builder.SIBLING_HELD_FOR_PAUSE_TOAST);
     }
 
     static string Decide(CloseTapOutcomes outcome)

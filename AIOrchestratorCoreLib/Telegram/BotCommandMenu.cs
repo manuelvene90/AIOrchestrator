@@ -86,6 +86,10 @@ public static class BotCommandMenu
         // IS an answer to what is left. A correction has to be checked in every scope the
         // thing it corrects runs in, or it is the same defect with a newer date.
         ("progress", "This topic's task ledger, every row — in General, one line per orchestration"),
+        // BESIDE /progress, because it is the ledger's other reading for a linked topic (spec 2026-09-23 §2.4):
+        // the endeavour's summed bar, plus what the siblings told each other — which is never pushed (O3), so
+        // this is the owner's one way to see it.
+        ("endeavour", "The linked jobs of this topic's endeavour: combined bar and what the siblings last told each other"),
         ("tail", "What a headless session is doing right now (/tail 1, /tail sup)"),
         ("limits", "5-hour and weekly usage limits"),
 

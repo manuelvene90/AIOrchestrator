@@ -496,8 +496,11 @@ public class OrchestrationLauncherTests : IDisposable
         return transcript;
     }
 
-    /// <summary>The live probe shape trimmed to what the respawn reads, written with the BOM the statusline's Set-Content leaves.</summary>
-    static void Write_ProbeFile(string probeFile, string sessionId, string transcriptPath)
+    /// <summary>
+    /// The live probe shape trimmed to what the respawn reads, written with the BOM the statusline's
+    /// Set-Content leaves. Internal so SiblingLaunchTests writes the SAME probe rather than a second copy.
+    /// </summary>
+    internal static void Write_ProbeFile(string probeFile, string sessionId, string transcriptPath)
     {
         var payload = new JsonObject
         {
@@ -544,9 +547,51 @@ internal sealed class RecordingSpawner_Fake : ISessionSpawner
 {
     public List<ISpawnCommand> SpawnedCommands { get; } = [];
 
+    (string WorkingDirectory, Exception Failure)? _nextFailure;
+    readonly Lock _failureLock = new();
+
+    /// <summary>
+    /// OPT-IN, ONE SHOT, AND AIMED: the next spawn whose working directory is
+    /// <paramref name="workingDirectory"/> throws <paramref name="failure"/> instead of recording; every
+    /// other spawn records as always. Aimed and one-shot because an engine test's watchdog keeps spawning
+    /// on its own schedule (the general supervisor every 45 s), and a failure it could consume would make
+    /// the test about the watchdog.
+    /// </summary>
+    public void Fail_NextSpawnIn_With(string workingDirectory, Exception failure)
+    {
+        lock (_failureLock)
+            _nextFailure = (workingDirectory, failure);
+    }
+
     public int? Spawn(ISpawnCommand command)
     {
+        lock (_failureLock)
+        {
+            if (_nextFailure is { } armed && string.Equals(armed.WorkingDirectory, command.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                _nextFailure = null;
+                throw armed.Failure;
+            }
+        }
+
         SpawnedCommands.Add(command);
         return 77777;
+    }
+
+    /// <summary>
+    /// The value that follows <paramref name="flag"/> on the command line the spawner was HANDED —
+    /// `--title` is the window title and `-d` the directory wt.exe starts in. Read off the arguments
+    /// rather than off the launch, because the arguments are what Process.Start runs: a title or a
+    /// directory that is right on the launch and lost in the command would still be a wrong window.
+    /// </summary>
+    public static string Read_Argument_After(ISpawnCommand command, string flag)
+    {
+        for (var i = 0; i < command.Arguments.Count - 1; i++)
+        {
+            if (command.Arguments[i] == flag)
+                return command.Arguments[i + 1];
+        }
+
+        throw new Exception($"No '{flag}' argument in: {string.Join(" ", command.Arguments)}");
     }
 }

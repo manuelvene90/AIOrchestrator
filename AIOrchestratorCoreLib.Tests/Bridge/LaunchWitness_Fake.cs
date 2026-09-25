@@ -37,6 +37,12 @@ internal sealed class LaunchWitness_Fake(IOrchestrationLauncher inner, ISupervis
         return Photograph(inner.Start_BasicOrchestration(repoName, repoPath), OrchestrationModes.BASIC);
     }
 
+    /// <summary>A sibling is a basic orchestration, so it is photographed as one — the same instant, the same boundary.</summary>
+    public IOrchestrationSession Start_SiblingOrchestration(string parentOrchId, string displayName, string workingPath, string bornFromHandover)
+    {
+        return Photograph(inner.Start_SiblingOrchestration(parentOrchId, displayName, workingPath, bornFromHandover), OrchestrationModes.BASIC);
+    }
+
     IOrchestrationSession Photograph(IOrchestrationSession session, string shape)
     {
         var file = paths.Get_OwnerChannelFile(session.OrchId);

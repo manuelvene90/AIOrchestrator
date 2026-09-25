@@ -434,6 +434,12 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
   The app then asks the owner to confirm with a tap and closes ONLY on that tap, so your own check
   is still worth doing but is no longer the last word. It lapses unanswered after 12 hours. The
   folder stays as audit trail; the topic is deleted.
+- **Siblings — you never start a sibling.** A solo can ask, on the owner's word, for a SIBLING: a
+  second solo with its own topic and its own worktree, linked to it as one endeavour. General shows
+  linked orchestrations grouped under one 🔗 line with a combined bar, and `/endeavour` in any of
+  their topics shows the group. Starting one is the solo's request (it writes the brief and creates
+  the worktree), so there is no request for you to file: if the owner asks you to split a job, tell
+  them to ask the solo in its own topic. Closing one is an ordinary `close-orchestration` of that id.
 
 - **Model DEFAULTS — only when the owner EXPLICITLY asks for a default/global change** ("change
   the default supervisor model to X", "all implementers from now on..."): edit `../config.json`

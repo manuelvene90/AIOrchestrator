@@ -27,7 +27,8 @@ public sealed class StatePackInputs(
     IReadOnlyList<string> unavailable,
     string? progressNote = null,
     string? conclusions = null,
-    IReadOnlyList<IChannelEntry>? standingNotes = null)
+    IReadOnlyList<IChannelEntry>? standingNotes = null,
+    string? endeavourDigest = null)
 {
     public string OrchId { get; } = orchId;
     public string MemberId { get; } = memberId;
@@ -84,4 +85,12 @@ public sealed class StatePackInputs(
     /// </para>
     /// </summary>
     public IReadOnlyList<IChannelEntry> StandingNotes { get; } = standingNotes ?? [];
+
+    /// <summary>
+    /// The linked solo's <c>ENDEAVOUR.md</c>, whole — null for anyone else, and for a solo with no open
+    /// sibling, whose file the app has removed (sibling plan 2026-09-23, spec §5.4). A terminal solo reads it
+    /// at boot; without it here a FRESH resume would start knowing less about its siblings than a terminal
+    /// one. TRAILING AND OPTIONAL so every caller that builds inputs without an endeavour stays as it was.
+    /// </summary>
+    public string? EndeavourDigest { get; } = endeavourDigest;
 }

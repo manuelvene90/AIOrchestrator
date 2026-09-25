@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
+using AIOrchestratorCoreLib.Telegram;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Sessions;
@@ -116,5 +117,51 @@ public class SessionJsonSerializerTests
 
         Assert.False(reloaded.Paused);
         Assert.Equal("arb-fix", reloaded.OrchId);
+    }
+
+    /// <summary>
+    /// THE FOUR SIBLING FIELDS ROUND-TRIP. Written by the executor at a birth (spec §3.2) and read by
+    /// every tick after it, so a field that does not survive Serialize → Deserialize is a sibling that
+    /// forgets its endeavour on the next load.
+    /// </summary>
+    [Fact]
+    public void TheSiblingFields_RoundTrip()
+    {
+        var session = OrchestrationSession_Factory.Create(
+            "ai-orchestrator-8", "AIOrchestrator", @"C:\repo", DateTime.UtcNow, null, null, null, null,
+            "AI-Orch · limits", null, null, [], TelegramDeliveryModes.Normal, null,
+            endeavourId: "ai-orchestrator-7",
+            bornFromOrchId: "ai-orchestrator-7",
+            bornFromHandover: "ai-orchestrator-7#14",
+            workingPath: @"C:\repo.worktrees\limits");
+
+        var back = SessionJson_Serializer.Deserialize(SessionJson_Serializer.Serialize(session), "test");
+
+        Assert.Equal("ai-orchestrator-7", back.EndeavourId);
+        Assert.Equal("ai-orchestrator-7", back.BornFromOrchId);
+        Assert.Equal("ai-orchestrator-7#14", back.BornFromHandover);
+        Assert.Equal(@"C:\repo.worktrees\limits", back.WorkingPath);
+    }
+
+    /// <summary>
+    /// ABSENT MEANS NULL, and null means "today's behaviour": not linked, spawned at RepoPath. Every
+    /// session.json on the owner's machine was written before these keys existed. The fixture is a
+    /// literal copy of a pre-change file, not one built by the current serializer, which would already
+    /// know the keys.
+    /// </summary>
+    [Fact]
+    public void APreSiblingSessionJson_LoadsWithAllFourNull()
+    {
+        const string PRE_CHANGE = """
+            {"orchId":"crm-2","repoName":"CRM","repoPath":"C:\\crm","createdUtc":"2026-09-01T10:00:00.0000000Z",
+             "members":[],"telegramMode":"Normal","ownerPresence":"Remote","awaitingTest":false,"done":false,"paused":false}
+            """;
+
+        var session = SessionJson_Serializer.Deserialize(PRE_CHANGE, "fixture");
+
+        Assert.Null(session.EndeavourId);
+        Assert.Null(session.BornFromOrchId);
+        Assert.Null(session.BornFromHandover);
+        Assert.Null(session.WorkingPath);
     }
 }

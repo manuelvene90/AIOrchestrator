@@ -42,6 +42,14 @@ public static class MirrorText_Formatter
             return false;
         }
 
+        // A SOLO'S REPLY TO ITS SIBLINGS ONLY (sibling plan 2026-09-23, ruling S4; owner decision O3). A print
+        // turn that only siblings woke still files its reply here — its one writable channel, and the thing
+        // that stops two print solos acknowledging each other for ever — but tagged for the agent, by the
+        // dispatcher (ReplyAudience_Resolver). It is the record, never a text: pushed, it put sibling chatter
+        // on the owner's phone and, while they were waiting, went out as their answer.
+        if (entry.Author == ChannelAuthors.Solo && Channels.AppEntryAudience_Tag.Is_AgentTagged(entry.Subject))
+            return false;
+
         // Owner entries came FROM Telegram (or the owner's own terminal) — never echoed back.
         return entry.Author != ChannelAuthors.Owner;
     }

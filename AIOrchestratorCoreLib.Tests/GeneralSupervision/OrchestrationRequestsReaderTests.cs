@@ -165,6 +165,12 @@ public class OrchestrationRequestsReaderTests : IDisposable
         Assert.Contains("unknown action 'start-orchestration-retry'", unknownAction.Reason);
         Assert.Contains("retries must reuse the SAME action", unknownAction.Reason);
 
+        // THE LIST MUST BE THE SWITCH, not a subset of it: promote-orchestration once went missing from
+        // it while its case worked, teaching a session that mistyped the action that the feature did not
+        // exist. spawn-sibling (2026-09-23) is the newest case and the one most likely to be mistyped.
+        Assert.Contains(OrchestrationRequests_Reader.SPAWN_SIBLING_ACTION, unknownAction.Reason);
+        Assert.Contains(OrchestrationRequests_Reader.PROMOTE_ORCHESTRATION_ACTION, unknownAction.Reason);
+
         var missingRepo = pending.MalformedRequests.Single(m => m.FilePath.EndsWith("bad2.json"));
         Assert.Contains("missing 'repo'", missingRepo.Reason);
     }

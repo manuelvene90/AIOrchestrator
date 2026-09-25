@@ -101,6 +101,63 @@ internal sealed class OrchestrationLauncherModel(
         return Add_Member(orchId, MemberKinds.Solo);
     }
 
+    /// <summary>
+    /// A SIBLING SOLO: a basic orchestration of the parent's repo, linked into the parent's endeavour and
+    /// spawned in its own worktree (spec 2026-09-23 §4.3 step 3).
+    ///
+    /// <para>
+    /// THE ORDER IS THE WHOLE POINT. The window title (<c>SessionWindowTitle_Builder</c>), the working
+    /// directory, the model and the effort are all read AT SPAWN, inside <c>Add_Member</c> →
+    /// <c>Respawn_Implementer</c>. So every field the first process must see — the link, the name, the
+    /// copied dials — is stamped BEFORE <c>Add_Member</c>. A field stamped one line after it is right on
+    /// disk and wrong in the only process that exists, until the next respawn happens to fix it.
+    /// </para>
+    /// <para>
+    /// THE TREE IS CHECKED BEFORE THE ID IS SPENT. A folder found missing after allocation would leave
+    /// an orchestration on disk whose session can never start, and the watchdog would respawn it into
+    /// that missing folder on every tick. It must also be ABSOLUTE: <c>Directory.Exists</c> answers a
+    /// relative path against the app's own current directory, which is nobody's worktree, and whatever
+    /// is stored here becomes the cwd of every respawn for the life of the sibling. Whether the folder
+    /// is a git worktree of this repo is not asked here — the validator asks it, before this call, and
+    /// the launcher starts sessions rather than running git.
+    /// </para>
+    /// <para>
+    /// THE ENDEAVOUR IS THE FIRST ORCHESTRATION'S (§3.2): <c>parent.EndeavourId ?? parent.OrchId</c>, so a
+    /// sibling of a sibling joins the same group instead of starting a second one. The PARENT is not
+    /// written: stamping its own endeavour id is the birth step's job (Task 7), and a launcher that
+    /// edited other orchestrations would be a second place deciding what the parent is.
+    /// </para>
+    /// <para>
+    /// THE PARENT'S DIALS ARE COPIED because they are the owner's setting on this endeavour (§4.1): the
+    /// request carries no model and no effort, so half of the endeavour cannot quietly run on another.
+    /// The implementer slot is the one a solo reads (decision 24).
+    /// </para>
+    /// </summary>
+    public IOrchestrationSession Start_SiblingOrchestration(string parentOrchId, string displayName, string workingPath, string bornFromHandover)
+    {
+        var parent = _store.Get_Session(parentOrchId);
+
+        if (!Path.IsPathFullyQualified(workingPath))
+            throw new Exception($"Worktree '{workingPath}' for a sibling of '{parentOrchId}' is not an absolute path — nothing was started");
+
+        if (!Directory.Exists(workingPath))
+            throw new Exception($"Worktree '{workingPath}' for a sibling of '{parentOrchId}' does not exist — nothing was started");
+
+        var orchId = OrchId_Allocator.Allocate_NextOrchId(_paths, parent.RepoName);
+
+        _store.Create_Orchestration(orchId, parent.RepoName, parent.RepoPath);
+        _store.Set_SiblingLink(orchId, parent.EndeavourId ?? parent.OrchId, parent.OrchId, bornFromHandover, workingPath);
+        _store.Set_DisplayName(orchId, displayName);
+        _store.Set_ImplementerModelOverride(orchId, parent.ImplementerModelOverride);
+        _store.Set_ImplementerEffortOverride(orchId, parent.ImplementerEffortOverride);
+
+        Planning.PlanSeed_Writer.Ensure_Exists(_paths, orchId, parent.RepoName);
+
+        _log.Log_Info(orchId, $"SIBLING orchestration created — '{displayName}', a sibling of '{parent.OrchId}' in '{workingPath}'");
+
+        return Add_Member(orchId, MemberKinds.Solo);
+    }
+
     public IOrchestrationSession Add_Implementer(string orchId)
     {
         return Add_Member(orchId, MemberKinds.Implementer);
@@ -329,6 +386,10 @@ internal sealed class OrchestrationLauncherModel(
             SessionRoles.Supervisor,
             orchId,
             SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
+
+            // RepoPath, NOT WorkingPath_Resolver: a linked orchestration never has a supervisor (spec
+            // 2026-09-23 §7.6 refuses promoting one), so the only sessions with a WorkingPath never
+            // reach this method.
             session.RepoPath,
             session.SupervisorModelOverride ?? _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Supervisor),
             pidFile,
@@ -378,6 +439,9 @@ internal sealed class OrchestrationLauncherModel(
             SessionRoles.Communicator,
             orchId,
             SessionLaunch_Factory.COMMUNICATOR_MEMBER_ID,
+
+            // RepoPath for the supervisor's reason: a communicator belongs to a crew, and a linked
+            // orchestration is never a crew (spec 2026-09-23 §7.6).
             session.RepoPath,
             _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Communicator),
             pidFile,
@@ -475,7 +539,13 @@ internal sealed class OrchestrationLauncherModel(
         // the SAME single definition — SessionScoped_Reader.Stated_OrNull.
         var effort = SessionScoped_Reader.Stated_OrNull(session.ImplementerEffortOverride) ?? _configProvider.Get_Current().Get_EffortForRole_OrNull(role);
 
-        var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName, effort, resumeSessionId);
+        // THE WORKING PATH, NOT THE REPO (spec 2026-09-23 §6, §7.1). This is the one path every member
+        // spawn and respawn takes — the first spawn (Add_Member), the watchdog, /model and /effort
+        // (Apply_Dial), and the app-restart pass — so a sibling's cwd is its worktree every time. RESUME
+        // DEPENDS ON THAT: Claude Code keys transcripts by working directory, so a respawn in a different
+        // folder does not fail, it silently starts a fresh conversation while the resume id above still
+        // says otherwise. Null WorkingPath is RepoPath, so no unlinked session moves.
+        var launch = SessionLaunch_Factory.Create(role, orchId, memberId, WorkingPath_Resolver.Resolve(session), model, pidFile, session.DisplayName, effort, resumeSessionId);
 
         _store.Set_MemberPid(orchId, memberId, null);
         Delete_StalePidFile_BestEffort(pidFile);

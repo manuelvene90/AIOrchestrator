@@ -511,6 +511,47 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             return _buttons.FirstOrDefault(button => button.Label.Contains(labelFragment, StringComparison.Ordinal)).Data;
     }
 
+    /// <summary>
+    /// Every send WITH THE TOPIC it went to, beside <c>_sentTexts</c> for the same reason
+    /// <c>_sentWithIds</c> is: nothing that already reads the texts changes. A claim that something
+    /// reached ONE topic and not another (spec 2026-09-23 O3, O4) needs the thread, which the flat text
+    /// list cannot give.
+    /// </summary>
+    readonly List<(long? ThreadId, long Id, string Text)> _sentByTopic = [];
+
+    /// <summary>Every button with the message that carried it and that message's topic — what a tap has to name.</summary>
+    readonly List<(string Data, string Label, long MessageId, long? ThreadId)> _buttonMessages = [];
+
+    /// <summary>The texts sent into <paramref name="threadId"/> (null = General), oldest first.</summary>
+    public IReadOnlyList<string> Sent_InTopic(long? threadId)
+    {
+        lock (_lock)
+            return [.. _sentByTopic.Where(sent => sent.ThreadId == threadId).Select(sent => sent.Text)];
+    }
+
+    /// <summary>
+    /// The NEWEST button whose label contains <paramref name="labelFragment"/>, with the message and topic
+    /// it was sent on, or null. Newest rather than first (unlike <see cref="Find_ButtonFor"/>), because a
+    /// prompt asked again carries fresh callback data and the old buttons are disarmed. It exists because
+    /// <see cref="LastButtonMessageId"/> is set only for single-use <c>opt-</c> buttons, so a close-family
+    /// prompt's message id was not recoverable at all.
+    /// </summary>
+    public (string Data, long MessageId, long? ThreadId)? Find_ButtonMessage_OrNull(string labelFragment)
+    {
+        lock (_lock)
+        {
+            for (var i = _buttonMessages.Count - 1; i >= 0; i--)
+            {
+                var button = _buttonMessages[i];
+
+                if (button.Label.Contains(labelFragment, StringComparison.Ordinal))
+                    return (button.Data, button.MessageId, button.ThreadId);
+            }
+
+            return null;
+        }
+    }
+
     public IReadOnlyList<(long Id, string Text, TelegramSendSounds Sound)> Sent_WithIds
     {
         get { lock (_lock) return [.. _sentWithIds]; }
@@ -654,7 +695,7 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             _timeoutSendsContaining = fragment;
     }
 
-    long? Record(string text, TelegramSendSounds sound)
+    long? Record(long? threadId, string text, TelegramSendSounds sound)
     {
         lock (_lock)
         {
@@ -684,25 +725,29 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
             _sentTexts.Add(text);
             _sentWithIds.Add((_nextMessageId, text, sound));
+            _sentByTopic.Add((threadId, _nextMessageId, text));
             _currentByMessageId[_nextMessageId] = (text, "");
             return _nextMessageId++;
         }
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(text, sound));
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(messageThreadId, text, sound));
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(html, sound));
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.FromResult(Record(messageThreadId, html, sound));
 
     public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
         => Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
 
     public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        var messageId = Record(text, sound);
+        var messageId = Record(messageThreadId, text, sound);
 
         lock (_lock)
         {
             _buttons.AddRange(buttons);
+
+            if (messageId != null)
+                _buttonMessages.AddRange(buttons.Select(button => (button.Data, button.Label, messageId.Value, messageThreadId)));
 
             if (buttons.Any(button => button.Data.StartsWith(CallbackToken.PREFIX, StringComparison.Ordinal)))
                 LastButtonMessageId = messageId;
@@ -832,7 +877,35 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             return _downloadFailure == null ? Task.FromResult(_downloadBytes) : Task.FromException<byte[]>(_downloadFailure);
     }
 
-    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => Task.FromResult(1L);
+    bool _distinctTopicIds;
+    long _nextTopicId = FIRST_DISTINCT_TOPIC_ID;
+
+    /// <summary>Where <see cref="Use_DistinctTopicIds"/> starts counting — far from any topic id a test assigns by hand.</summary>
+    public const long FIRST_DISTINCT_TOPIC_ID = 100;
+
+    /// <summary>
+    /// EVERY NEW TOPIC GETS ITS OWN ID from here on, counting up from <see cref="FIRST_DISTINCT_TOPIC_ID"/>.
+    /// Without it every topic this fake creates is topic 1, so a test with two orchestrations whose topics
+    /// the ENGINE creates routes both to one thread — and a claim about one topic not affecting another
+    /// (a sibling's, spec 2026-09-23 O4) would pass on a single topic and prove nothing.
+    ///
+    /// <para>
+    /// OPT-IN, so no existing test's expectation moves: every test written before this method still gets
+    /// 1 for every topic, exactly as it did.
+    /// </para>
+    /// </summary>
+    public void Use_DistinctTopicIds()
+    {
+        lock (_lock)
+            _distinctTopicIds = true;
+    }
+
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            return Task.FromResult(_distinctTopicIds ? _nextTopicId++ : 1L);
+    }
+
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -887,13 +960,35 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
 
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
     {
+        Action? beforeThisAnswer;
+
         lock (_lock)
         {
             _answeredCallbacks++;
             _answeredCallbackTexts.Add(text);
+
+            beforeThisAnswer = _beforeNextCallbackAnswer;
+            _beforeNextCallbackAnswer = null;
         }
 
+        // Outside the lock: the action touches the disk, not this fake.
+        beforeThisAnswer?.Invoke();
+
         return Task.CompletedTask;
+    }
+
+    Action? _beforeNextCallbackAnswer;
+
+    /// <summary>
+    /// ONE-SHOT: runs <paramref name="action"/> when the next tap is answered. The engine answers a tap
+    /// AFTER it has read the tapped request and BEFORE it acts on it, so this is the one moment a test can
+    /// change the disk between those two — the seam the "unreadable at classification, readable at
+    /// execution" race needs (Task 9b, 2026-09-23).
+    /// </summary>
+    public void Run_OnNextCallbackAnswer(Action action)
+    {
+        lock (_lock)
+            _beforeNextCallbackAnswer = action;
     }
     public Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken)
     {

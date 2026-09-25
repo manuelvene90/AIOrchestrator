@@ -133,6 +133,7 @@ public class StatePackInputsReaderTests : IDisposable
     {
         public string Key => key;
         public string ChannelFilePath => path;
+        public AIOrchestratorCoreLib.Running.TurnSource.TurnSourceKinds Kind => IsOwnerChannel ? AIOrchestratorCoreLib.Running.TurnSource.TurnSourceKinds.Owner : AIOrchestratorCoreLib.Running.TurnSource.TurnSourceKinds.Spoke;
         public bool IsOwnerChannel => key == "owner";
     }
 

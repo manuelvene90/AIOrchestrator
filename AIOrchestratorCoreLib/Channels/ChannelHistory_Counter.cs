@@ -40,11 +40,16 @@ public static class ChannelHistory_Counter
     /// because the roles do not coexist — and after a PROMOTION the solo's old entries are history the
     /// supervisor inherits, which is exactly what a "has this conversation been answered" count should
     /// see. Asking which mode we are in would add a second source of truth for no gain.
+    ///
+    /// AN AGENT-TAGGED ENTRY IS NOT AN ANSWER (sibling plan 2026-09-23, ruling S4). A print solo's reply to a
+    /// turn only its siblings woke is filed here with <see cref="AppEntryAudience_Tag.AGENT_TAG"/> — the record,
+    /// never texted. Counted, it cleared the owner's pending reply while their message still waited for the
+    /// turn that would answer it (observed RED 2026-09-24: "Turn ended after the owner was answered" one tick
+    /// after the tagged entry).
     /// </summary>
     public static int Count_OwnerFacingEntries(string channelFilePath)
     {
-        return Count_Entries_ByAuthor(channelFilePath, ChannelAuthors.Supervisor)
-            + Count_Entries_ByAuthor(channelFilePath, ChannelAuthors.Solo);
+        return Count_Answers_In(channelFilePath) + Count_Answers_In(Channel_Compactor.Build_ArchiveFilePath(channelFilePath));
     }
 
     /// <summary>
@@ -126,6 +131,19 @@ public static class ChannelHistory_Counter
         entries.AddRange(Parse_In(channelFilePath));
 
         return entries;
+    }
+
+    static int Count_Answers_In(string filePath)
+    {
+        var count = 0;
+
+        foreach (var entry in Parse_In(filePath))
+        {
+            if (entry.Author is ChannelAuthors.Supervisor or ChannelAuthors.Solo && !AppEntryAudience_Tag.Is_AgentTagged(entry.Subject))
+                count++;
+        }
+
+        return count;
     }
 
     static int Count_In(string filePath, ChannelAuthors author)

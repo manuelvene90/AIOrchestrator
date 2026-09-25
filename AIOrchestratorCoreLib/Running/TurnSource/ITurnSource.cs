@@ -31,9 +31,17 @@ public interface ITurnSource
     string ChannelFilePath { get; }
 
     /// <summary>
+    /// Which kind of channel this is — <see cref="TurnSourceKinds"/> says why the trigger needs it: on a
+    /// <see cref="TurnSourceKinds.Sibling"/> source another solo's entry is inbound for a solo, and on the
+    /// owner channel the same author word is the solo's own record.
+    /// </summary>
+    TurnSourceKinds Kind { get; }
+
+    /// <summary>
     /// Whether this is the conversation with the OWNER — the owner channel of an orchestration, or the
     /// general supervisor's own. It carries the priority rule and it is the default target for
-    /// reply text a session did not address to anybody.
+    /// reply text a session did not address to anybody. Exactly <c>Kind == Owner</c>: kept as its own
+    /// member so none of its callers had to move when <see cref="Kind"/> arrived.
     /// </summary>
     bool IsOwnerChannel { get; }
 }

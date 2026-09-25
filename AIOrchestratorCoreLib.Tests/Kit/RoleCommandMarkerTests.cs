@@ -65,6 +65,13 @@ public class RoleCommandMarkerTests
     static readonly IReadOnlyList<string> NOT_MARKERS =
     [
         "PARALLEL UNITS", "UNPROVEN", "HOLD", "FROM", "AWAY MODE ON",
+
+        // THE SIBLING OUTBOX'S OWN SUBJECT WORDS (solo/reference/siblings.md, sibling solos 2026-09-23):
+        // conventions one sibling SESSION writes for another to read, which no app code matches — the
+        // app only routes the outbox. They reached this guard on 2026-09-25, when origin/master's
+        // reference-file scan met the sibling branch's reference file. HANDOVER is not here: the app
+        // does read that one (HandoverEntry_Detector).
+        "ASK", "FYI", "CLAIM", "RELEASE", "RELAY", "HANDBACK",
         .. AIOrchestratorCoreLib.Sessions.Platform_Abbreviations.ALL.Select(entry => entry.Code),
     ];
 

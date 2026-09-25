@@ -21,7 +21,7 @@ public class BotCommandMenuTests
     /// </summary>
     static readonly string[] EXPECTED_ORDER =
     [
-        "pending", "left", "progress", "tail", "limits", "model", "effort", "settings", "cost", "merge", "close", "dnd", "mute",
+        "pending", "left", "progress", "endeavour", "tail", "limits", "model", "effort", "settings", "cost", "merge", "close", "dnd", "mute",
         "summary", "resume", "resume_dispatch", "status", "tasks", "tokens", "context", "diff", "imp", "log", "test",
         "done", "pause", "refresh", "switch", "clear",
         "pc", "dnd_all", "mute_all", "screens", "screen", "show", "organize", "organize_mains",
@@ -41,8 +41,8 @@ public class BotCommandMenuTests
     [Fact]
     public void EveryCommand_SurvivedTheReorder_AndNoneTwice()
     {
-        Assert.Equal(37, BotCommandMenu.ALL.Count);
-        Assert.Equal(37, BotCommandMenu.ALL.Select(entry => entry.Command).Distinct().Count());
+        Assert.Equal(38, BotCommandMenu.ALL.Count);
+        Assert.Equal(38, BotCommandMenu.ALL.Select(entry => entry.Command).Distinct().Count());
     }
 
     /// <summary>

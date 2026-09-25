@@ -50,7 +50,9 @@ public class NoProtocolFileIsOrphanedTests
         // added without anyone noticing; the equality makes adding one a conscious act, which is the
         // same discipline the app-write census keeps. It still does the job a floor was wanted for: a
         // refactor that deletes every reference file cannot pass by checking nothing.
-        Assert.Equal(20, checkedFiles);
+        // 21 since the merge of 2026-09-25: the 20 above plus the solo's
+        // siblings.md (sibling solo sessions, 2026-09-23).
+        Assert.Equal(21, checkedFiles);
     }
 
     /// <summary>

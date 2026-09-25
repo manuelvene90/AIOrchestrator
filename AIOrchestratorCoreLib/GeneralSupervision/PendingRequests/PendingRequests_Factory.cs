@@ -7,6 +7,7 @@ using AIOrchestratorCoreLib.GeneralSupervision.SetModelRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.ClearDispatchPauseRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetOrchestrationNameRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.SetTelegramMutedRequest;
+using AIOrchestratorCoreLib.GeneralSupervision.SpawnSiblingRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.StartOrchestrationRequest;
 
 namespace AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
@@ -23,6 +24,7 @@ public static class PendingRequests_Factory
         IReadOnlyList<IPromoteOrchestrationRequest> promoteOrchestrationRequests,
         IReadOnlyList<ISetModelRequest> setModelRequests,
         IReadOnlyList<IClearDispatchPauseRequest> clearDispatchPauseRequests,
+        IReadOnlyList<ISpawnSiblingRequest> spawnSiblingRequests,
         IReadOnlyList<IMalformedRequest> malformedRequests)
     {
         return new PendingRequestsModel(
@@ -35,6 +37,7 @@ public static class PendingRequests_Factory
             promoteOrchestrationRequests,
             setModelRequests,
             clearDispatchPauseRequests,
+            spawnSiblingRequests,
             malformedRequests);
     }
 }

@@ -136,7 +136,24 @@ public static class SessionCursors_Bookkeeper
             var delivered = pending.Where(item => SOURCE_KEYS.Equals(item.Source.Key, source.Key)).Select(item => item.Entry).ToList();
             var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
 
-            advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
+            advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, source.Kind, entries, delivered));
+        }
+
+        // A CURSOR IS NEVER DROPPED FOR A SOURCE THAT DID NOT RESOLVE FOR THIS TURN — Read_AndPersist's rule,
+        // and this is the other place the cursor set is rewritten. It used to keep only the turn's sources,
+        // which was invisible while every source a session lost stayed lost. A PAUSED linked solo resolves
+        // no sibling source (TurnSources_Resolver), and the owner's message that lifts a pause can start a
+        // turn a tick before the pause is lifted: dropped then, the sibling cursor came back EMPTY on
+        // unpause and the whole live outbox — the HANDOVER absorbed at registration included — was handed
+        // over again as new traffic (sibling plan 2026-09-23 Task 13, SiblingPrintTurnTests). The status
+        // log's cursor is skipped here for the reason Read_AndPersist skips it: it is re-added below.
+        foreach (var cursor in state.Cursors)
+        {
+            if (SOURCE_KEYS.Equals(cursor.SourceKey, StatusLog_Store.CURSOR_KEY))
+                continue;
+
+            if (!sources.Any(source => SOURCE_KEYS.Equals(source.Key, cursor.SourceKey)))
+                advanced.Add(cursor);
         }
 
         // THE LOG'S CURSOR, ADVANCED WITH THE SAME SET AND IN THE SAME WRITE. A note that rode this

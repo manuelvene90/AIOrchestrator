@@ -39,7 +39,7 @@ public static class TurnCursor_Factory
 
         foreach (var entry in liveEntries)
         {
-            if (!PrintTurn_Trigger.Is_Inbound(role, entry))
+            if (!PrintTurn_Trigger.Is_Inbound(role, source.Kind, entry))
                 continue;
 
             delivered.Add(ChannelEntry_Digest.Compute(entry));
@@ -68,6 +68,18 @@ public static class TurnCursor_Factory
     /// </summary>
     public static ITurnCursor CreateFrom_Delivered(ITurnCursor cursor, SessionRoles role, IReadOnlyList<IChannelEntry> liveEntries, IReadOnlyList<IChannelEntry> justDelivered)
     {
+        return CreateFrom_Delivered(cursor, role, TurnSourceKinds.Owner, liveEntries, justDelivered);
+    }
+
+    /// <summary>
+    /// The same, pruned by the SOURCE'S kind (ruling D, sibling plan 2026-09-23). A cursor carries no kind of
+    /// its own — it is keyed by the source and the kind comes from the source resolved on the tick — so the
+    /// caller hands it in. Pruned as an owner channel, a sibling's outbox holds no inbound entry at all: the
+    /// prune would take its "the read came back empty" branch on every turn, and the delivered set would never
+    /// shed what compaction archived.
+    /// </summary>
+    public static ITurnCursor CreateFrom_Delivered(ITurnCursor cursor, SessionRoles role, TurnSourceKinds kind, IReadOnlyList<IChannelEntry> liveEntries, IReadOnlyList<IChannelEntry> justDelivered)
+    {
         HashSet<string> stillLive = [];
         var highWater = cursor.HighWaterIndex;
 
@@ -76,7 +88,7 @@ public static class TurnCursor_Factory
         // again, and the one after.
         foreach (var entry in liveEntries)
         {
-            if (PrintTurn_Trigger.Is_Inbound(role, entry) || PrintTurn_Trigger.Is_AgentNote(entry))
+            if (PrintTurn_Trigger.Is_Inbound(role, kind, entry) || PrintTurn_Trigger.Is_AgentNote(entry))
                 stillLive.Add(ChannelEntry_Digest.Compute(entry));
         }
 

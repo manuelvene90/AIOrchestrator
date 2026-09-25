@@ -130,6 +130,26 @@ public class ASolosAnswerConsumesTheOwnersWaitTests : IDisposable
         Assert.Equal(3, ChannelHistory_Counter.Count_OwnerFacingEntries(_channelFile));
     }
 
+    /// <summary>
+    /// AN AGENT-TAGGED SOLO ENTRY IS NOT AN ANSWER (sibling plan Task 13, ruling S4). A print turn that only
+    /// siblings woke files its reply in the owner channel with the <c>[agent]</c> tag: written for the
+    /// record, never texted. Counted here, it would clear the owner's pending reply — "answered" — while
+    /// the owner's message still waits for the turn that will actually answer it.
+    /// </summary>
+    [Fact]
+    public void AnAgentTaggedSoloEntry_IsNotAnAnswer()
+    {
+        File.WriteAllText(_channelFile, Build_Entries(("solo", 1), ("owner", 2)));
+
+        var atDelivery = ChannelHistory_Counter.Count_OwnerFacingEntries(_channelFile);
+
+        File.AppendAllText(_channelFile, $"## [3] FROM solo — 2026-08-14 20:31 — {AppEntryAudience_Tag.Apply("ACK — parser", AppEntryAudiences.Agent)}\n\nnoted, sibling\n\n");
+        Assert.Equal(atDelivery, ChannelHistory_Counter.Count_OwnerFacingEntries(_channelFile));
+
+        File.AppendAllText(_channelFile, Build_Entries(("solo", 4)));
+        Assert.Equal(atDelivery + 1, ChannelHistory_Counter.Count_OwnerFacingEntries(_channelFile));
+    }
+
     static string Build_Entries(params (string Author, int Index)[] entries)
     {
         var text = "";

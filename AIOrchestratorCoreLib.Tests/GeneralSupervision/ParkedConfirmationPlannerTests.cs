@@ -86,6 +86,7 @@ public class ParkedConfirmationPlannerTests
     [InlineData("close-orchestration", ParkedCloseKinds.Orchestration)]
     [InlineData("close-implementer", ParkedCloseKinds.Implementer)]
     [InlineData("promote-orchestration", ParkedCloseKinds.Promotion)]
+    [InlineData("spawn-sibling", ParkedCloseKinds.Sibling)]
     public void TheKindIsReadFromTheAction(string action, ParkedCloseKinds expected)
     {
         Assert.Equal(expected, ParkedConfirmation_Planner.Resolve_Kind(action));

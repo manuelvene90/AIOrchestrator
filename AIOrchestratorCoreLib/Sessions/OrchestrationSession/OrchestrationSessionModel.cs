@@ -27,7 +27,11 @@ internal sealed class OrchestrationSessionModel(
     string? supervisorEffortOverride,
     string? implementerEffortOverride,
     bool paused,
-    DateTime? telegramTopicFinalNameUtc) : IOrchestrationSession
+    DateTime? telegramTopicFinalNameUtc,
+    string? endeavourId,
+    string? bornFromOrchId,
+    string? bornFromHandover,
+    string? workingPath) : IOrchestrationSession
 {
     public string OrchId { get; } = orchId;
     public string RepoName { get; } = repoName;
@@ -56,4 +60,9 @@ internal sealed class OrchestrationSessionModel(
 
     public Telegram.OwnerPresenceModes OwnerPresence { get; } = ownerPresence;
     public DateTime? ClosedUtc { get; } = closedUtc;
+
+    public string? EndeavourId { get; } = endeavourId;
+    public string? BornFromOrchId { get; } = bornFromOrchId;
+    public string? BornFromHandover { get; } = bornFromHandover;
+    public string? WorkingPath { get; } = workingPath;
 }

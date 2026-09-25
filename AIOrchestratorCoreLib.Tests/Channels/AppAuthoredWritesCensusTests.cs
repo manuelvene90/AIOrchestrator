@@ -98,7 +98,17 @@ public class AppAuthoredWritesCensusTests
     /// LIFTS the pause (or declares an account change with nothing paused), and when the owner KEEPS
     /// it — four sites, all agent-audience, all in the general channel where the asker reads.
     /// </para>
-    const int EXPECTED_EVENT_SITES = 86;
+    /// <para>
+    /// ONE HUNDRED since the 2026-09-25 merge of sibling solo sessions (feat/sibling-solos, CLAUDE.md
+    /// decision 27), which were built on a branch that did not carry this register. Fourteen sites, all
+    /// about a sibling's lifecycle: the spawn-sibling request held / linked / unheld for the owner's tap
+    /// (four), the birth note in the child's topic and its General lines (three), a failed birth (one),
+    /// the survivors told of a close and the refusals of a linked promote/switch (three), and the three
+    /// sibling notices sent through <c>Append_SiblingNotice_UnlessPaused</c>, the pause-screened wrapper
+    /// named in CLAUDE.md's PAUSE bullet (two agent notes, and the parent's notice of a birth). Agent-
+    /// audience except the birth note, its General lines and the parent's notice, the owner's own news.
+    /// </para>
+    const int EXPECTED_EVENT_SITES = 100;
 
     /// <summary>
     /// SIX since 2026-09-16: <c>AppNote_Writer.Write</c> (plan 02 task 4) is the sixth pass-through,
@@ -117,7 +127,11 @@ public class AppAuthoredWritesCensusTests
     /// stopped being a site.
     /// </para>
     /// </summary>
-    const int HELPER_BODIES = 8;
+    /// <para>
+    /// NINE since the 2026-09-25 sibling merge: <c>BridgeEngineModel.Append_SiblingNotice_UnlessPaused</c>
+    /// is a wrapper like the four above — its callers are counted as sites, its one call is its body.
+    /// </para>
+    const int HELPER_BODIES = 9;
 
     static readonly string[] APPEND_NAMES =
     [
@@ -136,6 +150,10 @@ public class AppAuthoredWritesCensusTests
         // Append_SupervisorAttention_UnlessMeeting, which is already in this list, so they are counted
         // once where they always were.
         "Route_ChannelNote(",
+
+        // The sibling notices' pause screen (sibling solos, merged 2026-09-25): a wrapper, counted like
+        // the four above so a site moved onto it cannot read as a site that disappeared.
+        "Append_SiblingNotice_UnlessPaused(",
     ];
 
     [Fact]

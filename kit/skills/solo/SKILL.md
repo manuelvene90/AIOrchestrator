@@ -72,6 +72,11 @@ any code.
    opened — check whether it actually landed before redoing it. The app confirms every request
    with a `FROM app` entry; if there is none, the request never arrived. Your Monitor died with the
    old process — arm it again at step 3 as on any boot.
+
+   If `$ORCH/.siblings` exists you are part of an endeavour: read `reference/siblings.md`, then
+   `ENDEAVOUR.md`, then — if your first `FROM app` entry names one — your brief (the HANDOVER entry
+   it names). (`$ORCH` is `${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS`; the
+   reference folder resolves as in the section on siblings below.)
 2. Append a SHORT greeting: subject `solo online — <repo> — <last two folders>`, empty body.
 3. Arm the monitor (below) and end your turn, unless there is unanswered traffic — then do that
    first.
@@ -691,6 +696,93 @@ read off the current shape, confirmed by sending it twice. Your route is still t
 the same thing of you either way: **a `HANDOVER` entry before anything switches.** If the owner
 sends `/switch` and you have not written one, the app will tell you to, in this channel, and nothing
 happens until you do.
+
+## When the work splits in two — asking for a SIBLING
+
+A sibling is a SECOND SOLO beside you: its own Telegram topic, its own channel, its own PLAN.md, its
+own git worktree, linked to you as one endeavour. You and it talk only through your two sibling
+outboxes; the owner talks to each of you in its own topic.
+
+**The test — three routes, and they are not interchangeable:**
+
+- **Width → fan out.** Work that only needs to go wide is yours to parallelise with sub-agents
+  (above). It is never a reason to ask for anything.
+- **Needs an independent review or a crew → promote** (the section above).
+- **Two jobs the owner wants to steer separately, each big enough to run for hours → sibling.** The
+  point is that neither job waits on the owner's answers about the other.
+
+**Only on the owner's word.** Either the owner asked for it, or you asked them with a `QUESTION:`
+and they said yes. Never on your own judgement: a sibling is a second session running for hours —
+a spend increase, exactly like promotion — and the owner confirms it with a tap anyway.
+
+**The recipe, in this order:**
+
+1. **Worktree and branch.** Create the child's worktree yourself (git writes stay in sessions, the
+   app never runs `git worktree add`): the repo's own layout if it has one, otherwise
+   `git worktree add ../<repo>.worktrees/<orch-slug>-<job> -b <branch> <base>`. Its absolute path is
+   the request's `worktree`. It must be a worktree of your repo, and never your own tree or another
+   sibling's — siblings never share a tree.
+2. **A `HANDOVER` entry in YOUR OUTBOX** — not in your owner channel. Resolve the folder once with
+   `ORCH="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS"`. **Nobody creates the
+   outbox for you, and the helper refuses a channel that does not exist** (`channel … does not exist`,
+   exit 2), so create it first — `touch` never truncates, so it is safe every time:
+   `touch "$ORCH/sibling-outbox.md"`. Then append with
+   `channel-append.sh --channel "$ORCH/sibling-outbox.md" --author solo --subject "HANDOVER — <job>" --body-file <file>`.
+   The body is the child's whole brief, because it starts with nothing else: the job, the files it
+   owns, the files you keep, the ambient files nobody owns (`.csproj`, DI registrations, shared
+   constants, `CLAUDE.md`), the traps, and the base branch. **Note the number the helper prints** (a
+   bare `14`, no brackets) — it is the one index you never guess, and the request cites it.
+3. **The request.** Write `$AIORCH_SUPERVISION_ROOT/.requests/sibling-$ARGUMENTS-<timestamp>.json`
+   (your orch id and a timestamp in the filename, as for a close):
+
+   ```json
+   {
+     "action":   "spawn-sibling",
+     "orchId":   "$ARGUMENTS",
+     "name":     "AI-Orch · limits rework",
+     "job":      "Rework the usage-limit pause so a restored pause can be lifted per window",
+     "handover": 14,
+     "worktree": "C:/Users/Gianpiero/source/repos/AIOrchestrator.worktrees/limits",
+     "reason":   "two jobs the owner wants to steer separately; disjoint files"
+   }
+   ```
+
+   - `name` is the new topic's name: the platform code, ` · `, then **2-4 words after the code, 3 is
+     best** — exactly one ` · `, a code of 1-12 characters with no spaces, one plain line, at most 64
+     characters, and not the name of an open sibling. One word after the code is refused.
+   - `job` is one line of at most 200 characters — a headline the owner reads on the prompt; the
+     brief is your HANDOVER entry.
+   - `handover` is the number from step 2, a whole number (never a string). `worktree` is absolute. `reason` is
+     required and relayed to the owner — they are being asked to spend, so say on what.
+4. **One line to the owner** that you have asked, and why.
+5. **Back to work.** Nothing has started; you are still the only session on this job.
+
+**Do not re-drop the request. The app answers with a `FROM app` entry either way** — `sibling HELD`
+while the owner decides, then started, declined, or lapsed (12 hours unanswered). A refusal comes in
+one of three shapes, and each means nothing started:
+- **`request REJECTED`** — the FILE itself is malformed (a one-word name, a missing `reason`,
+  `"handover": "14"` as a string, a job over 200 characters): "Your request file was rejected:
+  <reason>. Fix it and drop a new file (same action string)." This is the commonest one.
+- **`sibling REFUSED — …`** — the file is well-formed and the world says no (no such HANDOVER entry,
+  a worktree that is missing, shared or not of your repo, the name taken, the cap reached). It names
+  the one rule broken and ends "The owner has NOT been asked and nothing was changed".
+- **The same `sibling REFUSED — …` found at the tap** — it held when asked and not when the owner
+  tapped, so it ends instead "The owner tapped Start, but the request no longer held at that moment,
+  so nothing was started. File a fresh request if it still applies."
+
+Fix what it names and file a fresh request. A retry citing the same HANDOVER is answered with what
+already happened, never with a second sibling — **one HANDOVER entry starts at most one sibling**, so
+a second sibling needs a second HANDOVER entry with its own brief. During a usage-limit pause the
+request, and a tap the owner already gave, wait until the pause lifts.
+
+**Once you are linked, the protocol lives in `reference/siblings.md` — READ it as soon as the app
+says the sibling started, before your first outbox entry after the HANDOVER** (the HANDOVER itself
+is written before you are linked, by this recipe). A child reads it at boot. It is inside the plugin, and a bare `reference/...` is NOT a path your tools can
+open; resolve the folder with this and read from it:
+
+```bash
+REF="$(dirname "$(dirname "$(command -v channel-append.sh)")")/skills/solo/reference"; ls "$REF"
+```
 
 
 ## RUN TO THE END — the default is never to stop (owner directive, 2026-08-20)

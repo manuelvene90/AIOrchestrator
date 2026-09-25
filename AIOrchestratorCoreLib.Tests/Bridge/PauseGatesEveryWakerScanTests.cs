@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
@@ -258,6 +259,108 @@ public class PauseGatesEveryWakerScanTests
         Assert.True(
             paused > meeting && paused < deliver,
             "the paused reconcile does not sit between the meeting flags and the first write of the tick");
+    }
+
+    /// <summary>
+    /// THE ENDEAVOUR ARTEFACTS (sibling plan 2026-09-23 Task 10) are reconciled on the tick AFTER the
+    /// paused marker, so a sibling's <c>paused|live</c> column in <c>.siblings</c> is written in the same
+    /// pass that settled <c>.paused</c> — never a tick behind it. Its own case rather than a line added to
+    /// the one above, so the Task 13 edit to this file (ruling G) stays a textual neighbour, not a merge.
+    /// </summary>
+    [Fact]
+    public void TheEndeavourArtefacts_AreReconciledOnEveryTick_AfterThePausedMarker()
+    {
+        var body = Extract_Method("async Task Execute_MirrorTick_Inside_Snapshot_Async");
+
+        var paused = body.IndexOf("Sync_PausedFlags()", StringComparison.Ordinal);
+        var endeavour = body.IndexOf("Sync_EndeavourArtefacts()", StringComparison.Ordinal);
+
+        Assert.True(paused >= 0, "the paused reconcile is gone — this scan is reading a tick it does not understand");
+        Assert.True(endeavour >= 0, "nothing reconciles .siblings / ENDEAVOUR.md on the tick, so they can outlive the siblings they list");
+        Assert.True(endeavour > paused, "the endeavour reconcile runs before the paused marker, so its paused|live column reads last tick's truth");
+    }
+
+    /// <summary>
+    /// THE SIBLING TURN SOURCES (sibling plan 2026-09-23 Task 13, spec §5.4) are a waker of their own: a
+    /// sibling's outbox entry starts a bridge-driven solo's turn, and no delivery mode stands between the
+    /// two. The gate is in the resolver, ABOVE the source being made — a paused solo resolves no sibling
+    /// source, so nothing a sibling writes can wake it, and the cursor the dispatcher keeps for an
+    /// unresolved source carries the backlog to the unpause. Its own case (ruling G), so it stays a textual
+    /// neighbour of the Task 10 case above.
+    /// </summary>
+    [Fact]
+    public void TheSiblingTurnSources_AreGatedOnPause()
+    {
+        // SCOPED TO THE METHOD THAT MAKES THEM (review M4): a `.Paused` anywhere earlier in the file, in
+        // any other method, must not count as this method's gate.
+        var body = BranchSource.Extract_Method(
+            BranchSource.Read_Code("TurnSources_Resolver.cs"),
+            "static IReadOnlyList<ITurnSource> Resolve_WithSiblings(");
+
+        var create = body.IndexOf("Create_Sibling(", StringComparison.Ordinal);
+
+        Assert.True(create >= 0, "Resolve_WithSiblings makes no sibling source — this scan is reading a method it does not understand");
+
+        var gate = body.LastIndexOf(".Paused", create, StringComparison.Ordinal);
+
+        Assert.True(gate >= 0, "no pause check before the sibling sources are made, so a sibling's entry wakes a paused solo");
+    }
+
+    /// <summary>
+    /// THE SIBLING LIFECYCLE'S OWN APPENDS (final review I1, 2026-09-24) — three writers into ANOTHER
+    /// orchestration's owner channel that shipped with no gate: the survivors' close notice, the parent's
+    /// "sibling started" line, and a refusal re-found at the tap. They share one gate,
+    /// <c>Append_SiblingNotice_UnlessPaused</c>, which must ask before it appends (its own case below); here
+    /// each site is pinned to go THROUGH it rather than around it.
+    /// </summary>
+    public static TheoryData<string, string> TheSiblingNoticeSites => new()
+    {
+        { "void Execute_Close(", "Append_SiblingNotice_UnlessPaused(notice.OrchId" },
+        { "string Execute_SiblingBirth(", "Append_SiblingNotice_UnlessPaused(sibling.OrchId, AppEntryAudiences.Owner, birth.ParentNotice" },
+        { "string Execute_SiblingBirth(", "unlessPaused: true" },
+    };
+
+    [Theory]
+    [MemberData(nameof(TheSiblingNoticeSites))]
+    public void EverySiblingNoticeSite_GoesThroughThePauseGate(string signatureMark, string gatedCall)
+    {
+        Assert.Contains(gatedCall, Extract_Method(signatureMark), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheSiblingNoticeGate_AsksBeforeItAppends()
+    {
+        var body = Extract_Method("bool Append_SiblingNotice_UnlessPaused(");
+
+        var gate = body.IndexOf("Is_Paused(orchId)", StringComparison.Ordinal);
+        var append = body.IndexOf("Append_OrchestrationAppEntry(", StringComparison.Ordinal);
+
+        Assert.True(gate >= 0 && append >= 0, "the sibling notice gate no longer reads as this scan expects");
+        Assert.True(gate < append, "the pause is checked AFTER the append — the sleeper is already awake");
+
+        var refusal = Extract_Method("void Tell_SiblingRefusal(");
+        Assert.Contains("Append_SiblingNotice_UnlessPaused(", refusal, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE PROMPT-TIME RE-RUN OF THE SIBLING TABLE WAITS FOR A PAUSED REQUESTER (final review I1): its
+    /// refusal is an append into the requester's channel, so the pause is asked BEFORE the re-run — a
+    /// paused requester's request is neither refused nor put to the owner until it wakes.
+    /// <c>SiblingConfirmationTests.AParkedRequestOfAPausedRequester_…</c> carries the behavioural half.
+    /// </summary>
+    [Fact]
+    public void ThePromptTimeSiblingCheck_WaitsForAPausedRequester()
+    {
+        var body = Extract_Method("async Task Ask_OwnerToConfirmClose_Async");
+
+        var check = body.IndexOf("Refuse_ParkedSibling_IfNoLongerValid(", StringComparison.Ordinal);
+
+        Assert.True(check >= 0, "the ask sweep no longer re-runs the sibling table — this scan is reading a method it does not understand");
+
+        var gate = body.LastIndexOf("session.Paused", check, StringComparison.Ordinal);
+        var lineStart = body.LastIndexOf('\n', check);
+
+        Assert.True(gate > lineStart, "the prompt-time sibling check is not gated on the requester's pause in the same condition");
     }
 
     /// <summary>

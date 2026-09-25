@@ -15,6 +15,7 @@ public class WatchdogPrintSessionTests
 
         public IOrchestrationSession Start_Orchestration(string repoName, string repoPath) => throw new NotSupportedException();
         public IOrchestrationSession Start_BasicOrchestration(string repoName, string repoPath) => throw new NotSupportedException();
+        public IOrchestrationSession Start_SiblingOrchestration(string parentOrchId, string displayName, string workingPath, string bornFromHandover) => throw new NotSupportedException();
         public IOrchestrationSession Add_Implementer(string orchId) => throw new NotSupportedException();
         public IOrchestrationSession Promote_ToFullCrew(string orchId) => throw new NotSupportedException();
         public IOrchestrationSession Demote_ToBasic(string orchId) => throw new NotSupportedException();

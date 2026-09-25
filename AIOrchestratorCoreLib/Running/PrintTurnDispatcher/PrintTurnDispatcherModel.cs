@@ -1325,14 +1325,18 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             // BEFORE THE TURN'S OWN ENTRY, in the order they were written. A final message the turn
             // then superseded is content the result does not carry, and this is the only place it
             // still exists — see ITurnResult.SupersededFinals.
-            if (!await Write_SupersededFinals_Async(state, roleConfig, sources, result, requestId))
+            // WHO THE REPLY IS FOR, read once for everything this turn files (ruling S4): a turn only siblings
+            // woke is written for the record and never texted — ReplyAudience_Resolver says why.
+            var replyAudience = ReplyAudience_Resolver.Resolve(pending);
+
+            if (!await Write_SupersededFinals_Async(state, roleConfig, sources, result, requestId, replyAudience))
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but a superseded final message could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, roleConfig, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
                 return;
             }
 
-            if (!(await Write_Reply_Async(state, roleConfig, sources, result.ResultText, Find_AnsweredOwnerEntry_OrNull(state, pending))).AllLanded)
+            if (!(await Write_Reply_Async(state, roleConfig, sources, result.ResultText, replyAudience, Find_AnsweredOwnerEntry_OrNull(state, pending))).AllLanded)
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, roleConfig, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
@@ -1518,7 +1522,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return;
         }
 
-        var delivery = await Write_Reply_Async(state, roleConfig, sources, closing.ResultText);
+        var delivery = await Write_Reply_Async(state, roleConfig, sources, closing.ResultText, ReplyAudience_Resolver.Resolve(pending));
 
         if (!delivery.AllLanded)
         {
@@ -1745,7 +1749,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// reader cannot recover from.
     /// </para>
     /// </summary>
-    async Task<bool> Write_SupersededFinals_Async(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<ITurnSource> sources, ITurnResult result, string requestId)
+    async Task<bool> Write_SupersededFinals_Async(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<ITurnSource> sources, ITurnResult result, string requestId, AppEntryAudiences audience)
     {
         if (result.SupersededFinals.Count == 0)
             return true;
@@ -1754,7 +1758,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var superseded in result.SupersededFinals)
         {
-            if (!(await Write_Reply_Async(state, roleConfig, sources, superseded)).AllLanded)
+            if (!(await Write_Reply_Async(state, roleConfig, sources, superseded, audience)).AllLanded)
                 return false;
         }
 
@@ -1809,7 +1813,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return null;
     }
 
-    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<ITurnSource> sources, string? resultText, int? answersOwnerEntry = null)
+    /// <param name="audience">
+    /// <see cref="AppEntryAudiences.Agent"/> for a turn only siblings woke (<see cref="ReplyAudience_Resolver"/>):
+    /// every entry filed is then <see cref="AppEntryAudience_Tag"/>-tagged, which keeps it off the phone and out
+    /// of the owner's answered-count while it still lands in the channel as the record.
+    /// </param>
+    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, RoleRunnerConfig.IRoleRunnerConfig roleConfig, IReadOnlyList<ITurnSource> sources, string? resultText, AppEntryAudiences audience, int? answersOwnerEntry = null)
     {
         var author = SessionRole_Names.Get_Author(state.Role);
         var ownChannel = state.ChannelFilePath;
@@ -1819,9 +1828,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // (Running.ReplyLinks). Later parts follow it in the chat as they always did.
         var linkPending = answersOwnerEntry != null;
 
+        // EVERY ENTRY THIS REPLY FILES CARRIES THE AUDIENCE (sibling ruling S4): a turn only siblings woke is
+        // AppEntryAudience_Tag-tagged here, once, so no call site below can forget it.
         async Task<bool> Append_Async(string target, string subject, string body)
         {
-            var index = await Append_SessionEntry_WithRetry_OrNull_Async(target, author, subject, body);
+            var index = await Append_SessionEntry_WithRetry_OrNull_Async(target, author, AppEntryAudience_Tag.Apply(subject, audience), body);
 
             if (index == null)
                 return false;
@@ -1840,7 +1851,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // question "did this reply answer the owner" would come to have two answers.
         HashSet<string> written = new(StringComparer.OrdinalIgnoreCase);
 
-        if (sources.Count <= 1)
+        // A SIBLING'S OUTBOX IS NEVER A TARGET (TurnSources_Resolver.Select_ReplyTargets says why), so a
+        // linked solo — own channel plus siblings — is ONE-TARGET and is not split, exactly as it was before
+        // it had siblings. The contract it was shown (PrintTurnPrompt_Builder.Describe_Contract) is built from
+        // the same list, so it was never told it could address one.
+        var targets = TurnSources_Resolver.Select_ReplyTargets(sources);
+
+        if (targets.Count <= 1)
         {
             var (soleSubject, soleBody) = PrintTurnEntry_Splitter.Split(resultText);
             var soleLanded = await Append_Async(ownChannel, soleSubject, soleBody);
@@ -1848,10 +1865,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             if (soleLanded)
                 written.Add(ownChannel);
 
-            return Describe_Delivery(soleLanded, sources, written);
+            // ONE TARGET ANSWERS EVERYTHING IT WAS HANDED: the one entry is the whole reply, and a sibling's
+            // entry has no other place to be answered from here. Before siblings this was the same set.
+            return soleLanded ? new ReplyDelivery(true, [.. sources.Select(source => source.Key)]) : Describe_Delivery(false, sources, written);
         }
 
-        var byKey = sources.ToDictionary(source => source.Key, SOURCE_KEYS);
+        var byKey = targets.ToDictionary(source => source.Key, SOURCE_KEYS);
         var blocks = TurnReply_Splitter.Split(resultText);
 
         if (blocks.Count == 0)
@@ -1901,7 +1920,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 AppNoteKinds.TurnMachinery,
                 AppEntryAudiences.Agent,
                 $"{MISADDRESSED_SUBJECT} {state.MemberId} — {string.Join(", ", misaddressed.Distinct())}",
-                $"Part(s) of the last turn were addressed to {string.Join(", ", misaddressed.Distinct().Select(key => $"'{key}'"))}, which {(misaddressed.Distinct().Count() == 1 ? "is not a channel" : "are not channels")} this session is woken by. They were written HERE instead, in order.\n\nAddressable this turn: {string.Join(", ", sources.Select(source => source.Key))}",
+                $"Part(s) of the last turn were addressed to {string.Join(", ", misaddressed.Distinct().Select(key => $"'{key}'"))}, which {(misaddressed.Distinct().Count() == 1 ? "is not a channel" : "are not channels")} this session is woken by. They were written HERE instead, in order.\n\nAddressable this turn: {string.Join(", ", targets.Select(source => source.Key))}",
                 DateTime.Now);
         }
 

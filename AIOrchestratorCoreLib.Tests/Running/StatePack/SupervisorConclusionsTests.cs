@@ -163,5 +163,6 @@ public class SupervisorConclusionsTests : IDisposable
         public string Key => key;
         public string ChannelFilePath => path;
         public bool IsOwnerChannel => key == "owner";
+        public AIOrchestratorCoreLib.Running.TurnSource.TurnSourceKinds Kind => IsOwnerChannel ? AIOrchestratorCoreLib.Running.TurnSource.TurnSourceKinds.Owner : AIOrchestratorCoreLib.Running.TurnSource.TurnSourceKinds.Spoke;
     }
 }

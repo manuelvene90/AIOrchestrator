@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.ReviewingSettings;
+using AIOrchestratorCoreLib.Configuration.EndeavourSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.PhoneSettings;
@@ -129,7 +130,12 @@ public static class OrchestratorConfig_Loader
             // Nathan's — so a block parsed without the tree would give every machine the catalogue's
             // answer and neither owner's. No absence dance here either: the resolved value IS the value.
             PhoneSettings_Json.Parse(configRoot, preset),
-            PulseSettings_Json.Parse(configRoot, preset));
+            PulseSettings_Json.Parse(configRoot, preset),
+
+            // THE `endeavour` BLOCK (2026-09-23, sibling solos, O2), on the same preset rung. Neither
+            // shipped preset states it — the catalogue's 3 is the answer — but a preset that does is
+            // honoured rather than silently skipped. Never written back by Save below.
+            EndeavourSettings_Json.Parse(configRoot, preset));
     }
 
     /// <summary>
@@ -368,8 +374,9 @@ public static class OrchestratorConfig_Loader
         // button. EffortSettings_Json has no Write method at all, so that cannot happen by accident.
         // The `phone`/`topic` and `pulse` blocks (2026-09-14) are the newest members, for the same
         // preset reason and more sharply — they are the rows the two presets disagree about — and
-        // PhoneSettings_Json and PulseSettings_Json have no Write either.
-        // All seven are read; none is owned.
+        // PhoneSettings_Json and PulseSettings_Json have no Write either. The `endeavour` block
+        // (2026-09-23) joins them for the effort reason: EndeavourSettings_Json has no Write.
+        // All eight are read; none is owned.
 
         secretsRoot["telegramBotToken"] = config.TelegramBotToken;
 

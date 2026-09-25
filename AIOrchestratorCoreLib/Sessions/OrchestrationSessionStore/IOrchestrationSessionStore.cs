@@ -49,6 +49,18 @@ public interface IOrchestrationSessionStore
     /// <summary>Asleep for now, and reversibly — see IOrchestrationSession.Paused.</summary>
     void Set_Paused(string orchId, bool paused);
 
+    /// <summary>
+    /// Stamps the PARENT with its endeavour, the first time it gets a sibling — see
+    /// IOrchestrationSession.EndeavourId. Touches no other sibling field.
+    /// </summary>
+    void Set_EndeavourId(string orchId, string endeavourId);
+
+    /// <summary>
+    /// Links a CHILD at birth: all four sibling fields in ONE save, so a crash cannot leave it
+    /// half-linked — see IOrchestrationSession.EndeavourId / BornFromHandover / WorkingPath.
+    /// </summary>
+    void Set_SiblingLink(string orchId, string endeavourId, string bornFromOrchId, string bornFromHandover, string workingPath);
+
     /// <summary>Where the owner is for this orchestration — see IOrchestrationSession.OwnerPresence.</summary>
     void Set_OwnerPresence(string orchId, Telegram.OwnerPresenceModes presence);
     void Set_MemberPid(string orchId, string memberId, int? pid);

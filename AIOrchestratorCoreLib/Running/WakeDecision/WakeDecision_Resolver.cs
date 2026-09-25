@@ -139,7 +139,7 @@ public static class WakeDecision_Resolver
 
             observe?.Invoke(source, cursor!, entries, cursorIsNew);
 
-            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, entries, cursor!), Nothing_EverDelivered(cursor!)));
+            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, source.Kind, entries, cursor!), Nothing_EverDelivered(cursor!)));
         }
 
         return reads;

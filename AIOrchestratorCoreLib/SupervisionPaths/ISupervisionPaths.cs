@@ -58,6 +58,27 @@ public interface ISupervisionPaths
     string Get_PlanFile(string orchId);
 
     /// <summary>
+    /// A sibling solo's own outbox (spec 2026-09-23 §3.3): written by the sibling itself, through
+    /// channel-append.sh, and nobody else — one writer per file, so no author word is needed and no
+    /// app-authored entry can ever wake a sibling. It sits in the orchestration folder ROOT on purpose:
+    /// ChannelDiscovery only finds owner-channel.md and imp-*/rev-* spokes, so the outbox is never
+    /// tailed and never mirrored to the owner's phone (O3).
+    /// </summary>
+    string Get_SiblingOutboxFile(string orchId);
+
+    /// <summary>
+    /// The open siblings as tab-separated lines for the bash watcher (spec §3.4): written by the app,
+    /// derived, never authored, and removed when the orchestration has no open sibling.
+    /// </summary>
+    string Get_SiblingsListFile(string orchId);
+
+    /// <summary>
+    /// The endeavour awareness digest the solo reads at every boundary (spec §3.4): written by the
+    /// app, derived, never authored, rewritten only when its text changes.
+    /// </summary>
+    string Get_EndeavourDigestFile(string orchId);
+
+    /// <summary>
     /// The app's PRECOMPUTED reading of that ledger, for the supervisor's terminal status line to
     /// render. It exists so the status line never parses PLAN.md itself: a second reader of that file
     /// is a second answer to "how far along is this", and the terminal and the owner's phone would

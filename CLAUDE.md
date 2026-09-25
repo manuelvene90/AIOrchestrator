@@ -274,6 +274,42 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     by task on the owner's own instruction. Do not read that rule as still binding on `CLAUDE.md`
     without asking — it needs the owner's explicit call on how session boundaries work post-merge.
 
+27. **Sibling solos (owner request 2026-09-23, `ai-orchestrator-29`; written on the owner's instruction
+    2026-09-25, entry [179]).** A solo that has two big jobs asks for a SIBLING: a second basic
+    orchestration with its own Telegram topic and its own worktree, linked to the first by an
+    ENDEAVOUR. The owner talks to each in its own topic; the siblings keep each other informed without
+    the owner relaying. Spec `docs/superpowers/specs/2026-09-23-sibling-solo-sessions-design.md`, gate
+    report `docs/superpowers/plans/2026-09-23-sibling-solo-sessions-report.md`.
+    - **A sibling IS an orchestration** — no new session kind. Membership is DERIVED from
+      `session.EndeavourId` (`Sessions/EndeavourMembers_Resolver`); `BornFromOrchId` /
+      `BornFromHandover` record the birth; the link is permanent for the life of the endeavour (there
+      is no unlink — `/switch` and promote are refused on a linked orchestration and say so).
+    - **The outbox model.** Each member writes ONE file, `<orch>/sibling-outbox.md`, through
+      `channel-append.sh` (the solo `touch`es it first — the helper refuses a missing channel); only
+      its owner writes it, and the app NEVER tails it, so nothing in it can reach the phone. Readers
+      are the other siblings (their watcher and the print runner's sibling sources). Compaction keeps
+      45 and moves the rest to `.archive.md`; a reader more than 45 behind reads the archive, and a
+      compaction wake means nothing new.
+    - **Derived, never authored:** `.siblings` and `ENDEAVOUR.md` in each member's folder are rebuilt on
+      the tick (`Bridge/Siblings/EndeavourArtefacts_Step`, linked sessions only, no git spawned). The
+      General `/progress` groups an endeavour under ONE summed bar that KEEPS closed siblings in the
+      sum; `/endeavour` shows the group and the last outbox subjects on demand.
+    - **`WorkingPath` on every spawn** (`Sessions/WorkingPath_Resolver`): a sibling runs in its
+      worktree, and every respawn route (watchdog, `/model`, `/effort`, app restart) resumes it THERE —
+      `claude --resume` finds a transcript by the cwd it was started in, so a respawn at `RepoPath`
+      would silently start fresh. A sibling may attach files from its own worktree as well as the repo.
+    - **The owner's four answers (2026-09-23 entry [43], "Yes, all 4"):** O1 every sibling is confirmed
+      by the owner's tap (the parked request lapses after `CloseConfirmation_Parking.EXPIRY_HOURS` = 12);
+      O2 at most `endeavour.maxOpenSiblings` open members (shipped 3, requester included); O3
+      sibling-to-sibling traffic NEVER reaches the phone — a print solo's reply to its siblings alone is
+      filed `[agent]` and never counts as the owner's answer; O4 question holds stay per topic.
+    - **Refusals** live in one table, `Bridge/Siblings/SiblingRequest_Validator` (with
+      `SiblingRefusals`); the same checks re-run when the owner taps. A retried request whose HANDOVER
+      was already used is refused idempotently and repairs a parent link a crash left undone.
+    - **Pause:** a paused sibling is dormant to its siblings too — notices into its channel go through
+      `Append_SiblingNotice_UnlessPaused` and are SKIPPED, not held (the facts stay in `.siblings` /
+      `ENDEAVOUR.md`, which it reads on waking).
+
 ## Resolved Decisions (2026-08-06, owner)
 
 - **UI framework: WPF** ("keep it simple") — `net10.0-windows`. The suite's `LoggingLib` ships a WPF `ListBoxLoggerSimple` control, which the app uses as its live log panel.
@@ -292,7 +328,9 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
   member-side sweeps it deliberately excludes (`Nudge_IdleImplementers_Async`, `Flag_IdleMembers`),
   `Check_LedgerHealth_Async`, `Push_PeriodicStatus_Async`, `Resume_AllSessions_Async`, the
   `SessionWatchdog` respawn, and `Break_SilentDeadlock_Async` (which must not CONSUME the suppressed
-  entry even though its send is already suppressed). Miss one and dormancy is a word.
+  entry even though its send is already suppressed) — and, since decision 27, the print runner's
+  **sibling sources** (`TurnSources_Resolver`), the solo watcher's sibling half, and the app's
+  sibling notices (`Append_SiblingNotice_UnlessPaused`). Miss one and dormancy is a word.
   **`Break_SilentDeadlock_Async` DOES NOT EXIST IN THE CODE (verified 2026-09-15).** A repo-wide grep
   finds only two prose references plus `AwaySuppressesAppAlertsScanTests.cs:54`, a test that asserts
   its ABSENCE; `docs/superpowers/plans/2026-09-12-behavioural-seams-03.md:838` already logged this.

@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using AIOrchestratorCoreLib.Bridge.PeriodicStatus;
 using AIOrchestratorCoreLib.Bridge.QuestionAppButtons;
 using AIOrchestratorCoreLib.Bridge.ReceiptRegistry;
+using AIOrchestratorCoreLib.Bridge.Siblings;
 using AIOrchestratorCoreLib.Bridge.SuppressedEntries;
 using AIOrchestratorCoreLib.Bridge.TopicDeletion;
 using AIOrchestratorCoreLib.Channels;
@@ -19,6 +20,7 @@ using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.WindowFocus;
 using AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 using AIOrchestratorCoreLib.GeneralSupervision.PendingRequests;
+using AIOrchestratorCoreLib.GeneralSupervision.SpawnSiblingRequest;
 using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Git;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -383,6 +385,22 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly HashSet<string> _closeConfirmationsResolving = [];
     readonly Lock _closeConfirmationLock = new();
+
+    /// <summary>
+    /// CONFIRMED SIBLING TAPS WAITING FOR THE TICK, keyed by parked path, with the prompt to edit once the
+    /// birth has run (Task 9, 2026-09-23). Under <see cref="_closeConfirmationLock"/>, and counted as
+    /// "being resolved" by <see cref="Is_BeingResolved"/>, so neither sweep re-asks or lapses a request the
+    /// owner has already said yes to. In memory only: after a restart the file is still parked and the
+    /// owner is simply asked again — fail-safe, and the held prompt says so.
+    /// </summary>
+    readonly Dictionary<string, (CloseConfirmation Confirmation, long? PromptMessageId)> _siblingBirthsApproved = [];
+
+    /// <summary>
+    /// Parked sibling requests re-validated at PROMPT time in this run. The table's world read starts git,
+    /// and a prompt whose send fails is retried every tick — so the re-run happens once per request per
+    /// run, and the tap re-runs it regardless. Mirror-loop only, like the ask sweep that reads it.
+    /// </summary>
+    readonly HashSet<string> _siblingPromptsValidated = [];
 
     sealed class CloseConfirmation
     {
@@ -1752,6 +1770,10 @@ internal sealed class BridgeEngineModel(
         if (!dispatchPaused)
         {
             Rescue_LimitBlockedSessions();
+            // BEFORE THE WATCHDOG, ON THIS THREAD: a birth adds its solo with a null spawn stamp and
+            // spawns it a moment later, and a watchdog pass reading between the two would spawn it again.
+            await Run_ApprovedSiblingBirths_Async(cancellationToken);
+
             _watchdog.Check_AndRestart_DeadSessions();
             Persist_EngineState_IfRespawnCountsMoved();
         }
@@ -1795,6 +1817,8 @@ internal sealed class BridgeEngineModel(
         // can wake anyone, while this runs two seconds later. Appending above the reconciles to save
         // that lag would trade a real guarantee for an imaginary one.
         await Sweep_RoutedReports_Async(cancellationToken);
+
+        Sync_EndeavourArtefacts();   // after .paused, so a sibling's `paused|live` column reads this tick's truth
 
         // Owner texts flow to the agents regardless of DND — mute only pauses OUTBOUND.
         await Flush_OwnerDeliveries_Async(cancellationToken);
@@ -2006,6 +2030,7 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient != null)
             await Sync_GeneralTopicName_BestEffort_Async(_telegramClient, cancellationToken);
 
+        Compact_SiblingOutboxes();   // after the owner's delivery and the poll: it takes channel locks (Task 10b)
         Compact_LongChannels();
         Persist_BridgeState();
     }
@@ -6006,6 +6031,14 @@ internal sealed class BridgeEngineModel(
         if (!string.IsNullOrWhiteSpace(session?.RepoPath))
             allowedRoots.Add(session.RepoPath);
 
+        // WHERE THE SESSION RUNS, from the one definition (final review I2): a sibling works in its own
+        // worktree, outside RepoPath, and its build log or screenshot was refused. Nothing wider.
+        // Added only when it differs, so the refusal's list of roots does not name the repo twice.
+        var workingPath = session == null ? null : WorkingPath_Resolver.Resolve(session);
+
+        if (!string.IsNullOrWhiteSpace(workingPath) && !allowedRoots.Contains(workingPath, StringComparer.OrdinalIgnoreCase))
+            allowedRoots.Add(workingPath);
+
         var channelFolder = Path.GetDirectoryName(channel.FilePath);
 
         if (!string.IsNullOrWhiteSpace(channelFolder))
@@ -6352,7 +6385,7 @@ internal sealed class BridgeEngineModel(
             Delete_RequestFile(malformedRequest.FilePath);
         }
 
-        // THE THREE THAT SPAWN. Left on disk while paused, so they run at the resume — and SAID,
+        // THE FOUR THAT SPAWN. Left on disk while paused, so they run at the resume — and SAID,
         // because a file that sits with no line anywhere is indistinguishable from one that was lost.
         if (!dispatchPaused)
         {
@@ -6360,6 +6393,7 @@ internal sealed class BridgeEngineModel(
             Process_StartRequests(pending);
             Process_AddImplementerRequests(pending);
             Process_PromoteOrchestrationRequests(pending);
+            Process_SpawnSiblingRequests(pending);
         }
         else
         {
@@ -6607,6 +6641,11 @@ internal sealed class BridgeEngineModel(
 
         foreach (var request in pending.PromoteOrchestrationRequests)
             Notice_DeferredRequest(request.SourceFilePath, request.OrchId, "promote-orchestration", body);
+
+        // THE FOURTH SINCE SIBLING SOLOS (merged 2026-09-25): a spawn-sibling parked by the pause is told
+        // so in the asking solo's channel, exactly like the other three.
+        foreach (var request in pending.SpawnSiblingRequests)
+            Notice_DeferredRequest(request.SourceFilePath, request.OrchId, "spawn-sibling", body);
     }
 
     void Notice_DeferredRequest(string sourceFilePath, string? orchId, string action, string body)
@@ -6976,6 +7015,17 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
+                // A LINKED ORCHESTRATION IS NEVER PROMOTED IN v1 (spec 2026-09-23 §7.6): the supervisor role has
+                // no sibling protocol. "Linked" is the endeavour id alone — v1 never unlinks, even once every
+                // other sibling has closed. Refused to the solo, before the owner is involved, like the rest.
+                if (session.EndeavourId != null)
+                {
+                    var linked = SiblingNotice_Wording.Describe_LinkedPromoteRefusal();
+                    Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Agent, linked.Subject, linked.Body);
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, SiblingRefusals.LINKED_ORCHESTRATION);
+                    continue;
+                }
+
                 // THE SAME RULE THE EXECUTION USES, so the answer at park time and the answer at tap
                 // time cannot differ in kind — only in how stale they are. A half-promoted
                 // orchestration (stamped, solo still running) is INCOMPLETE rather than "already a
@@ -7040,6 +7090,62 @@ internal sealed class BridgeEngineModel(
                     request.OrchId, AppEntryAudiences.Agent,
                     "promotion NOT held — nothing was changed",
                     $"Your promotion request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and you are still the session here. Ask again if it is still wanted.");
+
+                Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
+            }
+        }
+    }
+
+    /// <summary>
+    /// A solo asking for a SIBLING solo (spec 2026-09-23 §4.2): refused to the solo with its own reason,
+    /// or parked for the owner's tap (O1 — the tap is <see cref="Ask_OwnerToConfirmClose_Async"/>'s).
+    /// Call-and-append only: the table is <see cref="SiblingRequest_Validator"/>'s, every word is
+    /// <see cref="SiblingNotice_Wording"/>'s, and the world is read by <see cref="SiblingWorld_Reader"/> —
+    /// which starts git, so it runs HERE, once per arriving request, and never on the tick's sweeps.
+    ///
+    /// <para>
+    /// A refusal has NO owner involvement (the promote precedent). <c>unspawnable</c> has no requester
+    /// channel, so it goes to General — as Agent, not the Owner audience promote uses there: decision 15,
+    /// the owner cannot act on a missing orchestration's request. And nothing is keyed on the raw id
+    /// until the store has vouched for it: only a refusal with a real requester, or the catch below when
+    /// the world named one, writes into an orchestration's channel.
+    /// </para>
+    /// </summary>
+    void Process_SpawnSiblingRequests(IPendingRequests pending)
+    {
+        foreach (var request in pending.SpawnSiblingRequests)
+        {
+            SiblingWorld? world = null;
+
+            try
+            {
+                world = SiblingWorld_Reader.Read(_paths, _store, _configProvider.Get_Current(), request, ownParkedPath: null);
+                var refusal = SiblingRequest_Validator.Decide_Refusal_OrNull(request, world);
+
+                if (refusal != null)
+                {
+                    Tell_SiblingRefusal(request, world, refusal.Value.Label, (refusal.Value.Subject, refusal.Value.Body), unlessPaused: false);
+                    Archive_ResolvedRequest_BestEffort(request.SourceFilePath, refusal.Value.Label);
+                    continue;
+                }
+
+                var parkedPath = CloseConfirmation_Parking.Park(_paths, request.SourceFilePath);   // O1: the tap is the ask sweep's.
+                _log.Log_Info(request.OrchId, $"spawn-sibling held for the owner's confirmation ({parkedPath})");
+
+                var held = SiblingNotice_Wording.Describe_Held(request);
+                Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Agent, held.Subject, held.Body);
+            }
+            catch (Exception ex)
+            {
+                // Fail closed and say so, as promote does: nothing was parked, so nothing can start.
+                _log.Log_Error(request.OrchId, "spawn-sibling could not be held for confirmation — NOT started", ex);
+
+                var unheld = SiblingNotice_Wording.Describe_Unheld(ex.Message);
+
+                if (world?.Requester != null)
+                    Append_OrchestrationAppEntry(world.Requester.OrchId, AppEntryAudiences.Agent, unheld.Subject, unheld.Body);
+                else
+                    Append_GeneralAppEntry(AppEntryAudiences.Agent, $"{unheld.Subject}: '{request.OrchId}'", unheld.Body);
 
                 Archive_ResolvedRequest_BestEffort(request.SourceFilePath, "unheld");
             }
@@ -7332,6 +7438,20 @@ internal sealed class BridgeEngineModel(
                 $"orchestration '{orchId}' closed — {reason}",
                 $"{authorisation} Asked by: {requester}. Sessions ended; folder kept as audit trail; "
                 + (onClose == TopicCloseActions.Close ? "Telegram topic closed and kept in the list." : "Telegram topic deleted."));
+
+            // THE SURVIVING SIBLINGS ARE TOLD (spec 2026-09-23 §7.5), after both topic branches so it holds
+            // under either `topic.onClose`. ITS OWN CATCH: the close has already happened, and the catch
+            // below reports "close-orchestration FAILED" and rethrows — a notice that threw would tell the
+            // owner a successful close had failed.
+            try
+            {
+                foreach (var notice in SiblingClose_Step.Build_SurvivorNotices(_paths, _store.Load_All(), session))
+                    Append_SiblingNotice_UnlessPaused(notice.OrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
+            }
+            catch (Exception noticeException)
+            {
+                _log.Log_Warning(orchId, $"closed, but its surviving siblings could not be told: {noticeException.Message}");
+            }
         }
         catch (Exception ex)
         {
@@ -7462,7 +7582,7 @@ internal sealed class BridgeEngineModel(
     bool Is_BeingResolved(string parkedPath)
     {
         lock (_closeConfirmationLock)
-            return _closeConfirmationsResolving.Contains(parkedPath);
+            return _closeConfirmationsResolving.Contains(parkedPath) || _siblingBirthsApproved.ContainsKey(parkedPath);
     }
 
     /// <summary>
@@ -7530,6 +7650,12 @@ internal sealed class BridgeEngineModel(
                     OrchestrationShape.Has_LiveSolo(session.Members)))
                 => "there is nothing left to promote",
 
+            // NOT MOOT BY A ONE-LINE RULE: a sibling re-runs the whole refusal table (§4.2), and a refusal
+            // is told to the requester rather than filed "moot". It runs BELOW the topic guard, in
+            // Refuse_ParkedSibling_IfNoLongerValid — the table's world read starts git, and above the
+            // guard it would run every tick for a requester with no topic yet.
+            ParkedCloseKinds.Sibling => null,
+
             _ => null,
         };
 
@@ -7573,6 +7699,13 @@ internal sealed class BridgeEngineModel(
         // than swallowed as already-said.
         _confirmationsUnaskable.Remove(session.OrchId);
 
+        // The prompt-time re-run of the sibling table (§4.2) — the Sibling arm of the moot rule above. A PAUSED
+        // requester's request WAITS (final review I1): its refusal would be a foreign append that wakes it, and
+        // a birth for a session the owner put to sleep is not a question to put to them now. Neither refused
+        // nor asked; the first sweep after the unpause judges it, and the 12 h lapse still applies.
+        if (request.Kind == ParkedCloseKinds.Sibling && (session.Paused || Refuse_ParkedSibling_IfNoLongerValid(request, parkedPath)))
+            return;
+
         // What is being ended mid-flight, named at the moment they decide. It does NOT block the
         // close: a ledger that can refuse to let an orchestration end is the tail wagging the dog,
         // and it is the same shape as every deadlock removed tonight — an enforcement demanding an
@@ -7583,8 +7716,9 @@ internal sealed class BridgeEngineModel(
         // of that prompt — reading it here anyway would be work whose only possible use is to
         // mislead.
         //
-        // DELIBERATELY TWO-ARMED OVER A THREE-VALUED ENUM — do not "fix" it. A promotion ENDS nothing,
-        // so it belongs on the same side as a member close, and it is already there. Said explicitly
+        // DELIBERATELY TWO-ARMED OVER A FOUR-VALUED ENUM — do not "fix" it. A promotion ENDS nothing,
+        // and neither does a sibling (it starts one), so both belong on the same side as a member close,
+        // and they are already there. Said explicitly
         // because a sweep of this file found six two-armed branches that were wrong and this is the
         // one that is right: the next person enumerating them should be able to stop here in a second
         // rather than reason it out again, or worse, "correct" it.
@@ -7593,7 +7727,9 @@ internal sealed class BridgeEngineModel(
             : Planning.PlanProgress_Formatter.Describe_UnresolvedAtClose_OrNull(
                 Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(request.OrchId))));
 
-        var text = CloseConfirmationPrompt_Builder.Build(request, unresolved);
+        // The requester's NAME rides into the one builder (pre-flight ruling H): only the Sibling prompt
+        // reads it, and a second, sibling-only builder chosen here would be two routes to one sentence.
+        var text = CloseConfirmationPrompt_Builder.Build(request, unresolved, session.DisplayName ?? session.OrchId);
 
         var confirmData = $"close-yes-{Guid.NewGuid():N}";
         var declineData = $"close-no-{Guid.NewGuid():N}";
@@ -7764,13 +7900,21 @@ internal sealed class BridgeEngineModel(
         // reading the file twice would let them disagree if it were archived in between — and the
         // toast was a kind-blind literal: the owner tapped "✅ Make it a crew" and their phone
         // flashed "closing…". That was the third owner-visible string on this one tap.
-        var tappedKind = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath)?.Kind;
+        var tapped = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
+        var tappedKind = tapped?.Kind;
+
+        // A CONFIRMED SIBLING IS BORN ON THE TICK, NOT HERE (Task 9, 2026-09-23) — see
+        // Hand_SiblingBirth_ToTheTick. Under a usage-limit pause it waits there, so the toast says so.
+        var siblingBirth = confirmation.Confirms && tappedKind == ParkedCloseKinds.Sibling;
+        var siblingHeldForPause = siblingBirth && Describe_DispatchPause_OrNull() != null;
 
         try
         {
             await client.Answer_CallbackQuery_Async(
                 tap.CallbackQueryId,
-                CloseConfirmationPrompt_Builder.Build_TapToast(tappedKind, confirmation.Confirms),
+                siblingHeldForPause
+                    ? CloseConfirmationPrompt_Builder.SIBLING_HELD_FOR_PAUSE_TOAST
+                    : CloseConfirmationPrompt_Builder.Build_TapToast(tappedKind, confirmation.Confirms),
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -7800,8 +7944,19 @@ internal sealed class BridgeEngineModel(
         // had been closed hours earlier: a stale snapshot reanimating a dead session.
         Persist_EngineState();
 
+        if (siblingBirth)
+        {
+            await Hand_SiblingBirth_ToTheTick_Async(client, tap, confirmation, tapped!, siblingHeldForPause, cancellationToken);
+            return true;
+        }
+
+        // THE EXECUTOR ACTS ON `tapped`, THE ONE READ — never a second one (Task 9b, 2026-09-23). It used to
+        // re-read the file, so a classification read that failed transiently (siblingBirth false) followed
+        // by a re-read that succeeded ran the Sibling arm HERE, on the inbound loop: past the dispatch-pause
+        // gate and inside the watchdog's double-spawn window. A tap that cannot be classified is now the
+        // executor's unreadable branch — nothing done, left parked, asked again.
         var result = confirmation.Confirms
-            ? Execute_ConfirmedClose(confirmation)
+            ? Execute_ConfirmedClose(confirmation, tapped)
             : Decline_CloseConfirmation(confirmation);
 
         // THE DECISION IS RECORDED AFTER THE OUTCOME IS KNOWN, and it used to be recorded before.
@@ -7840,44 +7995,58 @@ internal sealed class BridgeEngineModel(
         // two members declaring the same wiring unpinnable before a reviewer pinned it. Do not re-add
         // the stronger claim.
         if (tap.MessageId != null)
-        {
-            try
-            {
-                await client.Edit_MessageText_Async(
-                    tap.MessageId.Value,
-                    CloseConfirmationPrompt_Builder.Describe_Decision(confirmation.OrchId, result.Request, result.Outcome),
-                    cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // ROUTINE ONLY WHERE THE TOPIC IS BEING DELETED UNDERNEATH THIS EDIT, which is not the
-                // same as "the close succeeded". A successful MEMBER close returns Closed too and
-                // deletes no topic, so keying the quiet path on the outcome alone silenced the case
-                // where the prompt is still standing with two live buttons on it.
-                //
-                // Exact rather than approximate here: we are holding a live client and a message
-                // inside the orchestration's own topic, so an orchestration close on this path always
-                // started the deletion.
-                var topicIsBeingDeleted =
-                    result.Outcome == CloseTapOutcomes.Closed
-                    && result.Request?.Kind == ParkedCloseKinds.Orchestration;
-
-                var message = $"Could not record the close decision on the prompt: {ex.Message}";
-
-                // A warning that fires on the healthy path is how a log stops being read; a failed
-                // edit anywhere else means the owner is looking at a prompt that says something untrue.
-                if (topicIsBeingDeleted)
-                    _log.Log_Info(confirmation.OrchId, message);
-                else
-                    _log.Log_Warning(confirmation.OrchId, message);
-            }
-        }
+            await Record_TapDecision_OnPrompt_Async(client, tap.MessageId.Value, confirmation.OrchId, result, cancellationToken);
 
         return true;
+    }
+
+    /// <summary>
+    /// Replaces the prompt with what the tap DID. EXTRACTED from the tap handler (Task 9, 2026-09-23) so a
+    /// confirmed sibling — whose birth runs on the tick, not in the handler — records its outcome through
+    /// the same sentence and the same failure handling as every other tap: one route to the owner's only
+    /// record of the decision. The order argument (after the outcome, never before) is at the call site.
+    /// </summary>
+    async Task Record_TapDecision_OnPrompt_Async(
+        ITelegramApiClient client,
+        long messageId,
+        string orchId,
+        CloseTapResult result,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.Edit_MessageText_Async(
+                messageId,
+                CloseConfirmationPrompt_Builder.Describe_Decision(orchId, result.Request, result.Outcome, result.ArchiveLabel),
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // ROUTINE ONLY WHERE THE TOPIC IS BEING DELETED UNDERNEATH THIS EDIT, which is not the
+            // same as "the close succeeded". A successful MEMBER close returns Closed too and
+            // deletes no topic, so keying the quiet path on the outcome alone silenced the case
+            // where the prompt is still standing with two live buttons on it.
+            //
+            // Exact rather than approximate here: we are holding a live client and a message
+            // inside the orchestration's own topic, so an orchestration close on this path always
+            // started the deletion.
+            var topicIsBeingDeleted =
+                result.Outcome == CloseTapOutcomes.Closed
+                && result.Request?.Kind == ParkedCloseKinds.Orchestration;
+
+            var message = $"Could not record the close decision on the prompt: {ex.Message}";
+
+            // A warning that fires on the healthy path is how a log stops being read; a failed
+            // edit anywhere else means the owner is looking at a prompt that says something untrue.
+            if (topicIsBeingDeleted)
+                _log.Log_Info(orchId, message);
+            else
+                _log.Log_Warning(orchId, message);
+        }
     }
 
     /// <summary>
@@ -7886,11 +8055,12 @@ internal sealed class BridgeEngineModel(
     ///
     /// WHICH outcome is chosen is not decided here — <see cref="CloseTapOutcome_Decider"/> owns that,
     /// because a decision made in this class cannot be reached by the suite and this one is the fix.
+    ///
+    /// THE CALLER READS <paramref name="request"/> (Task 9b, 2026-09-23): the tap hands in the read it
+    /// already classified the tap by, so the kind that chose this path is the kind executed.
     /// </summary>
-    CloseTapResult Execute_ConfirmedClose(CloseConfirmation confirmation)
+    CloseTapResult Execute_ConfirmedClose(CloseConfirmation confirmation, IParkedCloseRequest? request)
     {
-        var request = ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath);
-
         // NON-NEGOTIABLE: a request we cannot read is not authority to end an orchestration. This
         // used to close anyway and record it as "Asked by: unrecorded" — killing every session of an
         // orchestration whose close nobody could produce, which is the precise failure this entire
@@ -7967,6 +8137,14 @@ internal sealed class BridgeEngineModel(
                 archiveLabel = "promoted";
                 Execute_ConfirmedPromotion(confirmation.OrchId, request.Reason);
             }
+            else if (request.Kind == ParkedCloseKinds.Sibling)
+            {
+                // STARTS ONE, ENDS NOTHING — and named, like every kind here, because the arm below is
+                // Execute_Close. The label is what the birth DID ("started" or the refusal re-found at the
+                // tap), assigned only when it returns: a throw leaves "unexecuted" and the outcome files it
+                // "uncertain", never "started".
+                archiveLabel = Execute_SiblingBirth(confirmation.ParkedPath, request.Sibling!);
+            }
             else if (request.Kind == ParkedCloseKinds.Orchestration)
             {
                 archiveLabel = "closed";
@@ -7990,9 +8168,11 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            // Already logged and reported to the general channel by Execute_Close. Swallowed HERE
-            // because this runs on the inbound loop with nobody watching, and a throw would take the
-            // loop down; the owner's own close does the opposite and surfaces it.
+            // Already logged and reported by the arm that threw (Execute_Close to the general channel,
+            // Execute_SiblingBirth to the requester and General). Swallowed HERE because this runs on a
+            // loop with nobody watching — the inbound loop for a close or a promotion, the mirror tick for
+            // a sibling's birth (Run_ApprovedSiblingBirths_Async) — and a throw would take that loop down;
+            // the owner's own close does the opposite and surfaces it.
             //
             // SWALLOWED IS NOT UNREPORTED, and it used to be. Execute_Close marks the orchestration
             // closed before it kills the sessions, so a throw between those two can leave it flagged
@@ -8032,7 +8212,7 @@ internal sealed class BridgeEngineModel(
             confirmation.ParkedPath,
             CloseTapOutcome_Decider.Describe_ForArchive(outcome, archiveLabel));
 
-        return new CloseTapResult(outcome, request);
+        return new CloseTapResult(outcome, request, archiveLabel);
     }
 
     /// <summary>
@@ -8070,6 +8250,268 @@ internal sealed class BridgeEngineModel(
                 orchId, AppEntryAudiences.Owner,
                 "promotion FAILED after the owner confirmed it",
                 $"The owner approved the promotion and it could not be completed ({ex.Message}). Check which sessions are actually running before asking again.");
+        }
+    }
+
+    /// <summary>
+    /// A CONFIRMED SIBLING IS BORN ON THE TICK, NOT ON THE INBOUND LOOP (Task 9, 2026-09-23). Two reasons,
+    /// and either would do:
+    /// <list type="bullet">
+    /// <item>THE WATCHDOG WINDOW. The launcher adds the child's solo with a null spawn stamp and stamps it
+    /// only when it spawns; the watchdog runs on the tick and respawns an unstamped member with no pid
+    /// file. Born here, on the other loop, a watchdog pass landing between those two writes would open a
+    /// second terminal in the child's worktree (Task 7 review, Minor). Born on the tick, just before the
+    /// watchdog, the two never interleave.</item>
+    /// <item>THE DISPATCH PAUSE (§7.3) HOLDS EVERY SPAWNING REQUEST, and the owner's yes is one. The tick
+    /// already runs its spawning work only while no pause is in force, so a tap during a pause waits there
+    /// — HELD, not refused, the start-orchestration precedent — and the prompt says so meanwhile.</item>
+    /// </list>
+    /// The approval counts as "being resolved", so neither sweep re-asks or lapses it while it waits.
+    /// </summary>
+    async Task Hand_SiblingBirth_ToTheTick_Async(
+        ITelegramApiClient client,
+        ITelegramCallbackTap tap,
+        CloseConfirmation confirmation,
+        IParkedCloseRequest request,
+        bool heldForPause,
+        CancellationToken cancellationToken)
+    {
+        lock (_closeConfirmationLock)
+            _siblingBirthsApproved[confirmation.ParkedPath] = (confirmation, tap.MessageId);
+
+        if (!heldForPause)
+        {
+            _log.Log_Info(confirmation.OrchId, $"The owner confirmed sibling '{request.Sibling?.Name}' — it starts on the next tick");
+            return;
+        }
+
+        _log.Log_Info(confirmation.OrchId, $"The owner confirmed sibling '{request.Sibling?.Name}' during a usage-limit pause — HELD, it starts when the pause lifts");
+
+        if (tap.MessageId == null)
+            return;
+
+        try
+        {
+            await client.Edit_MessageText_Async(tap.MessageId.Value, CloseConfirmationPrompt_Builder.Describe_SiblingHeldForPause(request), cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(confirmation.OrchId, $"Could not record the held sibling start on the prompt: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The tick's half of <see cref="Hand_SiblingBirth_ToTheTick_Async"/>: every approved birth, through
+    /// <see cref="Execute_ConfirmedClose"/> — the one executor that names every kind — and then the same
+    /// prompt edit every other tap gets. Called only while no dispatch pause is in force.
+    /// </summary>
+    async Task Run_ApprovedSiblingBirths_Async(CancellationToken cancellationToken)
+    {
+        List<(CloseConfirmation Confirmation, long? PromptMessageId)> approved;
+
+        lock (_closeConfirmationLock)
+            approved = [.. _siblingBirthsApproved.Values];
+
+        foreach (var (confirmation, promptMessageId) in approved)
+        {
+            CloseTapResult result;
+
+            try
+            {
+                result = Execute_ConfirmedClose(confirmation, ParkedCloseRequest_Reader.Read_OrNull(confirmation.ParkedPath));
+            }
+            finally
+            {
+                // AFTER THE ARCHIVE, never before: until the file has left awaiting-owner/, this entry is
+                // what keeps the ask sweep from reading it as a request nobody has asked about.
+                lock (_closeConfirmationLock)
+                    _siblingBirthsApproved.Remove(confirmation.ParkedPath);
+            }
+
+            if (_telegramClient != null && promptMessageId != null)
+                await Record_TapDecision_OnPrompt_Async(_telegramClient, promptMessageId.Value, confirmation.OrchId, result, cancellationToken);
+        }
+
+        // THE ROSTER WAS READ BEFORE THE BIRTH (final review M4): the tick's snapshot predates the child and
+        // its parent's new link, so the endeavour reconcile further down this tick would write their files a
+        // tick late — and a print child's first turn could run with no ENDEAVOUR.md. Re-read once, only on a
+        // tick that ran a birth.
+        if (approved.Count > 0 && _sessionsThisTick != null)
+            _sessionsThisTick = _store.Load_All();
+    }
+
+    /// <summary>
+    /// THE PROMPT-TIME RE-RUN OF THE SIBLING TABLE (§4.2) — the Sibling arm of the moot rule: a request
+    /// that no longer holds (the requester promoted to a crew, the tree taken, the cap reached) is refused
+    /// to the requester with its own reason and archived under its label, and the owner is never asked a
+    /// question whose "yes" could only be refused.
+    ///
+    /// <para>
+    /// ONCE PER REQUEST PER RUN. The world read starts git, and a prompt whose send fails is retried every
+    /// tick; the tap re-runs the table before anything starts, so a second prompt-time run would buy
+    /// nothing but processes. And ADVISORY on failure for the same reason: a world that cannot be read now
+    /// is said (decision 21) and the owner is asked anyway — nothing can start without the tap's check.
+    /// </para>
+    /// </summary>
+    bool Refuse_ParkedSibling_IfNoLongerValid(IParkedCloseRequest request, string parkedPath)
+    {
+        if (!_siblingPromptsValidated.Add(parkedPath))
+            return false;
+
+        try
+        {
+            var world = SiblingWorld_Reader.Read(_paths, _store, _configProvider.Get_Current(), request.Sibling!, ownParkedPath: parkedPath);
+            var refusal = SiblingRequest_Validator.Decide_Refusal_OrNull(request.Sibling!, world);
+
+            if (refusal == null)
+                return false;
+
+            _log.Log_Info(request.OrchId, $"A parked spawn-sibling no longer holds — {refusal.Value.Label}; refused before the owner was asked");
+            Tell_SiblingRefusal(request.Sibling!, world, refusal.Value.Label, (refusal.Value.Subject, refusal.Value.Body), unlessPaused: false);
+            Archive_ResolvedRequest_BestEffort(parkedPath, refusal.Value.Label);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(request.OrchId, $"Could not re-check a parked spawn-sibling before asking the owner — asking anyway, the tap re-checks: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// ONE ROUTE FOR A SIBLING REFUSAL — at arrival, at prompt time and at the tap. Always the Agent
+    /// audience (decision 15); <c>unspawnable</c> has no requester channel, so it goes to General.
+    ///
+    /// <para>
+    /// <paramref name="unlessPaused"/> is the TAP's (final review I1): the owner can tap a prompt drawn
+    /// before they paused the requester, and a refusal written then would wake it. Arrival is answering a
+    /// request the session has just written, so it is awake; prompt time never reaches here for a paused
+    /// requester — the ask sweep waits for the unpause.
+    /// </para>
+    /// <para>
+    /// AND THE ONE PLACE A CRASH MID-BIRTH IS REPAIRED (final review M2): <c>handover-already-used</c> names
+    /// a child that exists, and if its parent was never linked, <see cref="SiblingBirth_Step.Repair_ParentLink_OrNull"/>
+    /// links it now — at whichever of the three checks the retry meets first.
+    /// </para>
+    /// </summary>
+    void Tell_SiblingRefusal(ISpawnSiblingRequest request, SiblingWorld world, string label, (string Subject, string Body) notice, bool unlessPaused)
+    {
+        if (label == SiblingRefusals.HANDOVER_ALREADY_USED)
+        {
+            var repaired = SiblingBirth_Step.Repair_ParentLink_OrNull(_store, request.OrchId, request.HandoverIndex, world.Sessions);
+
+            if (repaired != null)
+                _log.Log_Warning(request.OrchId, repaired);
+        }
+
+        if (label == SiblingRefusals.UNSPAWNABLE)
+            Append_GeneralAppEntry(AppEntryAudiences.Agent, notice.Subject, notice.Body);
+        else if (unlessPaused)
+            Append_SiblingNotice_UnlessPaused(request.OrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
+        else
+            Append_OrchestrationAppEntry(request.OrchId, AppEntryAudiences.Agent, notice.Subject, notice.Body);
+    }
+
+    /// <summary>
+    /// THE PAUSE GATE FOR WHAT THE SIBLING LIFECYCLE WRITES INTO ANOTHER ORCHESTRATION'S CHANNEL (final review
+    /// I1, spec §7.2) — the survivors' close notice, the parent's "sibling started" line, a refusal at the tap.
+    /// CLAUDE.md's PAUSE rule: each waker asks for itself, because no delivery mode governs a channel write,
+    /// and a solo's watcher fires on any foreign append to its owner channel. A paused recipient gets NOTHING
+    /// appended — the other wakers' rule — and the log says what it missed; what these entries carry stays on
+    /// disk (the closed sibling's PLAN.md, the child's own topic), and <c>.siblings</c> is reconciled either way.
+    /// </summary>
+    bool Append_SiblingNotice_UnlessPaused(string orchId, AppEntryAudiences audience, string subject, string body)
+    {
+        if (Is_Paused(orchId))
+        {
+            _log.Log_Info(orchId, $"paused — '{subject}' was not appended, so it does not wake the session");
+            return false;
+        }
+
+        return Append_OrchestrationAppEntry(orchId, audience, subject, body);
+    }
+
+    /// <summary>
+    /// THE BIRTH THE OWNER'S TAP AUTHORISED (spec §4.3), call-and-append: the table is
+    /// <see cref="SiblingRequest_Validator"/>'s, the link-and-launch is <see cref="SiblingBirth_Step"/>'s,
+    /// every word is <see cref="SiblingNotice_Wording"/>'s. Returns the archive label — "started" only
+    /// when the birth ran, otherwise the refusal re-found at the tap.
+    ///
+    /// <para>
+    /// THE ORDER IS THE MECHANISM (Process_StartRequests' rule): everything is written AFTER the launch,
+    /// the birth note first and then the job as FROM owner, because a bridge-driven session baselines at
+    /// registration and an entry written first would be history it never answers.
+    /// </para>
+    /// <para>
+    /// THE CHILD'S CHANNEL IS SEEN BEFORE IT IS WRITTEN (Task 7 carry). The tailer takes a channel it has
+    /// never seen at its current length, so a birth note appended before the child's first poll would be
+    /// absorbed as history — in the file, never in the new topic, which the note is what creates. The
+    /// tailer is anchored at the length BEFORE the note, on this same thread as its poll.
+    /// </para>
+    /// <para>
+    /// A THROW IS REPORTED IN ITS OWN WORDS, then rethrown (the Execute_Close precedent): the requester and
+    /// General get the step's message verbatim — on the created-but-not-spawned path it names the child —
+    /// and the caller's catch files the tap "uncertain", never "started".
+    /// </para>
+    /// </summary>
+    string Execute_SiblingBirth(string parkedPath, ISpawnSiblingRequest sibling)
+    {
+        try
+        {
+            var world = SiblingWorld_Reader.Read(_paths, _store, _configProvider.Get_Current(), sibling, ownParkedPath: parkedPath);
+            var refusal = SiblingRequest_Validator.Decide_Refusal_OrNull(sibling, world);
+
+            if (refusal != null)
+            {
+                _log.Log_Info(sibling.OrchId, $"spawn-sibling refused at the owner's tap — {refusal.Value.Label}; nothing was started");
+                Tell_SiblingRefusal(sibling, world, refusal.Value.Label, SiblingNotice_Wording.Restate_AtTheTap((refusal.Value.Subject, refusal.Value.Body)), unlessPaused: true);
+                return refusal.Value.Label;
+            }
+
+            var birth = SiblingBirth_Step.Execute(_store, _launcher, _paths, sibling);
+            var childId = birth.Child.OrchId;
+            var childChannel = _paths.Get_OwnerChannelFile(childId);
+
+            if (File.Exists(childChannel))
+                _tailer.Set_Offset(childChannel, new FileInfo(childChannel).Length);
+
+            Append_OrchestrationAppEntry(childId, AppEntryAudiences.Owner, birth.BirthNote.Subject, birth.BirthNote.Body);
+
+            if (ChannelAppender.Append_OwnerEntry(childChannel, sibling.Job, DateTime.Now))
+            {
+                // The owner read these words on the prompt and tapped to approve them, so the child is in
+                // owner debt from its first turn — the start-orchestration precedent.
+                Raise_OwnerWait(childId);
+            }
+            else
+            {
+                _log.Log_Error(childId, $"The job that came with the sibling could not be appended to '{childId}' owner channel — the sibling is up but has not been told what to do", null);
+
+                var withoutJob = SiblingNotice_Wording.Describe_StartedWithoutJob(childId, sibling.Name);
+                Append_GeneralAppEntry(AppEntryAudiences.Owner, withoutJob.Subject, withoutJob.Body);
+            }
+
+            Append_SiblingNotice_UnlessPaused(sibling.OrchId, AppEntryAudiences.Owner, birth.ParentNotice.Subject, birth.ParentNotice.Body);
+            Append_GeneralAppEntry(AppEntryAudiences.Agent, birth.GeneralLine.Subject, birth.GeneralLine.Body);
+
+            _log.Log_Info(childId, $"SIBLING started on the owner's tap — '{sibling.Name}', a sibling of '{sibling.OrchId}'");
+            return CloseTapOutcome_Decider.SIBLING_STARTED;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(sibling.OrchId, "A sibling FAILED to start after the owner confirmed it", ex);
+
+            var failed = SiblingNotice_Wording.Describe_BirthFailed(sibling.Name, ex.Message);
+            Append_OrchestrationAppEntry(sibling.OrchId, AppEntryAudiences.Agent, failed.Subject, failed.Body);
+
+            var general = SiblingNotice_Wording.Describe_GeneralBirthFailed(sibling.OrchId, sibling.Name, ex.Message);
+            Append_GeneralAppEntry(AppEntryAudiences.Owner, general.Subject, general.Body);
+
+            throw;
         }
     }
 
@@ -9080,6 +9522,11 @@ internal sealed class BridgeEngineModel(
             // In General the machine menu; in a topic that orchestration's rows, read-only (plan 04 D3).
             await _settingsMenu.Send_Menu_Async(client, this, messageThreadId, cancellationToken);
         }
+        else if (command == "endeavour")
+        {
+            // Sibling traffic is never pushed (O3); this is where the owner sees it, asked (spec 2026-09-23 §2.4).
+            await Send_EndeavourReport_Async(client, messageThreadId, cancellationToken);
+        }
         else if (command == "context")
         {
             await Send_ContextReport_Async(client, messageThreadId, cancellationToken);
@@ -9267,6 +9714,15 @@ internal sealed class BridgeEngineModel(
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
     }
 
+    /// <summary>/endeavour — the text is <see cref="Siblings.EndeavourReport_Builder"/>'s; this only sends it, chunked like /progress.</summary>
+    async Task Send_EndeavourReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var text = Siblings.EndeavourReport_Builder.Build_ForTopic(_paths, _store.Load_All(), messageThreadId);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
     /// <summary>
     /// Which log scope a message sent in this topic belongs to. Named for the QUESTION it answers
     /// rather than for the lookup it performs: the same `Find_ByTelegramTopicId_OrNull` appears
@@ -9338,20 +9794,8 @@ internal sealed class BridgeEngineModel(
             return Build_OrchestrationLedgerText(session.OrchId, session.DisplayName ?? session.OrchId, unfinishedOnly);
         }
 
-        List<string> blocks = [];
-
-        foreach (var session in _store.Load_All())
-        {
-            if (session.ClosedUtc != null)
-                continue;
-
-            blocks.Add(Build_OrchestrationCountsLine(session.OrchId, session.DisplayName ?? session.OrchId));
-        }
-
-        if (blocks.Count == 0)
-            return "no open orchestrations";
-
-        return string.Join('\n', blocks);
+        // General's body — moved out with the sibling plan (2026-09-23, Task 11), which groups an endeavour.
+        return Telegram.ProgressReport_Builder.Build_OpenOrchestrationsText(_paths, _store.Load_All());
     }
 
     /// <summary>Full ledger for one orchestration — the raw '- [x]' lines are the point of the command.</summary>
@@ -9384,19 +9828,10 @@ internal sealed class BridgeEngineModel(
         return $"{Build_OrchestrationCountsLine(orchId, displayName)}\n{ledger}";
     }
 
-    /// <summary>
-    /// <paramref name="previous"/> is passed by the PERIODIC push alone. `/status` is on demand and
-    /// answers "where is this now", so a delta against a message the owner may not have been looking
-    /// at would be a number with no visible baseline.
-    /// </summary>
+    /// <summary>One spelling of the counts line (decision 12): see <see cref="Telegram.ProgressReport_Builder.Build_CountsLine"/>.</summary>
     string Build_OrchestrationCountsLine(string orchId, string displayName, Planning.PlanProgressSnapshot? previous = null)
     {
-        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
-
-        if (progress == null)
-            return $"{displayName}: no task ledger yet";
-
-        return $"{displayName}: {Planning.PlanProgress_Formatter.Describe_Counts(progress, previous)}";
+        return Telegram.ProgressReport_Builder.Build_CountsLine(_paths, orchId, displayName, previous);
     }
 
     /// <summary>
@@ -10647,6 +11082,14 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // §7.6 (spec 2026-09-23): a linked topic is neither promoted nor demoted in v1 — before the handover
+        // gate, so the owner is not sent to ask a session for a HANDOVER that would buy nothing.
+        if (session.EndeavourId != null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, SiblingNotice_Wording.Describe_LinkedSwitchRefusal(), cancellationToken);
+            return;
+        }
+
         var promoting = Sessions.OrchestrationShape.Would_Promote(session.SupervisorSpawnedUtc);
 
         // ASKED AT THE MOMENT OF EFFECT, the rule both launcher methods already follow.
@@ -11061,6 +11504,20 @@ internal sealed class BridgeEngineModel(
     {
         foreach (var session in Sessions_ThisTick())
             Sync_PausedFlag(session.OrchId, session.ClosedUtc == null && session.Paused);
+    }
+
+    /// <summary>The sibling plan's derived files (Task 10); the rules live in the step.</summary>
+    void Sync_EndeavourArtefacts()
+    {
+        foreach (var failure in EndeavourArtefacts_Step.Reconcile(_paths, Sessions_ThisTick()))
+            _log.Log_Warning(GLOBAL_ORCH_ID, failure);
+    }
+
+    /// <summary>Sibling outbox compaction (Task 10b): its own call, so it can run after the owner's delivery.</summary>
+    void Compact_SiblingOutboxes()
+    {
+        foreach (var failure in EndeavourArtefacts_Step.Compact_Outboxes(_paths, Sessions_ThisTick()))
+            _log.Log_Warning(GLOBAL_ORCH_ID, failure);
     }
 
     async Task Request_Close_FromCommand_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)

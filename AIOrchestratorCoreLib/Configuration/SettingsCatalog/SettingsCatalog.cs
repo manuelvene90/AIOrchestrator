@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels.StatusLog;
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
+using AIOrchestratorCoreLib.Configuration.EndeavourSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingDefinition;
@@ -59,6 +60,9 @@ public static class SettingsCatalog
 {
     public const string MODELS_PATH_PREFIX = "models.";
     public const string EFFORT_PATH_PREFIX = "effort.";
+
+    /// <summary>The sibling cap's path (spec 2026-09-23 §9, O2) — the one spelling the loader and the renderers share.</summary>
+    public const string ENDEAVOUR_MAX_OPEN_SIBLINGS_PATH = "endeavour.maxOpenSiblings";
 
     /// <summary>Every definition the app knows, in renderer order: Models, Kernel, Phone, Receipts, Pulse, Owner.</summary>
     public static readonly IReadOnlyList<ISettingDefinition> ALL = Build_All();
@@ -609,6 +613,25 @@ public static class SettingsCatalog
             restart: RestartKinds.Host));
 
         kernel.AddRange(Build_Reviewing());
+
+        // AT THE END OF THE FLAT KERNEL ROWS, deliberately (pre-flight ruling, 2026-09-23): /settings
+        // payloads index ALL, so any insertion renumbers every later row and an open menu answers
+        // "stale". Placed here, it moves only the session-state rows, and it stays clear of the
+        // guardrail rows plan 03's high-risk toggle may touch. RestartKinds.None is truthful: the
+        // spawn-sibling executor reads the provider's current config per request.
+        kernel.Add(SettingDefinition_Factory.Create_Int(
+            path: ENDEAVOUR_MAX_OPEN_SIBLINGS_PATH,
+            shippedDefault: EndeavourSettings_Factory.DEFAULT_MAX_OPEN_SIBLINGS,
+            minimum: 1,
+            maximum: 10,
+            scope: SettingScopes.Machine,
+            category: SettingCategories.Kernel,
+            label: "Max open siblings per endeavour",
+            description:
+                "How many solo sessions one endeavour may have open at once. Each extra sibling adds a topic, a session, " +
+                "and another block in every sibling's digest. Counts open members of one endeavour, the requester included.",
+            restart: RestartKinds.None));
+
         kernel.AddRange(Build_SessionState());
 
         return kernel;

@@ -42,7 +42,14 @@ public static class OrchestrationSession_Factory
         string? supervisorEffortOverride = null,
         string? implementerEffortOverride = null,
         bool paused = false,
-        DateTime? telegramTopicFinalNameUtc = null)
+        DateTime? telegramTopicFinalNameUtc = null,
+
+        // The four sibling fields (spec §3.2), trailing and optional so that every existing call
+        // site — and every session that is not part of an endeavour — reads exactly as before.
+        string? endeavourId = null,
+        string? bornFromOrchId = null,
+        string? bornFromHandover = null,
+        string? workingPath = null)
     {
         if (string.IsNullOrWhiteSpace(orchId))
             throw new ArgumentException($"OrchId must be non-empty (repo '{repoName}' at '{repoPath}')");
@@ -52,7 +59,8 @@ public static class OrchestrationSession_Factory
             communicatorSpawnedUtc, displayName, supervisorModelOverride, implementerModelOverride, members,
             telegramMode, ownerPresence, closedUtc, statusLineMessageId, awaitingTest, done,
             telegramTopicDeletePendingUtc, telegramTopicDeletedUtc, telegramTopicDeleteFailureReported,
-            supervisorEffortOverride, implementerEffortOverride, paused, telegramTopicFinalNameUtc);
+            supervisorEffortOverride, implementerEffortOverride, paused, telegramTopicFinalNameUtc,
+            endeavourId, bornFromOrchId, bornFromHandover, workingPath);
     }
 
     /// <summary>
@@ -233,6 +241,36 @@ public static class OrchestrationSession_Factory
     }
 
     /// <summary>
+    /// Stamps the PARENT with its endeavour the first time it gets a sibling. Only the endeavour: the
+    /// parent was born from nobody and still runs where it always ran, so the three child-only fields
+    /// stay as they are (null).
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithEndeavourId(IOrchestrationSession existing, string endeavourId)
+    {
+        return CreateFrom_Existing(existing, endeavourId: endeavourId);
+    }
+
+    /// <summary>
+    /// Links a CHILD at birth — all four fields in one copy, so the store saves them in one write and
+    /// a crash can never leave a sibling half-linked (an endeavour with no handover key would lose
+    /// its idempotency; a handover key with no endeavour would be a sibling nobody can see).
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithSiblingLink(
+        IOrchestrationSession existing,
+        string endeavourId,
+        string bornFromOrchId,
+        string bornFromHandover,
+        string workingPath)
+    {
+        return CreateFrom_Existing(
+            existing,
+            endeavourId: endeavourId,
+            bornFromOrchId: bornFromOrchId,
+            bornFromHandover: bornFromHandover,
+            workingPath: workingPath);
+    }
+
+    /// <summary>
     /// One copy-with-overrides in place of a full argument list per mutation — the repeated lists
     /// were where a newly added field silently got dropped. Nullable overrides that may legitimately
     /// be set BACK to null carry an explicit "wasSet" flag, since null cannot mean both "unchanged"
@@ -295,7 +333,18 @@ public static class OrchestrationSession_Factory
         bool telegramTopicDeleteFailureReportedWasSet = false,
 
         // Set once and never cleared, like the two delete stamps — so no wasSet dance.
-        DateTime? telegramTopicFinalNameUtc = null)
+        DateTime? telegramTopicFinalNameUtc = null,
+
+        // The four sibling fields are set once at a birth and NEVER cleared (closing a sibling keeps
+        // it in the endeavour's sum, spec §3.5), so a plain `?? existing` is correct and no wasSet
+        // flag is needed. What IS load-bearing is that they are carried at all: every Set_* in the
+        // store rebuilds through here, so a field missing from this list would be wiped by the next
+        // pid write — which happens on every spawn — and the sibling would silently leave its
+        // endeavour.
+        string? endeavourId = null,
+        string? bornFromOrchId = null,
+        string? bornFromHandover = null,
+        string? workingPath = null)
     {
         return Create(
             existing.OrchId,
@@ -322,6 +371,10 @@ public static class OrchestrationSession_Factory
             supervisorEffortWasSet ? supervisorEffortOverride : existing.SupervisorEffortOverride,
             implementerEffortWasSet ? implementerEffortOverride : existing.ImplementerEffortOverride,
             pausedWasSet ? paused : existing.Paused,
-            telegramTopicFinalNameUtc ?? existing.TelegramTopicFinalNameUtc);
+            telegramTopicFinalNameUtc ?? existing.TelegramTopicFinalNameUtc,
+            endeavourId ?? existing.EndeavourId,
+            bornFromOrchId ?? existing.BornFromOrchId,
+            bornFromHandover ?? existing.BornFromHandover,
+            workingPath ?? existing.WorkingPath);
     }
 }

@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
+using AIOrchestratorCoreLib.Configuration.EndeavourSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.PhoneSettings;
 using AIOrchestratorCoreLib.Configuration.PulseSettings;
@@ -117,14 +118,18 @@ public static class OrchestratorConfig_Factory
         // AND THE EIGHTH AND NINTH, the `phone` and `pulse` blocks (added 2026-09-14, plan 03 task 1),
         // under the same three rules — neither _Json class has a Write.
         IPhoneSettings? phone = null,
-        IPulseSettings? pulse = null)
+        IPulseSettings? pulse = null,
+
+        // AND A NINTH, the `endeavour` block (added 2026-09-23, sibling solos task 3, O2) — the same
+        // three rules; EndeavourSettings_Json has no Write.
+        IEndeavourSettings? endeavour = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, reviewerModel, soloModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
             RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound, effort, reviewing,
-            phone, pulse);
+            phone, pulse, endeavour);
     }
 
     /// <summary>
@@ -160,7 +165,8 @@ public static class OrchestratorConfig_Factory
         IEffortSettings? effort = null,
         IReviewingSettings? reviewing = null,
         IPhoneSettings? phone = null,
-        IPulseSettings? pulse = null)
+        IPulseSettings? pulse = null,
+        IEndeavourSettings? endeavour = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -230,7 +236,11 @@ public static class OrchestratorConfig_Factory
             // default has one home (CLAUDE.md decision 12) and Create_Empty gets it without restating
             // it. Not classic — the preset rung is the loader's, exactly as for effort.
             phone ?? PhoneSettings_Json.Parse(configRoot: null, presetTree: null),
-            pulse ?? PulseSettings_Json.Parse(configRoot: null, presetTree: null));
+            pulse ?? PulseSettings_Json.Parse(configRoot: null, presetTree: null),
+
+            // DEFAULTED, NEVER NULL, the same rule again: a caller that predates the block gets the
+            // owner's O2 answer, never a null the spawn-sibling executor would have to test for.
+            endeavour ?? EndeavourSettings_Factory.Create_Default());
     }
 
     /// <summary>
@@ -314,6 +324,7 @@ public static class OrchestratorConfig_Factory
             source.Effort,
             source.Reviewing,
             source.Phone,
-            source.Pulse);
+            source.Pulse,
+            source.Endeavour);
     }
 }

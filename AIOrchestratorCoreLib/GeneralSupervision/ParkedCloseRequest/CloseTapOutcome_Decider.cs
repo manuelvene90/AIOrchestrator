@@ -18,6 +18,12 @@ namespace AIOrchestratorCoreLib.GeneralSupervision.ParkedCloseRequest;
 /// </summary>
 public static class CloseTapOutcome_Decider
 {
+    /// <summary>
+    /// What a confirmed sibling tap is filed under when the birth RAN — and the only label that lets the
+    /// prompt say "✅ Started". Every other label a Sibling arm returns is a refusal's own word.
+    /// </summary>
+    public const string SIBLING_STARTED = "started";
+
     /// <param name="request">The parked request, or null when it could not be read.</param>
     /// <param name="failure">What the executor threw, or null when it ran to completion.</param>
     public static CloseTapOutcomes Decide(IParkedCloseRequest? request, Exception? failure)
