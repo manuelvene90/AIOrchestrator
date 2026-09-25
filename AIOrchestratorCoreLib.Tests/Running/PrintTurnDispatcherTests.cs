@@ -250,7 +250,13 @@ public class PrintTurnDispatcherTests
     [Fact]
     public async Task ATurnThatOutlivesTheTimeout_IsKilledAndRetried_AndStallsWithAnAlertOnTheThird()
     {
-        using var harness = new PrintRunnerTestHarness("implementer", turnTimeoutMinutes: 1.0 / 60);
+        // FOUR SECONDS, not one (2026-09-25). A one-second deadline is shorter than FakeClaude's own
+        // start-up on a loaded Windows machine: the process was killed before it recorded its
+        // invocation, so the attempts were spent and stalled correctly while the invocation log held
+        // one or two of the three — red in four runs alone, on origin/master as on the merge. Four
+        // seconds still sits well under the scenario's eight, so every attempt and every closing turn
+        // (clamped to the same deadline) is still killed; the 90 s budget below covers 3 × (4 + 4) s.
+        using var harness = new PrintRunnerTestHarness("implementer", turnTimeoutMinutes: 4.0 / 60);
         var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
         harness.Write_Scenario("""{"default":{"delay_ms":8000}}""");
         var dispatcher = harness.Create_Dispatcher(retryBackoff: TimeSpan.FromMilliseconds(100));
