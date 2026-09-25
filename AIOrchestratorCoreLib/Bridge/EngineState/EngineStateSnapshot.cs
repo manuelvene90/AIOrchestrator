@@ -253,5 +253,19 @@ public sealed record EngineStateSnapshot
     /// </summary>
     public DateTime? LimitProbeCutoffUtc { get; init; }
 
+    /// <summary>
+    /// The Claude account the usage readings — and so the pause and the lift above — belong to, or
+    /// null when it could not be read. See <see cref="Limits.ClaudeAccount.IClaudeAccountReader"/>.
+    /// </summary>
+    public string? LimitAccountId { get; init; }
+
+    /// <summary>
+    /// When the app first saw <see cref="LimitAccountId"/> logged in after a DIFFERENT one, or null
+    /// when no switch has been seen. The switch also moves <see cref="LimitProbeCutoffUtc"/> to this
+    /// instant (the previous account's probes stop counting); this field is kept for the limit rescue,
+    /// which treats a refusal older than the switch as the previous account's.
+    /// </summary>
+    public DateTime? LimitAccountSinceUtc { get; init; }
+
     public static EngineStateSnapshot Empty => new();
 }

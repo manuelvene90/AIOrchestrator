@@ -63,6 +63,12 @@ internal sealed class BridgeEngineModel(
     IBridgeEngineTiming timing,
     Hosting.HostWindowing.IHostWindowing hostWindowing,
 
+    // Which Claude account is logged in — a usage-limit pause belongs to one (owner, 2026-09-23).
+    Limits.ClaudeAccount.IClaudeAccountReader accountReader,
+
+    // The session shells, by pid file — what the limit rescue stops so the watchdog restarts them.
+    Termination.SessionProcesses.ISessionProcesses sessionProcesses,
+
     // The OUTBOUND ALLOWANCE the Telegram client spends from, held here only so it can be written
     // into .bridge-state.json beside the cursor (brief F5) — the engine never asks it for a token.
     // Null in file-only mode and on the test seams that hand in their own client.
@@ -168,7 +174,9 @@ internal sealed class BridgeEngineModel(
     /// failure catch — see <c>Note_InboundConflicted_IfNew_Async</c>.
     /// </summary>
     const int TELEGRAM_CONFLICT_STATUS = 409;
-    const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
+
+    /// <summary>Shared with the limit rescue — one cadence for every limit decision (decision 12).</summary>
+    const int LIMIT_CHECK_INTERVAL_SECONDS = Limits.LimitRescue_Decider.CHECK_INTERVAL_SECONDS;
 
     /// <summary>Pause before relaunching a bridge loop that ended, so a broken loop cannot spin.</summary>
     const int LOOP_RELAUNCH_DELAY_MILLISECONDS = 5000;
@@ -1284,6 +1292,37 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// The account the pause, the lift and the usage probes belong to, and since when — see
+    /// <see cref="Observe_AccountSwitch_Async"/>. Guarded by <c>_ownerStateLock</c> with the three above.
+    /// </summary>
+    string? _limitAccountId = restoredState.LimitAccountId;
+    DateTime? _limitAccountSinceUtc = restoredState.LimitAccountSinceUtc;
+
+    readonly Limits.ClaudeAccount.IClaudeAccountReader _accountReader = accountReader;
+
+    /// <summary>
+    /// When the account was last read. Its own clock, and not throttled to the probe interval: an
+    /// account switch has to be seen on the FIRST tick after a restart, before the restored pause is
+    /// announced as still holding.
+    /// </summary>
+    DateTime _lastAccountCheckUtc = DateTime.MinValue;
+
+    const int ACCOUNT_CHECK_INTERVAL_SECONDS = 30;
+
+    /// <summary>
+    /// Since when the dispatcher has been OPEN — the app's start, or the instant the last pause
+    /// ended. Handed to <see cref="_limitRescuer"/>, which gives the CLI's own auto-continue a grace
+    /// from this instant before it steps in.
+    /// </summary>
+    DateTime _dispatchOpenSinceUtc = clock.UtcNow;
+
+    /// <summary>
+    /// Stops terminal sessions stuck on a usage limit so the watchdog restarts them — on the tick once
+    /// the reset has passed, and on /resume at once. See <see cref="LimitRescue.ILimitRescuer"/>.
+    /// </summary>
+    readonly LimitRescue.ILimitRescuer _limitRescuer = LimitRescue.LimitRescuer_Factory.Create(paths, store, log, sessionProcesses);
+
+    /// <summary>
     /// False until the first pause check of this host run. That check announces a pause restored
     /// from engine state — mirror loop only, so no lock.
     /// </summary>
@@ -1723,6 +1762,7 @@ internal sealed class BridgeEngineModel(
         // nothing to do with the session. Work already running is never touched.
         if (!dispatchPaused)
         {
+            Rescue_LimitBlockedSessions();
             _watchdog.Check_AndRestart_DeadSessions();
             Persist_EngineState_IfRespawnCountsMoved();
         }
@@ -4484,7 +4524,11 @@ internal sealed class BridgeEngineModel(
     /// reading and alert about another.
     /// </para>
     /// </summary>
-    Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> Read_CurrentLimitWindows()
+    /// <param name="writtenSinceUtc">
+    /// Skip probe files last written before this instant — the limit rescue's "a probe written after
+    /// the refusal". Null reads them all (the probe cutoff above applies either way).
+    /// </param>
+    Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> Read_CurrentLimitWindows(DateTime? writtenSinceUtc = null)
     {
         // TakenAtUtc rides along only to pick the window instance in force; it is projected away
         // below, because no consumer of this method has any business with a file's write time.
@@ -4506,6 +4550,9 @@ internal sealed class BridgeEngineModel(
         // used to throw a sharing violation out of this loop and abort the whole check.
         foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, nowLocal, Read_LimitProbeCutoff_OrNull()))
         {
+            if (writtenSinceUtc != null && Read_LastWriteUtc_OrMin(usageFile) < writtenSinceUtc.Value)
+                continue;
+
             var windows = Limits.LimitData_Parser.Extract_LimitWindows(UsageTotals_Reader.Read_Text_Safe(usageFile));
 
             // When this probe last learned anything — see WindowInstance_Order.Compare_Reading.
@@ -6326,6 +6373,10 @@ internal sealed class BridgeEngineModel(
         // Re-decide on the very next tick, not up to a minute later: the throttle is for probes that
         // did not change, and the owner just said which ones no longer count.
         _lastDispatchPauseCheckUtc = DateTime.MinValue;
+
+        if (wasPaused)
+            _dispatchOpenSinceUtc = nowUtc;
+
         Persist_EngineState();
         Raise_DispatchPauseChanged();
 
@@ -11551,9 +11602,12 @@ internal sealed class BridgeEngineModel(
     /// a session that hit the limit ends its turn without doing the work, and nothing will speak to
     /// it again on its own, so the whole fleet sits idle until someone says go.
     ///
-    /// It works by APPENDING to each channel rather than touching the terminals: a channel change
-    /// is what every monitor is already watching for, so the wake goes through the same path as
-    /// ordinary traffic and needs no window handling, no pids, no respawn.
+    /// It APPENDS a GO AHEAD to each channel, and then STOPS every terminal session still blocked on
+    /// the limit so the watchdog respawns it into that entry (owner, 2026-09-23). The append alone was
+    /// the whole command until then, and it is heard only by an ARMED watcher: at 10:00:33Z that day
+    /// /resume answered "woke 7 session(s)" and not one session woke because of it — every monitor had
+    /// expired at the limit and the CLI refused to re-arm it. A session that is not blocked is never
+    /// stopped: /resume must not interrupt live work.
     /// </summary>
     async Task Resume_AllSessions_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
@@ -11604,7 +11658,7 @@ internal sealed class BridgeEngineModel(
             wokenOrchestrations++;
 
             // Every counter increments only on a written entry. The total is reported to the owner
-            // below as "go ahead sent to N sessions", and /resume is the one command with no retry —
+            // below as "GO AHEAD written to N channels", and /resume is the one command with no retry —
             // it exists for the usage-limit reset, where nothing else will speak to a session again.
             // Counting an append that did not happen tells the owner a session was woken and leaves
             // it asleep, which is the exact failure /resume is the remedy for.
@@ -11618,8 +11672,14 @@ internal sealed class BridgeEngineModel(
                 if (member.ClosedUtc != null)
                     continue;
 
-                if (ChannelAppender.Append_AppEntry(
-                        Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId), AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
+                var memberChannel = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
+
+                // A SOLO'S CHANNEL IS THE OWNER CHANNEL, written just above: one GO AHEAD per basic
+                // orchestration, not two (2026-09-23 — "woke 7" on a morning with four sessions).
+                if (string.Equals(memberChannel, _paths.Get_OwnerChannelFile(session.OrchId), StringComparison.Ordinal))
+                    continue;
+
+                if (ChannelAppender.Append_AppEntry(memberChannel, AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
                     wokenSessions++;
                 else
                     notWoken.Add($"{session.OrchId}/{member.MemberId}");
@@ -11634,7 +11694,7 @@ internal sealed class BridgeEngineModel(
         else
             notWoken.Add("general");
 
-        _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — woke {wokenSessions} session(s) across {wokenOrchestrations} orchestration(s)");
+        _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — GO AHEAD written to {wokenSessions} channel(s) across {wokenOrchestrations} orchestration(s) + general");
 
         // Named, not counted: "3 of 5" leaves the owner to work out which two are still asleep, and
         // /resume is exactly when they cannot afford to guess.
@@ -11650,10 +11710,27 @@ internal sealed class BridgeEngineModel(
             ? string.Empty
             : $" — cleared {clearedAppointments} usage-limit appointment{(clearedAppointments == 1 ? "" : "s")}";
 
+        // THE APPENDS ARE ONLY HEARD BY AN ARMED WATCHER, so every session still blocked on the limit
+        // is stopped now, AFTER its GO AHEAD is on disk, for the watchdog to respawn into it. Guarded
+        // like the two overrides above: the reply below must still go out.
+        LimitRescue.LimitRescueSweep? sweep = null;
+
+        try
+        {
+            sweep = _limitRescuer.Rescue_AllBlocked_Now(_clock.UtcNow, Is_BridgeDriven);
+            _log.Log_Info(GLOBAL_ORCH_ID, sweep.Describe_ForLog());
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(GLOBAL_ORCH_ID, "/resume could not restart the sessions blocked on a usage limit — the GO AHEAD entries are written, but a session whose watcher died at the limit will not hear them", ex);
+        }
+
+        var sweepNote = sweep == null ? "could not check which sessions are blocked (see the log)" : sweep.Describe_ForOwner();
+
         await Send_DirectReply_BestEffort_Async(
             client,
             messageThreadId,
-            $"▶ go ahead sent to {wokenSessions} session{(wokenSessions == 1 ? "" : "s")} across {wokenOrchestrations} orchestration{(wokenOrchestrations == 1 ? "" : "s")} (+ general){clearedNote}",
+            $"▶ /resume: {sweepNote} — GO AHEAD written to {wokenSessions} channel{(wokenSessions == 1 ? "" : "s")} across {wokenOrchestrations} orchestration{(wokenOrchestrations == 1 ? "" : "s")} (+ general){clearedNote}",
             cancellationToken);
     }
 
@@ -13438,6 +13515,10 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Update_DispatchPause_Async(CancellationToken cancellationToken)
     {
+        // FIRST, so a restart after an account switch lifts the old account's pause instead of
+        // announcing it as still holding.
+        await Observe_AccountSwitch_Async(cancellationToken);
+
         var nowUtc = _clock.UtcNow;
 
         DateTime? pausedUntilUtc;
@@ -13537,6 +13618,7 @@ internal sealed class BridgeEngineModel(
             _dispatchPauseReason = null;
         }
 
+        _dispatchOpenSinceUtc = nowUtc;
         Persist_EngineState();
 
         var resume = Limits.DispatchPause_Gate.Describe_Resume(previousReason ?? "the window reset");
@@ -13576,6 +13658,7 @@ internal sealed class BridgeEngineModel(
                 _dispatchPauseReason = null;
             }
 
+            _dispatchOpenSinceUtc = nowUtc;
             Persist_EngineState();
 
             var resume = Limits.DispatchPause_Gate.Describe_Resume(
@@ -13600,6 +13683,118 @@ internal sealed class BridgeEngineModel(
 
         Persist_EngineState();
         _log.Log_Info(GLOBAL_ORCH_ID, $"Dispatch pause SHORTENED to {Limits.DispatchPause_Gate.Describe_ResumeInstant(reconsidered.Value, nowUtc)} — {reason} (was until {Limits.DispatchPause_Gate.Describe_ResumeInstant(storedUntilUtc, nowUtc)})");
+    }
+
+    /// <summary>
+    /// THE OWNER LOGGED IN TO ANOTHER CLAUDE ACCOUNT (owner, 2026-09-23 — they run three and switch
+    /// when one runs out). A usage-limit pause describes the allowance of the account that was logged
+    /// in when it was set; once a different one is, that pause is lifted and this instant becomes the
+    /// probe cutoff (<see cref="EngineStateSnapshot.LimitProbeCutoffUtc"/>) — the same declaration the
+    /// owner makes by hand with /resume_dispatch, made here because the app SAW the account change.
+    /// The probes written before it are the previous account's readings, and at 100% they would
+    /// re-pause on the next check. The next tick re-decides from live readings, as after a hand lift.
+    ///
+    /// <para>
+    /// A FIRST SIGHTING IS ADOPTED, NOT A SWITCH: with no account on record (a state file from before
+    /// this existed) the current one is taken as the pause's own, because nothing says otherwise. And
+    /// an unreadable account is no opinion at all (decision 21).
+    /// </para>
+    /// </summary>
+    async Task Observe_AccountSwitch_Async(CancellationToken cancellationToken)
+    {
+        var nowUtc = _clock.UtcNow;
+
+        if ((nowUtc - _lastAccountCheckUtc).TotalSeconds < ACCOUNT_CHECK_INTERVAL_SECONDS)
+            return;
+
+        _lastAccountCheckUtc = nowUtc;
+
+        var currentAccountId = _accountReader.Read_AccountId_OrNull();
+
+        if (currentAccountId == null)
+            return;
+
+        string? previousAccountId;
+        string? liftText = null;
+
+        lock (_ownerStateLock)
+        {
+            previousAccountId = _limitAccountId;
+
+            if (previousAccountId == currentAccountId)
+                return;
+
+            _limitAccountId = currentAccountId;
+
+            if (previousAccountId != null)
+            {
+                _limitAccountSinceUtc = nowUtc;
+                _limitProbeCutoffUtc = nowUtc;
+
+                if (Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, nowUtc))
+                {
+                    liftText = Limits.DispatchPause_Gate.Describe_AccountSwitchLift(_dispatchPauseReason);
+                    _dispatchPausedUntilUtc = null;
+                    _dispatchPauseReason = null;
+                }
+            }
+        }
+
+        if (previousAccountId != null)
+            _lastDispatchPauseCheckUtc = DateTime.MinValue;
+
+        Persist_EngineState();
+
+        if (previousAccountId == null)
+            return;
+
+        if (liftText == null)
+        {
+            _log.Log_Info(GLOBAL_ORCH_ID, "Claude account changed — usage readings from before now no longer count toward a dispatch pause");
+            return;
+        }
+
+        _dispatchOpenSinceUtc = nowUtc;
+        _log.Log_Info(GLOBAL_ORCH_ID, liftText);
+        Raise_DispatchPauseChanged();
+        await Send_GeneralNotice_BestEffort_Async(liftText, cancellationToken);
+    }
+
+    static DateTime Read_LastWriteUtc_OrMin(string filePath)
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(filePath);
+        }
+        catch
+        {
+            return DateTime.MinValue;
+        }
+    }
+
+    /// <summary>
+    /// The mirror tick's half of the limit rescue — see <see cref="LimitRescue.ILimitRescuer"/>. Only
+    /// while the dispatcher is open: a stopped session is only worth anything if the watchdog will
+    /// bring it back.
+    /// </summary>
+    void Rescue_LimitBlockedSessions()
+    {
+        DateTime? accountSwitchedAtUtc;
+
+        lock (_ownerStateLock)
+            accountSwitchedAtUtc = _limitAccountSinceUtc;
+
+        _limitRescuer.Rescue_Due(_clock.UtcNow, _dispatchOpenSinceUtc, accountSwitchedAtUtc, Is_BridgeDriven, FreshProbe_ShowsAllowance_Since);
+    }
+
+    /// <summary>
+    /// The account's live windows, from probes written at or after <paramref name="floorUtc"/>, say the
+    /// allowance is back — through <see cref="Read_CurrentLimitWindows"/>, the one reader the pause and
+    /// the alerts already share (decision 12).
+    /// </summary>
+    bool FreshProbe_ShowsAllowance_Since(DateTime floorUtc)
+    {
+        return Limits.LimitRescue_Decider.Shows_AllowanceBack(Read_CurrentLimitWindows(floorUtc).Values.Select(window => window.Percent).ToList());
     }
 
     /// <summary>
@@ -18104,6 +18299,8 @@ internal sealed class BridgeEngineModel(
                     DispatchPausedUntilUtc = _dispatchPausedUntilUtc,
                     DispatchPauseReason = _dispatchPauseReason,
                     LimitProbeCutoffUtc = _limitProbeCutoffUtc,
+                    LimitAccountId = _limitAccountId,
+                    LimitAccountSinceUtc = _limitAccountSinceUtc,
                 };
             }
         }

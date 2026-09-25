@@ -189,7 +189,7 @@ public class OrchestratorConfigLoaderGuardrailsTests : IDisposable
         Assert.Null(exception);
 
         var root = JsonNode.Parse(File.ReadAllText(_paths.ConfigFile))!.AsObject();
-        Assert.Equal("opus", root["supervisorModel"]!.GetValue<string>());
+        Assert.Equal("claude-opus-5-5", root["supervisorModel"]!.GetValue<string>());
     }
 
     /// <summary>

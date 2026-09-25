@@ -430,6 +430,72 @@ public class LimitResetParserTests
         Assert.Equal(DateTimeKind.Utc, reading.ResetsAtUtc.Kind);
     }
 
+    /// <summary>
+    /// THE RESCUE'S READING (owner, 2026-09-23): when a terminal session stuck on a limit may be
+    /// restarted. The five-hour refusal seen that morning — "resets 12pm (Europe/Rome)" at 11:13 Rome,
+    /// 09:13 UTC — resolves to 12:00 Rome, 10:00 UTC, read as of the moment the refusal was SEEN rather
+    /// than as of now, so a reading taken at 12:05 still names 12:00 instead of tomorrow.
+    /// </summary>
+    [Fact]
+    public void TheRescueReading_ResolvesTheSessionLimit_AsOfWhenTheRefusalWasSeen()
+    {
+        var reading = LimitReset_Parser.Read_ResetInstant_OrNull(
+            "You've hit your session limit · resets 12pm (Europe/Rome)", 429, Utc(2026, 9, 23, 9, 13));
+
+        Assert.NotNull(reading);
+        Assert.Equal(Utc(2026, 9, 23, 10, 0), reading.ResetsAtUtc);
+        Assert.False(reading.ZoneAssumedUtc);
+    }
+
+    /// <summary>
+    /// THE WEEKLY REFUSAL NAMES A DATE ("resets Sep 15, 9pm (Europe/Rome)", measured 2026-09-12), and
+    /// the dispatcher's reading never matched it. The rescue must: read as "nothing", a weekly limit
+    /// falls back to the no-reset rule and a stuck session is restarted into the same wall every half
+    /// hour for days. Not capped at <see cref="LimitReset_Parser.MAX_DEFERRAL"/> — a later reset is
+    /// only a longer wait here, never a silence the app keeps.
+    /// </summary>
+    [Fact]
+    public void TheRescueReading_ReadsTheDatedWeeklyClause_Uncapped()
+    {
+        var reading = LimitReset_Parser.Read_ResetInstant_OrNull(
+            "You've hit your weekly limit · resets Sep 15, 9pm (Europe/Rome)", 429, Utc(2026, 9, 12, 20, 27));
+
+        Assert.NotNull(reading);
+        Assert.Equal(Utc(2026, 9, 15, 19, 0), reading.ResetsAtUtc);
+    }
+
+    [Fact]
+    public void TheRescueReading_RollsADatedClauseIntoNextYear_AcrossNewYear()
+    {
+        var reading = LimitReset_Parser.Read_ResetInstant_OrNull(
+            "You've hit your weekly limit · resets Jan 2, 9am (UTC)", 429, Utc(2026, 12, 30, 12, 0));
+
+        Assert.NotNull(reading);
+        Assert.Equal(Utc(2027, 1, 2, 9, 0), reading.ResetsAtUtc);
+    }
+
+    /// <summary>A date further out than a weekly window, or already behind the refusal, is not a reset this app can stand behind.</summary>
+    [Theory]
+    [InlineData("You've hit your weekly limit · resets Oct 30, 9pm (Europe/Rome)")]
+    [InlineData("You've hit your weekly limit · resets Sep 1, 9pm (Europe/Rome)")]
+    [InlineData("You've hit your weekly limit · resets Sep 15, 9pm (Europe/Rome) · resets 5am (Europe/Rome)")]
+    [InlineData("You've hit your weekly limit · resets Sep 45, 9pm (Europe/Rome)")]
+    [InlineData("the build resets Sep 15, 9pm (Europe/Rome)")]
+    public void TheRescueReading_RefusesWhatItCannotStandBehind(string text)
+    {
+        Assert.Null(LimitReset_Parser.Read_ResetInstant_OrNull(text, null, Utc(2026, 9, 12, 20, 27)));
+    }
+
+    /// <summary>
+    /// The dispatcher's reading is UNCHANGED by the rescue's: a dated clause is still nothing to it,
+    /// and its six-hour cap still holds.
+    /// </summary>
+    [Fact]
+    public void TheDispatchersReading_StillIgnoresTheDatedClause()
+    {
+        Assert.Null(LimitReset_Parser.Read_OrNull("You've hit your weekly limit · resets Sep 15, 9pm (Europe/Rome)", 429, Utc(2026, 9, 15, 17, 0)));
+    }
+
     static ITurnResult Result(int exitCode, bool isError, int? apiErrorStatus, string resultText)
     {
         return TurnResult_Factory.Create(exitCode, timedOut: false, isError, subtype: null, resultText, sessionId: "s", totalCostUsd: null,

@@ -46,6 +46,15 @@ public static class TranscriptActivity_Reader
 
     const string QUEUE_OPERATION_TYPE = "queue-operation";
     const string ASSISTANT_TYPE = "assistant";
+    const string USER_TYPE = "user";
+    const string SYSTEM_TYPE = "system";
+
+    /// <summary>
+    /// The CLI's own notice when its auto-continue fires at the reset (Claude Code 2.1.280, measured
+    /// 2026-09-23). NOT its "Usage limit reached · continuing automatically at 12pm" notice, which is
+    /// written straight after the refusal and is the wait itself.
+    /// </summary>
+    const string LIMIT_RESET_NOTICE_PREFIX = "Usage limit reset";
     const string ENQUEUE_OPERATION = "enqueue";
 
     /// <summary>
@@ -80,16 +89,31 @@ public static class TranscriptActivity_Reader
     /// examined on 2026-09-14 were this, and every replacement landed on the same limit.
     ///
     /// Read only off records the CLI marks <c>isApiErrorMessage</c>, so a model quoting the sentence
-    /// cannot set it; cleared only by a later assistant record, because the CLI writes a
-    /// <c>system</c> turn_duration record straight after the refusal and that is not the session
-    /// moving on.
+    /// cannot set it; cleared by a later assistant record, a later USER record (input reached the
+    /// session — the auto-continue prompt, or the owner typing), or the CLI's "Usage limit reset ·
+    /// continuing automatically" notice. Not by any other <c>system</c> record: the CLI writes a
+    /// turn_duration and a "continuing automatically at 12pm" notice straight after the refusal, and
+    /// neither is the session moving on.
     /// </param>
+    /// <param name="RefusedAtUtc">
+    /// The stamp of the refusal <paramref name="RefusedForUsageLimit"/> is about — the moment the CLI
+    /// said it, which is what its "resets 12pm" is relative to. Not <paramref name="LastActivityUtc"/>:
+    /// the CLI writes a <c>system</c> record straight after the refusal. Null whenever
+    /// <paramref name="RefusedForUsageLimit"/> is false. With <paramref name="RefusalText"/> and
+    /// <paramref name="RefusalApiStatus"/>, added 2026-09-23 so the limit rescue restarts a stuck
+    /// session only once the reset the refusal NAMES has passed.
+    /// </param>
+    /// <param name="RefusalText">The refusal's own words, e.g. <c>You've hit your session limit · resets 12pm (Europe/Rome)</c>.</param>
+    /// <param name="RefusalApiStatus">The refusal's <c>apiErrorStatus</c> (429 when the CLI sends one).</param>
     public readonly record struct TranscriptActivity(
         DateTime? LastActivityUtc,
         DateTime? OldestUnansweredWakeUtc,
         bool SawActivity,
         bool HasOpenToolCall = false,
-        bool RefusedForUsageLimit = false)
+        bool RefusedForUsageLimit = false,
+        DateTime? RefusedAtUtc = null,
+        string? RefusalText = null,
+        int? RefusalApiStatus = null)
     {
         /// <summary>Nothing read, nothing known — the shape every failure path returns.</summary>
         public static TranscriptActivity Unknown => new(null, null, false, false, false);
@@ -146,7 +170,11 @@ public static class TranscriptActivity_Reader
         var hasOpenToolCall = false;
 
         // Flipped by whichever ASSISTANT record came last — a refusal sets it, a real reply clears it.
+        // The refusal's stamp, words and status travel with it and are cleared with it.
         var refusedForUsageLimit = false;
+        DateTime? refusedAtUtc = null;
+        string? refusalText = null;
+        int? refusalApiStatus = null;
 
         var lines = tailText.Split('\n');
 
@@ -157,7 +185,7 @@ public static class TranscriptActivity_Reader
             if (line.Length == 0)
                 continue;
 
-            if (!Try_ReadRecord(line, out var stampedUtc, out var isEnqueue, out var isToolUse, out var isToolResult, out var isAssistant, out var isLimitRefusal))
+            if (!Try_ReadRecord(line, out var stampedUtc, out var isEnqueue, out var isToolUse, out var isToolResult, out var isAssistant, out var isLimitRefusal, out var replyText, out var apiStatus, out var movesPastRefusal))
                 continue;
 
             if (isEnqueue)
@@ -176,7 +204,26 @@ public static class TranscriptActivity_Reader
                 hasOpenToolCall = false;
 
             if (isAssistant)
+            {
                 refusedForUsageLimit = isLimitRefusal;
+                refusedAtUtc = isLimitRefusal ? stampedUtc : null;
+                refusalText = isLimitRefusal ? replyText : null;
+                refusalApiStatus = isLimitRefusal ? apiStatus : null;
+            }
+            else if (movesPastRefusal)
+            {
+                // INPUT AFTER THE REFUSAL IS THE SESSION MOVING ON (review of 171a23d, 2026-09-23). At the
+                // reset the CLI's auto-continue writes a `system` "Usage limit reset · continuing
+                // automatically" and a `user` "Your claude.ai usage limit has reset…" prompt, and the first
+                // ASSISTANT record follows 3-14 s later (measured in the general supervisor's transcript).
+                // Read off assistant records alone, that gap looked blocked, and a /resume sweep landing
+                // in it killed a turn that had just restarted by itself. A user record is also the owner
+                // typing into the terminal. If the new turn is refused again, its refusal sets this back.
+                refusedForUsageLimit = false;
+                refusedAtUtc = null;
+                refusalText = null;
+                refusalApiStatus = null;
+            }
 
             // Any non-enqueue record is the SESSION acting: a dequeue, a removal, a tool call, a
             // reply. It clears every wake before it — those were answered by definition.
@@ -184,7 +231,9 @@ public static class TranscriptActivity_Reader
             oldestWakeSinceActivityUtc = null;
         }
 
-        return new TranscriptActivity(lastActivityUtc, oldestWakeSinceActivityUtc, lastActivityUtc != null, hasOpenToolCall, refusedForUsageLimit);
+        return new TranscriptActivity(
+            lastActivityUtc, oldestWakeSinceActivityUtc, lastActivityUtc != null, hasOpenToolCall, refusedForUsageLimit,
+            refusedAtUtc, refusalText, refusalApiStatus);
     }
 
     /// <summary>
@@ -222,7 +271,10 @@ public static class TranscriptActivity_Reader
         out bool isToolUse,
         out bool isToolResult,
         out bool isAssistant,
-        out bool isLimitRefusal)
+        out bool isLimitRefusal,
+        out string replyText,
+        out int? apiStatus,
+        out bool movesPastRefusal)
     {
         stampedUtc = default;
         isEnqueue = false;
@@ -230,6 +282,9 @@ public static class TranscriptActivity_Reader
         isToolResult = false;
         isAssistant = false;
         isLimitRefusal = false;
+        replyText = string.Empty;
+        apiStatus = null;
+        movesPastRefusal = false;
 
         try
         {
@@ -260,9 +315,16 @@ public static class TranscriptActivity_Reader
             // A tool call and its result are both ordinary stamped records; what matters is which
             // came last. Read from the message content rather than the record type, because both
             // arrive as plain assistant/user records.
-            isAssistant = string.Equals(record["type"]?.GetValue<string>(), ASSISTANT_TYPE, StringComparison.Ordinal);
+            var recordType = record["type"]?.GetValue<string>();
+            isAssistant = string.Equals(recordType, ASSISTANT_TYPE, StringComparison.Ordinal);
 
-            var replyText = new System.Text.StringBuilder();
+            movesPastRefusal = string.Equals(recordType, USER_TYPE, StringComparison.Ordinal)
+                || (string.Equals(recordType, SYSTEM_TYPE, StringComparison.Ordinal)
+                    && record["content"] is JsonValue notice
+                    && notice.TryGetValue<string>(out var noticeText)
+                    && noticeText.StartsWith(LIMIT_RESET_NOTICE_PREFIX, StringComparison.OrdinalIgnoreCase));
+
+            var replyBuilder = new System.Text.StringBuilder();
 
             if (record["message"] is JsonObject message && message["content"] is JsonArray blocks)
             {
@@ -275,18 +337,21 @@ public static class TranscriptActivity_Reader
                     else if (string.Equals(kind, "tool_result", StringComparison.Ordinal))
                         isToolResult = true;
                     else if (string.Equals(kind, "text", StringComparison.Ordinal))
-                        replyText.Append((block as JsonObject)?["text"]?.GetValue<string>()).Append(' ');
+                        replyBuilder.Append((block as JsonObject)?["text"]?.GetValue<string>()).Append(' ');
                 }
             }
 
             // ONLY THE CLI CAN MARK A RECORD AS AN API ERROR, and the wording question is asked in the
             // one place that already answers it for the dispatcher (LimitReset_Parser), so the two
             // readers of "was this a limit refusal" cannot drift apart.
+            replyText = replyBuilder.ToString().Trim();
+            apiStatus = Read_Status_OrNull(record["apiErrorStatus"]);
+
             isLimitRefusal = isAssistant
                 && record["isApiErrorMessage"] is JsonValue flag
                 && flag.TryGetValue<bool>(out var isApiError)
                 && isApiError
-                && LimitReset_Parser.Looks_LikeUsageLimit(replyText.ToString(), Read_Status_OrNull(record["apiErrorStatus"]));
+                && LimitReset_Parser.Looks_LikeUsageLimit(replyText, apiStatus);
 
             return true;
         }

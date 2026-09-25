@@ -55,10 +55,10 @@ public class PerRoleModelDefaultsTests : IDisposable
     {
         var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
-        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("claude-opus-5-5", config.Get_ModelForRole(SessionRoles.Supervisor));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
-        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
+        Assert.Equal("claude-opus-5-5", config.Get_ModelForRole(SessionRoles.Solo));
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.General));
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Communicator));
     }
@@ -222,7 +222,7 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         var provider = OrchestratorConfigProvider_Factory.Create(_paths);
 
-        Assert.Equal("opus", provider.Get_Current().Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("claude-opus-5-5", provider.Get_Current().Get_ModelForRole(SessionRoles.Supervisor));
         Assert.Equal("opus", provider.Get_Current().Get_ModelForRole(SessionRoles.Reviewer));
     }
 
@@ -259,7 +259,7 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
-        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
+        Assert.Equal("claude-opus-5-5", config.Get_ModelForRole(SessionRoles.Solo));
     }
 
     /// <summary>
@@ -303,10 +303,10 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
-        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("claude-opus-5-5", config.Get_ModelForRole(SessionRoles.Supervisor));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
-        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
+        Assert.Equal("claude-opus-5-5", config.Get_ModelForRole(SessionRoles.Solo));
 
         // Routing and narration are cheap on BOTH sides and neither preset ever touches them.
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.General));
@@ -320,7 +320,7 @@ public class PerRoleModelDefaultsTests : IDisposable
         var (value, origin) = Settings_Resolver.Resolve(effortDefinition, presetTree, configTree: null, session: null);
 
         Assert.Equal(SettingOrigins.Preset, origin);
-        Assert.Equal("xhigh", value!.GetValue<string>());
+        Assert.Equal("high", value!.GetValue<string>());
     }
 
     /// <summary>
@@ -341,10 +341,10 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
-        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("claude-opus-5-5", config.Get_ModelForRole(SessionRoles.Supervisor));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
-        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
+        Assert.Equal("claude-opus-5-5", config.Get_ModelForRole(SessionRoles.Solo));
 
         var definition = Catalog.Find_OrNull("phone.push")!;
         var presetTree = Presets_Loader.Resolve_ForConfig(
@@ -423,10 +423,10 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         // Classic's own behaviour — exactly what an ABSENT preset key already yields (classic states
         // no model any more), because a typo must cost nothing more than saying nothing would.
-        Assert.Equal("opus", config!.Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("claude-opus-5-5", config!.Get_ModelForRole(SessionRoles.Supervisor));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
         Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
-        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
+        Assert.Equal("claude-opus-5-5", config.Get_ModelForRole(SessionRoles.Solo));
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.General));
         Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Communicator));
 
@@ -508,8 +508,8 @@ public class PerRoleModelDefaultsTests : IDisposable
     {
         var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
-        Assert.Equal("xhigh", config.Get_EffortForRole_OrNull(SessionRoles.Supervisor));
-        Assert.Equal("xhigh", config.Get_EffortForRole_OrNull(SessionRoles.Solo));
+        Assert.Equal("high", config.Get_EffortForRole_OrNull(SessionRoles.Supervisor));
+        Assert.Equal("high", config.Get_EffortForRole_OrNull(SessionRoles.Solo));
         Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.Implementer));
         Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.Reviewer));
         Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.General));
@@ -563,7 +563,7 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         Assert.Equal("high", config.Get_EffortForRole_OrNull(SessionRoles.Implementer));
         Assert.Null(config.Get_EffortForRole_OrNull(SessionRoles.Supervisor));
-        Assert.Equal("xhigh", config.Get_EffortForRole_OrNull(SessionRoles.Solo));
+        Assert.Equal("high", config.Get_EffortForRole_OrNull(SessionRoles.Solo));
     }
 
     /// <summary>A word that is not an effort level costs that one key its default, never the load.</summary>
@@ -574,7 +574,7 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
 
-        Assert.Equal("xhigh", config.Get_EffortForRole_OrNull(SessionRoles.Supervisor));
+        Assert.Equal("high", config.Get_EffortForRole_OrNull(SessionRoles.Supervisor));
     }
 
     /// <summary>Captures what the loader reported, so "a mistyped preset is named, not swallowed" can be asserted.</summary>

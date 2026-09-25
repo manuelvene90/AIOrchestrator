@@ -113,7 +113,8 @@ public static class BridgeEngine_Factory
             EngineStateStore_Factory.Create_File(paths, log),
             Clock_Factory.Create_System(),
             timing,
-            sendBudget: sendBudget);
+            sendBudget: sendBudget,
+            accountReader: Limits.ClaudeAccount.ClaudeAccountReader_Factory.Create_ForThisUser());
     }
 
     /// <summary>
@@ -154,7 +155,15 @@ public static class BridgeEngine_Factory
 
         // Null in file-only mode and on the test seams that hand in their own client: with no
         // budget the engine simply writes no sendBucket key, and the next start begins full.
-        ITelegramSendBudget? sendBudget = null)
+        ITelegramSendBudget? sendBudget = null,
+
+        // Null reads as "cannot tell which account": a test seam that does not name one can never see
+        // an account switch. Production passes the reader of this user's ~/.claude.json.
+        Limits.ClaudeAccount.IClaudeAccountReader? accountReader = null,
+
+        // Null is this machine's real process table. A test passes a fake so the limit rescue can be
+        // driven without a session shell to find or to stop.
+        Termination.SessionProcesses.ISessionProcesses? sessionProcesses = null)
     {
         // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
         var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
@@ -184,6 +193,8 @@ public static class BridgeEngine_Factory
             paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, transcriber,
             printTurns, lastUpdateId, engineStateStore, restoredState, clock, timing,
             hostWindowing ?? Hosting.HostWindowing.HostWindowing_Factory.Create_ForThisHost(),
+            accountReader ?? Limits.ClaudeAccount.ClaudeAccountReader_Factory.Create_Unknown(),
+            sessionProcesses ?? Termination.SessionProcesses.SessionProcesses_Factory.Create_ForThisHost(),
             sendBudget);
     }
 }
