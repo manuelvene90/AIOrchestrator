@@ -430,7 +430,10 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Telegram supergroup chat id",
             description: "The forum supergroup every topic is created in. Absent until the installer or the owner sets it.",
-            restart: RestartKinds.None,
+            // HOST, NOT NONE (final review I1, 2026-09-24): read ONCE at startup — BridgeEngine_Factory builds the client
+            // with the startup chat id (and no client at all when it was absent), and the inbound loop captures both ids
+            // before its first poll. "applies at once" here told the owner a move to a new group had landed when it had not.
+            restart: RestartKinds.Host,
             nullable: true));
 
         kernel.Add(SettingDefinition_Factory.Create_Int(
@@ -442,7 +445,9 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Telegram owner user id",
             description: "The one Telegram user whose messages the bridge accepts as the owner's. Absent until set.",
-            restart: RestartKinds.None,
+            // HOST, NOT NONE (final review I1): the inbound loop captures this id before its first poll and filters every
+            // update with it for the life of the process — the same startup read as telegramSupergroupChatId above.
+            restart: RestartKinds.Host,
             nullable: true));
 
         kernel.Add(SettingDefinition_Factory.Create_Bool(
@@ -498,6 +503,25 @@ public static class SettingsCatalog
             description: "How long a typed high-risk code stays valid. Long enough to fetch the phone from another room; short enough to be a second gesture.",
             restart: RestartKinds.Host));
 
+        // ON BY DEFAULT, OFF IN CLASSIC (owner, 2026-09-23, plan 03 task 15): the shipped default is
+        // today's behaviour and the guarded one (ruling R14); classic.json states the owner's way.
+        // Read by the engine at the one place a question's risk is decided, per question, so the
+        // switch takes effect on the next question with no restart.
+        kernel.Add(SettingDefinition_Factory.Create_Bool(
+            path: GuardrailSettings_Factory.HIGH_RISK_CONFIRMATION_KEY,
+            shippedDefault: GuardrailSettings_Factory.DEFAULT_HIGH_RISK_CONFIRMATION,
+            scope: SettingScopes.Machine,
+            category: SettingCategories.Kernel,
+            label: "High-risk confirmation code",
+            description:
+                "Whether a tap on a high-risk question — declared RISK: high by the asker, or matching a high-risk pattern — " +
+                "also costs a typed 4-digit code. OFF, one tap decides it, but it is still high risk: it never takes a " +
+                "default and lapses as a deny. The question contract does not change: every question still carries its " +
+                "RISK: line, and the log still records which questions are high risk. A question asked while the code was " +
+                "ON keeps its lock after the setting is turned off — the lock is fixed when the question is asked. " +
+                "highRiskPatterns: [] only silences the pattern half; this is the switch for both.",
+            restart: RestartKinds.None));
+
         kernel.Add(SettingDefinition_Factory.Create_Int(
             path: "dispatchPauseThresholdPercent",
             shippedDefault: (int)GuardrailSettings_Factory.DEFAULT_DISPATCH_PAUSE_THRESHOLD_PERCENT,
@@ -537,16 +561,12 @@ public static class SettingsCatalog
 
         kernel.Add(SettingDefinition_Factory.Create_String(
             path: "web.listen",
-
-            // READ BY NOTHING IN THIS PLAN. The HTTP listener that will consume it is plan 04; the key
-            // is registered now so the resolver, the presets and the renderers have one spelling of it
-            // from the start rather than acquiring one later.
             shippedDefault: "127.0.0.1:7391",
             scope: SettingScopes.Machine,
             category: SettingCategories.Kernel,
             label: "Web listen address",
             description:
-                "host:port the settings web page will listen on, or 'off'. READ BY NOTHING YET — the listener is plan 04. " +
+                "host:port the settings web page listens on, or 'off'. " +
                 "The loopback default is deliberate: the page has no authentication of its own beyond web.token.",
             restart: RestartKinds.Host,
             validator: SettingValidators.LISTEN_ADDRESS));
@@ -557,8 +577,11 @@ public static class SettingsCatalog
             scope: SettingScopes.Machine,
             category: SettingCategories.Kernel,
             label: "Web token",
-            description: "The shared secret the settings web page will require. READ BY NOTHING YET — the listener is plan 04.",
-            restart: RestartKinds.Host));
+            description: "The shared secret the settings web page requires.",
+
+            // NOT Host (ruling P37, 2026-09-23): the listener re-reads it whenever config.json changes, so a token set
+            // by hand is enforced on the next request — a restart label here would tell the owner to do a needless one.
+            restart: RestartKinds.None));
 
         kernel.Add(SettingDefinition_Factory.Create_Composite(
             path: "repos",
@@ -568,7 +591,9 @@ public static class SettingsCatalog
             label: "Repositories",
             description:
                 "The repo list, a structure rather than a value — name, path and topic colour per entry. Shown read-only " +
-                "here because its own editor already exists; the named parser is the authority on its shape.",
+                "here because it is changed elsewhere: in the desktop app's main window, whose REPOSITORIES list is dragged " +
+                "to reorder, with entries added by the installer or by hand in config.json. The named parser is the " +
+                "authority on its shape.",
             restart: RestartKinds.Host));
 
         kernel.Add(SettingDefinition_Factory.Create_Composite(
@@ -578,8 +603,9 @@ public static class SettingsCatalog
             category: SettingCategories.Kernel,
             label: "Plan backend",
             description:
-                "Where the task ledger lives — a structure with its own kind and per-kind fields. Read-only here; the " +
-                "named parser is the authority, and a mistyped kind stays LOUD there rather than quietly becoming a default.",
+                "Where the task ledger lives — a structure with its own kind and per-kind fields. Read-only here: it is " +
+                "hand-edited in config.json, and no window or command writes it. The named parser is the authority, and a " +
+                "mistyped kind stays LOUD there rather than quietly becoming a default.",
             restart: RestartKinds.Host));
 
         kernel.AddRange(Build_Reviewing());
@@ -700,10 +726,10 @@ public static class SettingsCatalog
     }
 
     // ---------------------------------------------------------------------------------------
-    // PHONE — what reaches the owner's phone and how a topic looks. INERT until plan 03.
+    // PHONE — what reaches the owner's phone and how a topic looks. Every row is read by the engine
+    // at its point of effect since plan 03 (the last two, topic.modeGlyphs and topic.onClose, in
+    // Tasks 7 and 10), so the "read by nothing yet" note these rows carried is gone.
     // ---------------------------------------------------------------------------------------
-
-    const string INERT_NOTE = "REGISTERED BUT READ BY NOTHING YET — the engine starts obeying this key in plan 03.";
 
     static IReadOnlyList<ISettingDefinition> Build_Phone()
     {
@@ -717,8 +743,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Phone,
                 label: "What reaches the phone",
                 description:
-                    "'filtered' pushes only what asks, is blocked, carries a picture, or is THE answer (OwnerPush_Policy); " +
-                    $"'everything' mirrors every owner-channel entry. {INERT_NOTE}",
+                    "'filtered' pushes only what asks, is blocked, carries a picture, or is THE answer (OwnerPush_Policy), " +
+                    "and hands the rest over as one message when the turn the owner waited on ends; " +
+                    "'everything' mirrors every owner-channel entry. Orchestration topics only — General always gets everything.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
@@ -727,7 +754,10 @@ public static class SettingsCatalog
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Periodic status",
-                description: $"Whether the app pushes an unprompted periodic status at all. {INERT_NOTE}",
+                description:
+                    "Whether the app posts master's periodic STATUS (the /status roster plus the current task) into each " +
+                    "orchestration topic on its interval — and only when it changed since the last one, so an idle topic " +
+                    "stays silent. The away digest is not this: it keeps its own half hour whatever this says.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Int(
@@ -738,7 +768,32 @@ public static class SettingsCatalog
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Periodic status interval (minutes)",
-                description: $"Minutes between periodic status messages, when they are on at all. {INERT_NOTE}",
+                description:
+                    "Minutes between periodic status messages, when they are on — a grid on the wall clock counted from " +
+                    "midnight, shared by every topic. Moves the periodic status only; the away digest stays on 30.",
+                restart: RestartKinds.None),
+
+            // THE AWAY DELAY (plan 03 task 18; owner 2026-09-23, ai-orchestrator-29 entry [95]: "the away mode
+            // is triggered too soon all the time. That also should be a setting."). The shipped value is
+            // today's 15 (ruling R14) and classic states the owner's 60. Read by the engine each time it asks
+            // AwayMode_Policy.Should_EnterAway, which is also where 0 is read as "never", not "at once".
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.AWAY_AFTER_MINUTES_PATH,
+                shippedDefault: Bridge.AwayMode_Policy.DEFAULT_AWAY_AFTER_MINUTES,
+
+                // 0 IS LEGAL AND IS THE OFF SWITCH; a day is the ceiling, because a silence longer than
+                // that is not a delay any more — it is the switch, and 0 already says so plainly.
+                minimum: 0,
+                maximum: 1440,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Away mode after (minutes)",
+                description:
+                    "How long you can be silent — no message or tap in ANY topic — while an orchestration is holding " +
+                    "its questions for you, before the app decides you are away: it tells you once, parks the " +
+                    "questions already asked, tells every session to ask nothing more, and sends a short update per " +
+                    "orchestration every 30 minutes until you write again. Any message you send ends it everywhere, " +
+                    "and it never starts while you are at a PC (/pc). 0 means away mode never starts by itself.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
@@ -748,8 +803,10 @@ public static class SettingsCatalog
                 category: SettingCategories.Phone,
                 label: "App messages ring",
                 description:
-                    "Whether the app's own messages arrive with a notification or silently. An agent's question always " +
-                    $"rings; this governs the app's narration around it. {INERT_NOTE}",
+                    "Whether your supervisor's (or solo's) narration rings as it arrives. When off, only a question, a " +
+                    "BLOCKED ON OWNER, a file, the boot greeting and the answer to what you asked ring; the rest arrives " +
+                    "silently. Under phone.push = filtered, narration held for the turn-end summary still rings once, " +
+                    "with that summary. Receipts, the busy line and a bare turn-ended line are silent either way.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Enum(
@@ -762,47 +819,105 @@ public static class SettingsCatalog
                 description:
                     "The bar of literal slash commands above the input box. Off by default and deliberately not persistent: " +
                     "is_persistent re-shows the bar whenever the phone keyboard hides — which is what the back button does — " +
-                    $"and disables the icon that collapses it (CLAUDE.md decision 24). {INERT_NOTE}",
+                    "and disables the icon that collapses it (CLAUDE.md decision 24). 'on' INSTALLS NOTHING YET: the owner " +
+                    "answered D5 'off for both presets' (2026-09-14), so plan 03 task 9 wired no carrier and ReplyKeyboard_Markup " +
+                    "stays built, tested and deliberately uncalled — wiring it is its own request.",
                 restart: RestartKinds.Host),
+
+            // THE AGGREGATION WINDOW AND ITS DISCOUNT (plan 03 task 13, owner 2026-09-23: "it should be a
+            // buffer of 6 seconds, giving me the time to press wait if I need"). The shipped values are
+            // today's — the fork's 3 s / 2 s (bb91051a, 2026-09-09) — and classic states the owner's 6 s
+            // with no discount. The reasoning behind each number lives on the constant it reads, one copy.
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.AGGREGATION_SECONDS_PATH,
+                shippedDefault: Bridge.OwnerDeliveryBuffer.OwnerDeliveryBuffer_Factory.DEFAULT_AGGREGATION_SECONDS,
+
+                // ONE, NOT ZERO: OwnerDeliveryBuffer refuses a window under a second, and a window of zero
+                // is a message taken on the tick it lands — out of reach of ⏸ and one turn per message.
+                minimum: 1,
+                maximum: 60,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Message aggregation window (seconds)",
+                description:
+                    "How long the app holds a message you send before handing it to the session. Longer gives you " +
+                    "time to press ⏸ Wait under the receipt — the hold only reaches a message still in the buffer — " +
+                    "and lets a burst of typing arrive as ONE turn instead of one each (a turn costs roughly a million " +
+                    "input tokens, measured 2026-09-09); shorter makes a lone message reach the session sooner. " +
+                    "▶ Send now skips it for one message.",
+                restart: RestartKinds.None),
+
+            SettingDefinition_Factory.Create_Int(
+                path: PhoneSettings.PhoneSettings_Json.FINISHED_MESSAGE_SECONDS_PATH,
+                shippedDefault: Bridge.OwnerDeliveryBuffer.OwnerDeliveryBuffer_Factory.FINISHED_MESSAGE_QUIET_SECONDS,
+
+                // ZERO IS LEGAL here and only here: it is "a finished message leaves on the next tick".
+                // Never longer than the window — OwnerDeliveryBufferModel clamps it at the point of use.
+                minimum: 0,
+                maximum: 60,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Finished-message window (seconds)",
+                description:
+                    "The shorter wait a single message that reads as finished ('ok, go ahead.') serves instead of the " +
+                    "aggregation window. A discount only while it is the shorter of the two — a value above the window " +
+                    "is served as the window. Equal to the window means no discount: every message stays reachable by " +
+                    "⏸ Wait for the whole window, which is the owner's classic choice (2026-09-23).",
+                restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Int(
                 path: "phone.foldLongEntriesAbove",
                 shippedDefault: OwnerMessage_Folder.DEFAULT_FOLD_THRESHOLD,
-                minimum: 1,
+
+                // 0, NOT 1: 0 is the owner's OFF SWITCH (OwnerMessage_Folder — the delivery that predates
+                // the fold), pinned by TelegramProseSettingsJsonTests and LongEntriesFoldOnThePhoneTests.
+                // A floor of 1 was harmless while nothing resolved this row; the day
+                // TelegramProseSettings_Json began resolving it (2026-09-14) it would have turned a
+                // hand-edited 0 into 900.
+                minimum: 0,
                 maximum: 10000,
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Fold long entries above (characters)",
                 description:
-                    "Characters above which an entry is folded on the phone rather than sent whole. Re-homed from " +
-                    $"'telegram.foldLongEntriesAbove', which still resolves as an alias. {INERT_NOTE}",
+                    "Characters above which an entry is folded on the phone rather than sent whole; 0 turns folding off. " +
+                    "Re-homed from 'telegram.foldLongEntriesAbove', which still resolves as an alias.",
                 restart: RestartKinds.None,
                 legacyPath: $"{TelegramProseSettings.TelegramProseSettings_Json.TELEGRAM_KEY}.{TelegramProseSettings.TelegramProseSettings_Json.FOLD_LONG_ENTRIES_ABOVE_KEY}"),
 
             SettingDefinition_Factory.Create_Int(
                 path: "phone.attachEntriesAbove",
                 shippedDefault: OwnerDocument_Builder.DEFAULT_ATTACH_ABOVE_CHUNKS,
-                minimum: 1,
+
+                // 0, NOT 1, for the reason phone.foldLongEntriesAbove gives: 0 is the attachment's off switch.
+                minimum: 0,
                 maximum: 100,
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "Attach entries above (chunks)",
                 description:
-                    "How many message-sized chunks an entry may span before it is sent as an attached document instead. " +
-                    $"Re-homed from 'telegram.attachEntriesAbove', which still resolves as an alias. {INERT_NOTE}",
+                    "How many message-sized chunks an entry may span before it is sent as an attached document instead; " +
+                    "0 turns the attachment off. Re-homed from 'telegram.attachEntriesAbove', which still resolves as an alias.",
                 restart: RestartKinds.None,
                 legacyPath: $"{TelegramProseSettings.TelegramProseSettings_Json.TELEGRAM_KEY}.{TelegramProseSettings.TelegramProseSettings_Json.ATTACH_ENTRIES_ABOVE_KEY}"),
 
+            // DELETE IS THE SHIPPED DEFAULT — the owner's answer D2 (2026-09-14): "delete", with close-but-keep
+            // "staying available as an option" (ruling R4 implements it). Classic states nothing and follows;
+            // quiet no longer restates it. Read at the point of effect by the engine's Execute_Close.
             SettingDefinition_Factory.Create_Enum(
                 path: "topic.onClose",
                 values: ["delete", "close"],
-                shippedDefault: "close",
+                shippedDefault: "delete",
                 scope: SettingScopes.Machine,
                 category: SettingCategories.Phone,
                 label: "On closing an orchestration",
                 description:
-                    "Whether closing an orchestration deletes its Telegram topic or closes it. 'close' keeps the audit " +
-                    $"trail the whole system is built on; 'delete' is for a phone the owner wants tidy. {INERT_NOTE}",
+                    "Whether closing an orchestration deletes its Telegram topic or closes it. 'delete' (the default) " +
+                    "removes the topic and its messages — for a phone that will hold thousands of finished topics — and " +
+                    "keeps trying: a delete that fails is retried, remembered, and paid off at the next start. 'close' " +
+                    "keeps the topic in the list with its history, marked 🏁, as an audit trail on the phone; it is one " +
+                    "closeForumTopic, not retried, because a failed close only leaves the topic open. The folder on disk " +
+                    "is kept either way.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Enum(
@@ -817,8 +932,51 @@ public static class SettingsCatalog
                     "THE FORK'S REASON FOR MOVING THEM OFF THE NAME: each rename is an editForumTopic call and EACH " +
                     "RENAME WRITES A SERVICE MESSAGE, so an app-wide mode change wrote a line into every one of the " +
                     "owner's threads to tell them something they had just done themselves. In PULSE's header the same " +
-                    $"fact costs one silent edit of a message that was being edited anyway (spec §7.4). {INERT_NOTE}",
+                    "fact costs one silent edit of a message that was being edited anyway (spec §7.4). Under 'name' that " +
+                    "cost is back: an app-wide mode change (/dnd_all, /mute_all, away) renames every open topic in one " +
+                    "sweep. A name is only renamed when what it should say has changed, never on a tick. The state " +
+                    "glyphs (🏁 💤 ✅ 🧪 ⏸) stay on the name either way, and the five are never drawn in both places.",
                 restart: RestartKinds.None),
+
+            // THE PER-REPO TOPIC COLOUR (plan 03 task 14; owner 2026-09-23 08:10: "since we merged his forks
+            // the topic icon gets colored without any context of why, red, blue, green, seemingly random").
+            // The shipped value is today's — the fork's brief F1 (dfb33688, 2026-09-10) — and classic states
+            // the owner's false (ruling R14). Read at the point of effect by RepoTopicColour_Resolver.
+            SettingDefinition_Factory.Create_Bool(
+                path: PhoneSettings.PhoneSettings_Json.TOPIC_REPO_COLOURS_PATH,
+                shippedDefault: true,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Colour topics by repository",
+                description:
+                    "Whether each repository's topics are created with a colour of their own: the first repository " +
+                    "takes blue, the next yellow, then violet, green, rose and red, and the colour is written onto the " +
+                    "repository in config.json so reordering the list never changes it. Off creates every topic in " +
+                    "Telegram's default. TELEGRAM ONLY TAKES A COLOUR WHEN A TOPIC IS CREATED (editForumTopic has no " +
+                    "icon_color), so a change reaches topics created afterwards — existing topics keep the colour they " +
+                    "have. Turning it off erases no assignment: on again, each repository gets its old colour back.",
+                restart: RestartKinds.None),
+
+            // THE BUTTONS UNDER A QUESTION (plan 04 task 11; owner 2026-09-24, ai-orchestrator-29 entry [123]: "Can
+            // we have a setting that lets us decide what buttons we want under the questions? I'd add all 2 or just
+            // one of the two."). The shipped value is today's — the fork's Let's talk alone (ruling R14) — and
+            // classic states the owner's ["explain","talk"]. Read by the engine each time it builds a question's
+            // keyboard, so a change reaches the next question asked and never re-draws one already on the phone.
+            SettingDefinition_Factory.Create_StringList(
+                path: PhoneSettings.PhoneSettings_Json.QUESTION_APP_BUTTONS_PATH,
+                shippedDefault: [QuestionAppButton_Names.TALK],
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Phone,
+                label: "Buttons under a question",
+                description:
+                    "The app's own buttons under every question, after its options, in this order. 'explain' is " +
+                    $"\"{Bridge.OwnerPush_Policy.EXPLAIN_LABEL}\": the session explains what each option means in practice, what it costs " +
+                    $"to get wrong and which it recommends, then asks the question again. 'talk' is \"{Bridge.OwnerPush_Policy.TALK_LABEL}\": the " +
+                    "session explains in prose and answers whatever you ask next, then asks again once you are done. " +
+                    "Either tap closes the question — its buttons go — without choosing anything. An empty list adds no " +
+                    "button: the options alone. A change reaches the next question asked.",
+                restart: RestartKinds.None,
+                validator: SettingValidators.QUESTION_APP_BUTTONS),
         ];
     }
 
@@ -838,8 +996,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Receipts,
                 label: "Receipt style",
                 description:
-                    "How the app says it has your message: 'ticks' edits a receipt line, 'reactions' reacts to the owner's " +
-                    $"own message instead. {INERT_NOTE}",
+                    "How the app says it has your message: 'ticks' posts a silent ✓ under it and edits that line to ✓✓ " +
+                    "when a session is handed it; 'reactions' puts 👀 then 👌 on the owner's own message instead, and no " +
+                    "reaction is attempted under 'ticks'. A reaction Telegram refuses still gets the ✓, whichever is set.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_Bool(
@@ -851,7 +1010,8 @@ public static class SettingsCatalog
                 description:
                     "WHERE the ⏸/▶ hold toggle is drawn: true puts it on the PULSE bar, false on the receipt. NEVER BOTH — " +
                     "one toggle in two places is CLAUDE.md decision 12's drift, and this key is the single fact that says " +
-                    $"which place. {INERT_NOTE}",
+                    "which place. False with phone.receipts = 'reactions' has no receipt message to carry it, so the toggle " +
+                    "falls back to the PULSE bar and the log says so once.",
                 restart: RestartKinds.None),
         ];
     }
@@ -883,8 +1043,15 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Pulse fields",
                 description:
-                    "Which fields the pulse line carries, in this order. 'modelEffort' is a legal field and is not shipped " +
-                    $"on the line — an owner who wants it adds it. {INERT_NOTE}",
+                    "Which fields the pulse line carries, in this order, under its header. 'modelEffort' is a legal field and " +
+                    "is not shipped on the line — an owner who wants it adds it, and it rides the supervisor and member rows " +
+                    "rather than drawing a line of its own. 'progress' is the task count alone, '1/12 (8%)' — the reading " +
+                    "'merged' carries without its label, and with the 'unchanged for' clause when pulse.unchangedFor is on " +
+                    "('1/12 (8%) · unchanged 25 min') — and it is the one field with a place " +
+                    "outside this order: listed FIRST, it is drawn above the header, so it is the first line of the message and " +
+                    "of a notification preview; listed anywhere else, it sits in its place like any other field. " +
+                    "Omitting 'updated' removes the heartbeat, which is what tells the " +
+                    "owner a quiet orchestration from a dead app — a frozen status line looks exactly like a correct one.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.PULSE_FIELDS),
 
@@ -897,10 +1064,31 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Pulse step (minutes)",
                 description:
-                    "The granularity the pulse's 'unchanged for' reading steps in, and therefore how often the pulse " +
-                    "message is EDITED at all. THE FLOOR IS NOT LOWER BY DEFAULT because of the 429 evidence of " +
-                    "2026-09-10: an edit per minute across every open topic is a rate-limit, and a status line that is " +
-                    $"rate-limited tells the owner nothing at all. {INERT_NOTE}",
+                    "The granularity the pulse's clocks step in — each member's time on task, the 'unchanged for' reading " +
+                    "and the 'updated' heartbeat, all three by the same step — and therefore how often the pulse message " +
+                    "is EDITED at all. THE FLOOR IS NOT LOWER BY DEFAULT because of the 429 evidence of 2026-09-10: an " +
+                    "edit per minute across every open topic is a rate-limit, and a status line that is rate-limited tells " +
+                    "the owner nothing at all.",
+                restart: RestartKinds.None),
+
+            // THE "UNCHANGED FOR" CLAUSE (plan 03 task 19; owner 2026-09-24, ai-orchestrator-29 entry [100]: "my
+            // brother removed the indication ... of how long the progress and completion percentage have stayed
+            // identical in minutes. It's useful to get an idea if the session is working or not."). Shipped ON,
+            // today's behaviour for the shipped list, where `merged` carries it (ruling R14). Neither preset states
+            // it (ruling R28, superseding R26): the fork never removed the clause — quiet draws the shipped list,
+            // whose `merged` carries it — and it was lost only on classic, through Task 16's `progress`. The
+            // wording and the ten-minute silence are UnchangedFor_Formatter's, one copy.
+            SettingDefinition_Factory.Create_Bool(
+                path: PulseSettings.PulseSettings_Json.UNCHANGED_FOR_PATH,
+                shippedDefault: true,
+                scope: SettingScopes.Machine,
+                category: SettingCategories.Pulse,
+                label: "Say how long progress has stood still",
+                description:
+                    "Whether the pulse's progress reading says how long the task count and completion percentage have " +
+                    "stayed identical — 'unchanged 25 min', shown only once they have stood still for 10 minutes and " +
+                    "stepped by pulse.stepMinutes. A useful hint of whether the session is working. It rides whichever " +
+                    "of the 'progress' and 'merged' fields is drawn; off, neither says it.",
                 restart: RestartKinds.None),
 
             SettingDefinition_Factory.Create_StringList(
@@ -910,11 +1098,9 @@ public static class SettingsCatalog
                 category: SettingCategories.Pulse,
                 label: "Orchestration topic buttons",
                 description:
-                    "The verbs on an orchestration topic's button bar, in display order. NOTE FOR WHOEVER IMPLEMENTS THE " +
-                    "botCommands VALIDATOR: 'tail sup' is a verb WITH ITS TARGET, by deliberate design — a tap carries no " +
-                    "text, so the target rides inside the verb — and it is therefore NOT a member of BotCommandMenu.ALL, " +
-                    "which holds the bare 'tail'. A validator that tests exact membership would refuse the shipped default. " +
-                    $"{INERT_NOTE}",
+                    "The verbs on an orchestration topic's button bar, in display order. Any command of the '/' menu can be a " +
+                    "button, and a tap runs it exactly as if you had typed it in that topic. An element carrying a target other " +
+                    "than 'tail sup' (e.g. 'tail 1') is left off the bar and named once in the log — it stays a typed command.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.BOT_COMMANDS),
 
@@ -926,7 +1112,8 @@ public static class SettingsCatalog
                 label: "General topic buttons",
                 description:
                     "The verbs on the GENERAL topic's button bar, in display order. All cross-cutting on purpose: General " +
-                    $"has no session of its own, so a /merge or a /close there would have nothing to act on. {INERT_NOTE}",
+                    "has no session of its own, so a /merge or a /close there would have nothing to act on. An empty list " +
+                    "is no bar at all.",
                 restart: RestartKinds.None,
                 validator: SettingValidators.BOT_COMMANDS),
         ];

@@ -24,8 +24,19 @@ public interface ITelegramApiClient
     /// </summary>
     Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken);
 
-    /// <summary>Deletes a topic AND its messages — closed orchestrations disappear from Telegram entirely.</summary>
+    /// <summary>
+    /// Deletes a topic AND its messages — under <c>topic.onClose = delete</c>, the shipped default, a
+    /// closed orchestration disappears from Telegram entirely.
+    /// </summary>
     Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// CLOSES a topic (<c>closeForumTopic</c>): it stays in the owner's topic list with its history, and
+    /// only admins can post in it. What <c>topic.onClose = close</c> does to a closed orchestration's
+    /// topic (plan 03 Task 10) — the audit trail kept on the phone. Closing an already-closed topic is
+    /// answered <c>TOPIC_NOT_MODIFIED</c>. Needs <c>can_manage_topics</c> on the bot.
+    /// </summary>
+    Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Telegram auto-pins the "topic created" service message on bot-created topics — the owner

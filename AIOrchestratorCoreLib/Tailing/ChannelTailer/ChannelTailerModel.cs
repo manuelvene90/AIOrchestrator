@@ -251,7 +251,7 @@ internal sealed class ChannelTailerModel : IChannelTailer
             // THE FILE IS THE THIRD PLACE AN ENTRY CAN BE OWED FROM, and it was the blind spot that
             // made the two clauses above insufficient. The mirror tick appends to channel files
             // BETWEEN the poll and compaction, on the same thread — Check_LedgerHealth_Async,
-            // Check_ChannelShapes_Async and Push_AwayDigests_Async all write entries after the
+            // Check_ChannelShapes_Async and Push_PeriodicStatus_Async all write entries after the
             // poll has run. Those bytes are in no buffer here, so both clauses answered false;
             // compaction then kept the new entry among the newest 45, returned EOF, and Set_Offset
             // parked the cursor past it. Gone from Telegram, intact on disk, and invisible to the

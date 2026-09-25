@@ -81,10 +81,15 @@ public class QuestionContractProbeTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
+        // THE LOCK IS STATED, NOT INHERITED (plan 03 task 15): two cases below assert the read-back
+        // code (ADeclaredHighRisk_LocksAQuestionWhoseWordsAreHarmless, AReadBackThatLapsesOnAClosedQuestion_NamesWhatClosedIt),
+        // and classic — what a config with no `preset` resolves to — turns it off since the owner's
+        // request of 2026-09-23. `true` is the shipped default and quiet's answer; quiet itself is not
+        // selected because it names print runners, which an engine test must never register.
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"highRiskConfirmation\":true}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -160,12 +165,153 @@ public class QuestionContractProbeTests : IDisposable
         Assert.Contains("📎 FIN-D-277a", question, StringComparison.Ordinal);
         Assert.DoesNotContain("🔐", question, StringComparison.Ordinal);
 
-        // ONE app button, not two. "❔ Explain the options" and "💬 Let's talk" were the same
-        // gesture under two labels once the talk tap started closing its question.
-        Assert.NotNull(_telegram.Find_ButtonFor(OwnerPush_Policy.TALK_LABEL));
-        Assert.Null(_telegram.Find_ButtonFor("Explain the options"));
-        Assert.Null(_telegram.Find_ButtonFor("❔"));
+        // BOTH APP BUTTONS, EXPLAIN FIRST: this fixture names no preset, so it is classic, and classic
+        // states `questions.appButtons` = ["explain","talk"] (owner, 2026-09-24 entry [123]). The fork had
+        // collapsed the pair into Let's talk alone; the owner uses Explain more often.
+        Assert.Equal(["Start it", "Wait", OwnerPush_Policy.EXPLAIN_LABEL, OwnerPush_Policy.TALK_LABEL], _telegram.LastDecisionLabels);
     }
+
+    /// <summary>
+    /// THE KEYBOARD IS THE SETTING, IN ITS ORDER (plan 04 Task 11, owner entry [123]: <i>"Can we have a setting
+    /// that lets us decide what buttons we want under the questions? I'd add all 2 or just one of the two."</i>).
+    /// Each value of <c>questions.appButtons</c> the row accepts, stated in config.json, drawn after the options.
+    /// An empty list is no app button at all — the options alone.
+    /// </summary>
+    [Theory]
+    [InlineData("[]", new string[0])]
+    [InlineData("[\"talk\"]", new[] { OwnerPush_Policy.TALK_LABEL })]
+    [InlineData("[\"explain\"]", new[] { OwnerPush_Policy.EXPLAIN_LABEL })]
+    [InlineData("[\"explain\",\"talk\"]", new[] { OwnerPush_Policy.EXPLAIN_LABEL, OwnerPush_Policy.TALK_LABEL })]
+    [InlineData("[\"talk\",\"explain\"]", new[] { OwnerPush_Policy.TALK_LABEL, OwnerPush_Policy.EXPLAIN_LABEL })]
+    [Trait("Speed", "Slow")]
+    public async Task TheAppButtonsUnderAQuestion_AreTheSetting_InItsOrder(string appButtonsJson, string[] expectedAppLabels)
+    {
+        State_AppButtons(appButtonsJson);
+
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(["Start it", "Wait", .. expectedAppLabels], _telegram.LastDecisionLabels);
+
+        // Persisted as what they are, so a restart rewrites a tap with the right acknowledgement.
+        var appKinds = _engineState.Load_OrEmpty().PendingButtons.Where(button => button.AppButton != null).Select(button => button.AppButton);
+        Assert.Equal(expectedAppLabels.Select(label => label == OwnerPush_Policy.EXPLAIN_LABEL ? "explain" : "talk"), appKinds);
+    }
+
+    /// <summary>
+    /// MASTER'S EXPLAIN, RESTORED — AND IT CLOSES ITS QUESTION, AS MASTER'S DID. At <c>a58ef7e</c> the button was
+    /// an ordinary <c>opt-</c> payload: a tap consumed the whole group, removed the question from the open set and
+    /// sent <c>MORE_DETAIL_REQUEST</c> to the supervisor, whose protocol said "the old buttons are spent" and told
+    /// it to re-ask. What master did badly is not restored: it stamped the instruction text as "✅ &lt;request&gt;",
+    /// the answered-choice record — this tree edits in an acknowledgement instead, the way Let's talk does.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task Explain_ClosesItsQuestionLikeLetsTalk_DeliversMastersRequest_AndRecordsNoChoice()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        var explain = _telegram.Find_ButtonFor(OwnerPush_Policy.EXPLAIN_LABEL)
+            ?? throw new Exception("the explain button never reached the phone — this fixture is classic, which states it");
+
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(explain, questionMessageId, updateId: 3110));
+
+        Assert.True(
+            await Run_Until_Async(() => Channel(orchId).Contains(OwnerPush_Policy.EXPLAIN_REQUEST, StringComparison.Ordinal), 20_000),
+            $"the supervisor never received master's request.{Environment.NewLine}{_log.Dump()}");
+
+        // Not the talk request: the session is asked what the owner tapped.
+        Assert.DoesNotContain("wants to talk this decision through", Channel(orchId), StringComparison.Ordinal);
+
+        Assert.Empty(_engineState.Load_OrEmpty().OpenQuestions);
+
+        var edited = _telegram.Find_EditedContaining(OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT)
+            ?? throw new Exception($"the question message was never edited.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        Assert.Contains("Start the FIN-D-277a build now?", edited, StringComparison.Ordinal);
+        Assert.DoesNotContain("✅", edited, StringComparison.Ordinal);
+        Assert.DoesNotContain(OwnerPush_Policy.TALK_ACKNOWLEDGEMENT, edited, StringComparison.Ordinal);
+        Assert.False(_telegram.Has_Edited_Containing("Explain this decision before I choose"), _telegram.Dump_Sent());
+
+        // The whole group went with it, Let's talk included.
+        var talk = _telegram.Find_ButtonFor(OwnerPush_Policy.TALK_LABEL)
+            ?? throw new Exception("the talk payload is gone from the fake");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(talk, questionMessageId, updateId: 3120));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Dump().Contains("Callback REFUSED", StringComparison.Ordinal), 20_000),
+            $"a consumed sibling was still live.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.False(Channel(orchId).Contains("wants to talk this decision through", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// READ WHEN THE KEYBOARD IS BUILT, NEVER CACHED: the setting is changed between two questions of one running
+    /// engine, and the second keyboard follows it. The first question is closed by its own tap, so nothing holds
+    /// the second back (one question at a time).
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AChangedSetting_ReachesTheNextQuestion_WithoutARestart()
+    {
+        State_AppButtons("[\"talk\"]");
+
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the first question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(["Start it", "Wait", OwnerPush_Policy.TALK_LABEL], _telegram.LastDecisionLabels);
+
+        var startIt = _telegram.Find_ButtonFor("Start it") ?? throw new Exception("unreachable");
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, _telegram.LastButtonMessageId!.Value, updateId: 3210));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().OpenQuestions.Count == 0, 20_000),
+            $"the first question never closed.{Environment.NewLine}{_log.Dump()}");
+
+        State_AppButtons("[\"explain\"]");
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Merge it") != null, 25_000),
+            $"the second question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(["Merge it", "Hold", OwnerPush_Policy.EXPLAIN_LABEL], _telegram.LastDecisionLabels);
+    }
+
+    /// <summary>
+    /// States <c>questions.appButtons</c> in this fixture's config.json, keeping every other key. The write stamp is
+    /// moved forward explicitly: the provider reloads on a changed stamp, and two writes inside one timestamp tick
+    /// would otherwise read as one.
+    /// </summary>
+    void State_AppButtons(string appButtonsJson)
+    {
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"highRiskConfirmation\":true,"
+            + $"\"questions\":{{\"appButtons\":{appButtonsJson}}}}}");
+
+        File.SetLastWriteTimeUtc(_paths.ConfigFile, DateTime.UtcNow.AddSeconds(++_configWrites));
+    }
+
+    int _configWrites;
 
     [Fact]
     [Trait("Speed", "Slow")]
@@ -437,8 +583,11 @@ public class QuestionContractProbeTests : IDisposable
         // Edits accepted BEFORE the refusal are not the subject; only what happens from here on is.
         var acceptedBefore = _telegram.Count_EditAttempts(pulseId);
 
-        // An open question changes the line ("waiting on you"), so an edit is due — and refused.
-        Append_Supervisor(orchId, COMPLETE_QUESTION);
+        // A declared state changes the supervisor's row, so an edit is due — and refused. It was an open
+        // question until plan 03 Task 17 (2026-09-23): its "waiting on you" row is not in the field list a
+        // config naming no preset resolves to (classic's), so the question changed nothing on the line and
+        // the edit this case saw was the render-key defect's every-tick edit of an unchanged PULSE.
+        Append_Supervisor(orchId, "Working on it.\nSTATE: rebuilding the images");
 
         Assert.True(
             await Run_Until_Async(() => _telegram.Count_EditAttempts(pulseId) > acceptedBefore, 20_000),

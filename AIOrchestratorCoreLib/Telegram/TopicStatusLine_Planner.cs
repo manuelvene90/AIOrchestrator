@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Status;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 using AIOrchestratorCoreLib.Status.SessionContextUsage;
+using AIOrchestratorCoreLib.Status.SessionModelReading;
 
 namespace AIOrchestratorCoreLib.Telegram;
 
@@ -28,8 +29,21 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// </summary>
 public static class TopicStatusLine_Planner
 {
-    /// <summary>What the engine should do this tick, and the exact text to send if anything.</summary>
-    public readonly record struct TopicStatusPlan(TopicStatusActions Action, string Text);
+    /// <summary>
+    /// What the engine should do this tick, the exact text to send if anything, and the whole rendering
+    /// (<see cref="TopicStatusLine_RenderKey"/>) that text makes with the bar it was planned against — the
+    /// value the engine remembers once the write succeeds, so the key is built in one place.
+    ///
+    /// <para>
+    /// <see cref="SeenAtBottomKey"/> is the third thing the engine remembers after a successful write
+    /// (ruling R27): the rendering, heartbeat stripped, that the owner saw when the line was last at the
+    /// bottom. The planner decides it — the line's burial state is known here and nowhere the suite can
+    /// reach in the engine — so the engine stores it and never computes it. Null only when nothing is
+    /// known (a restart before the first write), which the next plan reads as "compare with the last
+    /// write".
+    /// </para>
+    /// </summary>
+    public readonly record struct TopicStatusPlan(TopicStatusActions Action, string Text, string RenderKey, string? SeenAtBottomKey);
 
     /// <summary>
     /// The newest message the app knows of in a topic, and when it learned of it.
@@ -86,7 +100,33 @@ public static class TopicStatusLine_Planner
         // waited on for, a usage-limit pause, when the last event happened. The builder is handed
         // per-member channels and cannot read owner-channel.md or a member's state file, so these
         // arrive as data rather than being fetched. See TopicStatusFields.
-        TopicStatusFields fields = default)
+        TopicStatusFields fields = default,
+
+        // THE SUPERVISOR'S MODEL AND EFFORT, and the two `pulse.*` values — all RESOLVED BY THE ENGINE
+        // and handed through untouched, because this function is pure: it is never given a config
+        // provider, and a value it read for itself would be a second reading of a setting the owner can
+        // change between two ticks. Null keeps the builder's shipped defaults, as it does there.
+        ISessionModelReading? supervisorModel = null,
+        IReadOnlyList<string>? pulseFields = null,
+        int? stepMinutes = null,
+
+        // `topic.modeGlyphs`, resolved by the engine for the same reason: whether the header or the
+        // topic name carries the five mode glyphs. Null is the builder's shipped default.
+        ModeGlyphPlacements? modeGlyphs = null,
+
+        // THE BAR, AND THE WHOLE RENDERING LAST WRITTEN — see "HOW A CHANGE TO THE BAR ALONE IS SEEN"
+        // below. Both null is "no bar is known", which decides on the text alone: every caller that
+        // predates brief D, and the tests that are about the text.
+        IReadOnlyList<IReadOnlyList<(string Data, string Label)>>? commandButtonRows = null,
+        string? lastWrittenRenderKey = null,
+
+        // WHAT THE OWNER LAST SAW AT THE BOTTOM — the previous plan's SeenAtBottomKey, handed back
+        // (ruling R27). Null falls back to the rendering last written: the rule as it was before R27.
+        string? lastSeenAtBottomKey = null,
+
+        // `pulse.unchangedFor`, resolved by the engine like the other `pulse.*` values (task 19). Null is
+        // the builder's shipped default.
+        bool? unchangedFor = null)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
@@ -98,9 +138,45 @@ public static class TopicStatusLine_Planner
         // come to disagree about whether a topic is muted.
         var text = TopicStatusLine_Builder.Build(
             progress, members, Pick_LastEvent_OrNull(members, now), now, existingMessageId != null,
-            figuresUnchangedFor, supervisorContext, fields with { Mode = mode });
+            figuresUnchangedFor, supervisorContext, fields with { Mode = mode },
+            supervisorModel, pulseFields, stepMinutes, modeGlyphs, unchangedFor);
 
+        IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows = commandButtonRows ?? [];
+        var renderKey = TopicStatusLine_RenderKey.Build(text, buttonRows);
+
+        // TEXT AGAINST TEXT. `lastWrittenText` is the TEXT last written, never the render key: the key
+        // opens with "<length>:", so a key compared with raw text never matches, and from the fork's
+        // `2143db8` until plan 03 Task 17 (2026-09-23) that is what the engine handed in — every tick
+        // answered Edit (one "not modified" edit per topic every 30 s in production), and the repost
+        // gate below reduced to "buried and quiet", so PULSE was deleted and re-sent ten seconds after
+        // every exchange whether or not anything in it had changed (plan 03 report §5.3).
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
+
+        // HOW A CHANGE TO THE BAR ALONE IS SEEN. The bar is not part of the text — the hold toggle's label
+        // carries the held count, and `pulse.buttons` can be changed from config.json — so a text
+        // comparison is blind to it, and a quiet orchestration's text does not move for hours (brief D).
+        // The planner is handed the bar itself and the whole rendering last written, and asks: "would the
+        // text last written, under TODAY'S bar, render as what was written?" If not, the bar changed.
+        //
+        // WHY THE ROWS AND THE KEY, AND NOT A `barChanged` FLAG: the flag would be derived at the call
+        // site inside the engine, where nothing can see it, and a derived bool is exactly what this file
+        // was built to stop taking (M-G3, the id-for-a-bool change above). WHY THE PLANNER AND NOT THE
+        // ENGINE: this promotion used to be an engine branch after the plan, with its own copy of the
+        // back-off check (a 2026-09-10 incident, 357 retries against a 429, came from the copy it once
+        // lacked); here it runs under the one back-off at the bottom of this method, and it is reachable
+        // by the suite.
+        //
+        // No rows or no key is "unknown", which is "unchanged": a restart forgets the key along with the
+        // text, and `Decide` already answers Edit for that.
+        var barChanged = commandButtonRows != null
+            && lastWrittenText != null
+            && lastWrittenRenderKey != null
+            && TopicStatusLine_RenderKey.Build(lastWrittenText, buttonRows) != lastWrittenRenderKey;
+
+        // A BAR-ONLY CHANGE IS AN EDIT (or a first post, if the id is gone), never a reason to write a
+        // blank line — `Decide`'s nothing-to-say rule still holds on the text.
+        if (decided == TopicStatusActions.None && barChanged && !string.IsNullOrWhiteSpace(text))
+            decided = existingMessageId == null ? TopicStatusActions.Post : TopicStatusActions.Edit;
 
         // THE REPOST RIDES ON THE DECIDER — it no longer overrides it. Owner, 2026-09-09: PULSE is
         // "deleted and re-posted (silently) only when it is buried by later traffic AND its content
@@ -109,13 +185,13 @@ public static class TopicStatusLine_Planner
         // topic bought a delete plus a post that carried no news — the waterfall decision 14 exists to
         // prevent, arriving one message at a time instead of all at once.
         //
-        // "SOMETHING NEW TO SAY" IS THE DECIDER'S ANSWER, NOT A SECOND COMPARISON. `Decide` already
-        // answers None for both cases that must not move the line — text identical to what is up, and
-        // text that is blank — so asking it is the whole predicate; writing `lastWrittenText != text`
-        // here would be a second spelling of the same rule, free to disagree with the first.
+        // "SOMETHING NEW TO SAY" USED TO BE THE DECIDER'S ANSWER — "different from the last write" — and
+        // ruling R27 (2026-09-24) replaced it; see "NEW SINCE THE OWNER LAST SAW IT" below. The two
+        // cases that must not move the line are still refused: blank text, and a rendering that is what
+        // the owner saw at the bottom.
         //
-        // AFTER A RESTART the remembered text is null (it lives in memory) and `Decide` reads that as
-        // Edit, which counts as news here. That does NOT produce a restart repost: the newest-message
+        // AFTER A RESTART nothing is remembered (it lives in memory), which counts as news here. That
+        // does NOT produce a restart repost: the newest-message
         // map is in memory too, so `Find_NewestTopicMessage_OrNull` answers null until the app observes
         // real traffic, and `Is_RepostDue` refuses a topic it knows nothing about. The two blind spots
         // cover each other, and the test at the bottom of this file pins the pair.
@@ -126,8 +202,30 @@ public static class TopicStatusLine_Planner
         // seconds". The repost asks the substance question through `Strip_Heartbeat`; the EDIT still
         // compares the raw text, because keeping the clock ticking in place is the heartbeat's whole
         // job and an edit notifies nobody.
-        var somethingNewToSay = decided != TopicStatusActions.None
-            && TopicStatusLine_Builder.Strip_Heartbeat(text) != TopicStatusLine_Builder.Strip_Heartbeat(lastWrittenText);
+        //
+        // A CHANGED BAR IS NEWS (plan 03 Task 17): the owner reads the labels — the held count on the
+        // toggle is the reason the render key exists — so a bar that changed under a buried line moves
+        // it exactly as a changed row would.
+        //
+        // NEW SINCE THE OWNER LAST SAW IT AT THE BOTTOM, NOT SINCE THE LAST WRITE (ruling R27, 2026-09-24).
+        // Asking the decider answered "new since the last write", and the last write of a buried line is
+        // usually the in-place EDIT made during the quiet window — so the common case, an answer that both
+        // buries PULSE and changes its STATE, was edited above the answer and then left there for good:
+        // by the time the topic was quiet it had nothing new to say against itself. The question is now
+        // asked of the SUBSTANCE (heartbeat stripped, bar included) against what the line showed when it
+        // was last unburied, which an edit made while buried does not move. With nothing remembered (a
+        // restart, or a caller that predates R27) the last write stands in for it — the rule as it was.
+        var substanceKey = Build_SubstanceKey(text, buttonRows);
+        var seenAtBottomBefore = lastSeenAtBottomKey
+            ?? (lastWrittenText == null ? null : Build_SubstanceKey(lastWrittenText, buttonRows));
+
+        var somethingNewToSay = !string.IsNullOrWhiteSpace(text)
+            && (seenAtBottomBefore == null
+                || substanceKey != seenAtBottomBefore
+
+                // A bar change is invisible to the fallback, which rebuilds the last write under TODAY'S
+                // bar; a remembered key carries the bar it was seen with, so it needs no help.
+                || (lastSeenAtBottomKey == null && barChanged));
 
         // THE LATCH COMES FIRST, and it is a fallback rather than a failure. Telegram REFUSES some
         // deletes permanently — a message past its 48-hour window, or a bot without
@@ -168,18 +266,54 @@ public static class TopicStatusLine_Planner
         if (action == TopicStatusActions.Repost && mode == TelegramDeliveryModes.Silenced)
             action = decided;
 
+        // WHAT THE OWNER WILL HAVE SEEN AT THE BOTTOM once this write lands (ruling R27). A repost puts the
+        // line there, and a write to a line that is not buried is written where they are looking; an
+        // edit to a BURIED line is not seen, so the memory stays where it was — that is the whole fix.
+        // A plan that writes nothing hands back what it was given; the engine stores only on a write.
+        var buried = Is_Buried(existingMessageId, newestTopicMessage);
+
+        TopicStatusPlan Planned(TopicStatusActions planned)
+        {
+            var seenAtBottomAfter = planned == TopicStatusActions.Repost || (planned != TopicStatusActions.None && !buried)
+                ? substanceKey
+                : seenAtBottomBefore;
+
+            return new TopicStatusPlan(planned, text, renderKey, seenAtBottomAfter);
+        }
+
         if (action == TopicStatusActions.None)
-            return new TopicStatusPlan(TopicStatusActions.None, text);
+            return Planned(TopicStatusActions.None);
 
         if (action == TopicStatusActions.Post && mode == TelegramDeliveryModes.Silenced)
-            return new TopicStatusPlan(TopicStatusActions.None, text);
+            return Planned(TopicStatusActions.None);
 
         // THE BACKOFF, last: a 429 answered at the tick rate inverts the cadence from once a minute
         // to thirty times a minute per topic and sustains the throttling that caused it.
         if (!Is_AttemptDue(lastFailedAttemptAt, now, backoffSeconds))
-            return new TopicStatusPlan(TopicStatusActions.None, text);
+            return Planned(TopicStatusActions.None);
 
-        return new TopicStatusPlan(action, text);
+        return Planned(action);
+    }
+
+    /// <summary>
+    /// The rendering as the repost question reads it: the text with its heartbeat stripped (the clock
+    /// is not news — see Strip_Heartbeat) and the bar's labels, in the render key's own encoding.
+    /// </summary>
+    static string Build_SubstanceKey(string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows)
+    {
+        return TopicStatusLine_RenderKey.Build(TopicStatusLine_Builder.Strip_Heartbeat(text) ?? "", buttonRows);
+    }
+
+    /// <summary>
+    /// Has later traffic landed below the status line? Ids, not counts: Telegram ids rise within a chat.
+    /// UNKNOWN IS NOT BURIED — no line, or no traffic seen since a restart — for the reason
+    /// <see cref="Is_RepostDue"/> gives. Equal is not buried: the newest message IS the line.
+    /// </summary>
+    public static bool Is_Buried(long? existingMessageId, TopicNewestMessage? newestTopicMessage)
+    {
+        return existingMessageId != null
+            && newestTopicMessage != null
+            && newestTopicMessage.Value.MessageId > existingMessageId.Value;
     }
 
 
@@ -294,15 +428,12 @@ public static class TopicStatusLine_Planner
     /// </summary>
     public static bool Is_RepostDue(long? existingMessageId, TopicNewestMessage? newestTopicMessage, DateTime now, int quietSeconds)
     {
-        if (existingMessageId == null || newestTopicMessage == null)
-            return false;
-
         // EQUAL is not buried: the newest message the app knows of IS the status line, so nothing came
-        // after it. Only strictly-later ids bury it.
-        if (newestTopicMessage.Value.MessageId <= existingMessageId.Value)
+        // after it. Only strictly-later ids bury it — see Is_Buried, the one spelling of that rule.
+        if (!Is_Buried(existingMessageId, newestTopicMessage))
             return false;
 
-        return now - newestTopicMessage.Value.ArrivedAt >= TimeSpan.FromSeconds(quietSeconds);
+        return now - newestTopicMessage!.Value.ArrivedAt >= TimeSpan.FromSeconds(quietSeconds);
     }
 
     public static bool Is_AttemptDue(DateTime? lastFailedAttemptAt, DateTime now, int backoffSeconds)

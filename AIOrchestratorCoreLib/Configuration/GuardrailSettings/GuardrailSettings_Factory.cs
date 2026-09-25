@@ -42,11 +42,26 @@ public static class GuardrailSettings_Factory
     /// </summary>
     public const int DEFAULT_BUTTON_EXPIRY_MINUTES = 720;
 
+    /// <summary>
+    /// On: the catalogue's shipped default — today's behaviour, and what <see cref="Create_Default"/>
+    /// and quiet get. It is NOT what a machine stating nothing gets: the loader resolves an absent or
+    /// preset-less config.json to classic, and <c>kit/presets/classic.json</c> states the owner's off
+    /// (2026-09-23). Only quiet, or the key stated in config.json, gives the code on a loaded machine.
+    /// </summary>
+    public const bool DEFAULT_HIGH_RISK_CONFIRMATION = true;
+
+    /// <summary>
+    /// The config key, named once: the catalogue registers this spelling and the loader resolves it,
+    /// and a key spelled in two places is a key read under one spelling and stated under the other.
+    /// </summary>
+    public const string HIGH_RISK_CONFIRMATION_KEY = "highRiskConfirmation";
+
     public static IGuardrailSettings Create(
         IReadOnlyList<string>? highRiskPatterns,
         int? highRiskCodeExpiryMinutes,
         double? dispatchPauseThresholdPercent,
-        int? buttonExpiryMinutes)
+        int? buttonExpiryMinutes,
+        bool? highRiskConfirmation = null)
     {
         return new GuardrailSettingsModel(
             // An EMPTY list in config means "nothing is high risk", which is a choice the owner is
@@ -55,7 +70,8 @@ public static class GuardrailSettings_Factory
             highRiskPatterns ?? DEFAULT_HIGH_RISK_PATTERNS,
             Positive_OrDefault(highRiskCodeExpiryMinutes, DEFAULT_HIGH_RISK_CODE_EXPIRY_MINUTES),
             dispatchPauseThresholdPercent is > 0 and <= 100 ? dispatchPauseThresholdPercent.Value : DEFAULT_DISPATCH_PAUSE_THRESHOLD_PERCENT,
-            Positive_OrDefault(buttonExpiryMinutes, DEFAULT_BUTTON_EXPIRY_MINUTES));
+            Positive_OrDefault(buttonExpiryMinutes, DEFAULT_BUTTON_EXPIRY_MINUTES),
+            highRiskConfirmation ?? DEFAULT_HIGH_RISK_CONFIRMATION);
     }
 
     public static IGuardrailSettings Create_Default()

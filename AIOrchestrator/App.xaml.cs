@@ -63,6 +63,11 @@ public partial class App : Application
         var engineToken = _engineCancellation.Token;
         _ = Task.Run(() => services.Engine.Run_Async(engineToken), engineToken);
 
+        // The settings page's listener, beside the engine and on the same token, so OnExit's one Cancel stops
+        // both. It never throws and never takes the bridge down — a port the daemon already holds is one
+        // warning line in the log (plan 04 Task 7).
+        _ = Task.Run(() => services.SettingsWebHost.Run_Async(engineToken), engineToken);
+
         var mainWindow = new MainWindow(paths, services.ConfigProvider, services.Store, services.Launcher, services.Engine, services.Log);
         mainWindow.Show();
     }
@@ -100,6 +105,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // Stops the engine AND the settings listener, which share this token.
         _engineCancellation?.Cancel();
 
         // Every spawned session (general + supervisors + implementers) dies with the app.

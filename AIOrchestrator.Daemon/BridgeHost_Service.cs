@@ -120,6 +120,13 @@ sealed class BridgeHost_Service(
         using var engineCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var engineTask = Task.Run(() => services.Engine.Run_Async(engineCancellation.Token), CancellationToken.None);
 
+        // The settings page's listener, beside the engine and on its token (plan 04 Task 7). Started HERE, inside
+        // this one hosted service, rather than as a second IHostedService (ruling P21): the service graph it needs
+        // is built a few lines up, inside Run_Host_Async, and a second hosted service would need that graph moved
+        // into Program.cs first. It never throws and never stops the daemon: "off", a refused address or a port the
+        // desktop app already holds is one log line, and the task simply completes.
+        var webHostTask = Task.Run(() => services.SettingsWebHost.Run_Async(engineCancellation.Token), CancellationToken.None);
+
         try
         {
             await Keep_SystemdWatchdogFed_Async(engineTask, stoppingToken);
@@ -129,6 +136,7 @@ sealed class BridgeHost_Service(
             services.Log.Log_Info("", "Daemon stopping — cancelling the bridge engine");
             engineCancellation.Cancel();
             await Await_EngineStop_Async(engineTask, services);
+            await Await_WebHostStop_Async(webHostTask, services);
 
             // Every spawned session (general + supervisors + implementers) dies with the host.
             // Orchestration state survives on disk; the watchdog respawns everything (with resume
@@ -194,6 +202,29 @@ sealed class BridgeHost_Service(
 
         await Task.WhenAny(engineTask, stopRequested.Task);
     }
+
+    /// <summary>
+    /// The listener closes its socket the moment the token is cancelled, so this is a short, separate bound rather
+    /// than a share of the engine's drain grace: a settings page must never be why sessions are killed late.
+    /// </summary>
+    static async Task Await_WebHostStop_Async(Task webHostTask, IOrchestratorServices services)
+    {
+        try
+        {
+            await webHostTask.WaitAsync(WEB_HOST_STOP_GRACE);
+        }
+        catch (TimeoutException)
+        {
+            services.Log.Log_Warning("", $"Settings page listener did not stop within {WEB_HOST_STOP_GRACE.TotalSeconds:0} s — proceeding with session termination");
+        }
+        catch (Exception exception)
+        {
+            // Run_Async is written never to throw; if it did, the daemon still stops cleanly — it is not the bridge.
+            services.Log.Log_Error("", "Settings page listener ended with an error", exception);
+        }
+    }
+
+    static readonly TimeSpan WEB_HOST_STOP_GRACE = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// An engine that ENDED on its own while the host still runs is a bug the WPF app could not

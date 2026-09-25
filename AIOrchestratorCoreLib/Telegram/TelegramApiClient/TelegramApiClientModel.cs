@@ -154,6 +154,17 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("deleteForumTopic", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
+    public async Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_thread_id"] = messageThreadId,
+        };
+
+        await Post_Async("closeForumTopic", payload, cancellationToken, TelegramCallClasses.Control);
+    }
+
     public async Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken)
     {
         var unpinPayload = new JsonObject
@@ -329,8 +340,9 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["chat_id"] = _supergroupChatId,
             ["text"] = html,
             ["parse_mode"] = "HTML",
-            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(Wrap_OneButtonPerRow(buttons)) },
         };
+
+        Stamp_InlineKeyboard_IfAny(payload, Wrap_OneButtonPerRow(buttons));
 
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
@@ -392,8 +404,9 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["chat_id"] = _supergroupChatId,
             ["message_id"] = messageId,
             ["text"] = text,
-            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(buttonRows) },
         };
+
+        Stamp_InlineKeyboard_IfAny(payload, buttonRows);
 
         Hold_UnlessThisMessageMayBeEdited(messageId);
 
@@ -408,6 +421,26 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Wrap_OneButtonPerRow(IReadOnlyList<(string Data, string Label)> buttons)
     {
         return [.. buttons.Select(button => (IReadOnlyList<(string Data, string Label)>)[button])];
+    }
+
+    /// <summary>
+    /// AN EMPTY KEYBOARD IS NO <c>reply_markup</c> AT ALL (plan 03 Task 5, D4). Classic's
+    /// <c>general.buttons</c> is the empty list, a ✓ tick whose hold toggle lives on PULSE has no button,
+    /// and Telegram will not take an empty <c>inline_keyboard</c> — so every send and edit that carries
+    /// buttons stamps the markup through here, and a list with nothing in it stamps nothing.
+    ///
+    /// <para>
+    /// ON AN EDIT THE ABSENCE IS NOT A NO-OP, and that is the point: Telegram reads a missing
+    /// <c>reply_markup</c> as "remove the keyboard", which is exactly what an edit to an emptied bar
+    /// means — the buttons it used to carry must go.
+    /// </para>
+    /// </summary>
+    static void Stamp_InlineKeyboard_IfAny(JsonObject payload, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows)
+    {
+        if (buttonRows.All(row => row.Count == 0))
+            return;
+
+        payload["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(buttonRows) };
     }
 
     /// <summary>
@@ -466,8 +499,9 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         {
             ["chat_id"] = _supergroupChatId,
             ["text"] = text,
-            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(buttonRows) },
         };
+
+        Stamp_InlineKeyboard_IfAny(payload, buttonRows);
 
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
@@ -954,10 +988,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (_cooldowns.Is_Held(target, nowUtc, out var notBeforeUtc))
             throw new TelegramHeldException(target, notBeforeUtc);
 
-        var owed = _budget.Reserve_MessageEdit(messageId, nowUtc);
-
-        if (owed > TimeSpan.Zero)
-            throw new TelegramHeldException(target, nowUtc + owed);
+        MessageEditSlot_Gate.Reserve_OrThrowHeld(_budget, messageId, nowUtc);
     }
 
     /// <summary>Blocks until the class of call named by <paramref name="callClass"/> may go out.</summary>

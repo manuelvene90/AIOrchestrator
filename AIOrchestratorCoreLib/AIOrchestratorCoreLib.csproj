@@ -56,5 +56,13 @@
          the two copies differ by a byte. -->
     <EmbeddedResource Include="..\kit\presets\classic.json" LogicalName="AIOrchestratorCoreLib.kit.presets.classic.json" />
     <EmbeddedResource Include="..\kit\presets\quiet.json" LogicalName="AIOrchestratorCoreLib.kit.presets.quiet.json" />
+
+    <!-- THE SETTINGS PAGE IS EMBEDDED ONLY — deliberately unlike the two above (plan 04 Task 8, D14).
+         The grammar and the presets ship as Content as well because a bash tool and an installer read
+         them from disk, and their two copies are kept honest by a byte-equality test. The page has ONE
+         consumer, the settings listener (Web/SettingsWebHost), which reads it through
+         Web/SettingsPage_Reader: a second copy on disk would have nothing to keep it honest, and would be
+         exactly the drift that byte-equality test exists to catch. -->
+    <EmbeddedResource Include="Web\Assets\settings.html" LogicalName="AIOrchestratorCoreLib.Web.Assets.settings.html" />
   </ItemGroup>
 </Project>

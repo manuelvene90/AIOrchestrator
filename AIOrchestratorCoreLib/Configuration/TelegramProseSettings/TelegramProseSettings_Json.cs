@@ -1,12 +1,15 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
+using Catalog = global::AIOrchestratorCoreLib.Configuration.SettingsCatalog.SettingsCatalog;
 
 namespace AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
 
 /// <summary>
-/// The <c>telegram</c> block, read:
+/// The two prose-shaping keys, read under either spelling:
 ///
 /// <code>
-/// "telegram": { "foldLongEntriesAbove": 900, "attachEntriesAbove": 3 }
+/// "phone":    { "foldLongEntriesAbove": 900, "attachEntriesAbove": 3 }   // the catalogue's path
+/// "telegram": { "foldLongEntriesAbove": 900, "attachEntriesAbove": 3 }   // the old one, still read
 /// </code>
 ///
 /// <para>
@@ -16,37 +19,49 @@ namespace AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
 /// freezing numbers that are meant to move when the app is updated.
 /// </para>
 /// <para>
+/// IT RESOLVES RATHER THAN PARSES (2026-09-14, plan 03 task 1). Until then this class read
+/// <c>telegram.*</c> directly, so the catalogue's re-homed <c>phone.*</c> spelling was registered and
+/// read by nothing. Both keys now come from <see cref="Settings_Resolver"/>, whose definitions carry
+/// <c>telegram.*</c> as the legacy path: the new spelling wins inside a layer, the old one is still
+/// honoured there, and the preset rung applies to these two keys like any other.
+/// </para>
+/// <para>
 /// TOLERANT, because a config the app refuses to load is a bridge that does not start. An absent
-/// block, an absent key, a key holding a string, an object or an array all read as the shipped
-/// default for that ONE setting. A negative number is kept rather than corrected: it means the same
-/// as 0 to both readers — off — and silently rewriting an owner's value is worse than honouring it.
+/// block, an absent key, a key holding a string, an object, an array or null all read as the layer
+/// below — ultimately the shipped default — for that ONE setting. 0 is the owner's OFF SWITCH for
+/// either key and the catalogue's floor is 0 for exactly that reason. A NEGATIVE number, which this
+/// class used to keep as a second spelling of "off", is now refused by the definition and costs the
+/// key its default instead: the resolver has one rule for an out-of-range value, and a private
+/// exception here would be the second idea of "valid" the catalogue exists to remove.
 /// </para>
 /// </summary>
 public static class TelegramProseSettings_Json
 {
+    /// <summary>The OLD spelling's parts — the catalogue builds each row's legacy path from them.</summary>
     public const string TELEGRAM_KEY = "telegram";
     public const string FOLD_LONG_ENTRIES_ABOVE_KEY = "foldLongEntriesAbove";
     public const string ATTACH_ENTRIES_ABOVE_KEY = "attachEntriesAbove";
 
-    public static ITelegramProseSettings Parse(JsonObject? configRoot)
-    {
-        var block = configRoot?[TELEGRAM_KEY] as JsonObject;
+    /// <summary>The catalogue's paths, the spelling the resolver walks first.</summary>
+    const string FOLD_LONG_ENTRIES_ABOVE_PATH = "phone." + FOLD_LONG_ENTRIES_ABOVE_KEY;
+    const string ATTACH_ENTRIES_ABOVE_PATH = "phone." + ATTACH_ENTRIES_ABOVE_KEY;
 
+    public static ITelegramProseSettings Parse(JsonObject? configRoot, JsonObject? presetTree)
+    {
         return TelegramProseSettings_Factory.Create(
-            Read_Int_OrNull(block, FOLD_LONG_ENTRIES_ABOVE_KEY),
-            Read_Int_OrNull(block, ATTACH_ENTRIES_ABOVE_KEY));
+            Read_Int(FOLD_LONG_ENTRIES_ABOVE_PATH, configRoot, presetTree),
+            Read_Int(ATTACH_ENTRIES_ABOVE_PATH, configRoot, presetTree));
     }
 
     /// <summary>
-    /// Null for every way the key can fail to be a whole number. <c>GetValue&lt;int&gt;</c> THROWS on
-    /// a JSON string, and a config file that throws while being read is the bridge not starting — the
-    /// defect the loader's own numeric readers were fixed for.
+    /// Narrowed from the resolver's <see cref="long"/> without a check: both rows are non-nullable with
+    /// <see cref="int"/> bounds, so whatever layer answers is a whole number the definition accepted.
     /// </summary>
-    static int? Read_Int_OrNull(JsonObject? block, string key)
+    static int Read_Int(string path, JsonObject? configRoot, JsonObject? presetTree)
     {
-        if (block?[key] is not JsonValue value)
-            return null;
+        var definition = Catalog.Find_OrNull(path)
+            ?? throw new Exception($"No catalogue entry for {path} — {nameof(TelegramProseSettings_Json)} names a row the settings catalogue does not register");
 
-        return value.TryGetValue<int>(out var number) ? number : null;
+        return (int)Settings_Resolver.Resolve_Long(definition, presetTree, configRoot, session: null)!.Value;
     }
 }

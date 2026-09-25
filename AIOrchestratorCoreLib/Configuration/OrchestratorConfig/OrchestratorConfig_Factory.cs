@@ -1,6 +1,8 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.EffortSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
+using AIOrchestratorCoreLib.Configuration.PhoneSettings;
+using AIOrchestratorCoreLib.Configuration.PulseSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.ReviewingSettings;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
@@ -86,12 +88,13 @@ public static class OrchestratorConfig_Factory
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
 
-        // OPTIONAL, AND ONLY THE SIX BELOW (four here, plus telegramInbound and effort — the count was
-        // stale from the day the fifth was added and is corrected 2026-09-12). Every other parameter
+        // OPTIONAL, AND ONLY THE NINE BELOW (four here, plus telegramInbound, effort, reviewing, phone and
+        // pulse — the count was stale from the day the fifth was added, corrected 2026-09-12, and moved
+        // to nine when origin/master's reviewing block met plan 03's phone and pulse). Every other parameter
         // is required because every caller knows its value; these keys are hand-edited in config.json
         // and no window has a field for any of them, so the Settings window builds a config without
         // them — and the loader, which is the only reader that can have them, passes them explicitly.
-        // Save() never serialises any of the six, so a config built without them cannot erase them
+        // Save() never serialises any of the nine, so a config built without them cannot erase them
         // from disk.
         PlanBackendSettings? planBackend = null,
         IGuardrailSettings? guardrails = null,
@@ -109,13 +112,19 @@ public static class OrchestratorConfig_Factory
 
         // AND A SEVENTH, the `reviewing` block (added 2026-09-17). Same three rules yet again:
         // hand-edited, no window field, never serialised — ReviewingSettings_Json has no Write.
-        IReviewingSettings? reviewing = null)
+        IReviewingSettings? reviewing = null,
+
+        // AND THE EIGHTH AND NINTH, the `phone` and `pulse` blocks (added 2026-09-14, plan 03 task 1),
+        // under the same three rules — neither _Json class has a Write.
+        IPhoneSettings? phone = null,
+        IPulseSettings? pulse = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, reviewerModel, soloModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
-            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound, effort, reviewing);
+            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound, effort, reviewing,
+            phone, pulse);
     }
 
     /// <summary>
@@ -149,7 +158,9 @@ public static class OrchestratorConfig_Factory
         ITelegramProseSettings? telegramProse = null,
         Telegram.TelegramInboundModes? telegramInbound = null,
         IEffortSettings? effort = null,
-        IReviewingSettings? reviewing = null)
+        IReviewingSettings? reviewing = null,
+        IPhoneSettings? phone = null,
+        IPulseSettings? pulse = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -212,7 +223,14 @@ public static class OrchestratorConfig_Factory
             // round, and a null would have to be tested for at the one site in the engine that asks.
             // Create_Default reads the three constants that already governed an unconfigured
             // machine, so every caller predating this parameter keeps the behaviour it had.
-            reviewing ?? ReviewingSettings_Factory.Create_Default());
+            reviewing ?? ReviewingSettings_Factory.Create_Default(),
+
+            // DEFAULTED, NEVER NULL, and FROM A NULL TREE rather than from a Create_Default: the two
+            // _Json parsers over no config and no preset ARE the catalogue's shipped defaults, so the
+            // default has one home (CLAUDE.md decision 12) and Create_Empty gets it without restating
+            // it. Not classic — the preset rung is the loader's, exactly as for effort.
+            phone ?? PhoneSettings_Json.Parse(configRoot: null, presetTree: null),
+            pulse ?? PulseSettings_Json.Parse(configRoot: null, presetTree: null));
     }
 
     /// <summary>
@@ -293,6 +311,9 @@ public static class OrchestratorConfig_Factory
             // CARRIED THROUGH, like every other block above: this method exists to move ONE bool, and
             // a block it forgot would be silently reset to the shipped default on the next
             // /screenshots tap — which is precisely the bug shape `runners` had here before.
-            source.Effort);
+            source.Effort,
+            source.Reviewing,
+            source.Phone,
+            source.Pulse);
     }
 }

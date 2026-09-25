@@ -125,6 +125,10 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   conversation, the request confirmations, and the owner-facing notices about your own turns
   (stall, usage limit), which are untagged because the owner sees them too. So the ABSENCE of an
   app note here is not evidence that what it would have reported did not happen.
+- **A `FROM app — STATUS` entry is the owner's periodic digest** — the app posts one on its interval
+  when the owner's `phone.status.periodic` setting is on, and only when something changed. It is
+  already on their phone. **It needs no reply and no action**: read it as a log line and carry on —
+  answering it is exactly what would make the next one differ.
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
@@ -242,14 +246,17 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 - Discrete choice? A question is FIVE lines and the app REFUSES to send one missing any of them:
   `QUESTION:` (one short, self-contained question), 2–4 `OPTION:` lines (they become tappable
   buttons), `RECOMMEND:` (what you would do and why, one line — printed with the question),
-  `RISK:` (`high` or `low`; high means they type back a 4-digit code, and `low` unlocks nothing —
-  the app also locks anything naming a push, a deploy, a release, production or a destructive
-  command), and `ROW:` (the plan row, or the word `none`). Miss one and the body still reaches them
+  `RISK:` (`high` or `low`; high means they must tap — never a default — and, if their settings
+  keep it on, type back a 4-digit code; `low` unlocks nothing — the app also treats as high risk
+  anything naming a push, a deploy, a release, production or a destructive command), and `ROW:` (the plan row, or the word `none`). Miss one and the body still reaches them
   while the question does not, with an entry here naming every line you left out.
-  The app adds ONE button of its own, "💬 Let's talk": a tap CLOSES the question like any other
-  button (keyboard gone, the message becomes "💬 Ok — tell me what you have in mind"), and you get a
-  request to explain the decision in prose, briefly — then **ask it again** with fresh lines once
-  the discussion has settled, or the decision silently never gets taken. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` — `IMAGE:` is pictures only, an HTML file sent that way is refused. Both read from the repo, your channel folder or `~/mockups/`; 10 MB a picture, 50 MB a file; a refusal is written here with its fix, never texted.
+  The app may add "❔ Explain the options" and/or "💬 Let's talk", per the owner's settings
+  (`questions.appButtons`); each asks you to explain, then ask again. A tap on either CLOSES the
+  question like any other button (keyboard gone, the message becomes "❔ Ok — explaining the
+  options." or "💬 Ok — tell me what you have in mind"), and you get a request to explain the
+  decision — from Explain, short and then re-ask at once; from Let's talk, in prose, briefly — then
+  **ask it again** with fresh lines once the discussion has settled, or the decision silently never
+  gets taken. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` — `IMAGE:` is pictures only, an HTML file sent that way is refused. Both read from the repo, your channel folder or `~/mockups/`; 10 MB a picture, 50 MB a file; a refusal is written here with its fix, never texted.
 - **A question that can wait for ever usually does. Bound it: `--deadline` and `--default`.** Two
   more flags on the same call:
 

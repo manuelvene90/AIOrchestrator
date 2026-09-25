@@ -262,6 +262,8 @@ internal sealed class TopicCountingTelegram_Fake : ITelegramApiClient
 
     public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken) => Task.CompletedTask;
 
+    public Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;

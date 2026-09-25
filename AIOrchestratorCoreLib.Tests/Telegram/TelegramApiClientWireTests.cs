@@ -403,6 +403,69 @@ public class TelegramApiClientWireTests
     }
 
     /// <summary>
+    /// AN EMPTY KEYBOARD IS NO <c>reply_markup</c> AT ALL — plan 03 Task 5, D4. Classic's
+    /// <c>general.buttons</c> is the empty list, and Telegram will not take an empty
+    /// <c>inline_keyboard</c>, so a send carrying one would be a 400 on every General dashboard post.
+    /// Every flavour is asked, because the rule lives in the one place the markup is built and four
+    /// methods reach it: the flat and row-aware send, the flat and row-aware edit.
+    ///
+    /// <para>
+    /// ON AN EDIT THE ABSENCE IS NOT A NO-OP, and that is the point: Telegram reads a missing
+    /// <c>reply_markup</c> as "remove the keyboard", which is exactly what an edit to an empty bar
+    /// means — the bar was emptied, so the buttons it used to carry must go.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AnEmptyKeyboard_PutsNoReplyMarkupOnTheWire_OnASendOrAnEdit()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":61}}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":62}}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":true}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":true}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":63}}""");
+
+        var client = Build_Client(transport);
+
+        await client.Send_MessageWithButtonRows_Async(null, "📋 ALL ORCHESTRATIONS", [], TelegramSendSounds.Silent, CancellationToken.None);
+        await client.Send_MessageWithButtons_Async(5, "✓", [], TelegramSendSounds.Silent, CancellationToken.None);
+        await client.Edit_MessageTextWithButtonRows_Async(61, "📋 ALL ORCHESTRATIONS", [], CancellationToken.None);
+        await client.Edit_MessageTextWithButtons_Async(62, "✓", [], CancellationToken.None);
+
+        Assert.Equal(4, transport.Requests.Count);
+        Assert.All(transport.Requests, request => Assert.DoesNotContain("reply_markup", request.Body, StringComparison.Ordinal));
+
+        // And a keyboard WITH a button still carries it — the guard above must be able to fail.
+        await client.Send_MessageWithButtons_Async(5, "✓", [("hold:5", "⏸ Wait")], TelegramSendSounds.Silent, CancellationToken.None);
+
+        Assert.Contains("\"reply_markup\"", transport.Requests[^1].Body, StringComparison.Ordinal);
+        Assert.Contains("hold:5", transport.Requests[^1].Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A TOPIC CREATED WITH NO COLOUR CARRIES NO <c>icon_color</c> AT ALL (plan 03 task 14). Under classic
+    /// the engine passes null (<c>TopicColourFollowsTheSettingTests</c>), and this is the other half of
+    /// "the topic is Telegram's default": the key is absent, not sent as zero. A permitted colour is still
+    /// written, so the absence above is the guard's doing and not a key the client never sends.
+    /// </summary>
+    [Fact]
+    public async Task ATopicCreatedWithNoColour_PutsNoIconColorOnTheWire_AndAPermittedColourStillDoes()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_thread_id":71}}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_thread_id":72}}""");
+
+        var client = Build_Client(transport);
+
+        await client.Create_ForumTopic_Async("alpha-1", null, CancellationToken.None);
+        await client.Create_ForumTopic_Async("alpha-2", TopicColor_Rotation.PALETTE[0], CancellationToken.None);
+
+        Assert.Equal(2, transport.Requests.Count);
+        Assert.DoesNotContain("icon_color", transport.Requests[0].Body, StringComparison.Ordinal);
+        Assert.Contains($"\"icon_color\":{TopicColor_Rotation.PALETTE[0]}", transport.Requests[1].Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// One multipart part, by name. Quoted and unquoted both accepted: .NET writes
     /// <c>name=chat_id</c> without quotes when the name needs none, and pinning the quoted form
     /// would make this test a test of the framework's formatting rather than of our payload.
@@ -412,6 +475,41 @@ public class TelegramApiClientWireTests
         Assert.True(
             body.Contains($"name=\"{name}\"", StringComparison.Ordinal) || body.Contains($"name={name}", StringComparison.Ordinal),
             $"the multipart body carries no '{name}' part:{Environment.NewLine}{body}");
+    }
+
+    /// <summary>
+    /// D7 THROUGH THE REAL CLIENT (ruling P14): no fake consults the budget on its own, so "five taps land"
+    /// is proved where the gate actually runs — <c>Hold_UnlessThisMessageMayBeEdited</c>, before the wire.
+    /// The exempt menu reaches the wire five times in a row; the message beside it reaches it once, and its
+    /// second edit is refused as HELD with no request made at all.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheLiveSettingsMenu_ReachesTheWireOnEveryEdit_AndAnotherMessagesSecondEditIsHeldBeforeIt()
+    {
+        const long LIVE_MENU_MESSAGE_ID = 81;
+        const long OTHER_MESSAGE_ID = 82;
+
+        var transport = new RecordingTransport_Fake();
+
+        for (var answer = 0; answer < 6; answer++)
+            transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":true}""");
+
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+        var client = TelegramApiClient_Factory.Create_WithTransport(TOKEN, CHAT_ID, budget, transport);
+
+        budget.Exempt_FromEditGap(LIVE_MENU_MESSAGE_ID);
+
+        for (var tap = 0; tap < 5; tap++)
+            await client.Edit_MessageTextWithButtonRows_Async(LIVE_MENU_MESSAGE_ID, $"Settings — page {tap}", [[("set:h::::0", "⬅ Back")]], CancellationToken.None);
+
+        await client.Edit_MessageTextWithButtonRows_Async(OTHER_MESSAGE_ID, "status line", [], CancellationToken.None);
+
+        await Assert.ThrowsAsync<TelegramHeldException>(
+            () => client.Edit_MessageTextWithButtonRows_Async(OTHER_MESSAGE_ID, "status line again", [], CancellationToken.None));
+
+        Assert.Equal(6, transport.Requests.Count);
+        Assert.Equal(5, transport.Requests.Count(request => request.Body.Contains($"\"message_id\":{LIVE_MENU_MESSAGE_ID}", StringComparison.Ordinal)));
     }
 
     static ITelegramApiClient Build_Client(RecordingTransport_Fake transport)

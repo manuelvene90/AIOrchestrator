@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Web.SettingsWebHost;
 
 namespace AIOrchestratorCoreLib.Composition.OrchestratorServices;
 
@@ -21,6 +22,12 @@ public interface IOrchestratorServices
     IOrchestrationSessionStore Store { get; }
     IOrchestrationLauncher Launcher { get; }
     IBridgeEngine Engine { get; }
+
+    /// <summary>
+    /// The settings page's listener (plan 04 Task 7). Built here, started by each host beside
+    /// <see cref="Engine"/> — the WPF app and the daemon alike — so neither host can ship without it.
+    /// </summary>
+    ISettingsWebHost SettingsWebHost { get; }
 
     /// <summary>Whether sessions may start. The host's kit check records the verdict into it.</summary>
     IPluginGate PluginGate { get; }

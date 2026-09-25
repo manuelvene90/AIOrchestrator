@@ -466,9 +466,11 @@ belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which
 - **A question to the owner owes FIVE things, and the tool REFUSES to write one that is missing any
   of them** — `--question` (short, self-contained, it is sent on its own message), `--option`
   (**two to four**), `--recommend` (one line), `--risk` (`high`|`low`), `--row` (the plan row, or
-  `none`). **Missing one? The body still reaches them, the question does not**, and you get an entry
-  naming what you left out — nobody answers a question that was never sent, so re-ask with all five.
-  **`RISK: low` unlocks nothing**; it can only ever ADD a lock. Worked call: `reference/owner-messages.md`.
+  `none`). `--risk high` means the owner must answer with a tap — it never takes a default — and,
+  if their settings keep it on, also type back a 4-digit code. **Missing one? The body still reaches
+  them, the question does not**, and you get an entry naming what you left out — nobody answers a
+  question that was never sent, so re-ask with all five. **`RISK: low` unlocks nothing**; it can only
+  ever ADD high risk. Worked call: `reference/owner-messages.md`.
 - **Every turn that writes to this channel ends with a `STATE:` line, at the END of the entry.** The
   app reads it for the topic's status line (PULSE), field 2: `sup · <what you declared> · declared
   HH:MM`. One line, your own words — a STATE, not a summary of what the entry just reported:
@@ -489,10 +491,12 @@ belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which
   dropped because nothing would ever apply it. **Only give a `DEFAULT:` to a question whose unattended
   answer you would defend**: it spends the owner's decision for them, so never on a merge, a push, or
   anything that costs money. Syntax and limits: `reference/owner-messages.md`.
-- **The app adds ONE button to every question — "💬 Let's talk" — and you write none of them.**
+- **The app may add "❔ Explain the options" and/or "💬 Let's talk", per the owner's settings, under
+  every question — and you write none of them.** Which ones appear, if any, is the owner's
+  `questions.appButtons`; each asks you to explain, then ask again.
 
-
-  A tap CLOSES the question and asks you to explain the decision in prose, briefly. **Then, once the
+  A tap on either CLOSES the question and asks you to explain the decision — from Explain, short, and
+  re-ask straight away; from Let's talk, in prose, briefly. **Then, once the
   discussion has settled, ASK IT AGAIN** with fresh flags — a decision nobody re-asks is one that
   silently never gets taken (2026-09-09). Detail: `reference/owner-messages.md`.
 - **TERMINAL MODE — the owner is at your terminal (`/pc`): READ `reference/terminal-mode.md` BEFORE
@@ -612,8 +616,10 @@ sending them anything at all** — no questions, no options, no updates — park
 asked, and carry on with what you can decide and delegate. If they reply, everything returns to
 normal by itself and you re-ask from your parked list.
 
-**2. `AWAY MODE ON` — 15 minutes later, if they have been silent EVERYWHERE.** Now it is a
-conclusion: they are told, and the backlog is parked for them. Nothing new starts pushing — PULSE
+**2. `AWAY MODE ON` — if they then stay silent EVERYWHERE for the away delay.** The delay is the
+owner's setting (`away.afterMinutes`), and the HOLD entry quotes the one in force — or says away mode
+will not start by itself, when they have turned it off. Now it is a conclusion: they are told, and
+the backlog is parked for them. Nothing new starts pushing — PULSE
 (the app's status line, see below) already keeps reflecting it, silently, whenever they do check.
 
 The clock is on their last message in ANY topic, so chatting in another orchestration proves they
@@ -1016,7 +1022,11 @@ reach for `- [?]` because a build is slow — that puts it on the owner's plate 
 **You do NOT write periodic STATUS entries any more — the APP does.** It keeps PULSE, one silent
 status line at the bottom of the topic, updated IN PLACE from this ledger plus live member states —
 never a new push, never a notification — and it answers `/progress` and `/status` on demand from the
-same data. That used to cost you ~26 turns a day to restate what the app can already see. **Keeping
+same data. When the owner's `phone.status.periodic` setting is on, the app ALSO appends a
+`FROM app — STATUS` entry to this channel on its interval, and only when something changed: that is
+the owner's periodic digest, already on their phone. **It needs no reply and no action** — read it as
+a log line and carry on; answering it is exactly what would make the next one differ. All of this
+used to cost you ~26 turns a day to restate what the app can already see. **Keeping
 PLAN.md accurate is therefore MORE important than before, not less** — it is now the direct source of
 what PULSE and every on-demand command tell the owner, with nothing in between to paper over a stale
 ledger.

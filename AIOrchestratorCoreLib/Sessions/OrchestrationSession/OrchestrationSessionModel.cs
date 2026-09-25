@@ -26,7 +26,8 @@ internal sealed class OrchestrationSessionModel(
     bool telegramTopicDeleteFailureReported,
     string? supervisorEffortOverride,
     string? implementerEffortOverride,
-    bool paused) : IOrchestrationSession
+    bool paused,
+    DateTime? telegramTopicFinalNameUtc) : IOrchestrationSession
 {
     public string OrchId { get; } = orchId;
     public string RepoName { get; } = repoName;
@@ -36,6 +37,7 @@ internal sealed class OrchestrationSessionModel(
     public DateTime? TelegramTopicDeletePendingUtc { get; } = telegramTopicDeletePendingUtc;
     public DateTime? TelegramTopicDeletedUtc { get; } = telegramTopicDeletedUtc;
     public bool TelegramTopicDeleteFailureReported { get; } = telegramTopicDeleteFailureReported;
+    public DateTime? TelegramTopicFinalNameUtc { get; } = telegramTopicFinalNameUtc;
 
     public long? StatusLineMessageId { get; } = statusLineMessageId;
     public int? SupervisorPid { get; } = supervisorPid;

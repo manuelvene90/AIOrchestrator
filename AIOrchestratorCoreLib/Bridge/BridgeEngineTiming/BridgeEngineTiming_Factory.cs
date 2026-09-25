@@ -24,36 +24,9 @@ public static class BridgeEngineTiming_Factory
     /// </summary>
     const int MIRROR_TICK_MILLISECONDS = 2000;
 
-    /// <summary>
-    /// The owner often texts several messages in a row — quiet time before delivery as ONE entry, so a
-    /// burst arrives on the session as one turn instead of one turn each.
-    ///
-    /// <para>
-    /// FOUR SECONDS WAS TOO SHORT TO BE HELD: WAIT can only stop a message still in the buffer, and
-    /// four seconds is less than it takes to realise you have more to say and type a word — measured on
-    /// the owner's machine, a WAIT five seconds behind its message arrived after the take and stopped
-    /// nothing. It went to eight. SIX, because the ⏸ button changed what the window has to be long
-    /// enough FOR: with a tap sitting under the receipt the owner set it back down themselves
-    /// (2026-08-15) — "with the button we can reduce the window".
-    /// </para>
-    /// <para>
-    /// THREE, and the balance changed again on 2026-09-09 because the window is no longer served in
-    /// full by everybody. Measured on the VPS that day: 11–12 s median from the owner's text to the
-    /// entry landing in the supervisor's channel, six of them here — and the owner asked for the wait
-    /// to shrink. A message that reads as plainly over now serves a SHORTER window rather than this one
-    /// (<c>OwnerDeliveryBufferModel.FINISHED_MESSAGE_QUIET_SECONDS</c>, asked below the ⏸ check so a
-    /// hold still stops everything), which leaves this number covering what it was always for: a burst
-    /// of typing that has not finished yet.
-    /// </para>
-    /// <para>
-    /// IT SKIPPED THE WINDOW ENTIRELY FOR ONE EVENING, and that is why the sentence above says
-    /// "shorter" and not "no". A finished message taken on the first flush pass left the buffer in
-    /// 150–2000 ms, which put it out of reach of the ⏸ button this number is sized around AND defeated
-    /// the aggregation: measured, two finished messages two seconds apart bought TWO supervisor turns
-    /// where the same two without full stops bought one, at roughly a million input tokens the turn.
-    /// </para>
-    /// </summary>
-    const int OWNER_AGGREGATION_SECONDS = 3;
+    // THERE IS NO OWNER_AGGREGATION_SECONDS HERE ANY MORE (2026-09-23, plan 03 task 13). The window is
+    // the owner's setting, phone.aggregationSeconds; its shipped value and its whole 4 → 8 → 6 → 3 history
+    // moved to OwnerDeliveryBuffer_Factory.DEFAULT_AGGREGATION_SECONDS, which the catalogue row reads.
 
     /// <summary>
     /// Pause before re-sending a channel whose mirror send failed. The tailer re-emits an
@@ -63,12 +36,26 @@ public static class BridgeEngineTiming_Factory
     /// </summary>
     const int MIRROR_RETRY_BACKOFF_SECONDS = 30;
 
-    /// <summary>THE SHIPPED NUMBERS. Every production caller gets these, and nothing else may.</summary>
+    /// <summary>
+    /// THE SHIPPED NUMBERS. Every production caller gets these, and nothing else may.
+    ///
+    /// <para>
+    /// AND NO AGGREGATION WINDOW — the one period production does not name here (2026-09-23, plan 03 task
+    /// 13). The window is a per-user setting, so production timing carries null and the engine's flush
+    /// resolves <c>phone.aggregationSeconds</c> / <c>phone.finishedMessageSeconds</c> from
+    /// <c>_configProvider.Get_Current().Phone</c> on every pass (<c>OwnerAggregationWindow_Resolver</c>).
+    /// THE SEAM'S DESIGN, in one sentence: <see cref="Create_Production"/> carries no window and
+    /// <see cref="Create_Custom"/> carries one, and a carried window outranks the setting — so every
+    /// engine test that hands in a one-second or sixty-second window keeps it, unedited, while
+    /// <see cref="Create_Custom_WindowFromSettings"/> is the fast-tick seam for the tests whose subject IS
+    /// the setting.
+    /// </para>
+    /// </summary>
     public static IBridgeEngineTiming Create_Production()
     {
         return new BridgeEngineTimingModel(
             MIRROR_TICK_MILLISECONDS,
-            OWNER_AGGREGATION_SECONDS,
+            ownerAggregationSecondsOrNull: null,
             MIRROR_RETRY_BACKOFF_SECONDS,
             (int)ChannelWrite_Lock.DEFAULT_TICK_ALLOWANCE.TotalMilliseconds,
             ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS);
@@ -80,6 +67,11 @@ public static class BridgeEngineTiming_Factory
     /// asserts. The guards below are the production floors the rest of the engine relies on: a
     /// non-positive tick is a hot loop, and <c>OwnerDeliveryBuffer_Factory</c> refuses an
     /// aggregation window under a second.
+    ///
+    /// <para>
+    /// <paramref name="ownerAggregationSeconds"/> OUTRANKS the owner's <c>phone.aggregationSeconds</c> —
+    /// see <see cref="Create_Production"/> for why that is the seam's design.
+    /// </para>
     /// </summary>
     public static IBridgeEngineTiming Create_Custom(
         int mirrorTickMilliseconds,
@@ -88,11 +80,41 @@ public static class BridgeEngineTiming_Factory
         int tickLockAllowanceMilliseconds,
         int trailingEntryQuietMilliseconds)
     {
-        if (mirrorTickMilliseconds < 1)
-            throw new ArgumentException($"mirrorTickMilliseconds must be >= 1, got {mirrorTickMilliseconds}");
-
         if (ownerAggregationSeconds < 1)
             throw new ArgumentException($"ownerAggregationSeconds must be >= 1, got {ownerAggregationSeconds}");
+
+        return Create_Validated(
+            mirrorTickMilliseconds, ownerAggregationSeconds, mirrorRetryBackoffSeconds, tickLockAllowanceMilliseconds,
+            trailingEntryQuietMilliseconds);
+    }
+
+    /// <summary>
+    /// THE TEST SEAM WITH THE OWNER'S WINDOW — fast ticks, and NO aggregation window, exactly as
+    /// production carries none, so the engine resolves <c>phone.aggregationSeconds</c> from config.json
+    /// on every flush. For the tests whose subject is that setting (plan 03 task 13): a window named
+    /// here would outrank the very thing they measure.
+    /// </summary>
+    public static IBridgeEngineTiming Create_Custom_WindowFromSettings(
+        int mirrorTickMilliseconds,
+        int mirrorRetryBackoffSeconds,
+        int tickLockAllowanceMilliseconds,
+        int trailingEntryQuietMilliseconds)
+    {
+        return Create_Validated(
+            mirrorTickMilliseconds, ownerAggregationSecondsOrNull: null, mirrorRetryBackoffSeconds,
+            tickLockAllowanceMilliseconds, trailingEntryQuietMilliseconds);
+    }
+
+    /// <summary>The production floors both test seams are held to — one copy of the guards.</summary>
+    static IBridgeEngineTiming Create_Validated(
+        int mirrorTickMilliseconds,
+        int? ownerAggregationSecondsOrNull,
+        int mirrorRetryBackoffSeconds,
+        int tickLockAllowanceMilliseconds,
+        int trailingEntryQuietMilliseconds)
+    {
+        if (mirrorTickMilliseconds < 1)
+            throw new ArgumentException($"mirrorTickMilliseconds must be >= 1, got {mirrorTickMilliseconds}");
 
         if (mirrorRetryBackoffSeconds < 1)
             throw new ArgumentException($"mirrorRetryBackoffSeconds must be >= 1, got {mirrorRetryBackoffSeconds}");
@@ -113,7 +135,7 @@ public static class BridgeEngineTiming_Factory
 
         return new BridgeEngineTimingModel(
             mirrorTickMilliseconds,
-            ownerAggregationSeconds,
+            ownerAggregationSecondsOrNull,
             mirrorRetryBackoffSeconds,
             tickLockAllowanceMilliseconds,
             trailingEntryQuietMilliseconds);

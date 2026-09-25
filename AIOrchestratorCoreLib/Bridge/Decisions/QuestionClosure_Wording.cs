@@ -25,6 +25,7 @@ public static class QuestionClosure_Wording
 {
     public const string TAPPED_OPTION = "an option the owner tapped";
     public const string TALK_REQUEST = "the owner asking to talk it through";
+    public const string EXPLAIN_REQUEST = "the owner asking for the options explained";
     public const string TYPED_ANSWER = "an answer the owner typed";
     public const string CONFIRMED_HIGH_RISK = "a high-risk choice confirmed by code";
     public const string DEADLINE = "its own deadline";

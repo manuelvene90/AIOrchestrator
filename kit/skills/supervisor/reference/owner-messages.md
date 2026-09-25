@@ -27,8 +27,9 @@ in `SKILL.md`; what lives here is the detail, the syntax and the dated account o
   `--option` — repeatable, two to four, spelled out; one option is not a choice and a fifth makes it
   a list. `--recommend` — what you would do and why, one line; it is printed with the question,
   because a recommendation the owner has to scroll back for is a decision deferred. `--risk` —
-  `high` or `low`; high means a tap is not enough and they type back a 4-digit code. `--row` — the
-  plan row this decision belongs to, or the word `none`, written out.
+  `high` or `low`; high means the owner must answer with a tap — it never takes a default — and,
+  if their settings keep it on, also type back a 4-digit code. `--row` — the plan row this decision
+  belongs to, or the word `none`, written out.
 
   **Missing a line? The body still reaches them, the question does not, and you get one entry in
   this channel naming every line you left out.** Nobody will answer a question that was never sent,
@@ -36,9 +37,9 @@ in `SKILL.md`; what lives here is the detail, the syntax and the dated account o
   mine your last sentence ending in "?" and, failing that, show a bare "Your call:" over the
   buttons — both were rescues of a malformed question, and the rescue is why nobody fixed the shape.
 
-  **`RISK: low` does not unlock anything.** The app ALSO locks any question whose text or options
-  name a push, a deploy, a release, production or a destructive command. Your declaration can only
-  ever ADD a lock.
+  **`RISK: low` does not unlock anything.** The app ALSO treats as high risk any question whose
+  text or options name a push, a deploy, a release, production or a destructive command. Your
+  declaration can only ever ADD high risk.
 
 ## Bounding a question — `--deadline` and `--default`
 
@@ -73,13 +74,17 @@ in `SKILL.md`; what lives here is the detail, the syntax and the dated account o
   owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
   anything that costs money.
 
-## The “💬 Let’s talk” button, and the re-ask that must follow
+## The “❔ Explain the options” and “💬 Let’s talk” buttons, and the re-ask that must follow
 
-  A tap there CLOSES the question, exactly like every other button: the keyboard goes and the
-  message they tapped becomes "💬 Ok — tell me what you have in mind." What reaches you is a request
-  to explain the decision — what each option means in practice, what differs between them, what it
-  costs to get wrong, which one you recommend and why — in prose, briefly. Answer whatever they ask
-  next.
+  The app may add either or both under every question, per the owner's `questions.appButtons`
+  setting — and you write none of them. Each asks you to explain, then ask again.
+
+  A tap on either CLOSES the question, exactly like every other button: the keyboard goes and the
+  message they tapped becomes "❔ Ok — explaining the options." or "💬 Ok — tell me what you have in
+  mind." What reaches you is a request to explain the decision — what each option means in practice,
+  what differs between them, what it costs to get wrong, which one you recommend and why. From
+  Explain, keep it short and re-ask straight away. From Let's talk, explain in prose, briefly, and
+  answer whatever they ask next.
 
   **Then, once the discussion has settled, ASK IT AGAIN** with fresh `QUESTION:`/`OPTION:` lines.
   Nothing of that question is live on their phone while you talk, so the re-ask is not a second copy

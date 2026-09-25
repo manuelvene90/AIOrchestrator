@@ -29,6 +29,57 @@ public static class FileShareEnforcement
     /// </summary>
     public static bool IsEnforced => _isEnforced.Value;
 
+    static readonly Lazy<bool> _isExclusiveOpenEnforced = new(Probe_ExclusiveOpen);
+
+    /// <summary>
+    /// True when a handle opened with <see cref="FileShare.None"/> makes ANOTHER open of the file for
+    /// reading fail on this machine — even one that grants every share (the flags
+    /// <c>Tolerant_FileReader</c> opens with). A DIFFERENT question from <see cref="IsEnforced"/>, and it
+    /// has a different answer across OSes: Windows refuses the open through its share modes, and .NET on
+    /// Linux and macOS emulates <see cref="FileShare.None"/> with an advisory <c>flock(LOCK_EX)</c> that
+    /// every other <see cref="FileStream"/> open (it takes <c>LOCK_SH</c>) runs into — whereas nothing on
+    /// POSIX stops a rename. Probed, never assumed: <c>DOTNET_SYSTEM_IO_DISABLEFILELOCKING</c>, or a
+    /// filesystem where flock is unsupported, turns the emulation off, and a test that then asserted a
+    /// refused read would be asserting on a read that simply succeeded (plan 04 Task 2b, 2026-09-23).
+    /// </summary>
+    public static bool IsExclusiveOpenEnforced => _isExclusiveOpenEnforced.Value;
+
+    static bool Probe_ExclusiveOpen()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"aiorch-exclusive-open-probe-{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(path, "probe");
+
+        try
+        {
+            using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                try
+                {
+                    using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    {
+                        // Opened beside an exclusive handle: this machine does not enforce it against a reader.
+                        return false;
+                    }
+                }
+                catch (IOException)
+                {
+                    return true;
+                }
+            }
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch
+            {
+                // Best-effort cleanup, as in Probe: the answer is already decided and must not be changed by this.
+            }
+        }
+    }
+
     static bool Probe()
     {
         var path = Path.Combine(Path.GetTempPath(), $"aiorch-fileshare-probe-{Guid.NewGuid():N}.tmp");
@@ -88,6 +139,27 @@ public sealed class RequiresFileShareEnforcementFactAttribute : FactAttribute
                    "flags entirely, unlike Windows CreateFile share-mode — confirmed by probe, not " +
                    "by platform name; uid does not change this) — cannot provoke 'the target cannot " +
                    "be replaced' on this machine.";
+        }
+    }
+}
+
+/// <summary>
+/// A <see cref="FactAttribute"/> that runs only where a <see cref="FileShare.None"/> handle actually makes
+/// another read of the file fail — see <see cref="FileShareEnforcement.IsExclusiveOpenEnforced"/>. Expected
+/// to RUN on Windows, Linux and macOS alike (the last two through .NET's flock emulation); it skips, by name,
+/// only where the probe finds that emulation switched off, because there "the file is in use" cannot be
+/// provoked and the test would pass on a read that never failed.
+/// </summary>
+public sealed class RequiresExclusiveOpenEnforcementFactAttribute : FactAttribute
+{
+    public RequiresExclusiveOpenEnforcementFactAttribute()
+    {
+        if (!FileShareEnforcement.IsExclusiveOpenEnforced)
+        {
+            Skip = "On this machine a FileShare.None handle does not stop another FileStream from opening the " +
+                   "file for reading (no Windows share mode, and .NET's flock emulation is off — " +
+                   "DOTNET_SYSTEM_IO_DISABLEFILELOCKING, or a filesystem without flock; confirmed by probe, not " +
+                   "by platform name) — cannot provoke 'config.json is in use' here.";
         }
     }
 }

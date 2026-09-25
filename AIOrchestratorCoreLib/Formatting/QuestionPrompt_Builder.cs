@@ -108,6 +108,16 @@ public static class QuestionPrompt_Builder
     }
 
     /// <summary>
+    /// The question message after the owner tapped "❔ Explain the options" — the same shape as
+    /// <see cref="Build_TalkText"/> for the same reason: the tap closed the question and chose nothing, so the
+    /// message keeps the question and says the app heard them, never a ✅ (plan 04 task 11).
+    /// </summary>
+    public static string Build_ExplainText(string questionText)
+    {
+        return $"{questionText}\n\n{Bridge.OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT}";
+    }
+
+    /// <summary>
     /// The record left on a question the asker moved past AFTER the owner had replied in words.
     ///
     /// <para>

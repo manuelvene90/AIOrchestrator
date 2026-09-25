@@ -164,6 +164,23 @@ public class SettingsResolverTests
     }
 
     /// <summary>
+    /// THE LONG ACCESSOR READS BOTH SHAPES A NUMBER ARRIVES IN. A value off disk is JsonElement-backed
+    /// and converts to <see cref="long"/> freely; a shipped default is <c>JsonValue.Create(int)</c>, which
+    /// refuses a <see cref="long"/> read outright. Found 2026-09-14 (plan 03 task 1), the first time
+    /// anything called <c>Resolve_Long</c>: every Int row with nothing stated threw
+    /// "A value of type 'System.Int32' cannot be converted to a 'System.Int64'" — out of the loader, on
+    /// the startup path, for a machine with no config.json at all.
+    /// </summary>
+    [Fact]
+    public void ResolveLong_ReadsAShippedIntDefault_AndAValueOffDisk()
+    {
+        var definition = Catalog.Find_OrNull("phone.status.intervalMinutes")!;
+
+        Assert.Equal(30L, Settings_Resolver.Resolve_Long(definition, presetTree: null, configTree: null, session: null));
+        Assert.Equal(45L, Settings_Resolver.Resolve_Long(definition, presetTree: null, Tree("""{"phone":{"status":{"intervalMinutes":45}}}"""), session: null));
+    }
+
+    /// <summary>
     /// NULL IS A REAL ANSWER FOR A NULLABLE ENUM, and it has to be distinguishable from "this layer
     /// said nothing" — `"effort": {"supervisor": null}` hand-written in config.json MEANS "emit no
     /// --effort flag", and it must beat a preset that sets xhigh (which `classic` does) rather than be
@@ -354,6 +371,7 @@ public class SettingsResolverTests
         public bool Done => throw new NotSupportedException();
         public DateTime? TelegramTopicDeletePendingUtc => throw new NotSupportedException();
         public DateTime? TelegramTopicDeletedUtc => throw new NotSupportedException();
+        public DateTime? TelegramTopicFinalNameUtc => throw new NotSupportedException();
         public bool TelegramTopicDeleteFailureReported => throw new NotSupportedException();
         public DateTime? ClosedUtc => throw new NotSupportedException();
     }

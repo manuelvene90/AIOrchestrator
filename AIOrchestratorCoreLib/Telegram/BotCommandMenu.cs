@@ -95,6 +95,11 @@ public static class BotCommandMenu
         // level is spelled xhigh (owner, 2026-09-09).
         ("model", "Pick the model for this topic's sessions — buttons, or /model fable"),
         ("effort", "Pick the effort level for this topic's sessions — buttons, or /effort xhigh"),
+
+        // BESIDE THE TWO DIALS, because it is the rest of them (plan 04 Task 5, owner 2026-09-23: "a
+        // /settings dialog in the General topic"). Both scopes named, for the reason /progress and /mute
+        // learned: in General it is the machine's menu; in a topic it answers read-only (D3).
+        ("settings", "This machine's settings, one section at a time — in a topic, that orchestration's own"),
         ("cost", "What this topic has cost, per session — in General, per orchestration"),
         ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
         ("close", "End THIS orchestration — you confirm with a tap"),

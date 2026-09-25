@@ -31,9 +31,17 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// <para>
 /// THE ORACLE IS THE PERSISTED SNAPSHOT (<c>OwnerAwaitingAnswer</c>), the same one
 /// <see cref="StartOrchestrationCarriesTheTaskTests"/> and <see cref="DecisionStateSurvivesARestartTests"/>
-/// already read. It is deliberately NOT "was the entry pushed": this build pushes everything the
-/// supervisor writes (owner's ruling, 2026-09-09), so a push assertion would be true whichever way the
-/// guard went and would pin nothing at all. The credit's own state is the only thing the guard moves.
+/// already read. It is deliberately NOT "was the entry pushed": under <c>phone.push = everything</c>
+/// every supervisor entry is pushed (owner's ruling, 2026-09-09), so a push assertion would be true
+/// whichever way the guard went and would pin nothing at all. The credit's own state is the only thing
+/// the guard moves.
+/// </para>
+/// <para>
+/// THE FIXTURE SELECTS <c>phone.push = everything</c> (plan 03), because that is the only mode in which
+/// this guard is reachable at all: under <c>filtered</c> a "WAITING ON …" entry with the credit open is
+/// HELD for the digest by <c>OwnerPush_Policy.Decide</c>, so it never gets as far as the consumption
+/// site this file pins. That mode's half — the declaration is neither sent nor allowed to spend the
+/// credit, and the answer after it is — is <c>AStatusLineDoesNotSpendTheOwnersWaitTests</c>.
 /// </para>
 /// <para>
 /// ORDERING IS WHAT MAKES THE ASSERTIONS SAFE: each entry's text is asserted SENT first, and the
@@ -75,10 +83,11 @@ public class AWaitingOnSubjectDoesNotSpendTheCreditTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
+        // phone.push = everything: see the class summary for why the guard is unreachable under filtered.
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"phone\":{{\"push\":\"everything\"}}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 

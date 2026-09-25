@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 
 namespace AIOrchestratorCoreLib.Bridge.EngineState;
 
@@ -36,6 +37,8 @@ public static class EngineState_Serializer
     const string LIMIT_PROBE_CUTOFF = "limitProbeCutoffUtc";
     const string LIMIT_ACCOUNT_ID = "limitAccountId";
     const string LIMIT_ACCOUNT_SINCE = "limitAccountSinceUtc";
+    const string SETTINGS_MENU_MESSAGE_ID = "settingsMenuMessageId";
+    const string SETTINGS_REPLY_STEPS = "settingsReplySteps";
 
     /// <summary>
     /// Reads a snapshot and says how many records it had to drop. Never throws for the CONTENT of
@@ -76,6 +79,8 @@ public static class EngineState_Serializer
             LimitProbeCutoffUtc = Read_Instant_OrNull(root[LIMIT_PROBE_CUTOFF]),
             LimitAccountId = Read_String_OrNull(root[LIMIT_ACCOUNT_ID]),
             LimitAccountSinceUtc = Read_Instant_OrNull(root[LIMIT_ACCOUNT_SINCE]),
+            SettingsMenuMessageId = Read_Long_OrNull(root[SETTINGS_MENU_MESSAGE_ID]),
+            SettingsReplySteps = Read_Records(root[SETTINGS_REPLY_STEPS], Read_SettingsReplyStep_OrNull, ref dropped),
         };
 
         return (snapshot, dropped);
@@ -111,6 +116,11 @@ public static class EngineState_Serializer
                 ["questionText"] = button.QuestionText,
                 ["expiresUtc"] = Write_Instant(button.ExpiresUtc),
                 ["isHighRisk"] = button.IsHighRisk,
+                ["appButton"] = button.AppButton,
+
+                // STILL WRITTEN, though it is derived now: a build from before `appButton` existed — a
+                // rollback, or the "- Copia" app beside a rebuild (CLAUDE.md decision 23) — reads only
+                // this, and must see an Explain button as one that records no choice.
                 ["answersNothing"] = button.AnswersNothing,
             });
         }
@@ -130,6 +140,7 @@ public static class EngineState_Serializer
                 ["deadlineUtc"] = question.DeadlineUtc == null ? null : Write_Instant(question.DeadlineUtc.Value),
                 ["defaultOptionIndex"] = question.DefaultOptionIndex,
                 ["isHighRisk"] = question.IsHighRisk,
+                ["needsCode"] = question.NeedsCode,
                 ["reminderSent"] = question.ReminderSent,
             });
         }
@@ -167,6 +178,19 @@ public static class EngineState_Serializer
             });
         }
 
+        var settingsReplySteps = new JsonArray();
+
+        foreach (var step in snapshot.SettingsReplySteps)
+        {
+            settingsReplySteps.Add(new JsonObject
+            {
+                ["threadId"] = step.ThreadId,
+                ["path"] = step.Path,
+                ["heldText"] = step.HeldText_OrNull,
+                ["expiresUtc"] = Write_Instant(step.ExpiresUtc),
+            });
+        }
+
         var root = new JsonObject
         {
             [OWNER_AWAITING_ANSWER] = awaiting,
@@ -182,6 +206,8 @@ public static class EngineState_Serializer
             [LIMIT_PROBE_CUTOFF] = snapshot.LimitProbeCutoffUtc == null ? null : Write_Instant(snapshot.LimitProbeCutoffUtc.Value),
             [LIMIT_ACCOUNT_ID] = snapshot.LimitAccountId,
             [LIMIT_ACCOUNT_SINCE] = snapshot.LimitAccountSinceUtc == null ? null : Write_Instant(snapshot.LimitAccountSinceUtc.Value),
+            [SETTINGS_MENU_MESSAGE_ID] = snapshot.SettingsMenuMessageId,
+            [SETTINGS_REPLY_STEPS] = settingsReplySteps,
         };
 
         return root.ToJsonString(Configuration.JsonWriting.INDENTED);
@@ -236,17 +262,41 @@ public static class EngineState_Serializer
             ExpiresUtc = expiresUtc.Value,
             IsHighRisk = Read_Bool_OrNull(entry["isHighRisk"]) ?? false,
 
-            // ABSENT READS AS FALSE, which is the honest default for a state file written before
-            // this field existed: every button in it was an answer, and an answer consumes.
-            //
-            // AND THE OLD NAME IS STILL READ. `keepsGroupOpen` was the same button under the
-            // behaviour this replaced, so a state file written by the previous build maps onto the
-            // new record exactly rather than turning a "Let's talk" into an option whose whole
-            // instruction text gets stamped over the question as if it had been chosen.
-            AnswersNothing = Read_Bool_OrNull(entry["answersNothing"])
-                ?? Read_Bool_OrNull(entry["keepsGroupOpen"])
-                ?? false,
+            AppButton = Read_AppButton_OrNull(entry),
         };
+    }
+
+    /// <summary>
+    /// <c>appButton</c> first (plan 04 task 11); without it, the flags older builds wrote.
+    ///
+    /// <para>
+    /// ABSENT READS AS AN OPTION, which is the honest default for a state file written before any of
+    /// these fields existed: every button in it was an answer, and an answer consumes.
+    /// </para>
+    /// <para>
+    /// <c>answersNothing: true</c> — AND THE OLDER NAME <c>keepsGroupOpen</c> — READ AS LET'S TALK. Before
+    /// <c>questions.appButtons</c>, "💬 Let's talk" was the only button that answered nothing, so that is what
+    /// every such record was; reading it as an option would stamp its whole instruction text over the
+    /// question as if it had been chosen.
+    /// </para>
+    /// <para>
+    /// A WORD THIS BUILD DOES NOT KNOW (a later build's button) also reads as talk, for the same reason in
+    /// the other direction: it was written as a button that answers nothing, and the safe reading keeps it
+    /// one. The acknowledgement may be the talk line; the choice record is never forged.
+    /// </para>
+    /// </summary>
+    static string? Read_AppButton_OrNull(JsonObject entry)
+    {
+        var word = Read_String_OrNull(entry["appButton"]);
+
+        if (word != null)
+            return QuestionAppButton_Names.ALL.Contains(word, StringComparer.Ordinal) ? word : QuestionAppButton_Names.TALK;
+
+        var answersNothing = Read_Bool_OrNull(entry["answersNothing"])
+            ?? Read_Bool_OrNull(entry["keepsGroupOpen"])
+            ?? false;
+
+        return answersNothing ? QuestionAppButton_Names.TALK : null;
     }
 
     static OpenQuestionRecord? Read_Question_OrNull(JsonObject entry)
@@ -279,6 +329,13 @@ public static class EngineState_Serializer
             // through) must not be able to arm an unattended approval of a push.
             DefaultOptionIndex = isHighRisk ? null : Read_Int_OrNull(entry["defaultOptionIndex"]),
             IsHighRisk = isHighRisk,
+
+            // ABSENT MEANS THE CLASSIFICATION: every file written before plan 03 task 14b predates the
+            // key, and until the highRiskConfirmation switch every high-risk question DID ask the code —
+            // its terms on the phone promised one. And the lock only ever FOLLOWS the classification: a
+            // hand-edited `needsCode: true` on an ordinary question is read as false, the same inbound
+            // enforcement the default gets above.
+            NeedsCode = isHighRisk && (Read_Bool_OrNull(entry["needsCode"]) ?? true),
             ReminderSent = Read_Bool_OrNull(entry["reminderSent"]) ?? false,
 
             // `inDiscussion` is no longer read. A file written by the previous build may carry it,
@@ -340,6 +397,22 @@ public static class EngineState_Serializer
             ExpiresUtc = Read_Instant_OrNull(entry["expiresUtc"]),
             PromptMessageId = Read_Long_OrNull(entry["promptMessageId"]),
         };
+    }
+
+    /// <summary>
+    /// A step with no path or no deadline is DROPPED, never defaulted: a step with no deadline would swallow the
+    /// owner's next message whenever it came, which is the one failure D9 exists to forbid.
+    /// </summary>
+    static SettingsMenu.ISettingsReplyStep? Read_SettingsReplyStep_OrNull(JsonObject entry)
+    {
+        var path = Read_String_OrNull(entry["path"]);
+        var expiresUtc = Read_Instant_OrNull(entry["expiresUtc"]);
+
+        if (path == null || expiresUtc == null)
+            return null;
+
+        return SettingsMenu.SettingsReplyStep_Factory.Create_Restored(
+            Read_Long_OrNull(entry["threadId"]), path, Read_String_OrNull(entry["heldText"]), expiresUtc.Value);
     }
 
     static IReadOnlyList<string> Read_StringList(JsonNode? node)

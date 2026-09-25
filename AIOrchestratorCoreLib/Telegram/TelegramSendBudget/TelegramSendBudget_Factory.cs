@@ -15,7 +15,29 @@ public static class TelegramSendBudget_Factory
     /// </summary>
     public static ITelegramSendBudget Create_Fresh()
     {
-        return new TelegramSendBudgetModel(TokenBucket_Gate.DEFAULT_CAPACITY, DateTime.UtcNow);
+        return new TelegramSendBudgetModel(TokenBucket_Gate.DEFAULT_CAPACITY, DateTime.UtcNow, TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE);
+    }
+
+    /// <summary>
+    /// A FRESH BUDGET WHOSE PER-MESSAGE EDIT GAP IS THE CALLER'S — THE TEST SEAM, and nothing in
+    /// production calls it: the app and the daemon build their budget through <see cref="Create_Fresh"/>
+    /// or <see cref="Create_FromPersisted"/>, which hold every message to
+    /// <see cref="TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE"/>.
+    ///
+    /// <para>
+    /// WHY IT EXISTS (plan 03 Task 6c, 2026-09-23). The owner's ✓ could be left reading "⏸ holding" on a
+    /// delivered message because its ✓✓ was the second edit of that message inside the gap, and every
+    /// engine fake had no gap at all — the defect was invisible to the whole suite. Wrapping a fake in
+    /// the REAL <see cref="ITelegramSendBudget.Reserve_MessageEdit"/> makes it visible, and a two-second
+    /// gap lets the probe watch the held edit land without a thirty-second test.
+    /// </para>
+    /// </summary>
+    public static ITelegramSendBudget Create_WithEditGap(TimeSpan editGap)
+    {
+        if (editGap <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(editGap), editGap, "an edit gap must be positive — a zero gap is a budget with no gate, which no test needs this seam for");
+
+        return new TelegramSendBudgetModel(TokenBucket_Gate.DEFAULT_CAPACITY, DateTime.UtcNow, editGap);
     }
 
     /// <summary>
@@ -41,6 +63,6 @@ public static class TelegramSendBudget_Factory
 
         var safeStamp = refilledUtc > nowUtc ? nowUtc : refilledUtc;
 
-        return new TelegramSendBudgetModel(safeTokens, safeStamp);
+        return new TelegramSendBudgetModel(safeTokens, safeStamp, TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE);
     }
 }

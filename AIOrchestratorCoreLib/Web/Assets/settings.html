@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>AI Orchestrator settings</title>
+<!--
+  THE PAGE KNOWS NO SETTING (plan 04 Task 8, spec §8.3). Every section, row, label, description, value,
+  origin, restart note, offer and refusal message on this page comes from GET /settings, which is the same
+  reading the desktop window and the Telegram menu draw. A new catalogue row therefore appears here with no
+  change to this file — SettingsPageAssetTests fails if this file ever names a path, a label or a category.
+
+  One file, no framework, no build step, no request to anywhere but the bridge that served it: it is reached
+  through loopback, often through an SSH tunnel to a machine with no browser of its own, and a CDN reference
+  would make it fail in exactly the situation it exists for.
+
+  EVERY SERVER STRING IS SET AS TEXT, never as markup: a description is the catalogue's prose and an error
+  echoes what a client sent, so nothing from the wire ever reaches innerHTML.
+-->
+<style>
+  :root {
+    --bg-window: #1B1E24;
+    --bg-panel: #22262E;
+    --bg-card: #2A2F3A;
+    --bg-input: #1F232B;
+    --border: #3A4150;
+    --text: #E8EDF5;
+    --text-dim: #9AA5B5;
+    --accent: #3B82F6;
+    --ok: #22C55E;
+    --warn: #F59E0B;
+    --bad: #EF4444;
+    --locked: #A855F7;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg-window); color: var(--text); }
+  body {
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  code, pre, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace; }
+  header.top {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--bg-panel); border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+  }
+  .top-inner { max-width: 900px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .top h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .top .sub { color: var(--text-dim); font-size: 13px; }
+  .top .spacer { flex: 1 1 auto; }
+  nav.jump { max-width: 900px; margin: 8px auto 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  nav.jump a {
+    color: var(--text-dim); text-decoration: none; font-size: 13px;
+    border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px;
+  }
+  nav.jump a:hover { color: var(--text); border-color: var(--accent); }
+  main { max-width: 900px; margin: 0 auto; padding: 12px 16px 48px; }
+  .banner {
+    border: 1px solid var(--border); border-left: 4px solid var(--warn);
+    background: var(--bg-panel); border-radius: 6px; padding: 12px 14px; margin: 8px 0 16px;
+  }
+  .banner.locked-mode { border-left-color: var(--accent); }
+  .banner.fault { border-left-color: var(--bad); }
+  .banner p { margin: 0 0 8px; }
+  .banner p:last-child { margin-bottom: 0; }
+  .banner pre {
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px;
+    padding: 8px 10px; margin: 8px 0; overflow-x: auto; white-space: pre; font-size: 13px;
+  }
+  .token-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .token-line input { flex: 1 1 220px; min-width: 0; }
+  section.cat { margin: 24px 0 0; }
+  /* The header is sticky: a jump to a section (or a row scrolled into view) must land below it, not under it. */
+  section.cat, .row { scroll-margin-top: 120px; }
+  section.cat > h2 {
+    font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim);
+    margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  .empty { color: var(--text-dim); font-style: italic; margin: 4px 0; }
+  .row {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 14px; margin: 8px 0;
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 16px;
+  }
+  .row.is-locked { border-left: 3px solid var(--locked); }
+  .row .who { grid-column: 1; min-width: 0; }
+  .row .what { grid-column: 2; min-width: 0; }
+  .row .label { font-weight: 600; }
+  .row .path { display: block; color: var(--text-dim); font-size: 12px; overflow-wrap: anywhere; }
+  .row .desc { color: var(--text-dim); font-size: 13px; margin: 6px 0 0; overflow-wrap: anywhere; }
+  .row .value { font-weight: 500; overflow-wrap: anywhere; }
+  .row .meta { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0 8px; font-size: 12px; }
+  .badge { border-radius: 999px; padding: 1px 8px; border: 1px solid var(--border); color: var(--text-dim); }
+  .badge.origin-ConfigFile { color: var(--text); border-color: var(--accent); background: rgba(59,130,246,.15); }
+  .badge.origin-Session { color: var(--text); border-color: var(--warn); }
+  .restart { color: var(--text-dim); }
+  .lock-note { font-size: 13px; color: var(--text-dim); border-left: 2px solid var(--locked); padding-left: 8px; margin: 6px 0; }
+  .note { font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+  .note.ok { color: var(--ok); }
+  .note.err { color: var(--bad); }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button, select, input {
+    font: inherit; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 10px; min-height: 32px;
+  }
+  input, select { min-width: 0; max-width: 100%; }
+  input.box { flex: 1 1 160px; }
+  button { cursor: pointer; background: var(--bg-panel); }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.current { background: rgba(59,130,246,.25); border-color: var(--accent); cursor: default; }
+  button.reset { color: var(--text-dim); }
+  button:disabled, select:disabled, input:disabled { opacity: .45; cursor: not-allowed; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { color: var(--text-dim); font-size: 12px; }
+  ol.items { list-style: none; margin: 0 0 6px; padding: 0; }
+  ol.items li {
+    display: flex; gap: 6px; align-items: center; padding: 3px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  ol.items li .word { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  ol.items li button { min-height: 28px; padding: 2px 8px; }
+  .busy { opacity: .6; pointer-events: none; }
+  @media (max-width: 640px) {
+    .row { grid-template-columns: minmax(0, 1fr); }
+    .row .who, .row .what { grid-column: 1; }
+    body { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <h1>Settings</h1>
+    <span class="sub" id="preset"></span>
+    <span class="spacer"></span>
+    <button type="button" id="reload">Reload</button>
+  </div>
+  <nav class="jump" id="jump" aria-label="Sections"></nav>
+</header>
+<main>
+  <div id="banner"></div>
+  <div id="sections"><p class="empty">Reading the settings from the bridge…</p></div>
+</main>
+<script>
+'use strict';
+
+// THE API — routes and query key only. What a row IS comes from the answer to GET, never from here.
+const API = '/settings';
+const RESET_KEY = 'path';
+const TOKEN_STORE_KEY = 'aiorch.settings.pageToken';
+
+// A Number box sends a JSON number ONLY for plain decimal digits (surrounding spaces trimmed). JavaScript's Number()
+// also reads "0x1F", "1e2", "1.5" and "Infinity"; turning those into numbers would be the page accepting a value
+// the catalogue never saw, so anything else goes RAW and the definition refuses it in its own words (decision 21,
+// ruling P13). Every Number row is a whole-number (Int) row.
+const WHOLE_NUMBER = /^-?[0-9]+$/;
+
+const state = {
+  data: null,        // the last GET /settings answer
+  token: readStoredToken(),
+  notes: {},         // path -> { kind: 'ok' | 'err', text }
+  fault: null,       // a page-wide problem (GET failed)
+  busy: false,
+};
+
+// ------------------------------------------------------------------ small helpers
+
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value === null || value === undefined || value === false) continue;
+      if (key === 'class') node.className = value;
+      else if (key === 'text') node.textContent = value;
+      else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, value === true ? '' : String(value));
+    }
+  }
+  for (const child of [].concat(children || [])) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(typeof child === 'string' ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+function same(a, b) {
+  return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+}
+
+function readStoredToken() {
+  try { return sessionStorage.getItem(TOKEN_STORE_KEY) || ''; } catch (e) { return ''; }
+}
+
+function storeToken(value) {
+  try {
+    if (value) sessionStorage.setItem(TOKEN_STORE_KEY, value);
+    else sessionStorage.removeItem(TOKEN_STORE_KEY);
+  } catch (e) { /* a private window: the token lives in memory for this page only */ }
+}
+
+async function readJson(response) {
+  try { return await response.json(); } catch (e) { return {}; }
+}
+
+function anchorFor(category) {
+  return 'cat-' + String(category).replace(/[^A-Za-z0-9_-]/g, '-');
+}
+
+// ------------------------------------------------------------------ talking to the bridge
+
+async function load() {
+  try {
+    const response = await fetch(API, { method: 'GET', cache: 'no-store', headers: { 'Accept': 'application/json' } });
+    const body = await readJson(response);
+    if (!response.ok || !Array.isArray(body.sections)) {
+      state.fault = body.error || ('The bridge answered HTTP ' + response.status + ' and no settings.');
+    } else {
+      state.data = body;
+      state.fault = null;
+    }
+  } catch (e) {
+    state.fault = 'Could not reach the bridge that served this page (' + e.message + '). Is it still running, and is the tunnel still open?';
+  }
+  render();
+}
+
+function editHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  const editing = state.data && state.data.editing;
+  if (editing && editing.tokenRequired && state.token) headers[editing.tokenHeader] = state.token;
+  return headers;
+}
+
+/** One path per PUT: its answer is then about exactly the row that was touched. */
+function putValue(path, value) {
+  const body = {};
+  body[path] = value === undefined ? null : value;
+  return send('PUT', API, JSON.stringify(body), path);
+}
+
+/** Reset deletes the key from config.json: the row falls back to the preset or the shipped value. */
+function resetRow(path) {
+  const query = new URLSearchParams();
+  query.set(RESET_KEY, path);
+  return send('DELETE', API + '?' + query.toString(), null, path);
+}
+
+async function send(method, url, body, path) {
+  if (state.busy) return;
+  state.busy = true;
+  document.body.classList.add('busy');
+  try {
+    let response, answer;
+    try {
+      response = await fetch(url, { method: method, headers: editHeaders(), body: body, cache: 'no-store' });
+      answer = await readJson(response);
+    } catch (e) {
+      state.notes[path] = { kind: 'err', text: 'Could not reach the bridge (' + e.message + '). Nothing was changed by this page.' };
+      render();
+      return;
+    }
+
+    // A 200 or a 422 carries one result PER PATH, and a 422 may be partial — so every result is read on its
+    // own, never the status alone. Anything else carries one "error" for the whole request.
+    if (Array.isArray(answer.results)) {
+      for (const result of answer.results) {
+        // The server's verdict (result.tookEffect), never the page's own reading of the outcome word.
+        state.notes[result.path] = result.tookEffect === true
+          ? { kind: 'ok', text: result.outcome === 'Reset' ? (result.message || 'Reset.') : 'Saved.' }
+          : { kind: 'err', text: result.message || ('Not applied (' + result.outcome + ').') };
+      }
+    } else {
+      state.notes[path] = { kind: 'err', text: answer.error || ('The bridge answered HTTP ' + response.status + '.') };
+      if (response.status === 401) focusToken();
+    }
+  } finally {
+    state.busy = false;
+    document.body.classList.remove('busy');
+  }
+  await load();
+  clearOkNotesLater();
+}
+
+let okTimer = null;
+function clearOkNotesLater() {
+  if (okTimer) clearTimeout(okTimer);
+  // Only the "Saved." / "Reset." notes go, and only their own nodes: a whole re-render here would wipe whatever
+  // the viewer had started typing into another box in the meantime.
+  okTimer = setTimeout(() => {
+    for (const [path, note] of Object.entries(state.notes)) if (note.kind === 'ok') delete state.notes[path];
+    for (const node of document.querySelectorAll('.note.ok')) node.remove();
+  }, 4000);
+}
+
+function focusToken() {
+  const box = document.getElementById('token');
+  if (box) box.focus();
+}
+
+// ------------------------------------------------------------------ rendering
+
+function render() {
+  const data = state.data;
+  document.getElementById('preset').textContent = data && data.preset ? 'preset: ' + data.preset : '';
+  renderBanner(data);
+  renderJump(data);
+  renderSections(data);
+}
+
+function renderBanner(data) {
+  const host = document.getElementById('banner');
+  host.replaceChildren();
+
+  if (state.fault) {
+    host.append(el('div', { class: 'banner fault' }, [el('p', { text: state.fault })]));
+  }
+  if (!data) return;
+
+  const editing = data.editing || {};
+
+  if (editing.tokenRequired) {
+    const box = el('input', {
+      id: 'token', type: 'password', autocomplete: 'off', placeholder: 'page token',
+      value: state.token, 'aria-label': 'Page token',
+    });
+    const use = () => { state.token = box.value.trim(); storeToken(state.token); render(); };
+    box.addEventListener('keydown', (e) => { if (e.key === 'Enter') use(); });
+    host.append(el('div', { class: 'banner locked-mode' }, [
+      el('p', { text: 'Editing needs the page token; reading does not. Every change is sent with the token typed below, which is kept in this browser tab only.' }),
+      el('div', { class: 'token-line' }, [
+        box,
+        el('button', { type: 'button', class: 'primary', onclick: use, text: 'Use token' }),
+        el('span', { class: 'hint', text: state.token ? 'A token is entered.' : 'No token entered yet.' }),
+      ]),
+    ]));
+    return;
+  }
+
+  host.append(el('div', { class: 'banner' }, [
+    el('p', { text: 'Editing is open: no page token is set, so anything on this machine that can reach this port can change the settings below. A few rows stay locked until a token is set — the ones that run a command, move this page, or decide whom the bridge answers.' }),
+    el('p', { text: 'The token cannot be set from this page. To set it by hand — on a machine with no desktop app, too — add this to config.json in the supervision folder (~/.claude/supervision/ unless the bridge was started with --root), keep the file valid JSON, then reload this page:' }),
+    el('pre', { text: tokenSnippet(editing.tokenPath) }),
+    el('p', { class: 'hint', text: 'Any long random string will do, for example the output of: openssl rand -hex 24' }),
+  ]));
+}
+
+/** The config.json fragment for the token row, built from the path the GET names — never spelled here. */
+function tokenSnippet(tokenPath) {
+  const segments = String(tokenPath || '').split('.').filter(Boolean);
+  if (segments.length === 0) return '';
+  let node = '<a long random string>';
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const wrapper = {};
+    wrapper[segments[i]] = node;
+    node = wrapper;
+  }
+  return JSON.stringify(node, null, 2);
+}
+
+function renderJump(data) {
+  const host = document.getElementById('jump');
+  host.replaceChildren();
+  if (!data) return;
+  for (const section of data.sections) {
+    host.append(el('a', { href: '#' + anchorFor(section.category), text: section.title }));
+  }
+}
+
+function renderSections(data) {
+  const host = document.getElementById('sections');
+  if (!data) {
+    if (state.fault) host.replaceChildren();
+    return;
+  }
+  host.replaceChildren();
+  for (const section of data.sections) {
+    const node = el('section', { class: 'cat', id: anchorFor(section.category) }, [el('h2', { text: section.title })]);
+    if (!section.rows || section.rows.length === 0) node.append(el('p', { class: 'empty', text: 'Nothing to set here yet — this section fills in with a later plan.' }));
+    for (const row of section.rows || []) node.append(renderRow(row, data.editing || {}));
+    host.append(node);
+  }
+}
+
+function renderRow(row, editing) {
+  const locked = !!row.fenced && !editing.tokenRequired;
+  const canEdit = !!row.editable && !locked;
+
+  const who = el('div', { class: 'who' }, [
+    el('span', { class: 'label', text: row.label }),
+    el('code', { class: 'path', text: row.path }),
+    el('p', { class: 'desc', text: row.description }),
+  ]);
+
+  const what = el('div', { class: 'what' }, [
+    el('div', { class: 'value', text: row.displayValue }),
+    el('div', { class: 'meta' }, [
+      el('span', { class: 'badge origin-' + row.origin, text: row.originLabel }),
+      row.restartLabel ? el('span', { class: 'restart', text: row.restartLabel }) : null,
+    ]),
+    row.sessionNote ? el('p', { class: 'desc', text: row.sessionNote }) : null,
+  ]);
+
+  if (locked) {
+    what.append(el('p', {
+      class: 'lock-note',
+      text: 'Locked on this page until a page token is set: it can run a command, move this page, or change whom the bridge answers. Change it in the desktop app\'s settings window, or by hand in config.json.',
+    }));
+  }
+
+  if (row.editable) {
+    const control = renderControl(row, canEdit);
+    if (control) what.append(control);
+  } else {
+    what.append(el('p', { class: 'hint', text: 'Shown here only — its description says where it is changed.' }));
+  }
+
+  if (row.editable && row.origin === 'ConfigFile') {
+    what.append(el('div', { class: 'controls' }, [
+      el('button', {
+        type: 'button', class: 'reset', disabled: !canEdit,
+        title: 'Remove this value from config.json so the preset or shipped value applies again',
+        onclick: () => resetRow(row.path), text: 'Reset',
+      }),
+    ]));
+  }
+
+  const note = state.notes[row.path];
+  if (note) what.append(el('div', { class: 'note ' + note.kind, role: 'status', text: note.text }));
+
+  return el('div', { class: 'row' + (locked ? ' is-locked' : ''), id: 'row-' + row.path }, [who, what]);
+}
+
+function renderControl(row, canEdit) {
+  switch (row.renderer) {
+    case 'Toggle':
+    case 'Choice':
+      return renderChoice(row, canEdit);
+    case 'Number':
+      return renderBox(row, canEdit, true);
+    case 'Text':
+      return renderBox(row, canEdit, false);
+    case 'OrderedList':
+      return renderList(row, canEdit);
+    default:
+      return null;
+  }
+}
+
+/** Offers are {caption, value}: the caption is drawn, the value is what is PUT — the page never reads a caption back. */
+function renderChoice(row, canEdit) {
+  const offers = row.offers || [];
+  if (offers.length <= 4) {
+    return el('div', { class: 'controls', role: 'group', 'aria-label': row.label },
+      offers.map((offer) => {
+        const current = same(offer.value, row.value);
+        return el('button', {
+          type: 'button', class: current ? 'current' : null, disabled: !canEdit,
+          'aria-pressed': current ? 'true' : 'false',
+          onclick: current ? null : () => putValue(row.path, offer.value),
+          text: offer.caption,
+        });
+      }));
+  }
+
+  const select = el('select', { disabled: !canEdit, 'aria-label': row.label });
+  let matched = false;
+  offers.forEach((offer, index) => {
+    const current = same(offer.value, row.value);
+    matched = matched || current;
+    select.append(el('option', { value: String(index), selected: current, text: offer.caption }));
+  });
+  if (!matched) select.prepend(el('option', { value: '', selected: true, disabled: true, text: row.displayValue }));
+  select.addEventListener('change', () => {
+    const offer = offers[Number(select.value)];
+    if (offer) putValue(row.path, offer.value);
+  });
+  return el('div', { class: 'controls' }, [select]);
+}
+
+/**
+ * A Number or Text box. An emptied box sends null; a Number box sends a JSON number when the text is one and
+ * the raw text otherwise, so the DEFINITION refuses what it will not take, in its own words (decision 21) —
+ * the bounds shown beside the box are for drawing it, never for judging it.
+ */
+function renderBox(row, canEdit, numeric) {
+  const current = row.value === null || row.value === undefined ? '' : String(row.value);
+  const box = el('input', {
+    class: 'box', type: 'text', value: current, disabled: !canEdit,
+    inputmode: numeric ? 'numeric' : null, spellcheck: 'false', autocomplete: 'off', 'aria-label': row.label,
+  });
+  const apply = () => {
+    const text = box.value;
+    let value;
+    if (text.trim() === '') value = null;
+    else if (numeric) value = WHOLE_NUMBER.test(text.trim()) ? Number(text.trim()) : text;
+    else value = text;
+    putValue(row.path, value);
+  };
+  box.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
+
+  const bounds = numeric && (row.minimum !== null || row.maximum !== null)
+    ? el('span', { class: 'hint', text: rangeHint(row.minimum, row.maximum) })
+    : null;
+
+  return el('div', { class: 'controls' }, [
+    box,
+    el('button', { type: 'button', class: 'primary', disabled: !canEdit, onclick: apply, text: 'Apply' }),
+    bounds,
+  ]);
+}
+
+function rangeHint(minimum, maximum) {
+  if (minimum !== null && maximum !== null) return minimum + ' – ' + maximum;
+  if (minimum !== null) return 'at least ' + minimum;
+  return 'at most ' + maximum;
+}
+
+/**
+ * An ordered list, edited in place: every move, removal or addition PUTs the whole list. With offers, new words
+ * are picked from them (the words the bridge can actually use); without, they are typed.
+ */
+function renderList(row, canEdit) {
+  const items = Array.isArray(row.value) ? row.value.slice() : [];
+  const list = el('ol', { class: 'items' });
+
+  items.forEach((item, index) => {
+    const move = (delta) => {
+      const next = items.slice();
+      const [moved] = next.splice(index, 1);
+      next.splice(index + delta, 0, moved);
+      putValue(row.path, next);
+    };
+    list.append(el('li', null, [
+      el('span', { class: 'word mono', text: typeof item === 'string' ? item : JSON.stringify(item) }),
+      el('button', { type: 'button', disabled: !canEdit || index === 0, title: 'Move up', 'aria-label': 'Move up', onclick: () => move(-1), text: '↑' }),
+      el('button', { type: 'button', disabled: !canEdit || index === items.length - 1, title: 'Move down', 'aria-label': 'Move down', onclick: () => move(1), text: '↓' }),
+      el('button', {
+        type: 'button', disabled: !canEdit, title: 'Remove', 'aria-label': 'Remove',
+        onclick: () => putValue(row.path, items.filter((_, i) => i !== index)), text: '✕',
+      }),
+    ]));
+  });
+
+  if (items.length === 0) list.append(el('li', null, [el('span', { class: 'word hint', text: 'The list is empty.' })]));
+
+  const offers = (row.offers || []).filter((offer) => !items.some((item) => same(item, offer.value)));
+  let adder;
+
+  if ((row.offers || []).length > 0) {
+    const select = el('select', { disabled: !canEdit || offers.length === 0, 'aria-label': 'Add to ' + row.label });
+    offers.forEach((offer, index) => select.append(el('option', { value: String(index), text: offer.caption })));
+    if (offers.length === 0) select.append(el('option', { text: 'everything is already in the list' }));
+    adder = el('div', { class: 'controls' }, [
+      select,
+      el('button', {
+        type: 'button', disabled: !canEdit || offers.length === 0, text: 'Add',
+        onclick: () => { const offer = offers[Number(select.value)]; if (offer) putValue(row.path, items.concat([offer.value])); },
+      }),
+    ]);
+  } else {
+    const box = el('input', { class: 'box', type: 'text', disabled: !canEdit, spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Add to ' + row.label });
+    const add = () => putValue(row.path, items.concat([box.value]));
+    box.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    adder = el('div', { class: 'controls' }, [
+      box,
+      el('button', { type: 'button', disabled: !canEdit, onclick: add, text: 'Add' }),
+    ]);
+  }
+
+  return el('div', null, [list, adder]);
+}
+
+document.getElementById('reload').addEventListener('click', () => { state.notes = {}; load(); });
+load();
+</script>
+</body>
+</html>

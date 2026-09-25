@@ -178,6 +178,13 @@ public class OrchestratorConfigLoaderGuardrailsTests : IDisposable
     /// Refusing to save over a corrupt config.json would strand the owner with a broken file and
     /// no way to fix it short of editing it by hand — the app is their only remaining way back in,
     /// so a save must succeed and produce a fresh, valid file carrying the keys this build owns.
+    ///
+    /// <para>
+    /// "THE KEYS THIS BUILD OWNS" NO LONGER INCLUDES A MODEL (plan 04 D1, 2026-09-23). This used to prove
+    /// the fresh file by reading <c>supervisorModel</c> back as "opus" — a shipped default Save was
+    /// materialising, which is precisely what D1 stops. It now reads back two keys Save still owns — the
+    /// repo list and the screenshots flag — and pins that the model key is ABSENT from the replacement.
+    /// </para>
     /// </summary>
     [Fact]
     public void Save_OverACorruptConfigJson_StillSucceeds_AndWritesTheKnownKeys()
@@ -189,7 +196,9 @@ public class OrchestratorConfigLoaderGuardrailsTests : IDisposable
         Assert.Null(exception);
 
         var root = JsonNode.Parse(File.ReadAllText(_paths.ConfigFile))!.AsObject();
-        Assert.Equal("claude-opus-5-5", root["supervisorModel"]!.GetValue<string>());
+        Assert.IsType<JsonArray>(root["repos"]);
+        Assert.False(root["telegramStatusScreenshots"]!.GetValue<bool>());
+        Assert.False(root.ContainsKey("supervisorModel"));
     }
 
     /// <summary>
@@ -210,5 +219,67 @@ public class OrchestratorConfigLoaderGuardrailsTests : IDisposable
         Assert.Null(root["highRiskCodeExpiryMinutes"]);
         Assert.Null(root["dispatchPauseThresholdPercent"]);
         Assert.Null(root["buttonExpiryMinutes"]);
+
+        // Classic's `false` in particular: written back, it would sit in the owner's own file as a
+        // choice and outrank every preset they later pick (the stale-model incident of 2026-09-12).
+        Assert.Null(root["highRiskConfirmation"]);
+    }
+
+    /// <summary>
+    /// CLASSIC TURNS THE CODE OFF (owner, 2026-09-23, plan 03 task 15): <i>"I'm asked to enter a code
+    /// when a requested change is impactful, I don't want that."</i> A config.json that names no preset
+    /// and states no key is classic, so it resolves to no code — through the preset rung, which is why
+    /// this key is resolved through the catalogue while its three older neighbours are read from the
+    /// file alone.
+    /// </summary>
+    [Fact]
+    public void AConfigStatingNothing_IsClassic_AndClassicAsksForNoCode()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[]}""");
+
+        Assert.False(OrchestratorConfig_Loader.Load_OrEmpty(_paths).Guardrails.HighRiskConfirmation);
+    }
+
+    /// <summary>Quiet states nothing, so it reads the shipped default — today's behaviour, the code on.</summary>
+    [Fact]
+    public void AConfigNamingQuiet_KeepsTheCode()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet"}""");
+
+        Assert.True(OrchestratorConfig_Loader.Load_OrEmpty(_paths).Guardrails.HighRiskConfirmation);
+    }
+
+    /// <summary>The file's own answer outranks the preset beneath it, in both directions.</summary>
+    [Theory]
+    [InlineData("""{"repos":[],"highRiskConfirmation":true}""", true)]
+    [InlineData("""{"repos":[],"preset":"quiet","highRiskConfirmation":false}""", false)]
+    public void AHighRiskConfirmationInConfigJson_BeatsThePreset(string configJson, bool expected)
+    {
+        File.WriteAllText(_paths.ConfigFile, configJson);
+
+        Assert.Equal(expected, OrchestratorConfig_Loader.Load_OrEmpty(_paths).Guardrails.HighRiskConfirmation);
+    }
+
+    /// <summary>
+    /// A NON-BOOLEAN IS A TYPO, NOT AN ANSWER: <c>"yes"</c> is refused by the row's own definition and
+    /// the key falls to the preset's value — never the load, which runs on every tick of the bridge.
+    /// </summary>
+    [Fact]
+    public void ANonBooleanHighRiskConfirmation_FallsToThePresetsAnswer()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"preset":"quiet","highRiskConfirmation":"no"}""");
+
+        Assert.True(OrchestratorConfig_Loader.Load_OrEmpty(_paths).Guardrails.HighRiskConfirmation);
+    }
+
+    /// <summary>
+    /// A CONFIG ASSEMBLED IN MEMORY HAS NO PRESET RUNG, and gets the catalogue's shipped default — the
+    /// code on. A LOADED config stating nothing is classic, and off (<see cref="AConfigStatingNothing_IsClassic_AndClassicAsksForNoCode"/>).
+    /// </summary>
+    [Fact]
+    public void TheShippedDefault_KeepsTheCode()
+    {
+        Assert.True(GuardrailSettings_Factory.Create_Default().HighRiskConfirmation);
+        Assert.True(GuardrailSettings_Factory.DEFAULT_HIGH_RISK_CONFIRMATION);
     }
 }

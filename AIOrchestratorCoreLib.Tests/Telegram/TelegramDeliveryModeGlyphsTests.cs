@@ -1,5 +1,7 @@
+using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Planning;
 using AIOrchestratorCoreLib.Telegram;
+using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Telegram;
@@ -28,16 +30,22 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// than dead code: every topic in the owner's list was named by the previous build, so the first
 /// rename after this change has to be able to take a moon off a name nothing will ever put a moon on
 /// again.
+///
+/// THE MOVE BECAME A SETTING IN PLAN 03 (Task 7, <c>topic.modeGlyphs</c>). The shipped default is
+/// the 2026-09-10 move — <see cref="ModeGlyphPlacements.PulseHeader"/> — and every test above the
+/// placement section pins it through <see cref="Name(TelegramDeliveryMode_Glyphs.TopicNameFlags)"/>,
+/// which composes under that default. Classic states <see cref="ModeGlyphPlacements.Name"/>, master's
+/// topic list, where the five come back onto the name with the header's precedence moved verbatim;
+/// the placement section pins that, and pins that the five are NEVER drawn in both places at once.
 /// </summary>
 public class TelegramDeliveryModeGlyphsTests
 {
     /// <summary>
-    /// The five that moved to PULSE's header on 2026-09-10, as a list to sweep a name against. A
-    /// sweep rather than five asserts because the failure this guards is a REGRESSION of the move —
-    /// somebody wiring a delivery fact back into the name — and that would arrive through whichever
-    /// glyph they picked.
+    /// The five delivery-mode glyphs, as a list to sweep a surface against. A sweep rather than five
+    /// asserts because the failure this guards is a glyph wired onto the wrong surface — and that would
+    /// arrive through whichever glyph somebody picked.
     /// </summary>
-    static readonly string[] DEPARTED_FROM_THE_NAME =
+    static readonly string[] MODE_GLYPHS =
     [
         TelegramDeliveryMode_Glyphs.DEFERRED,
         TelegramDeliveryMode_Glyphs.SILENCED,
@@ -246,14 +254,19 @@ public class TelegramDeliveryModeGlyphsTests
     /// example happens to visit — and mutation-testing confirmed exactly that: a glyph emitted only
     /// for Blocking-plus-all-four-state-flags is caught by this test and by nothing else.
     ///
+    /// SINCE PLAN 03 THE SWEEP SETS THE MODE INPUTS TOO — delivery mode, away, quiet, presence — which
+    /// `TopicNameFlags` carries again so the <c>name</c> placement can draw them. Under the shipped
+    /// placement they are set and must still draw nothing here; before they returned, this sweep could
+    /// not have caught a composer that read them, because there was nothing to read.
+    ///
     /// WHAT IT DOES NOT COVER, said plainly because the first version of this summary claimed it did:
-    /// a NEW flag. `All_FlagCombinations` is a hand-written loop over the five members
-    /// `TopicNameFlags` has today, so adding a sixth silently leaves half the space unswept. There is
+    /// a NEW flag. `All_FlagCombinations` is a hand-written loop over the members `TopicNameFlags` has
+    /// today, so adding one silently leaves half the space unswept. There is
     /// no reflection over the record here on purpose — it would be a cleverer test that fails for
     /// reasons unrelated to the rule — so this is a fact about the guard, not a hole to be hidden.
     /// </summary>
     [Fact]
-    public void TheFiveDepartedGlyphsNeverAppearInAName_WhateverTheFlags()
+    public void UnderPulseHeader_TheFiveModeGlyphsNeverAppearInAName_WhateverTheFlags()
     {
         List<string> offenders = [];
 
@@ -261,7 +274,7 @@ public class TelegramDeliveryModeGlyphsTests
         {
             var name = Name(flags);
 
-            foreach (var glyph in DEPARTED_FROM_THE_NAME)
+            foreach (var glyph in MODE_GLYPHS)
                 if (name.Contains(glyph, StringComparison.Ordinal))
                     offenders.Add($"{glyph} in \"{name}\" for {flags}");
         }
@@ -279,12 +292,15 @@ public class TelegramDeliveryModeGlyphsTests
     {
         List<string> offenders = [];
 
-        foreach (var flags in All_FlagCombinations())
+        foreach (var placement in Enum.GetValues<ModeGlyphPlacements>())
         {
-            var name = Name(flags);
+            foreach (var flags in All_FlagCombinations())
+            {
+                var name = Name(placement, flags);
 
-            if (name.Contains(TelegramDeliveryMode_Glyphs.REPLY_BLOCKING, StringComparison.Ordinal))
-                offenders.Add($"\"{name}\" for {flags}");
+                if (name.Contains(TelegramDeliveryMode_Glyphs.REPLY_BLOCKING, StringComparison.Ordinal))
+                    offenders.Add($"\"{name}\" under {placement} for {flags}");
+            }
         }
 
         Assert.True(offenders.Count == 0, $"⛔ is back on the name:\n{string.Join("\n", offenders)}");
@@ -301,11 +317,15 @@ public class TelegramDeliveryModeGlyphsTests
     /// name says nothing about mute, and the mute state is read from PULSE's header instead. The
     /// swallowing hazard the old test guarded is now covered by
     /// <see cref="TheReplyGlyphLeadsTheStateGlyph"/>, where ❓ has real glyphs to lead.
+    ///
+    /// UNDER THE SHIPPED PLACEMENT ONLY since plan 03 — <c>name</c> puts the bell back, and
+    /// <see cref="UnderName_TheModeGlyphsSitBetweenTheReplyGlyphAndTheStateGlyph"/> pins where. The
+    /// topic IS muted in this case now (it used to be asserted with no mode set, which proved nothing).
     /// </summary>
     [Fact]
-    public void AMutedTopicNoLongerCarriesABell_TheBellMovedToPulsesHeader()
+    public void UnderPulseHeader_AMutedTopicCarriesNoBell_TheBellIsOnPulsesHeader()
     {
-        var waiting = Name(new(OwnerReply: OwnerReplyStates.Wanted));
+        var waiting = Name(new(OwnerReply: OwnerReplyStates.Wanted, Mode: TelegramDeliveryModes.Silenced));
 
         Assert.Equal("❓ crm bug", waiting);
         Assert.DoesNotContain(TelegramDeliveryMode_Glyphs.SILENCED, waiting);
@@ -329,8 +349,9 @@ public class TelegramDeliveryModeGlyphsTests
     }
 
     /// <summary>
-    /// The six the name CAN draw must be six different characters — two states sharing a symbol in
-    /// the topic list is worse than no symbol, and the list is read at a glance with no legend.
+    /// The eleven the name CAN draw — six always, five more under <c>name</c> — must be eleven
+    /// different characters: two states sharing a symbol in the topic list is worse than no symbol,
+    /// and the list is read at a glance with no legend.
     /// </summary>
     [Fact]
     public void EveryGlyphTheNameCanDrawIsDistinct()
@@ -343,6 +364,7 @@ public class TelegramDeliveryModeGlyphsTests
             TelegramDeliveryMode_Glyphs.DONE,
             TelegramDeliveryMode_Glyphs.AWAITING_TEST,
             TelegramDeliveryMode_Glyphs.PAUSED_FOR_LIMIT,
+            .. MODE_GLYPHS,
         ];
 
         Assert.Equal(glyphs.Length, glyphs.Distinct().Count());
@@ -368,7 +390,8 @@ public class TelegramDeliveryModeGlyphsTests
         var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(currentName);
 
         Assert.Equal("crm bug", baseName);
-        Assert.Equal("✅ crm bug", TelegramDeliveryMode_Glyphs.Compose_TopicName(baseName, new(IsDone: true)));
+        Assert.Equal("✅ crm bug", TelegramDeliveryMode_Glyphs.Compose_TopicName(baseName, new(IsDone: true), ModeGlyphPlacements.PulseHeader));
+        Assert.Equal("✅ crm bug", TelegramDeliveryMode_Glyphs.Compose_TopicName(baseName, new(IsDone: true), ModeGlyphPlacements.Name));
     }
 
     /// <summary>
@@ -397,7 +420,8 @@ public class TelegramDeliveryModeGlyphsTests
 
     /// <summary>
     /// And the ones the name still draws, including the two that had no strip coverage before this
-    /// rewrite — ⏸ and 🏁. Without it every rename stacks another glyph onto the name.
+    /// rewrite — ⏸ and 🏁 — and 💤, and the mode glyphs where <c>name</c> puts them, between ❓ and the
+    /// state glyph. Without it every rename stacks another glyph onto the name.
     /// </summary>
     [Theory]
     [InlineData("❓ crm bug")]
@@ -409,9 +433,212 @@ public class TelegramDeliveryModeGlyphsTests
     [InlineData("❓ ✅ crm bug")]
     [InlineData("❓ 🧪 crm bug")]
     [InlineData("❓ ⏸ crm bug")]
+    [InlineData("💤 crm bug")]
+    [InlineData("❓ 💤 crm bug")]
+    [InlineData("❓ ✈ 💻 💤 crm bug")]
+    [InlineData("🤐 🔕 ✅ crm bug")]
+    [InlineData("✈ 🌙 ⏸ crm bug")]
     public void Strip_RemovesEveryGlyphTheNameStillDraws(string decorated)
     {
         Assert.Equal("crm bug", TelegramDeliveryMode_Glyphs.Strip_Glyph(decorated));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // THE PLACEMENT — `topic.modeGlyphs` (plan 03 Task 7). `pulseHeader` is the shipped default and
+    // everything above pins it; classic states `name`, which is master's topic list.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// UNDER <c>name</c> THE FIVE COME BACK ONTO THE NAME — one each, the delivery mode, away, quiet
+    /// and terminal, each exactly as PULSE's header draws it under the shipped placement.
+    /// </summary>
+    [Fact]
+    public void UnderName_EachModeGlyphIsOnTheName()
+    {
+        Assert.Equal("🌙 crm bug", Name(ModeGlyphPlacements.Name, new(Mode: TelegramDeliveryModes.Deferred)));
+        Assert.Equal("🔕 crm bug", Name(ModeGlyphPlacements.Name, new(Mode: TelegramDeliveryModes.Silenced)));
+        Assert.Equal("✈ crm bug", Name(ModeGlyphPlacements.Name, new(IsAway: true)));
+        Assert.Equal("🤐 crm bug", Name(ModeGlyphPlacements.Name, new(IsQuiet: true)));
+        Assert.Equal("💻 crm bug", Name(ModeGlyphPlacements.Name, new(Presence: OwnerPresenceModes.Terminal)));
+    }
+
+    /// <summary>
+    /// THE HEADER'S PRECEDENCE, MOVED VERBATIM — the same three rules <c>Build_HeaderLine</c> records,
+    /// because they were right and changing them in the commit that moves them would make a behaviour
+    /// change look like a relocation. AWAY SUPERSEDES QUIET; TERMINAL REPLACES THE DELIVERY GLYPH; AWAY
+    /// STILL SHOWS BESIDE TERMINAL. One implementation draws both surfaces
+    /// (<see cref="TelegramDeliveryMode_Glyphs.Compose_ModeGlyphs"/>), so these cannot drift from
+    /// TopicStatusLineBuilderTests' header cases — and
+    /// <see cref="TheModeGlyphs_AreNeverInBothPlaces_AndAlwaysInTheirOwn"/> proves the two surfaces
+    /// draw the same set.
+    /// </summary>
+    [Fact]
+    public void UnderName_TheHeadersPrecedenceHolds()
+    {
+        Assert.Equal("✈ crm bug", Name(ModeGlyphPlacements.Name, new(IsAway: true, IsQuiet: true)));
+        Assert.Equal("💻 crm bug", Name(ModeGlyphPlacements.Name, new(Mode: TelegramDeliveryModes.Silenced, Presence: OwnerPresenceModes.Terminal)));
+        Assert.Equal("✈ 💻 crm bug", Name(ModeGlyphPlacements.Name, new(IsAway: true, Presence: OwnerPresenceModes.Terminal)));
+        Assert.Equal("🤐 🌙 crm bug", Name(ModeGlyphPlacements.Name, new(IsQuiet: true, Mode: TelegramDeliveryModes.Deferred)));
+    }
+
+    /// <summary>
+    /// ❓ STAYS OUTERMOST AND THE STATE GLYPH STAYS BESIDE THE NAME — the mode glyphs go between them.
+    /// ❓ is the one glyph that asks something of the owner, so nothing displaces it from the front
+    /// (their own wording: "at the beginning of the topic name"); master drew ✈ ahead of 🧪 and ✅, and
+    /// this keeps that order. Pinned with ⏸, which replaces nothing, so every slot is visible.
+    /// </summary>
+    [Fact]
+    public void UnderName_TheModeGlyphsSitBetweenTheReplyGlyphAndTheStateGlyph()
+    {
+        Assert.Equal(
+            "❓ ✈ 🔕 ⏸ crm bug",
+            Name(ModeGlyphPlacements.Name, new(
+                OwnerReply: OwnerReplyStates.Wanted,
+                IsPausedForUsageLimit: true,
+                IsAway: true,
+                Mode: TelegramDeliveryModes.Silenced)));
+
+        Assert.Equal(
+            "❓ 🤐 🌙 💤 crm bug",
+            Name(ModeGlyphPlacements.Name, new(
+                OwnerReply: OwnerReplyStates.Blocking,
+                IsPausedByOwner: true,
+                IsQuiet: true,
+                Mode: TelegramDeliveryModes.Deferred)));
+    }
+
+    /// <summary>
+    /// ✅ AND 🧪 REPLACE THE DELIVERY GLYPH ON THE NAME (ruling R23, fix round 1), as their own
+    /// constants say and as master drew it: /test and /done ARE mute underneath, so `🔕 🧪` states one
+    /// fact twice — the reasoning that makes 💻 replace the delivery glyph. Only the DELIVERY glyph
+    /// goes: ✈ 🤐 and 💻 are other facts (the owner's phone, their chair) and stay, as ✈ did on master.
+    /// A DRAWN ✅ or 🧪 is what replaces — one outranked by 🏁 or 💤 replaces nothing.
+    /// </summary>
+    [Fact]
+    public void UnderName_DoneAndTest_ReplaceTheDeliveryGlyph()
+    {
+        Assert.Equal("✅ crm bug", Name(ModeGlyphPlacements.Name, new(IsDone: true, Mode: TelegramDeliveryModes.Silenced)));
+        Assert.Equal("🧪 crm bug", Name(ModeGlyphPlacements.Name, new(IsAwaitingTest: true, Mode: TelegramDeliveryModes.Silenced)));
+        Assert.Equal("✅ crm bug", Name(ModeGlyphPlacements.Name, new(IsDone: true, Mode: TelegramDeliveryModes.Deferred)));
+        Assert.Equal("❓ ✈ ✅ crm bug", Name(ModeGlyphPlacements.Name, new(OwnerReply: OwnerReplyStates.Wanted, IsDone: true, IsAway: true, Mode: TelegramDeliveryModes.Silenced)));
+        Assert.Equal("💻 🧪 crm bug", Name(ModeGlyphPlacements.Name, new(IsAwaitingTest: true, Presence: OwnerPresenceModes.Terminal)));
+
+        // 💤 outranks ✅ in the state slot, so no ✅ is drawn and nothing is replaced.
+        Assert.Equal("🌙 💤 crm bug", Name(ModeGlyphPlacements.Name, new(IsPausedByOwner: true, IsDone: true, Mode: TelegramDeliveryModes.Deferred)));
+    }
+
+    /// <summary>
+    /// UNDER THE SHIPPED PLACEMENT the rule has nothing to do on the name, which draws no mode glyph at
+    /// all — and PULSE's header, which draws no state glyph, keeps the bell: it is the only place the
+    /// mute is written, so there is no second statement for it to repeat.
+    /// </summary>
+    [Fact]
+    public void UnderPulseHeader_ADoneTopicsNameIsTheTick_AndTheHeaderKeepsTheBell()
+    {
+        var flags = new TelegramDeliveryMode_Glyphs.TopicNameFlags(IsDone: true, Mode: TelegramDeliveryModes.Silenced);
+
+        Assert.Equal("✅ crm bug", Name(ModeGlyphPlacements.PulseHeader, flags));
+        Assert.Equal("🔕 PULSE", Header(ModeGlyphPlacements.PulseHeader, flags));
+    }
+
+    /// <summary>
+    /// A CLOSED TOPIC'S NAME CARRIES NO MODE GLYPH (fix round 1). The orchestration is over: nothing is
+    /// delivered in it, nobody sits at its terminal, and under <c>topic.onClose = close</c> the topic
+    /// stays in the list — so a delivery glyph on it would be renamed by every app-wide toggle, a
+    /// service message into a finished thread. Its name is `🏁 crm bug` and stays that.
+    /// </summary>
+    [Fact]
+    public void UnderName_AClosedTopicCarriesNoModeGlyph()
+    {
+        Assert.Equal(
+            "🏁 crm bug",
+            Name(ModeGlyphPlacements.Name, new(IsClosed: true, Mode: TelegramDeliveryModes.Deferred, IsAway: true, IsQuiet: true, Presence: OwnerPresenceModes.Terminal)));
+    }
+
+    /// <summary>
+    /// NEVER BOTH, AND NEVER NEITHER — the placement's whole contract, swept over every combination of
+    /// every input under both placements. For each one the topic name and PULSE's header are drawn from
+    /// the SAME inputs, and: no mode glyph is on both; under <c>name</c> the header has none, under
+    /// <c>pulseHeader</c> the name has none; and the set drawn is the same set whichever surface drew
+    /// it, so a placement cannot lose a fact in transit — EXCEPT where the name's own rules take a
+    /// glyph off, which the oracle below states separately: a closed topic's name draws none, and a
+    /// drawn ✅ or 🧪 replaces the delivery glyph (ruling R23).
+    ///
+    /// <para>
+    /// The same contract as the hold toggle's never-both test (ConfigurableCommandButtonsTests, plan 03
+    /// Task 5): a fact the owner reads in two places is a fact they have to reconcile.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheModeGlyphs_AreNeverInBothPlaces_AndAlwaysInTheirOwn()
+    {
+        List<string> offenders = [];
+
+        foreach (var flags in All_FlagCombinations())
+        {
+            var drawnOnTheName = Mode_GlyphsIn(Name(ModeGlyphPlacements.Name, flags));
+            var expectedOnTheName = Expected_OnTheName(flags, Mode_GlyphsIn(Header(ModeGlyphPlacements.PulseHeader, flags)));
+
+            if (!drawnOnTheName.SequenceEqual(expectedOnTheName))
+                offenders.Add($"name drew [{string.Join(" ", drawnOnTheName)}], expected [{string.Join(" ", expectedOnTheName)}] for {flags}");
+
+            foreach (var placement in Enum.GetValues<ModeGlyphPlacements>())
+            {
+                var onName = Mode_GlyphsIn(Name(placement, flags));
+                var onHeader = Mode_GlyphsIn(Header(placement, flags));
+
+                if (onName.Intersect(onHeader).Any())
+                    offenders.Add($"under {placement}, [{string.Join(" ", onName.Intersect(onHeader))}] on BOTH for {flags}");
+
+                var misplaced = placement == ModeGlyphPlacements.Name ? onHeader : onName;
+
+                if (misplaced.Count > 0)
+                    offenders.Add($"under {placement}, [{string.Join(" ", misplaced)}] on the wrong surface for {flags}");
+            }
+        }
+
+        Assert.True(offenders.Count == 0, $"the mode glyphs are not in exactly one place:\n{string.Join("\n", offenders.Take(20))}");
+    }
+
+    /// <summary>
+    /// NO PLACEMENT NAMED IS THE CATALOGUE'S SHIPPED ONE — read from the catalogue row, not from a
+    /// literal, so the day the row moves this moves with it. Asserted against the catalogue's own
+    /// resolution rather than against <c>pulseHeader</c>, and then that the two agree today.
+    /// </summary>
+    [Fact]
+    public void ANullPlacement_ComposesUnderTheCataloguesShippedDefault()
+    {
+        var shipped = AIOrchestratorCoreLib.Configuration.PhoneSettings.PhoneSettings_Json.Parse(configRoot: null, presetTree: null).TopicModeGlyphs;
+        var flags = new TelegramDeliveryMode_Glyphs.TopicNameFlags(Mode: TelegramDeliveryModes.Deferred, IsAway: true);
+
+        Assert.Equal(Name(shipped, flags), TelegramDeliveryMode_Glyphs.Compose_TopicName("crm bug", flags));
+        Assert.Equal(ModeGlyphPlacements.PulseHeader, shipped);
+    }
+
+    /// <summary>
+    /// STRIP TAKES OFF EVERYTHING COMPOSE PUTS ON, under both placements and every combination — the
+    /// guarantee that a rename never stacks a glyph. It is also the migration in both directions: an
+    /// owner who flips <c>topic.modeGlyphs</c> from <c>name</c> to <c>pulseHeader</c> has every open
+    /// topic carrying mode glyphs that nothing will draw again, and the next rename must lift them all.
+    /// </summary>
+    [Fact]
+    public void UnderEitherPlacement_StripTakesOffEveryGlyphComposeDrew()
+    {
+        List<string> offenders = [];
+
+        foreach (var placement in Enum.GetValues<ModeGlyphPlacements>())
+        {
+            foreach (var flags in All_FlagCombinations())
+            {
+                var composed = Name(placement, flags);
+                var stripped = TelegramDeliveryMode_Glyphs.Strip_Glyph(composed);
+
+                if (stripped != "crm bug")
+                    offenders.Add($"\"{composed}\" stripped to \"{stripped}\"");
+            }
+        }
+
+        Assert.True(offenders.Count == 0, $"strip left glyphs behind:\n{string.Join("\n", offenders.Take(20))}");
     }
 
     /// <summary>
@@ -424,16 +651,69 @@ public class TelegramDeliveryModeGlyphsTests
         Assert.Equal("release 🔔 candidate", TelegramDeliveryMode_Glyphs.Strip_Glyph("release 🔔 candidate"));
     }
 
-    /// <summary>One base name for every case, so an expectation reads as its glyphs and nothing else.</summary>
+    /// <summary>
+    /// One base name for every case, so an expectation reads as its glyphs and nothing else — composed
+    /// under the SHIPPED placement, which is what every test above the placement section pins.
+    /// </summary>
     static string Name(TelegramDeliveryMode_Glyphs.TopicNameFlags flags)
     {
-        return TelegramDeliveryMode_Glyphs.Compose_TopicName("crm bug", flags);
+        return Name(ModeGlyphPlacements.PulseHeader, flags);
+    }
+
+    static string Name(ModeGlyphPlacements placement, TelegramDeliveryMode_Glyphs.TopicNameFlags flags)
+    {
+        return TelegramDeliveryMode_Glyphs.Compose_TopicName("crm bug", flags, placement);
     }
 
     /// <summary>
-    /// Every value the flags can take — 3 reply states × 5 booleans. Small enough to sweep whole,
-    /// which is what makes the "departed glyph" tests claims about the FUNCTION rather than about
-    /// six examples of it.
+    /// PULSE's header drawn from the SAME mode inputs the name was given — through the builder's front
+    /// door, because <c>Build_HeaderLine</c> is private. A `last` event gives the line substance (the
+    /// header is never a message on its own), and the field list is the one word `last`, so the first
+    /// line is the header whatever the shipped list leads with.
+    /// </summary>
+    static string Header(ModeGlyphPlacements placement, TelegramDeliveryMode_Glyphs.TopicNameFlags flags)
+    {
+        var line = TopicStatusLine_Builder.Build(
+            progress: null,
+            members: Array.Empty<ITopicStatusMember>(),
+            lastEvent: new TopicLastEvent("merged", null),
+            now: new DateTime(2026, 9, 23, 12, 0, 0),
+            aMessageIsAlreadyPosted: false,
+            fields: new TopicStatusFields(Mode: flags.Mode, IsAway: flags.IsAway, IsQuiet: flags.IsQuiet, Presence: flags.Presence),
+            pulseFields: [PulseField_Names.LAST_EVENT],
+            modeGlyphs: placement);
+
+        return line.Split('\n')[0];
+    }
+
+    /// <summary>
+    /// The oracle for the name under <c>name</c>: what the header would draw under <c>pulseHeader</c>,
+    /// minus what the name's own rules take off — everything when closed, the delivery glyph when a
+    /// ✅ or 🧪 is the state glyph drawn (🏁 and 💤 outrank both).
+    /// </summary>
+    static List<string> Expected_OnTheName(TelegramDeliveryMode_Glyphs.TopicNameFlags flags, List<string> onTheHeader)
+    {
+        if (flags.IsClosed)
+            return [];
+
+        var doneOrTestDrawn = !flags.IsPausedByOwner && (flags.IsDone || flags.IsAwaitingTest);
+
+        if (!doneOrTestDrawn)
+            return onTheHeader;
+
+        return [.. onTheHeader.Where(glyph => glyph != TelegramDeliveryMode_Glyphs.DEFERRED && glyph != TelegramDeliveryMode_Glyphs.SILENCED)];
+    }
+
+    /// <summary>The mode glyphs a surface carries, in <see cref="MODE_GLYPHS"/> order.</summary>
+    static List<string> Mode_GlyphsIn(string surface)
+    {
+        return [.. MODE_GLYPHS.Where(glyph => surface.Contains(glyph, StringComparison.Ordinal))];
+    }
+
+    /// <summary>
+    /// Every value the flags can take — 3 reply states × 5 state booleans × 3 delivery modes × away ×
+    /// quiet × every presence. Small enough to sweep whole, which is what makes the sweeps claims about
+    /// the FUNCTION rather than about a handful of examples of it.
     /// </summary>
     static IEnumerable<TelegramDeliveryMode_Glyphs.TopicNameFlags> All_FlagCombinations()
     {
@@ -445,12 +725,20 @@ public class TelegramDeliveryModeGlyphsTests
                     foreach (var closed in bothWays)
                         foreach (var awaitingTest in bothWays)
                             foreach (var done in bothWays)
-                                yield return new TelegramDeliveryMode_Glyphs.TopicNameFlags(
-                                    OwnerReply: reply,
-                                    IsPausedByOwner: pausedByOwner,
-                                    IsPausedForUsageLimit: paused,
-                                    IsClosed: closed,
-                                    IsAwaitingTest: awaitingTest,
-                                    IsDone: done);
+                                foreach (var mode in Enum.GetValues<TelegramDeliveryModes>())
+                                    foreach (var away in bothWays)
+                                        foreach (var quiet in bothWays)
+                                            foreach (var presence in Enum.GetValues<OwnerPresenceModes>())
+                                                yield return new TelegramDeliveryMode_Glyphs.TopicNameFlags(
+                                                    OwnerReply: reply,
+                                                    IsPausedByOwner: pausedByOwner,
+                                                    IsPausedForUsageLimit: paused,
+                                                    IsClosed: closed,
+                                                    IsAwaitingTest: awaitingTest,
+                                                    IsDone: done,
+                                                    Mode: mode,
+                                                    IsAway: away,
+                                                    IsQuiet: quiet,
+                                                    Presence: presence);
     }
 }

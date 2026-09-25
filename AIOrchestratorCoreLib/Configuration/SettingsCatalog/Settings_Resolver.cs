@@ -81,6 +81,31 @@ public static class Settings_Resolver
         return value?.GetValue<string>();
     }
 
+    /// <summary>
+    /// For a StringList setting (<c>pulse.fields</c>, the two button bars, <c>questions.appButtons</c>). The cast is
+    /// safe for a reason worth naming: every StringList row is non-nullable, and whatever layer answers has passed
+    /// the definition's own check that it is an array of strings — the shipped default included
+    /// (<c>SettingsCatalogTests</c>) — so a misspelled element refuses the WHOLE list at its layer and the caller
+    /// gets the layer below, never a list with a hole. The words are COPIED out rather than the node kept: a
+    /// preset tree is shared by every load in the process, so nothing downstream may hold it.
+    ///
+    /// <para>
+    /// ONE ACCESSOR, moved here from <c>PulseSettings_Json</c> when <c>PhoneSettings_Json</c> needed the same read
+    /// (plan 04 task 11) — a second private copy is the drift CLAUDE.md decision 12 forbids.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> Resolve_StringList(
+        ISettingDefinition definition,
+        JsonObject? presetTree,
+        JsonObject? configTree,
+        IOrchestrationSession? session)
+    {
+        Require_Kind(definition, SettingKinds.StringList);
+
+        var (value, _) = Resolve(definition, presetTree, configTree, session);
+        return value!.AsArray().Select(element => element!.GetValue<string>()).ToArray();
+    }
+
     public static bool Resolve_Bool(
         ISettingDefinition definition,
         JsonObject? presetTree,

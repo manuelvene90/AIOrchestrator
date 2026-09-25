@@ -42,11 +42,10 @@ public class OwnerPushPolicyTests
     /// included.
     ///
     /// <para>
-    /// ONLY THE PREDICATE IS PINNED HERE, not <see cref="OwnerPush_Policy.Should_Push"/>: this build
-    /// pushes everything the supervisor writes (owner's ruling, 2026-09-09), so the credit decides
-    /// nothing about the push and a Should_Push assertion would pin the opposite of what it did on
-    /// master. The engine is the reader — it refuses to CONSUME the credit on a turn-end subject.
-    /// The push half returns when the filter does (plan 03, `phone.push = filtered`).
+    /// ONLY THE PREDICATE IS PINNED HERE, not <see cref="OwnerPush_Policy.Should_Push"/>: that is the
+    /// <c>everything</c> arm, where the credit decides nothing about the push. The engine is one
+    /// reader — it refuses to CONSUME the credit on a turn-end subject — and the push half, under
+    /// <c>phone.push = filtered</c>, is pinned in <c>OwnerPushDeciderTests</c>.
     /// </para>
     /// </summary>
     [Theory]
@@ -84,26 +83,33 @@ public class OwnerPushPolicyTests
     /// <summary>
     /// The waterfall. Every one of these is real narration from the transcript that prompted this —
     /// useful in the channel, noise on a phone.
-    /// </summary>
-    /// <summary>
-    /// THE FILTER IS GONE, AND THIS IS THE TEST THAT SAYS SO. Progress narration used to be
-    /// suppressed here: only a question, an awaited answer, a BLOCKED flag, a file or the boot
-    /// greeting reached the phone. The owner's ruling of 2026-09-09 reversed it — *"If the
-    /// supervisor writes to me, I must know it"* — after their own quoted example of a message they
-    /// needed was suppressed and arrived five minutes late through the deadlock net, in raw Markdown.
     ///
     /// <para>
-    /// The brake on chatter is now the SKILL and the brevity nudge, not a filter guessing which of
-    /// the supervisor's words matter. This is a deliberate trade: five progress entries in ten
-    /// minutes are now five notifications, and the role commands say so.
+    /// MEASURED UNDER BOTH MODES SINCE PLAN 03 (<c>phone.push</c>), and the name keeps its meaning under
+    /// <see cref="PhonePushModes.Everything"/>: there the filter IS gone. The owner's ruling of
+    /// 2026-09-09 — *"If the supervisor writes to me, I must know it"* — came after their own quoted
+    /// example of a message they needed was suppressed and arrived five minutes late through the
+    /// deadlock net, in raw Markdown; the brake on chatter under that mode is the SKILL and the brevity
+    /// nudge, and five progress entries in ten minutes are five notifications.
+    /// </para>
+    /// <para>
+    /// Under <see cref="PhonePushModes.Filtered"/> — master's, and classic's — the same entries are
+    /// HELD for the turn-end digest instead: not rung, not lost. Both answers are now a choice rather
+    /// than a build, which is why one theory pins both rather than one file pinning whichever shipped.
     /// </para>
     /// </summary>
     [Theory]
-    [InlineData("## [11] FROM supervisor — d — s\nimp-1 is pricing the matrix; rev-1 has the diff.")]
-    [InlineData("## [12] FROM supervisor — d — s\nConfirmed: the provider list is complete.")]
-    [InlineData("## [13] FROM supervisor — d — s\nAccepted imp-3's report and merged it to staging.")]
-    public void ProgressNarration_IsPushed_NowThatTheFilterIsGone(string entry)
+    [InlineData(PhonePushModes.Everything, "## [11] FROM supervisor — d — s\nimp-1 is pricing the matrix; rev-1 has the diff.", OwnerPushDecisions.SendNow)]
+    [InlineData(PhonePushModes.Everything, "## [12] FROM supervisor — d — s\nConfirmed: the provider list is complete.", OwnerPushDecisions.SendNow)]
+    [InlineData(PhonePushModes.Everything, "## [13] FROM supervisor — d — s\nAccepted imp-3's report and merged it to staging.", OwnerPushDecisions.SendNow)]
+    [InlineData(PhonePushModes.Filtered, "## [11] FROM supervisor — d — s\nimp-1 is pricing the matrix; rev-1 has the diff.", OwnerPushDecisions.HoldForDigest)]
+    [InlineData(PhonePushModes.Filtered, "## [12] FROM supervisor — d — s\nConfirmed: the provider list is complete.", OwnerPushDecisions.HoldForDigest)]
+    [InlineData(PhonePushModes.Filtered, "## [13] FROM supervisor — d — s\nAccepted imp-3's report and merged it to staging.", OwnerPushDecisions.HoldForDigest)]
+    public void ProgressNarration_IsPushed_NowThatTheFilterIsGone(PhonePushModes mode, string entry, OwnerPushDecisions expected)
     {
+        Assert.Equal(expected, OwnerPush_Policy.Decide(mode, entry, ownerIsWaitingForAReply: false, subject: "s"));
+
+        // Should_Push is the Everything arm and nothing else, so it pushes in both rows.
         Assert.True(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false));
     }
 
@@ -245,6 +251,36 @@ public class OwnerPushPolicyTests
 
         // ✅ is the record of a CHOICE, and no choice was made by tapping this.
         Assert.DoesNotContain("✅", OwnerPush_Policy.TALK_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// MASTER'S BUTTON, VERBATIM (owner, 2026-09-24 entry [123]: "I more often use the explain in more details
+    /// feature"). The label and the request are master's words at <c>a58ef7e</c> — <c>MORE_DETAIL_LABEL</c> and
+    /// <c>MORE_DETAIL_REQUEST</c> there — pinned as literals so a paraphrase cannot pass as a restoration.
+    /// </summary>
+    [Fact]
+    public void TheExplainButton_IsMastersLabelAndMastersRequest_Verbatim()
+    {
+        Assert.Equal("❔ Explain the options", OwnerPush_Policy.EXPLAIN_LABEL);
+        Assert.Equal(
+            "Explain this decision before I choose: what each option actually means in practice, what "
+            + "differs between them, what it costs to get wrong, and which one you recommend and why. "
+            + "Keep it short. Then ask the question again.",
+            OwnerPush_Policy.EXPLAIN_REQUEST);
+
+        Assert.True(OwnerPush_Policy.EXPLAIN_LABEL.Length <= 30, "the label has to fit a phone button");
+        Assert.NotEqual(OwnerPush_Policy.TALK_LABEL, OwnerPush_Policy.EXPLAIN_LABEL);
+        Assert.NotEqual(OwnerPush_Policy.TALK_REQUEST, OwnerPush_Policy.EXPLAIN_REQUEST);
+    }
+
+    /// <summary>The Explain tap closes its question like Let's talk does, so it leaves a record in the same style — and no ✅.</summary>
+    [Fact]
+    public void TheExplainAcknowledgement_IsInTheTalkStyle_AndRecordsNoChoice()
+    {
+        Assert.StartsWith("❔ Ok — ", OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+        Assert.Contains("explaining the options", OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+        Assert.DoesNotContain("✅", OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+        Assert.NotEqual(OwnerPush_Policy.TALK_ACKNOWLEDGEMENT, OwnerPush_Policy.EXPLAIN_ACKNOWLEDGEMENT);
     }
 
     [Fact]

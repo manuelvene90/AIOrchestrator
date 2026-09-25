@@ -49,9 +49,9 @@ public class TelegramProseSettingsJsonTests : IDisposable
     {
         foreach (var settings in new[]
         {
-            TelegramProseSettings_Json.Parse(null),
-            TelegramProseSettings_Json.Parse(Parse("""{"repos":[]}""")),
-            TelegramProseSettings_Json.Parse(Parse("""{"telegram":{}}""")),
+            TelegramProseSettings_Json.Parse(configRoot: null, presetTree: null),
+            TelegramProseSettings_Json.Parse(Parse("""{"repos":[]}"""), presetTree: null),
+            TelegramProseSettings_Json.Parse(Parse("""{"telegram":{}}"""), presetTree: null),
         })
         {
             Assert.Equal(OwnerMessage_Folder.DEFAULT_FOLD_THRESHOLD, settings.FoldLongEntriesAbove);
@@ -63,7 +63,7 @@ public class TelegramProseSettingsJsonTests : IDisposable
     public void TheTwoKeysAreRead()
     {
         var settings = TelegramProseSettings_Json.Parse(
-            Parse("""{"telegram":{"foldLongEntriesAbove":1500,"attachEntriesAbove":5}}"""));
+            Parse("""{"telegram":{"foldLongEntriesAbove":1500,"attachEntriesAbove":5}}"""), presetTree: null);
 
         Assert.Equal(1_500, settings.FoldLongEntriesAbove);
         Assert.Equal(5, settings.AttachEntriesAbove);
@@ -74,7 +74,7 @@ public class TelegramProseSettingsJsonTests : IDisposable
     public void ZeroIsKept_BecauseItIsTheOffSwitch()
     {
         var settings = TelegramProseSettings_Json.Parse(
-            Parse("""{"telegram":{"foldLongEntriesAbove":0,"attachEntriesAbove":0}}"""));
+            Parse("""{"telegram":{"foldLongEntriesAbove":0,"attachEntriesAbove":0}}"""), presetTree: null);
 
         Assert.Equal(0, settings.FoldLongEntriesAbove);
         Assert.Equal(0, settings.AttachEntriesAbove);
@@ -96,7 +96,7 @@ public class TelegramProseSettingsJsonTests : IDisposable
     {
         Assert.Equal(
             OwnerMessage_Folder.DEFAULT_FOLD_THRESHOLD,
-            TelegramProseSettings_Json.Parse(Parse(json)).FoldLongEntriesAbove);
+            TelegramProseSettings_Json.Parse(Parse(json), presetTree: null).FoldLongEntriesAbove);
     }
 
     /// <summary>
