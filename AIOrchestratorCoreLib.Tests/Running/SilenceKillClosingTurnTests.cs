@@ -16,7 +16,22 @@ namespace AIOrchestratorCoreLib.Tests.Running;
 /// </summary>
 public class SilenceKillClosingTurnTests
 {
-    [Fact]
+    /// <summary>
+    /// NOT ON WINDOWS (2026-09-25), by the production rule rather than by convenience: there the CLI runs
+    /// under <c>cmd.exe /c</c>, so a process always runs below the turn and the silence brake can never
+    /// fire (<see cref="TurnTimeout_Rule"/>'s own account). Run on the owner's Windows machine this staged
+    /// hang was never killed and the test was red on origin/master exactly as on the merge.
+    /// </summary>
+    sealed class RequiresSilenceBrakeFactAttribute : FactAttribute
+    {
+        public RequiresSilenceBrakeFactAttribute()
+        {
+            if (OperatingSystem.IsWindows())
+                Skip = "The silence brake cannot fire on Windows (the CLI runs under cmd.exe, so a child process always exists below the turn) — TurnTimeout_Rule keeps the short ceiling there for that reason.";
+        }
+    }
+
+    [RequiresSilenceBrakeFact]
     public async Task AHungMemberTurn_IsKilledAtTheSilenceLimit_AndClosedDownLikeADeadlineKill()
     {
         // A two-second brake under a two-minute deadline: a kill inside the test's window can only be the brake's.

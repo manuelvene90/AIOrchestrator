@@ -36,7 +36,16 @@ public static class TurnTimeout_Rule
     /// <summary>The longest any turn may run under these settings — what a shutdown has to wait for.</summary>
     public static TimeSpan Resolve_Longest(IRunnerConfigs configs)
     {
-        var member = Resolve_ForRole(SessionRoles.Implementer, configs);
+        return Resolve_Longest(configs, OperatingSystem.IsWindows());
+    }
+
+    /// <summary>
+    /// The same, for a named platform — so the rule can be pinned on either OS from a test running on
+    /// the other, as <see cref="Resolve_ForRole(SessionRoles, IRunnerConfigs, bool)"/> already can.
+    /// </summary>
+    public static TimeSpan Resolve_Longest(IRunnerConfigs configs, bool isWindows)
+    {
+        var member = Resolve_ForRole(SessionRoles.Implementer, configs, isWindows);
 
         return member > configs.TurnTimeout ? member : configs.TurnTimeout;
     }

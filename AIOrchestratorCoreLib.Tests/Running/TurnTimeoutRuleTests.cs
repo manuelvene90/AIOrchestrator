@@ -26,7 +26,10 @@ public class TurnTimeoutRuleTests
     [InlineData(SessionRoles.Communicator, 30)]
     public void Resolve_ForRole_OnlyBrakedMembersGetTheLongCeiling(SessionRoles role, double expectedMinutes)
     {
-        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), TurnTimeout_Rule.Resolve_ForRole(role, Configs("{}")));
+        // PINNED OFF WINDOWS (2026-09-25): the long ceiling is the non-Windows rule, and the one-argument
+        // overload reads the HOST's OS — so on the owner's Windows machine this asserted 120 against
+        // the deliberate 30 of Resolve_ForRole_OnWindows_AMemberKeepsTheShortCeiling below.
+        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), TurnTimeout_Rule.Resolve_ForRole(role, Configs("{}"), isWindows: false));
     }
 
     [Fact]
@@ -41,8 +44,11 @@ public class TurnTimeoutRuleTests
     [Fact]
     public void Resolve_Longest_IsTheMemberCeilingWhileTheBrakeIsOn_AndNeverShorterThanTheTurnTimeout()
     {
-        Assert.Equal(TimeSpan.FromMinutes(120), TurnTimeout_Rule.Resolve_Longest(Configs("{}")));
-        Assert.Equal(TimeSpan.FromMinutes(45), TurnTimeout_Rule.Resolve_Longest(Configs("""{"turnTimeoutMinutes":45,"memberTurnTimeoutMinutes":20}""")));
+        Assert.Equal(TimeSpan.FromMinutes(120), TurnTimeout_Rule.Resolve_Longest(Configs("{}"), isWindows: false));
+        Assert.Equal(TimeSpan.FromMinutes(45), TurnTimeout_Rule.Resolve_Longest(Configs("""{"turnTimeoutMinutes":45,"memberTurnTimeoutMinutes":20}"""), isWindows: false));
+
+        // And on Windows, where the brake cannot fire, the longest turn is the ordinary deadline.
+        Assert.Equal(TimeSpan.FromMinutes(30), TurnTimeout_Rule.Resolve_Longest(Configs("{}"), isWindows: true));
     }
 
     [Theory]
