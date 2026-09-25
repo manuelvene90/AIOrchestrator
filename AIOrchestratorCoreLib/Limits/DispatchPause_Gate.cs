@@ -108,6 +108,16 @@ public static class DispatchPause_Gate
         return $"{Math.Max(1, (int)Math.Ceiling(span.TotalMinutes))} min";
     }
 
+    /// <summary>
+    /// Said at startup when the pause came back from engine state. Every session is down after a
+    /// restart, so a restored pause is what decides whether ANY of them comes back — and before this
+    /// line the only thing the log said was "Bridge started" (2026-09-15). Names the lever.
+    /// </summary>
+    public static string Describe_RestoredPause(string? reason, DateTime pausedUntilUtc, DateTime nowUtc)
+    {
+        return $"⏸ Dispatch is still PAUSED from before this restart — {reason ?? "a usage limit was reached"}. Sessions are not started or restored until {Describe_ResumeInstant(pausedUntilUtc, nowUtc)}. Send /resume_dispatch to lift it now.";
+    }
+
     public static string Describe_Resume(string reason)
     {
         return $"▶ Dispatch resumed — {reason}";

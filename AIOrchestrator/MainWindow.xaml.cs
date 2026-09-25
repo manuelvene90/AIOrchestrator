@@ -86,6 +86,11 @@ public partial class MainWindow : Window
                 SilenceAllCheckBox.IsChecked = silenced;
         });
 
+        // The dispatch pause stops every start and respawn — after a restart, that is every session.
+        // Shown only while it holds, so a restart that restores nothing says why on screen (2026-09-15).
+        engine.DispatchPauseChanged += pauseLine => Dispatcher.BeginInvoke(() => Show_DispatchPause(pauseLine));
+        Show_DispatchPause(engine.Describe_DispatchPause_OrNull());
+
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(REFRESH_INTERVAL_SECONDS) };
         _refreshTimer.Tick += (_, _) => Refresh_Orchestrations();
         _refreshTimer.Start();
@@ -448,6 +453,33 @@ public partial class MainWindow : Window
     void SilenceAllCheckBox_Changed(object sender, RoutedEventArgs e)
     {
         _engine.Set_SilenceAllTopics(SilenceAllCheckBox.IsChecked == true);
+    }
+
+    void Show_DispatchPause(string? pauseLine)
+    {
+        DispatchPauseButton.Visibility = pauseLine == null ? Visibility.Collapsed : Visibility.Visible;
+        DispatchPauseButton.ToolTip = pauseLine;
+    }
+
+    void DispatchPauseButton_Click(object sender, RoutedEventArgs e)
+    {
+        var pauseLine = _engine.Describe_DispatchPause_OrNull();
+
+        if (pauseLine == null)
+        {
+            Show_DispatchPause(null);
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            $"{pauseLine}\n\nLift it now? Sessions are started and restored straight away, and they spend what is left of the allowance.",
+            "AI Orchestrator",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        if (answer == MessageBoxResult.Yes)
+            _engine.Lift_DispatchPause_ByOwner();
     }
 
     void ShowSessionButton_Click(object sender, RoutedEventArgs e)

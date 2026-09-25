@@ -1284,6 +1284,12 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// False until the first pause check of this host run. That check announces a pause restored
+    /// from engine state — mirror loop only, so no lock.
+    /// </summary>
+    bool _restoredPauseChecked;
+
+    /// <summary>
     /// When the pause last read the usage probes. ITS OWN STAMP, not the alert scan's: that one is
     /// only advanced on ticks where the alert scan actually runs, and the alert scan returns early
     /// while muted — so sharing it would make the pause check fire every 2 s under DND and once a
@@ -1308,6 +1314,41 @@ internal sealed class BridgeEngineModel(
     public event Action<string>? OrchestrationActivity;
     public event Action<bool>? MutedChanged;
     public event Action<bool>? SilenceAllChanged;
+    public event Action<string?>? DispatchPauseChanged;
+
+    /// <summary>
+    /// The app's button. It pulls the SAME lever as /resume_dispatch and the pause-offer tap
+    /// (<see cref="Lift_DispatchPause_ByOwner_Async"/>): lift, and declare the probes written before
+    /// now as not evidence. The state change happens before the method's first await, so the pause is
+    /// lifted when this returns; the General notice goes out behind it. False when nothing was paused.
+    /// </summary>
+    public bool Lift_DispatchPause_ByOwner()
+    {
+        if (Describe_DispatchPause_OrNull() == null)
+            return false;
+
+        var lift = Lift_DispatchPause_ByOwner_Async("the app's button", CancellationToken.None);
+
+        _ = lift.ContinueWith(
+            task => _log.Log_Error(GLOBAL_ORCH_ID, "The app's pause-lift button lifted the pause, but its notice failed", task.Exception!),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
+
+        return true;
+    }
+
+    void Raise_DispatchPauseChanged()
+    {
+        try
+        {
+            DispatchPauseChanged?.Invoke(Describe_DispatchPause_OrNull());
+        }
+        catch
+        {
+            // A faulty subscriber must not take the bridge down.
+        }
+    }
 
     /// <summary>
     /// Turns the periodic status's screenshots on or off, APP-WIDE and persisted — the owner asked
@@ -6286,6 +6327,7 @@ internal sealed class BridgeEngineModel(
         // did not change, and the owner just said which ones no longer count.
         _lastDispatchPauseCheckUtc = DateTime.MinValue;
         Persist_EngineState();
+        Raise_DispatchPauseChanged();
 
         var cutoffText = $"{nowUtc:yyyy-MM-dd HH:mm} UTC";
         var lifted = Limits.DispatchPauseLift_Prompt.Describe_Lifted(cutoffText);
@@ -10843,7 +10885,7 @@ internal sealed class BridgeEngineModel(
     /// The dispatcher pause as one line, or null when it is running. Reads the same fields the tick
     /// writes — never a second computation of whether it is paused.
     /// </summary>
-    string? Describe_DispatchPause_OrNull()
+    public string? Describe_DispatchPause_OrNull()
     {
         DateTime? pausedUntilUtc;
         string? reason;
@@ -10859,7 +10901,7 @@ internal sealed class BridgeEngineModel(
         if (!Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, _clock.UtcNow))
             return null;
 
-        return $"⏸ DISPATCH PAUSED — {reason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {Limits.DispatchPause_Gate.Describe_ResumeInstant(pausedUntilUtc!.Value, _clock.UtcNow)}.";
+        return $"⏸ DISPATCH PAUSED — {reason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {Limits.DispatchPause_Gate.Describe_ResumeInstant(pausedUntilUtc!.Value, _clock.UtcNow)}. /resume_dispatch lifts it now.";
     }
 
     /// <summary>
@@ -13410,6 +13452,24 @@ internal sealed class BridgeEngineModel(
             previousReason = _dispatchPauseReason;
         }
 
+        // A PAUSE RESTORED FROM ENGINE STATE IS ANNOUNCED, once per host run. Every session is down
+        // after a restart and the watchdog is skipped while paused, so this pause decides whether ANY
+        // of them comes back. On 2026-09-15 a weekly pause six days out was restored in silence: two
+        // restarts, "Bridge started", and every session stayed down with no reason on screen.
+        if (!_restoredPauseChecked)
+        {
+            _restoredPauseChecked = true;
+
+            if (Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, nowUtc))
+            {
+                var restored = Limits.DispatchPause_Gate.Describe_RestoredPause(previousReason, pausedUntilUtc!.Value, nowUtc);
+
+                _log.Log_Warning(GLOBAL_ORCH_ID, restored);
+                Raise_DispatchPauseChanged();
+                await Send_GeneralNotice_BestEffort_Async(restored, cancellationToken);
+            }
+        }
+
         // Still inside the window: the pause may only get SHORTER or LIFT, never longer. The old
         // guard returned here without looking, to stop a still-high percentage extending the pause
         // past the reset it was measured against — which was right about extending and wrong about
@@ -13458,6 +13518,7 @@ internal sealed class BridgeEngineModel(
             var alert = Limits.DispatchPause_Gate.Describe_Pause(bindingWindow, bindingPercent, pauseUntilUtc, nowUtc);
 
             _log.Log_Warning(GLOBAL_ORCH_ID, wasPaused ? $"Dispatch pause EXTENDED — {alert}" : alert);
+            Raise_DispatchPauseChanged();
 
             // THE LEVER RIDES ON THE ALERT: the owner reads "paused until Monday" on their phone and
             // can answer "no — the account changed" right there, without a session asking for them.
@@ -13481,6 +13542,7 @@ internal sealed class BridgeEngineModel(
         var resume = Limits.DispatchPause_Gate.Describe_Resume(previousReason ?? "the window reset");
 
         _log.Log_Info(GLOBAL_ORCH_ID, resume);
+        Raise_DispatchPauseChanged();
         await Send_GeneralNotice_BestEffort_Async(resume, cancellationToken);
     }
 
@@ -13520,6 +13582,7 @@ internal sealed class BridgeEngineModel(
                 $"the live reading is under the threshold, so the pause ({storedReason ?? "no reason recorded"}) is lifted early");
 
             _log.Log_Info(GLOBAL_ORCH_ID, resume);
+            Raise_DispatchPauseChanged();
             await Send_GeneralNotice_BestEffort_Async(resume, cancellationToken);
             return;
         }

@@ -157,6 +157,22 @@ public class DispatchPauseGateTests
         Assert.Equal($"{Now.AddMinutes(-5):yyyy-MM-dd HH:mm} UTC (due now)", DispatchPause_Gate.Describe_ResumeInstant(Now.AddMinutes(-5), Now));
     }
 
+    /// <summary>
+    /// A pause restored from engine state is announced with its reason, its dated resume instant and
+    /// the lever — the 2026-09-15 restart restored a six-day pause with nothing on screen but
+    /// "Bridge started".
+    /// </summary>
+    [Fact]
+    public void Describe_RestoredPause_CarriesTheReason_TheDate_AndTheWayToLiftIt()
+    {
+        var text = DispatchPause_Gate.Describe_RestoredPause("the seven_day window was at 95%", Now.AddDays(6), Now);
+
+        Assert.Contains("the seven_day window was at 95%", text);
+        Assert.Contains(DispatchPause_Gate.Describe_ResumeInstant(Now.AddDays(6), Now), text);
+        Assert.Contains("2026-01-07", text);
+        Assert.Contains("/resume_dispatch", text);
+    }
+
     [Fact]
     public void Describe_Resume_CarriesTheReasonItIsGiven()
     {
