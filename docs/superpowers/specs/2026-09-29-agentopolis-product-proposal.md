@@ -1,6 +1,6 @@
 # Agentopolis — product proposal
 
-**Status:** PROPOSAL, the starting point for a brainstorm with the owner — nothing here is decided.
+**Status:** PROPOSAL, the starting point for a brainstorm with the owner. Decided so far: **D1** (§3.1).
 **Written:** 2026-09-29 by the solo session of `ai-orchestrator-30`, at the owner's request (*"study
 the source material, and think of ways to make this a great product … transform a team of a few
 developers into super productive agent managers"*).
@@ -138,6 +138,27 @@ Everything else depends on this, and both current codebases violate it as a *pro
 
 This also resolves the question I asked earlier (*where do a client's agents run?*): with the
 customer, always; our cloud is the control plane, never the execution plane.
+
+### 3.1 D1 — two credential modes (owner, 2026-09-29 13:55)
+
+The owner will also use Agentopolis for his own work, the way he uses AIOrchestrator today. So the
+product has **two credential modes**, chosen in the **organization settings** and in each **user's
+settings**:
+
+- **Subscription mode** — agents run in terminal sessions under the user's own Claude login, exactly
+  as AIOrchestrator works now. It exists for our own organization and users; **customers never see
+  this setting**.
+- **API-key mode** — the only mode a customer sees: they enter an API key for their AI provider, per
+  organization (and optionally per user).
+
+What this implies for the design (to confirm in the brainstorm):
+- The mode is a per-organization **capability granted by the licence**, not only a hidden UI switch:
+  the setting is absent from customer organizations' pages *and* refused by the Runner, so it cannot
+  be switched on by editing a file.
+- The kernel keeps both runners behind one seam: headless `claude -p` for API-key mode, and the
+  terminal/interactive runner (AIOrchestrator's) for subscription mode. §8's "Runner" row becomes
+  "both, chosen by the credential mode".
+- "An API key of **any** AI provider" widens the kernel beyond Claude Code — see open question 11.
 
 ---
 
@@ -450,6 +471,10 @@ the pilot still runs.
 8. Pricing shape after the pilot — per seat, per project, or flat per team?
 9. Who writes the default role prose — the owner, Nathan, or generated and reviewed?
 10. Which of AIOrchestrator's human-factor rules (§7) are non-negotiable for the owner?
+11. "Any AI provider" (D1): does v1 mean Anthropic API keys plus Anthropic via Bedrock/Vertex (which
+    Claude Code already supports), or other vendors too (OpenAI, Google)? Other vendors need a second
+    agent harness (for example the Codex CLI) behind the same turn engine — a real cost, better placed
+    after the pilot.
 
 ---
 
