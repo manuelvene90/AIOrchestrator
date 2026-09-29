@@ -1,8 +1,8 @@
 # Agentopolis — product design (v1 direction)
 
 **Status:** DIRECTION AGREED with the owner on 2026-09-29 (decisions D1-D12 below), pending the owner's review of
-this written text. Two decisions rest on assumptions still to confirm (D4's repository, D9's setup fee), and D3/D4
-need Nathan's agreement, since they make his repository and his engine the base. Each milestone in §10 gets its own
+this written text. D9's setup fee is an assumption still to confirm. D4 was corrected by the owner at 17:48: the
+product lives in a NEW repository and Nathan's is never modified. Each milestone in §10 gets its own
 spec → plan → build cycle; this document is the umbrella they refer to.
 **Written:** 2026-09-29 by the solo session of `ai-orchestrator-30`, at the owner's request (*"study
 the source material, and think of ways to make this a great product … transform a team of a few
@@ -22,9 +22,11 @@ read in that codebase; claims about the market cite sources in §12.
   handles only accounts, licences and teams (§3 rule, points 1 and 3). A hosted option is not v1.
 - **D3** (14:43) — the engine stays TypeScript (Agentopolis's kernel); the desktop app, web and
   cloud services are C# (from the DVFT suite); they meet at one versioned API (§5, decisions 1-2).
-- **D4** (14:52) — one repository for both sides. *Assumed, to confirm:* it is `Coding-Wand/agentopolis`
-  (keeping Nathan's history), with the TypeScript engine and the C# app side by side in their own
-  top-level folders and the API contract shared between them.
+- **D4** (14:52, corrected 17:48) — one repository for both sides, and it is a **new** repository:
+  *"we don't move work into Nathan's repository, we at most take inspiration from his work and bring it
+  in the new repo."* The TypeScript engine (`engine/`), the C# app (`app/`) and the API contract
+  (`api/`) sit side by side in it. Code from Agentopolis is copied in where it serves (the owner's
+  earlier words: *"for the most part it will be copy-paste"*); Agentopolis itself is only read.
 - **D5** (14:56) — the desktop app is in Guido's pilot. This overturns §10's "never on the pilot's
   critical path": M1 now includes a minimal desktop cockpit (inbox, task board, threads, approvals)
   on the Runner API, and the pilot starts when it is ready. Slack stays available as a second surface.
@@ -74,7 +76,7 @@ reviewed changes**, asking the humans only for decisions that are really theirs.
 5. **Value you can see.** The product measures itself — cycle time, review time, cost per merged
    change, hours of agent work — and writes the monthly impact report the consultancy sells on.
 
-**What we build it from.** Nathan's Agentopolis kernel (TypeScript) is the engine; this repo's
+**What we build it from.** Nathan's Agentopolis kernel (TypeScript), copied into a new repository, is the engine; this repo's
 two months of hard-won human-factors rules and role prose are the behaviour; the DVFT suite's
 accounts, licences, updater, Avalonia shell and Blazor web are the product chassis.
 
@@ -328,8 +330,7 @@ docs writer, support triage.
    it (§7) — its value is in its protocols and its behaviour rules, not its engine. The Claude Agent
    SDK is also TypeScript/Python only, which keeps that door open.
 2. **The chassis is C#.** Accounts, licences, the updater, the Avalonia shell, design tokens and the
-   Blazor web already exist in the DVFT suite. The two languages meet at **one versioned API**, which
-   also happens to divide the work along the brothers' own lines: Nathan the kernel, Manu the product.
+   Blazor web already exist in the DVFT suite. The two languages meet at **one versioned API**.
 3. **The Runner is Linux.** One isolation model (bubblewrap + nftables per turn, separate OS users)
    instead of three. Windows developers run it in WSL2 or on the team server; the desktop app runs
    natively on Windows and macOS and connects to it. A developer who wants "everything on my PC" gets
@@ -452,16 +453,17 @@ worth evaluating), Windows code signing, CI, Stripe wiring, GDPR processor flows
 
 Each milestone is shippable and demoable; each gets its own spec → plan → build cycle.
 
-- **M0 — Foundations (week 1).** Agree D3/D4 with Nathan; lay out the one repository (D4) with the
-  TypeScript engine and the C# app side by side; write the Runner API contract (versioned, with a
-  contract test on both sides). Write to Anthropic about §3. Secrets policy from the first commit.
+- **M0 — Foundations (week 1).** Create the new repository (D4) with `engine/`, `app/` and `api/`;
+  seed `engine/` by copying the Agentopolis kernel at a named commit; write the Runner API contract
+  (versioned, with a contract test on both sides). Write to Anthropic about §3. Secrets policy from
+  the first commit.
 - **M1 — Pilot kit (weeks 1–5).** Two tracks, one deliverable: Guido's team using it on their routine,
   with a before/after number.
-  - *Engine (Nathan):* the Agentopolis kernel changed only where the pilot needs it — customer-owned
+  - *Engine:* the kernel copied from Agentopolis, changed only where the pilot needs it — customer-owned
     Anthropic API keys (D12) and, for our own organization, the terminal/subscription mode (D1);
     a Runner installer for a Linux server/VM; **several humans** with a desk each (D7), card routing
     and the approval default of D6; the **performance playbook** with a frozen benchmark oracle.
-  - *Pilot cockpit (Manu):* the minimal Avalonia app of D5 — inbox, task board, threads with
+  - *Pilot cockpit:* the minimal Avalonia app of D5 — inbox, task board, threads with
     streaming replies, approvals — talking to the Runner directly over its API (LAN or SSH tunnel).
     No cloud account, licence or updater is needed for the pilot: the Runner issues the pilot's
     member tokens itself.

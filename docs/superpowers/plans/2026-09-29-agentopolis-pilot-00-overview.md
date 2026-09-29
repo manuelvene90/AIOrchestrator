@@ -9,24 +9,28 @@ shows a before/after number measured by the house.
 
 ## The three plans and their order
 
-| Plan | What | Who (D3) | Depends on |
+| Plan | What | Track (D3) | Depends on |
 |---|---|---|---|
-| `…-01-foundations.md` | Repository layout (D4), the Runner API contract, the decision records, CI for the C# side | both | — |
-| `…-02-engine.md` | Nathan's kernel: API-key mode, several members with a desk each, Slack optional, the Runner API server, the performance playbook, the customer installer | Nathan | 01 (contract) |
-| `…-03-cockpit.md` | The minimal Avalonia desktop app: connect, inbox, task board, threads with streaming, approvals | Manu | 01 (contract); runs against 02's fake mode |
+| `…-01-foundations.md` | The new repository (D4), the engine seeded by copying the Agentopolis kernel, the Runner API contract, the decision records, CI for both sides | engine + app | — |
+| `…-02-engine.md` | The copied kernel changed for the pilot: API-key mode, several members with a desk each, Slack optional, the Runner API server, the performance playbook, the customer installer | engine track | 01 |
+| `…-03-cockpit.md` | The minimal Avalonia desktop app: connect, inbox, task board, threads with streaming, approvals | app track | 01 (contract); runs against 02's fake mode |
 
 Plans 02 and 03 run **in parallel** once 01's contract is merged: the cockpit is built and tested
 against the engine's `--fake` mode and a recorded API fixture, never waiting for a real VPS.
 
 ## Conventions that bind every plan
 
-- The engine plan follows the agentopolis repository's own plan style (its `CLAUDE.md`, "Come si
-  consegna" and "Il rigore si misura sul rischio"): each point has a goal, the files, and "done when";
+- **Nothing is written to `Coding-Wand/agentopolis`, ever** (owner, 17:48). It is read, and its code is
+  copied into the new repository at a named commit; from then on the copy is ours and evolves on its
+  own. The engine's working rules come with the copy (its `CLAUDE.md`, rewritten for this repository
+  in plan 01 point 2).
+- The engine plan keeps the Agentopolis plan style, because the copied code comes with its tests and
+  rules ("Come si consegna", "Il rigore si misura sul rischio"): each point has a goal, the files, and "done when";
   full rigour (mutation proofs, bad cases) only on points marked **risk**; one milestone = one branch,
   one PR, one review; the merge to `master` is the owner's.
 - The cockpit plan follows the DVFT suite's `CODING_PATTERNS_QUICKREF.md` (copied into the repository
   in plan 01) and its test conventions.
-- **A new library is a question to the owner, never a decision** (agentopolis `CLAUDE.md`). The plans
+- **A new library is a question to the owner, never a decision** (a rule carried over with the copy). The plans
   are written to need none on the engine side (Server-Sent Events on `node:http`, no WebSocket
   library). The cockpit uses only packages the DVFT suite already uses.
 - Files, code, commits and logs in English.
@@ -47,9 +51,9 @@ against the engine's `--fake` mode and a recorded API fixture, never waiting for
   bubblewrap overlay version, systemd 257 behaviour, resolver, nft `socket cgroupv2`).
 - **P5 — Slack becomes optional.** Guido's team works in the desktop app (D5); Slack stays a
   connector a customer may add.
-- **P6 — The TypeScript tree stays at the repository root** and the C# app goes under `app/`, the
-  contract under `api/`. Moving Nathan's tree into a subfolder would churn every path, CI job and
-  deploy script for no gain.
+- **P6 — Layout of the new repository:** `engine/` (TypeScript, seeded from Agentopolis), `app/`
+  (C#), `api/` (the contract), each with its own CI job filtered by path. All engine paths in plan 02
+  are relative to `engine/`.
 
 ## What must be learned from Guido before M1's playbook point (not code — a conversation)
 

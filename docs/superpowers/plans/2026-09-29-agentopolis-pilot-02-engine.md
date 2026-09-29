@@ -1,9 +1,15 @@
-# Agentopolis pilot — plan 02: the engine (M1, Nathan's track)
+# Agentopolis pilot — plan 02: the engine (M1, engine track)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended)
-> or superpowers:executing-plans to implement this plan task-by-task. This plan follows the agentopolis
-> repository's own plan style — goal, files, "done when" per point, no code written in advance —
-> because its `CLAUDE.md` requires it ("Piani snelli"). Full rigour only on points marked **risk**.
+> or superpowers:executing-plans to implement this plan task-by-task. This plan keeps the plan style
+> of the code it changes — goal, files, "done when" per point, no code written in advance — because
+> the engine's rules, copied in plan 01, require it ("Piani snelli"). Full rigour only on points marked
+> **risk**.
+
+**Where:** the new repository (D4, corrected 17:48). Every path below is relative to `engine/`, the
+copy of the Agentopolis kernel made in plan 01 point 1; the file:line references were read in the
+source at `f803c71` and hold in the copy until it diverges. `Coding-Wand/agentopolis` is never
+written.
 
 **Goal:** the Agentopolis kernel runs at a customer on their Anthropic API key, for several people with
 a desk each, without Slack, serves the Runner API the desktop app talks to, runs the performance
@@ -21,13 +27,13 @@ nftables, systemd (all existing).
 **Spec:** `docs/superpowers/specs/2026-09-29-agentopolis-product-design.md` (D1, D2, D5-D7, D12, §4.4,
 §6); plan 01 (the contract `api/v1/openapi.yaml` and decision records 0035-0037); overview P1-P5.
 
-**Branch:** `m1/pilot-engine` from `master` after plan 01 is merged. Four rounds: (1), (2), (3-4),
+**Branch:** `m1/pilot-engine` from `main` after plan 01 is merged. Four rounds: (1), (2), (3-4),
 (5-6). One review at the end, on the points marked **risk**. The owner's test once, at the end, on a
-Debian 13 VM that is not Nathan's VPS.
+fresh Debian 13 VM.
 
 ## Global Constraints
 
-- Every rule in the agentopolis `CLAUDE.md` holds except where records 0035-0037 amend it: nothing
+- Every engine rule in the repository's `CLAUDE.md` (plan 01 point 2) holds, as amended by records 0035-0037: nothing
   dynamic in the system prompt; model and effort fixed at spawn; the envelope is the message; only the
   addressee is woken; pending work is a query; every uniqueness rule is a database constraint; a turn
   proposes, never commits an effect; no model takes part in an authorization decision; the mandate is
@@ -67,7 +73,7 @@ keeps the subscription mode, and only with the licence capability `subscription`
 
 **Files:**
 - `src/config/schemas.ts` (new top-level `credentials: { mode: subscription|api_key }`, default
-  `subscription` for backward compatibility of Nathan's home; `ConfigFile` near :639).
+  `subscription` so the copied tests and example home keep working; `ConfigFile` near :639).
 - `src/daemon.ts` (a pure `credentialModeRefusal(mode, licence)` beside `tokenInCageRefusal` :3208,
   called at boot after `AccountCredentials.take` :392; the licence is a file
   `/etc/agentopolis/licence.json` signed with our Ed25519 key, public key compiled in; `subscription`
@@ -117,7 +123,7 @@ card goes to whoever started its thread, else to the project's maintainers.
   and their API tokens: new table `members { id, name, role: owner|admin|maintainer|member|viewer,
   slack_user_id?, token_sha256, ssh_key_fingerprint?, created_at, revoked_at? }`, unique on `name`
   and on `slack_user_id` where not null. `slack.owner_user_id` stays as a legacy alias that seeds one
-  `owner` member at boot, so Nathan's home keeps working.
+  `owner` member at boot, so the copied tests and fixtures keep working unchanged.
 - The addressee value `"owner"` (`store/messages.ts:13`, 54 references, ~60 literals) is **kept**
   and means "a human"; a new nullable `person` (member id) goes next to it. Renaming would touch more
   than a hundred places for nothing.
@@ -189,8 +195,8 @@ and a desk colleague whose memory holds only what that person said; a question o
 thread appears in the member's inbox and not the viewer's; the member approves a `merge_production`
 card and the effect records the member's id; the viewer's press on the same card is refused with a
 reason and no row moves (mutation proof: remove the `mayDecide` call and the test goes red); a revoked
-member's press is refused; Nathan's existing home, with only `owner_user_id`, boots and behaves as
-before (the existing suite green).
+member's press is refused; a home with only `owner_user_id` boots and behaves as before (the copied
+suite green).
 
 ## 3 · Slack optional: every room works without a channel
 
@@ -290,7 +296,7 @@ check red.
 **Goal:** on a fresh Debian 13 VM, one command installs a Runner for a named organization, with its
 members, its API key and its repository, and one command removes it.
 
-**Files:** `deploy/machine.sh` (parameterize the values that are Nathan's: the aiorchestrator refusal
+**Files:** `deploy/machine.sh` (parameterize the values that belonged to the source's own VPS: the aiorchestrator refusal
 :23-25,130-138 becomes a check for *any* second tenant on the same login, off by default for a
 customer; memory ceilings from the VM's RAM; the source URL and commit as arguments),
 `deploy/preflight.sh` (:133-135 same), create `deploy/install-customer.sh` (runs `machine.sh`, then the
@@ -311,4 +317,4 @@ container, then install again).
 git@github.com:…` ends with the daemon active and `/v1/me` answering for a member created by `member
 add`; a second run changes nothing; `uninstall.sh` leaves no unit, nft table, sudoers file or user, and
 a third install succeeds; the tunnel user cannot open a shell or forward any port but 4894 (asserted);
-no value from Nathan's VPS appears in a generated home (grep in the test).
+no value from the source's VPS or projects appears in a generated home (grep in the test).
