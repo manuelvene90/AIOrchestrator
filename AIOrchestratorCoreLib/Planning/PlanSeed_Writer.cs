@@ -13,6 +13,13 @@ namespace AIOrchestratorCoreLib.Planning;
 /// </summary>
 public static class PlanSeed_Writer
 {
+    /// <summary>
+    /// The start of the seeded ledger line, marker included. Named once so a test that finishes the seed
+    /// cannot go on spelling a marker the seed stopped writing — which is how two probes went red on both
+    /// OSes in CI when the marker moved from `[>]` to `[?]` (2026-09-30).
+    /// </summary>
+    public const string SEEDED_LINE_PREFIX = "- [?] agree the direction";
+
     public static void Ensure_Exists(ISupervisionPaths paths, string orchId, string repoName)
     {
         try
@@ -55,7 +62,7 @@ public static class PlanSeed_Writer
                 The app reads this file for the card's progress bar and the owner's /progress command,
                 so update it at every boundary.
 
-                - [?] agree the direction with the owner, then replace this line with the real tasks - blocked on: the owner's first message
+                {SEEDED_LINE_PREFIX} with the owner, then replace this line with the real tasks - blocked on: the owner's first message
 
                 ## PARKED — found, not asked for
 

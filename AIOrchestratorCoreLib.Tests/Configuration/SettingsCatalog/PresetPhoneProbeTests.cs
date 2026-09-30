@@ -739,6 +739,11 @@ public class PresetPhoneProbeTests : IDisposable
     /// <summary>
     /// Marks the launcher's seeded ledger line finished, which makes the app tell the topic so — a notice
     /// it sends by itself, straight to Telegram, with no session involved.
+    ///
+    /// THE SEED IS `- [?]` SINCE 8e014d1 (the seed line is blocked on the owner), which merged the same
+    /// morning as these probes and made them red on both OSes in CI: they still looked for the old
+    /// `- [>]`. Any seeded marker to `[x]` is a FINISHED transition all the same, so the marker is read
+    /// off the seed rather than spelled here a second time.
     /// </summary>
     void Finish_TheSeededLedgerLine()
     {
@@ -746,9 +751,11 @@ public class PresetPhoneProbeTests : IDisposable
         var planFile = _paths.Get_PlanFile(session.OrchId);
         var plan = File.ReadAllText(planFile);
 
-        Assert.Contains("- [>] agree the direction", plan, StringComparison.Ordinal);
+        var seeded = AIOrchestratorCoreLib.Planning.PlanSeed_Writer.SEEDED_LINE_PREFIX;
 
-        File.WriteAllText(planFile, plan.Replace("- [>] agree the direction", "- [x] agree the direction", StringComparison.Ordinal));
+        Assert.Contains(seeded, plan, StringComparison.Ordinal);
+
+        File.WriteAllText(planFile, plan.Replace(seeded, "- [x] agree the direction", StringComparison.Ordinal));
     }
 
     /// <summary>
