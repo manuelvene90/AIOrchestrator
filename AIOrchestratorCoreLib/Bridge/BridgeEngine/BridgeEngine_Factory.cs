@@ -189,12 +189,23 @@ public static class BridgeEngine_Factory
 
         watchdog.Restore_ConsecutiveRespawns(restoredState.ConsecutiveRespawns);
 
+        // EVERY SEND THE ENGINE MAKES IS RECORDED AS TOPIC TRAFFIC, by wrapping the one client it holds
+        // (owner, 2026-09-30): that is how the status line learns it has been buried, whichever of the
+        // engine's many send sites buried it. Wrapped HERE, below every seam, so production and the
+        // engine tests that hand in a fake run through the same chokepoint.
+        var topicTraffic = Telegram.TopicTraffic.TopicTraffic_Factory.Create_Empty();
+
+        var recordingClient = telegramClient == null
+            ? null
+            : TelegramApiClient_Factory.Create_RecordingTopicTraffic(telegramClient, topicTraffic);
+
         return new BridgeEngineModel(
-            paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, transcriber,
+            paths, configProvider, store, launcher, log, tailer, recordingClient, watchdog, transcriber,
             printTurns, lastUpdateId, engineStateStore, restoredState, clock, timing,
             hostWindowing ?? Hosting.HostWindowing.HostWindowing_Factory.Create_ForThisHost(),
             accountReader ?? Limits.ClaudeAccount.ClaudeAccountReader_Factory.Create_Unknown(),
             sessionProcesses ?? Termination.SessionProcesses.SessionProcesses_Factory.Create_ForThisHost(),
+            topicTraffic,
             sendBudget);
     }
 }

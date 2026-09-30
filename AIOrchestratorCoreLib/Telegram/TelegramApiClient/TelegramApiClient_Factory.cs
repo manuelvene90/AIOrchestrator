@@ -55,4 +55,19 @@ public static class TelegramApiClient_Factory
 
         return new TelegramApiClientModel(botToken, supergroupChatId, budget, transport);
     }
+
+    /// <summary>
+    /// <paramref name="inner"/>, with every message it SENDS into a topic recorded in
+    /// <paramref name="traffic"/> — the one chokepoint that tells the status line it has been buried
+    /// (owner, 2026-09-30). See <see cref="TopicTrafficRecordingClientModel"/> for why this is a
+    /// decorator and not a call at each send site. The engine factory wraps the client it is given, so
+    /// production and every engine test seam run through it alike.
+    /// </summary>
+    public static ITelegramApiClient Create_RecordingTopicTraffic(ITelegramApiClient inner, TopicTraffic.ITopicTraffic traffic)
+    {
+        ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(traffic);
+
+        return new TopicTrafficRecordingClientModel(inner, traffic);
+    }
 }

@@ -24,6 +24,13 @@ namespace AIOrchestratorCoreLib.Time.Clock;
 /// away, an hour is" could only be asserted by moving a clock. Both halves moved together — a stamp on
 /// one clock compared against a reading of another is how the status-line back-off once went inert.
 /// </para>
+/// <para>
+/// AND A SECOND TIME (owner, 2026-09-30): the status line's move waits until the SESSION's last message
+/// in the topic is a minute old — a deadline the engine notices on its own. The stamp (taken when the
+/// mirror sends a session's entry) and the reading it is compared with (the status-line refresh) both
+/// come from here, carried together in <c>TopicStatusLine_Planner.TopicSessionSilence</c>. The planner's
+/// other clock — the LOCAL one its durations read agent-written stamps against — is untouched.
+/// </para>
 /// </summary>
 public interface IClock
 {

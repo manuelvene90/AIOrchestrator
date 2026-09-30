@@ -287,38 +287,44 @@ public class TopicStatusLinePlannerTests
         Assert.DoesNotContain("first in-progress ledger line", lastFieldLine);
     }
 
-    // ── THE REPOST, owner directive 2026-08-13 ────────────────────────────────────────────────────
+    // ── THE REPOST, owner directive 2026-08-13, RULE REPLACED 2026-09-30 ──────────────────────────
     //
-    // Posted once and edited forever meant the line SCROLLED AWAY: entering the topic showed whatever
-    // was last said, and the current state was somewhere above. The owner wants the status to be the
-    // thing they see without typing a command, so when it is no longer the last message AND the topic
-    // has gone quiet, it is rewritten at the bottom. While it IS the last message it keeps being
-    // edited exactly as before, because an edit notifies nobody.
+    // Posted once and edited forever meant the line SCROLLED AWAY, so a buried line is rewritten at
+    // the bottom (Telegram cannot move a message: delete, then a silent send). While it IS the last
+    // message it keeps being edited exactly as before.
     //
-    // THE WINDOW IS TEN SECONDS since 2026-08-24 — two minutes made the move correct and invisible,
-    // and the owner asked for it to feel immediate. See REPOST_AFTER_QUIET_SECONDS for why a short
-    // window is not a waterfall: the status line's own message is never recorded as topic traffic, so
-    // the fresh post reads as un-buried and nothing reposts again until real traffic arrives.
+    // WHEN IT MOVES is the owner's rule of 2026-09-30, and it replaces both earlier gates — the
+    // ten-second quiet window (2026-08-24) and "buried AND changed" (2026-09-09, ruling R27):
+    // *"it should be updated often so that is basically always the last message in the conversation.
+    // it should not get in the way of me speaking with the session, so it should be updated once the
+    // last session's message is at least 1 minute old. (not my last message, because to the session
+    // it quite often take a lot of time to reply)"*. Buried by ANYTHING — the owner, the app, the
+    // session — and the SESSION's last message at least sixty seconds old (or none seen): it moves.
+    // Content no longer matters to the move, only to the edit.
+    //
+    // Each case below that pinned an older ruling was rewritten to assert this one, under a name that
+    // says so, rather than deleted — so the diff of this file shows which claims were reversed.
 
     /// <summary>
-    /// The rule as the owner stated it: buried by later traffic, and the topic has gone quiet.
+    /// The rule as the owner stated it on 2026-09-30: buried by later traffic, and the session's own
+    /// last message a minute old. It was "the topic has gone quiet" until then.
     /// </summary>
     [Fact]
-    public void AStatusLineBuriedByLaterTrafficIsRepostedOnceTheTopicGoesQuiet()
+    public void AStatusLineBuriedByLaterTraffic_IsRepostedOnceTheSessionsLastMessageIsAMinuteOld()
     {
         var plan = Plan(
             existingMessageId: STATUS_ID,
             lastWrittenText: "an older line",
-            newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)));
+            newestTopicMessage: Newest(STATUS_ID + 20),
+            sessionSilence: Session_Spoke(NOW.AddMinutes(-1)));
 
         Assert.Equal(TopicStatusActions.Repost, plan.Action);
     }
 
     /// <summary>
-    /// AND THE OTHER SIDE, which is the one that keeps this feature from becoming a waterfall: while
-    /// the status line IS the last message it is EDITED, silently, exactly as before. A repost
-    /// notifies — Telegram cannot move a message — so one that fires while the line is already at the
-    /// bottom would ping the owner for a duration ticking from 4 to 5 minutes.
+    /// AND THE OTHER SIDE: while the status line IS the last message it is EDITED, silently, exactly as
+    /// before — however long the session has been quiet. Nothing is below it, so there is nothing to
+    /// move it past.
     /// </summary>
     [Fact]
     public void AStatusLineThatIsStillTheLastMessageIsEditedInPlace()
@@ -326,97 +332,114 @@ public class TopicStatusLinePlannerTests
         var plan = Plan(
             existingMessageId: STATUS_ID,
             lastWrittenText: "an older line",
-            newestTopicMessage: Newest(STATUS_ID - 20, NOW.AddHours(-1)));
+            newestTopicMessage: Newest(STATUS_ID - 20),
+            sessionSilence: Session_Spoke(NOW.AddHours(-1)));
 
         Assert.Equal(TopicStatusActions.Edit, plan.Action);
     }
 
     /// <summary>
-    /// THE QUIET WINDOW, asserted THROUGH Plan and at its boundary — so it pins the wiring of the
-    /// constant as well as the arithmetic. Item: the derived bool, the clock and the picker call were
-    /// each moved somewhere reachable while the wiring that activates them stayed behind, unobserved.
-    ///
-    /// One second short holds; the window itself fires. Without the window a repost would land on the
-    /// owner's phone in the middle of their own conversation, which is the opposite of the ask.
+    /// THE SESSION'S MINUTE, asserted THROUGH Plan and at its boundary — so it pins the wiring of the
+    /// constant as well as the arithmetic. One second short edits in place; the minute itself moves.
     /// </summary>
     [Fact]
-    public void TheRepostWaitsForTheTopicToGoQuiet()
+    public void TheRepostWaitsForTheSessionsLastMessageToBeAMinuteOld()
     {
         Assert.Equal(
             TopicStatusActions.Edit,
-            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddSeconds(-(TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS - 1)))).Action);
+            Plan_WhenTheSessionSpoke(TopicStatusLine_Planner.REPOST_AFTER_SESSION_QUIET_SECONDS - 1).Action);
 
         Assert.Equal(
             TopicStatusActions.Repost,
+            Plan_WhenTheSessionSpoke(TopicStatusLine_Planner.REPOST_AFTER_SESSION_QUIET_SECONDS).Action);
+    }
+
+    /// <summary>
+    /// AND THE WINDOW IS SIXTY SECONDS — the owner's number (2026-09-30: *"at least 1 minute old"*),
+    /// asserted with LITERAL seconds because the case above only pins the arithmetic around the
+    /// constant: set it to 0 and that case stays green while every burial moves the line in the middle
+    /// of the session's reply.
+    ///
+    /// 59 and 60 pin it EXACTLY. 10 holding is what makes this red against the ten-second window this
+    /// replaced, and 30 is the brief's own example of a session that spoke "30 s ago".
+    /// </summary>
+    [Fact]
+    public void TheSessionWindowIsSixtySeconds()
+    {
+        Assert.Equal(TopicStatusActions.Edit, Plan_WhenTheSessionSpoke(0).Action);
+        Assert.Equal(TopicStatusActions.Edit, Plan_WhenTheSessionSpoke(10).Action);
+        Assert.Equal(TopicStatusActions.Edit, Plan_WhenTheSessionSpoke(30).Action);
+        Assert.Equal(TopicStatusActions.Edit, Plan_WhenTheSessionSpoke(59).Action);
+        Assert.Equal(TopicStatusActions.Repost, Plan_WhenTheSessionSpoke(60).Action);
+        Assert.Equal(TopicStatusActions.Repost, Plan_WhenTheSessionSpoke(61).Action);
+    }
+
+    /// <summary>
+    /// A SESSION THAT SPOKE THIRTY SECONDS AGO HOLDS THE MOVE, and with nothing new to say the line is
+    /// not touched at all. This case used to assert that a fifteen-second pause was ALREADY enough —
+    /// the ten-second window's complaint. The owner's 2026-09-30 complaint is the opposite shape: the
+    /// line must not move while the session may still be mid-reply, so that the move never lands
+    /// between two of its messages.
+    /// </summary>
+    [Fact]
+    public void ASessionMessageThirtySecondsOld_HoldsTheRepost()
+    {
+        Assert.Equal(TopicStatusActions.Edit, Plan_WhenTheSessionSpoke(30).Action);
+
+        var current = Plan(existingMessageId: STATUS_ID).Text;
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
+                 newestTopicMessage: Newest(STATUS_ID + 20), sessionSilence: Session_Spoke(NOW.AddSeconds(-30))).Action);
+    }
+
+    /// <summary>
+    /// THE OWNER'S OWN MESSAGE DOES NOT HOLD THE MOVE — it BURIES the line and the move follows at once
+    /// when the session has been quiet. This case asserted the reverse until 2026-09-30 ("traffic that
+    /// has just landed still holds the repost"): every message reset the window. The owner named the
+    /// reason it must not: *"not my last message, because to the session it quite often take a lot of
+    /// time to reply"* — timing the move off the owner's words left PULSE twenty messages up in a topic
+    /// where the owner was waiting on a slow session.
+    ///
+    /// The planner does not see WHO buried the line — only the newest id and the session's own clock —
+    /// which is exactly the rule: a message that landed a moment ago buries, and does not hold.
+    /// </summary>
+    [Fact]
+    public void AnOwnerMessageThatJustLanded_DoesNotHoldTheRepost_WhenTheSessionIsQuiet()
+    {
+        Assert.Equal(
+            TopicStatusActions.Repost,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddSeconds(-TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS))).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 1), sessionSilence: Session_Spoke(NOW.AddMinutes(-5))).Action);
     }
 
     /// <summary>
-    /// AND THE WINDOW IS TEN SECONDS — the one number the owner actually specified (2026-08-24:
-    /// *"the topic status message should arrive immediately, not after 2 minutes, but more like after
-    /// 10 seconds"*), asserted with LITERAL seconds because the case above cannot see it.
-    ///
-    /// F2, rev-1: every other test passes `REPOST_AFTER_QUIET_SECONDS` symbolically, so they pin the
-    /// ARITHMETIC around the constant and never its VALUE. Set the constant to 0 and all of them stay
-    /// green — `AddSeconds(-(0 - 1))` is a stamp one second in the FUTURE, which holds, and
-    /// `AddSeconds(0)` is due. A repost would then fire the instant any message buried the line: a
-    /// notification in the middle of the owner's own sentence, which is the waterfall item 14 exists
-    /// to prevent, arriving with a green suite.
-    ///
-    /// 9 and 10 pin it EXACTLY rather than approximately: asserting only that 11 reposts would allow
-    /// any window from 0 to 11, and asserting only that 9 holds would allow the old 120 to survive.
-    /// The 120 case is what makes this red against the previous value, and the 11 case is the owner's
-    /// sentence read literally — "just over ten seconds" must already be moving.
+    /// A SESSION THAT HAS SAID NOTHING SINCE THE APP STARTED COUNTING IS A QUIET ONE — both spellings of
+    /// "nothing": no silence record at all, and a record with no message in it.
     /// </summary>
     [Fact]
-    public void TheQuietWindowIsTenSeconds()
+    public void ASessionThatHasPostedNothing_DoesNotHoldTheRepost()
     {
-        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(5).Action);
-        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(9).Action);
-        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(10).Action);
-        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(11).Action);
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line", newestTopicMessage: Newest(STATUS_ID + 1)).Action);
+
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line", newestTopicMessage: Newest(STATUS_ID + 1),
+                 sessionSilence: new TopicStatusLine_Planner.TopicSessionSilence(null, NOW)).Action);
     }
 
     /// <summary>
-    /// THE OWNER'S COMPLAINT, as a case rather than as a boundary: a line buried while the topic then
-    /// went quiet for a quarter of a minute must ALREADY have moved. This is the assertion that reads
-    /// red against the old two-minute window — 15 seconds of quiet planned an Edit there, which is
-    /// the "it arrives after 2 minutes" the owner reported.
-    /// </summary>
-    [Fact]
-    public void AShortPauseIsAlreadyLongEnoughToMoveTheLine()
-    {
-        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(15).Action);
-        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(60).Action);
-    }
-
-    /// <summary>
-    /// AND THE SHORT WINDOW IS STILL A PAUSE-DETECTOR, which is the half that keeps it from becoming
-    /// the waterfall item 14 exists to prevent. A message that landed a moment ago holds the line
-    /// exactly as it did at 120 — the owner typing a second sentence is not a quiet topic, and the
-    /// repost must not interrupt them mid-thought.
-    /// </summary>
-    [Fact]
-    public void TrafficThatHasJustLandedStillHoldsTheRepost()
-    {
-        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(0).Action);
-        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(2).Action);
-    }
-
-    /// <summary>
-    /// WHAT ACTUALLY BOUNDS THE REPOST, and it is not the window. After a repost the app's stored id
-    /// is the FRESH message, whose Telegram id is higher than every message the topic has seen —
-    /// and the status line's own post is deliberately never recorded as topic traffic
-    /// (`BridgeEngineModel._newestTopicMessageByThread` is written only by `Remember_TopicMessage`,
-    /// which the status-line refresh does not call). So the very next tick reads the line as
-    /// UN-BURIED and plans an edit, at any window value.
+    /// WHAT BOUNDS THE REPOST: after a repost the app's stored id is the FRESH message, whose Telegram id
+    /// is higher than every message the topic has seen — so the very next tick reads the line as
+    /// UN-BURIED and plans an edit, however quiet the session is. Without this, "reposts as soon as the
+    /// session is quiet" would read as "every tick".
     ///
-    /// This is the case that says a ten-second window cannot delete-and-send every ten seconds in a
-    /// quiet topic: without it, "10 is safe" rests on an argument in a comment in another file.
-    /// The state is the one that exists two seconds after a repost — quiet far longer than the
-    /// window, and the stored id now above the newest traffic id.
+    /// The engine now RECORDS the status line's own send as topic traffic too (every send is, since
+    /// 2026-09-30). That is harmless for exactly one reason — EQUAL is not buried — and the second
+    /// assertion pins it: the newest message the app knows of being the line itself buries nothing.
     /// </summary>
     [Fact]
     public void AFreshlyRepostedLineIsNoLongerBuriedAndDoesNotRepostAgain()
@@ -424,239 +447,170 @@ public class TopicStatusLinePlannerTests
         const long BURYING_TRAFFIC_ID = STATUS_ID + 20;
         const long REPOSTED_ID = BURYING_TRAFFIC_ID + 1;
 
-        // The traffic that buried the old line is still the newest thing the app knows of, and it is
-        // now an hour old — far past any window this constant could hold.
-        var newest = Newest(BURYING_TRAFFIC_ID, NOW.AddHours(-1));
+        var sessionLongQuiet = Session_Spoke(NOW.AddHours(-1));
 
-        Assert.False(TopicStatusLine_Planner.Is_RepostDue(
-            REPOSTED_ID, newest, NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(REPOSTED_ID, Newest(BURYING_TRAFFIC_ID), sessionLongQuiet));
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(REPOSTED_ID, Newest(REPOSTED_ID), sessionLongQuiet));
 
         Assert.Equal(
             TopicStatusActions.Edit,
-            Plan(existingMessageId: REPOSTED_ID, lastWrittenText: "an older line", newestTopicMessage: newest).Action);
+            Plan(existingMessageId: REPOSTED_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(REPOSTED_ID), sessionSilence: sessionLongQuiet).Action);
     }
 
     /// <summary>
-    /// THE RULE REVERSED, ON THE OWNER'S OWN WORDS (2026-09-09, brief C): PULSE is re-posted "only
-    /// when it is buried by later traffic AND its content changed". This test ASSERTED THE OPPOSITE
-    /// until 2026-09-10 and it was not wrong then — burial alone was the rule, and the summary above
-    /// it argued the case for it: a quiet topic never changes its text, so a content-gated repost
-    /// would never move a quiet topic's line.
+    /// THE RULE REVERSED A SECOND TIME, ON THE OWNER'S OWN WORDS (2026-09-30). Until 2026-09-10 burial
+    /// alone moved the line; from then until 2026-09-30 this case asserted that an UNCHANGED line stayed
+    /// buried (owner, 2026-09-09: re-posted "only when it is buried by later traffic AND its content
+    /// changed"), on the argument that a repost carrying no news was traffic. The owner has now read the
+    /// cost of that trade — PULSE stranded twenty messages up, its BUTTONS with it, so pressing one meant
+    /// scrolling — and wants it "basically always the last message". Every write here is silent, so a
+    /// move that says nothing new still rings nobody.
     ///
-    /// The owner read that trade and took the other side. Their complaint is the one this whole brief
-    /// answers — half of what reaches the phone is not for them — and a repost that carries no news
-    /// is the surface breaking its own promise: PULSE exists so that status costs no notifications,
-    /// and every pause in a talkative topic was buying a delete plus a post that said the same thing.
-    /// A buried unchanged line is a cosmetic loss (it is above some traffic); a repost of it is
-    /// traffic. Cosmetics lose.
-    ///
-    /// KEPT UNDER ITS OLD NAME INVERTED RATHER THAN DELETED, so the reversal is visible in the diff
-    /// of the file that carried the old claim, and nobody re-derives the old rule from the argument
-    /// still written above it.
-    ///
-    /// Both sides, from the SAME text: unchanged is silence whether or not it is buried.
+    /// KEPT, INVERTED, UNDER A NAME THAT SAYS SO: unchanged and buried moves once the session is quiet;
+    /// unchanged and NOT buried is still no call at all.
     /// </summary>
     [Fact]
-    public void TheRepostDoesNotFireWhenTheTextHasNotChanged()
+    public void TheRepostFiresEvenWhenTheTextHasNotChanged()
     {
         var current = Plan(existingMessageId: STATUS_ID).Text;
+        var sessionQuiet = Session_Spoke(NOW.AddMinutes(-2));
 
         Assert.Equal(
             TopicStatusActions.None,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
-                 newestTopicMessage: Newest(STATUS_ID - 20, NOW.AddHours(-1))).Action);
+                 newestTopicMessage: Newest(STATUS_ID - 20), sessionSilence: sessionQuiet).Action);
 
         Assert.Equal(
-            TopicStatusActions.None,
+            TopicStatusActions.Repost,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), sessionSilence: sessionQuiet).Action);
     }
 
     /// <summary>
-    /// THE BRIEF'S OWN PROBE, both halves in one place: "PULSE buried under 3 later messages with
-    /// unchanged content → not re-posted; content changes → one silent re-post at the bottom".
-    ///
-    /// The three messages are modelled the way the planner sees burial — by the newest id the app
-    /// knows of, which is the third of them — because that is the only thing `Is_RepostDue` reads.
-    /// Asserting on a count of intermediate messages would test a counter this feature does not have.
-    ///
-    /// ONE repost, not two: the second call re-runs the same tick with the line now carrying the new
-    /// text, which is the state the engine is in immediately after a successful repost. It must go
-    /// quiet — otherwise a changed line reposts on every tick for as long as it stays buried, which
-    /// is the waterfall by another door.
-    ///
-    /// "CHANGED" MEANS CHANGED SINCE THE OWNER LAST SAW IT AT THE BOTTOM (ruling R27, 2026-09-24), not
-    /// since the last write. Here no edit happens in between, so the text last written IS what was seen
-    /// at the bottom and the outcomes are the ones this case always pinned; the third call now hands in
-    /// the rendering the repost put at the bottom, which is what the engine remembers after it.
-    /// `ABuriedLineEditedInPlaceDuringTheWindow_IsBroughtBackOnceTheTopicIsQuiet` is the case where the
-    /// two meanings part.
+    /// THE BRIEF'S PROBE, rewritten for the 2026-09-30 rule: PULSE buried under three later messages
+    /// moves ONCE whether or not its content changed, and the fresh line — whose id is above the traffic
+    /// that buried the old one — does not move again on the next tick.
     /// </summary>
     [Fact]
-    public void BuriedAndUnchangedStaysPut_BuriedAndChangedMovesOnce()
+    public void BuriedMovesOnce_ChangedOrNot()
     {
-        var buriedUnderThree = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+        var buriedUnderThree = Newest(STATUS_ID + 3);
+        var sessionQuiet = Session_Spoke(NOW.AddMinutes(-2));
 
         var current = Plan(existingMessageId: STATUS_ID).Text;
 
         Assert.Equal(
-            TopicStatusActions.None,
+            TopicStatusActions.Repost,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
-                 newestTopicMessage: buriedUnderThree).Action);
+                 newestTopicMessage: buriedUnderThree, sessionSilence: sessionQuiet).Action);
 
         var afterAChange = Plan(
             existingMessageId: STATUS_ID,
             lastWrittenText: "what PULSE said before anything moved",
-            newestTopicMessage: buriedUnderThree);
+            newestTopicMessage: buriedUnderThree,
+            sessionSilence: sessionQuiet);
 
         Assert.Equal(TopicStatusActions.Repost, afterAChange.Action);
         Assert.False(string.IsNullOrWhiteSpace(afterAChange.Text));
 
         Assert.Equal(
             TopicStatusActions.None,
-            Plan(existingMessageId: STATUS_ID, lastWrittenText: afterAChange.Text, lastSeenAtBottomKey: afterAChange.SeenAtBottomKey,
-                 newestTopicMessage: buriedUnderThree).Action);
+            Plan(existingMessageId: STATUS_ID + 4, lastWrittenText: afterAChange.Text,
+                 newestTopicMessage: Newest(STATUS_ID + 4), sessionSilence: sessionQuiet).Action);
     }
 
-    // ── CHANGED SINCE THE OWNER LAST SAW IT AT THE BOTTOM (ruling R27, plan 03 Task 17 fix round 1) ────
+    // ── THE ANSWER THAT BURIES AND CHANGES PULSE (ruling R27's case, re-read under the 2026-09-30 rule) ──
     //
-    // With "changed" read as "changed since the last write", the common case never came back: an
-    // answer that both buries PULSE and changes its STATE is EDITED IN PLACE inside the ten-second
-    // window, so once the topic is quiet the line has "nothing new to say" and stays buried. The
-    // planner now also takes the rendering the line had when it was last unburied, and an edit made
-    // while buried does not move that memory.
+    // R27 (2026-09-24) existed because "changed since the last write" left a line edited in place while
+    // buried and then stranded for good. Under the owner's 2026-09-30 rule content no longer gates the
+    // move, so the memory R27 kept ("what the owner saw at the bottom") is gone with it; what these cases
+    // still pin is the SEQUENCE the owner lives through.
 
     static readonly IReadOnlyList<ITopicStatusMember> AFTER_THE_ANSWER = [Member("imp-1", "run the integration suite", "2026-08-12 14:50")];
 
     /// <summary>
-    /// THE COMMON CASE, step by step: seen at the bottom → buried and edited in place inside the window
-    /// (the memory does not move) → quiet: reposted ONCE → the fresh line is at the bottom and says the
-    /// same thing: nothing more.
+    /// THE COMMON CASE, step by step: the session's answer buries PULSE and changes it → edited in place
+    /// while the answer is fresh (the move would land in the middle of the session's reply) → once the
+    /// answer is a minute old: reposted ONCE → the fresh line is at the bottom: nothing more.
     /// </summary>
     [Fact]
-    public void ABuriedLineEditedInPlaceDuringTheWindow_IsBroughtBackOnceTheTopicIsQuiet()
+    public void AnAnswerThatBuriesAndChangesPulse_IsEditedInPlace_ThenBroughtBackOnceItIsAMinuteOld()
     {
         var atTheBottom = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
 
-        var justBuried = Newest(STATUS_ID + 2, NOW.AddSeconds(-2));
+        var buriedByTheAnswer = Newest(STATUS_ID + 2);
 
-        var inTheWindow = Plan(
+        var inTheMinute = Plan(
             members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
-            lastWrittenText: atTheBottom.Text, lastWrittenRenderKey: atTheBottom.RenderKey, lastSeenAtBottomKey: atTheBottom.SeenAtBottomKey,
-            newestTopicMessage: justBuried);
+            lastWrittenText: atTheBottom.Text, lastWrittenRenderKey: atTheBottom.RenderKey,
+            newestTopicMessage: buriedByTheAnswer, sessionSilence: Session_Spoke(NOW.AddSeconds(-2)));
 
-        Assert.Equal(TopicStatusActions.Edit, inTheWindow.Action);
-        Assert.Equal(atTheBottom.SeenAtBottomKey, inTheWindow.SeenAtBottomKey);
+        Assert.Equal(TopicStatusActions.Edit, inTheMinute.Action);
 
-        var quiet = Newest(STATUS_ID + 2, NOW.AddSeconds(-TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
-
-        var onceQuiet = Plan(
+        var aMinuteLater = Plan(
             members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
-            lastWrittenText: inTheWindow.Text, lastWrittenRenderKey: inTheWindow.RenderKey, lastSeenAtBottomKey: inTheWindow.SeenAtBottomKey,
-            newestTopicMessage: quiet);
+            lastWrittenText: inTheMinute.Text, lastWrittenRenderKey: inTheMinute.RenderKey,
+            newestTopicMessage: buriedByTheAnswer, sessionSilence: Session_Spoke(NOW.AddSeconds(-TopicStatusLine_Planner.REPOST_AFTER_SESSION_QUIET_SECONDS)));
 
-        Assert.Equal(TopicStatusActions.Repost, onceQuiet.Action);
-        Assert.NotEqual(atTheBottom.SeenAtBottomKey, onceQuiet.SeenAtBottomKey);
+        Assert.Equal(TopicStatusActions.Repost, aMinuteLater.Action);
 
-        // The fresh line carries an id above the traffic that buried the old one.
+        // The fresh line carries an id above the traffic that buried the old one — and, recorded as
+        // traffic itself, it IS the newest message.
         var afterTheRepost = Plan(
             members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID + 3, commandButtonRows: THREE_VERB_BAR,
-            lastWrittenText: onceQuiet.Text, lastWrittenRenderKey: onceQuiet.RenderKey, lastSeenAtBottomKey: onceQuiet.SeenAtBottomKey,
-            newestTopicMessage: quiet);
+            lastWrittenText: aMinuteLater.Text, lastWrittenRenderKey: aMinuteLater.RenderKey,
+            newestTopicMessage: Newest(STATUS_ID + 3), sessionSilence: Session_Spoke(NOW.AddMinutes(-5)));
 
         Assert.Equal(TopicStatusActions.None, afterTheRepost.Action);
     }
 
     /// <summary>
-    /// AND STILL BURIED AFTERWARDS, one tick later with the same memory handed back, it does not move
-    /// again: what was just put at the bottom is what the owner now sees there.
+    /// AN UNCHANGED BURIED LINE STAYS PUT WHILE THE SESSION IS RECENT — the "None" half of the brief's
+    /// "buried, session posted 30 s ago ⇒ Edit/None, not Repost". It asserted the opposite reason until
+    /// 2026-09-30 (unchanged ⇒ never moved); the reason is now the session's clock, and the next case
+    /// shows the same line moving once that clock has run.
     /// </summary>
     [Fact]
-    public void ALineReposted_IsNotRepostedAgainOnTheNextTick()
+    public void AnUnchangedBuriedLine_StaysPutWhileTheSessionIsRecent()
     {
-        var atTheBottom = Plan(existingMessageId: STATUS_ID);
-        var quiet = Newest(STATUS_ID + 2, NOW.AddMinutes(-1));
-
-        var reposted = Plan(
-            members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID,
-            lastWrittenText: atTheBottom.Text, lastSeenAtBottomKey: atTheBottom.SeenAtBottomKey, newestTopicMessage: quiet);
-
-        Assert.Equal(TopicStatusActions.Repost, reposted.Action);
-
-        Assert.Equal(
-            TopicStatusActions.None,
-            Plan(members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID,
-                 lastWrittenText: reposted.Text, lastSeenAtBottomKey: reposted.SeenAtBottomKey, newestTopicMessage: quiet).Action);
-    }
-
-    /// <summary>
-    /// AN UNCHANGED BURIED LINE STAYS PUT with the memory handed in, and a line at the bottom takes the
-    /// rendering it shows as the new memory — which is what makes a LATER burial compare against it.
-    /// </summary>
-    [Fact]
-    public void AnUnchangedBuriedLine_StaysPut_AndALineAtTheBottomIsWhatWasSeen()
-    {
-        var atTheBottom = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
-
-        Assert.NotNull(atTheBottom.SeenAtBottomKey);
+        var written = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
 
         Assert.Equal(
             TopicStatusActions.None,
             Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
-                 lastWrittenText: atTheBottom.Text, lastWrittenRenderKey: atTheBottom.RenderKey, lastSeenAtBottomKey: atTheBottom.SeenAtBottomKey,
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddHours(-1))).Action);
+                 lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
+                 newestTopicMessage: Newest(STATUS_ID + 20), sessionSilence: Session_Spoke(NOW.AddSeconds(-30))).Action);
 
-        // Changed while NOT buried: an edit, and the edit IS seen — the memory moves with it.
-        var editedAtTheBottom = Plan(
-            members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
-            lastWrittenText: atTheBottom.Text, lastWrittenRenderKey: atTheBottom.RenderKey, lastSeenAtBottomKey: atTheBottom.SeenAtBottomKey,
-            newestTopicMessage: Newest(STATUS_ID - 1, NOW.AddHours(-1)));
-
-        Assert.Equal(TopicStatusActions.Edit, editedAtTheBottom.Action);
-        Assert.NotEqual(atTheBottom.SeenAtBottomKey, editedAtTheBottom.SeenAtBottomKey);
-
-        // So burying it afterwards, unchanged, does not move it.
         Assert.Equal(
-            TopicStatusActions.None,
-            Plan(members: AFTER_THE_ANSWER, existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
-                 lastWrittenText: editedAtTheBottom.Text, lastWrittenRenderKey: editedAtTheBottom.RenderKey,
-                 lastSeenAtBottomKey: editedAtTheBottom.SeenAtBottomKey,
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-1))).Action);
+            TopicStatusActions.Repost,
+            Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR,
+                 lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
+                 newestTopicMessage: Newest(STATUS_ID + 20), sessionSilence: Session_Spoke(NOW.AddSeconds(-90))).Action);
     }
 
     /// <summary>
-    /// THE HEARTBEAT IS STILL NOT NEWS against the remembered rendering: a buried line whose only
-    /// difference from what was seen at the bottom is `updated HH:MM` is edited in place, not moved.
+    /// THE HEARTBEAT STILL EDITS IN PLACE while the session is recent: a buried line whose only difference
+    /// is `updated HH:MM` is rewritten where it is. Until 2026-09-30 this asserted that the heartbeat was
+    /// never a reason to MOVE; nothing about content is a reason to move now, so the case pins that the
+    /// clock alone does not move it early either.
     /// </summary>
     [Fact]
-    public void AHeartbeatOnlyDifferenceFromWhatWasSeen_DoesNotMoveABuriedLine()
+    public void AHeartbeatOnlyDifference_IsEditedInPlaceWhileTheSessionIsRecent()
     {
-        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+        var buried = Newest(STATUS_ID + 3);
 
         var seen = TopicStatusLine_Planner.Plan(
             A_Ledger(), [], NOW, STATUS_ID, null, TelegramDeliveryModes.Normal, null, BACKOFF, null, repostIsImpossible: false);
 
         var later = TopicStatusLine_Planner.Plan(
             A_Ledger(), [], NOW.AddMinutes(5), STATUS_ID, seen.Text, TelegramDeliveryModes.Normal, null, BACKOFF, buried, repostIsImpossible: false,
-            lastSeenAtBottomKey: seen.SeenAtBottomKey);
+            sessionSilence: Session_Spoke(NOW.AddMinutes(5).AddSeconds(-10)));
 
         Assert.NotEqual(seen.Text, later.Text);
         Assert.Equal(TopicStatusActions.Edit, later.Action);
-        Assert.Equal(seen.SeenAtBottomKey, later.SeenAtBottomKey);
     }
 
-    /// <summary>
-    /// THE RESTART, which is where a content-gated repost could have gone wrong and does not. The
-    /// remembered text lives in memory, so after a restart every topic has an id and no last text —
-    /// `Decide` reads that as Edit, which this planner counts as news. On its own that would repost
-    /// every buried line at every startup, all at once: a notification storm on the one event the
-    /// owner did not ask for.
-    ///
-    /// It cannot happen, because the NEWEST-MESSAGE map is in memory as well: until the app observes
-    /// real traffic in a topic it knows of no message that could have buried the line, and
-    /// `Is_RepostDue` refuses a topic it knows nothing about. This test pins the PAIR — the two blind
-    /// spots cover each other, and either one made durable alone would open the storm.
-    /// </summary>
     // ── RETIRED 2026-09-10, AFTER THE DEPLOY ──────────────────────────────────────────────────────
     //
     // Two tests lived here and both asserted that PULSE's text CHANGES every minute and is edited in
@@ -672,10 +626,10 @@ public class TopicStatusLinePlannerTests
     // minutes now, so from one minute to the next the text does not change and there is NO call at
     // all — which those two tests would have forbidden.
     //
-    // Their surviving claim — a heartbeat must never MOVE the line — belongs to `Strip_Heartbeat` and
-    // is still asserted by the repost cases above. What replaced them is
-    // `OneMinuteLaterPulseSaysTheSameThing_SoNothingIsEdited` and its two neighbours, which pin the
-    // stronger property: not "the edit is harmless" but "there is no edit".
+    // What replaced them is `OneMinuteLaterPulseSaysTheSameThing_SoNothingIsEdited` and its two
+    // neighbours, which pin the stronger property: not "the edit is harmless" but "there is no edit".
+    // Since 2026-09-30 they run on a line that is NOT buried: whether a buried line moves is decided by
+    // the session's clock alone, and these cases are about the edit.
 
     /// <summary>One merged line of four, so the surface has substance without a member on it.</summary>
     static IPlanProgress A_Ledger()
@@ -683,9 +637,12 @@ public class TopicStatusLinePlannerTests
         return PlanProgress_Factory.Create(1, 0, 0, 0, 4, null, [], [], [], null, []);
     }
 
+    /// <summary>The newest message the app knows of IS the status line — nothing below it.</summary>
+    static readonly TopicStatusLine_Planner.TopicNewestMessage AT_THE_BOTTOM = new(STATUS_ID);
+
     /// <summary>
     /// The same call as <see cref="Plan"/> but with the clock as an argument — the fixture's `Plan`
-    /// hard-codes `NOW`, and the two tests above exist precisely to move it. No members and a ledger,
+    /// hard-codes `NOW`, and the tests below exist precisely to move it. No members and a ledger,
     /// so the heartbeat is the only line that reads the clock.
     /// </summary>
     static TopicStatusLine_Planner.TopicStatusPlan Plan_At(
@@ -705,34 +662,32 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// A LIVE MEMBER NO LONGER MOVES THE LINE FOR THE MINUTE HAND — the owner's ruling of 2026-09-10,
-    /// and the second half of the same defect the heartbeat had.
+    /// A LIVE MEMBER NO LONGER REWRITES THE LINE FOR THE MINUTE HAND — the owner's ruling of 2026-09-10.
     ///
     /// <para>
-    /// Stage 8d fixed the heartbeat and reported the member row as the remaining case: a row ends in
-    /// "for how long", read from a live clock, so a buried topic with anybody working in it reposted
-    /// about once a minute — carrying no news, which is the exact thing PULSE exists not to do. The
-    /// duration now steps to five minutes, and because the repost gate compares the RENDERED text,
-    /// rounding what the owner reads is what stops the message moving.
+    /// A row ends in "for how long", read from a live clock, so a topic with anybody working in it
+    /// was rewritten about once a minute. The duration now steps to five minutes, so rounding what the
+    /// owner reads is what stops the call.
     /// </para>
     /// <para>
     /// FOUR MINUTES APART, INSIDE ONE STEP: the two renderings must be identical, so there is nothing
-    /// to repost. Then across the step boundary it moves once — asserted here too, because "it never
-    /// reposts" would also be satisfied by a surface that had stopped reporting durations at all.
+    /// to write. Then across the step boundary it is edited once — asserted too, because "it never
+    /// writes" would also be satisfied by a surface that had stopped reporting durations at all. This
+    /// case asserted a MOVE across the step until 2026-09-30; the line is at the bottom here, because
+    /// a move is no longer about content (see the repost cases above).
     /// </para>
     /// </summary>
     [Fact]
-    public void AWorkingMemberDoesNotMoveTheLineUntilItsDurationStepsOver()
+    public void AWorkingMemberDoesNotRewriteTheLineUntilItsDurationStepsOver()
     {
-        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
         var working = Member("imp-1", "fix the parser", NOW.AddMinutes(-1).ToString("yyyy-MM-dd HH:mm"));
 
         // The ledger matches Plan_At's, so the ONLY thing that can differ between the two renderings
         // is the member's duration.
-        var first = Plan(members: [working], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+        var first = Plan(members: [working], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: AT_THE_BOTTOM);
 
         // +3 minutes: the member is 4 minutes in, still below the first step, so the row reads the same.
-        var insideTheStep = Plan_At(NOW.AddMinutes(3), [working], first.Text, buried);
+        var insideTheStep = Plan_At(NOW.AddMinutes(3), [working], first.Text, AT_THE_BOTTOM);
 
         // COMPARED WITHOUT THE HEARTBEAT, because field 6 carries a wall clock and always differs
         // across a clock move — that is stage 8d's rule, and asserting on the raw text here would
@@ -741,24 +696,22 @@ public class TopicStatusLinePlannerTests
             TopicStatusLine_Builder.Strip_Heartbeat(first.Text),
             TopicStatusLine_Builder.Strip_Heartbeat(insideTheStep.Text));
 
-        // NONE, since 2026-09-10 — and it was Edit until then, for a reason that has gone. The
-        // heartbeat used to change every minute, so SOMETHING always differed and the line was
-        // rewritten in place; that per-minute edit is what drew 429s from Telegram in production.
-        // With the heartbeat stepped to five minutes as well, four minutes apart inside one step
-        // means nothing on the surface has changed, and the cheapest correct answer is no call.
+        // NONE, since 2026-09-10: with the heartbeat stepped to five minutes as well, four minutes apart
+        // inside one step means nothing on the surface has changed, and the cheapest correct answer is
+        // no call.
         Assert.Equal(TopicStatusActions.None, insideTheStep.Action);
 
-        // +5 minutes: 6 minutes in, over the step, so the row genuinely changed and the line moves.
-        var pastTheStep = Plan_At(NOW.AddMinutes(5), [working], first.Text, buried);
+        // +5 minutes: 6 minutes in, over the step, so the row genuinely changed and the line is edited.
+        var pastTheStep = Plan_At(NOW.AddMinutes(5), [working], first.Text, AT_THE_BOTTOM);
 
         Assert.NotEqual(
             TopicStatusLine_Builder.Strip_Heartbeat(first.Text),
             TopicStatusLine_Builder.Strip_Heartbeat(pastTheStep.Text));
 
-        Assert.Equal(TopicStatusActions.Repost, pastTheStep.Action);
+        Assert.Equal(TopicStatusActions.Edit, pastTheStep.Action);
     }
 
-    /// <summary>As <see cref="Plan_At"/>, with members — the duration cases need one on the line.</summary>
+    /// <summary>As <see cref="Plan_At(DateTime, string?, TopicStatusLine_Planner.TopicNewestMessage)"/>, with members — the duration cases need one on the line.</summary>
     static TopicStatusLine_Planner.TopicStatusPlan Plan_At(
         DateTime now,
         IReadOnlyList<ITopicStatusMember> members,
@@ -790,12 +743,6 @@ public class TopicStatusLinePlannerTests
     /// continuously, and it was hit because field 6 carried a per-minute clock.
     /// </para>
     /// <para>
-    /// STAGE 8d EXCLUDED THE HEARTBEAT FROM THE REPOST AND LEFT THE EDIT, on the reasoning that "an
-    /// edit notifies nobody". True of the owner's phone, false of the API — silence is not the only
-    /// cost of a write. The test that pinned the repost said nothing about the edit, which is exactly
-    /// the gap this fills.
-    /// </para>
-    /// <para>
     /// The clock still moves: across a five-minute step the text changes and the line is edited, and
     /// that half is asserted too, or a heartbeat that had simply stopped would satisfy the first.
     /// </para>
@@ -803,11 +750,9 @@ public class TopicStatusLinePlannerTests
     [Fact]
     public void OneMinuteLaterPulseSaysTheSameThing_SoNothingIsEdited()
     {
-        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+        var atTheStart = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: AT_THE_BOTTOM);
 
-        var atTheStart = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
-
-        var aMinuteLater = Plan_At(NOW.AddMinutes(1), atTheStart.Text, buried);
+        var aMinuteLater = Plan_At(NOW.AddMinutes(1), atTheStart.Text, AT_THE_BOTTOM);
 
         // The TEXT is identical, which is what stops the edit: the decider answers None to identical
         // text, and None is no API call at all.
@@ -823,12 +768,10 @@ public class TopicStatusLinePlannerTests
     [Fact]
     public void FiveMinutesLaterTheHeartbeatHasMoved()
     {
-        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
-
-        var atTheStart = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+        var atTheStart = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: AT_THE_BOTTOM);
 
         // NOW is 15:00 in this fixture, so +5 crosses a step boundary whatever the minute happens to be.
-        var laterStill = Plan_At(NOW.AddMinutes(5), atTheStart.Text, buried);
+        var laterStill = Plan_At(NOW.AddMinutes(5), atTheStart.Text, AT_THE_BOTTOM);
 
         Assert.NotEqual(atTheStart.Text, laterStill.Text);
         Assert.Equal(TopicStatusActions.Edit, laterStill.Action);
@@ -842,25 +785,32 @@ public class TopicStatusLinePlannerTests
     [Fact]
     public void EveryMinuteInsideOneStepRendersTheSameHeartbeat()
     {
-        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
         var step = UnchangedFor_Formatter.STEP_MINUTES;
 
         // From a moment floored to a step, every minute up to the next boundary must read alike.
         var start = NOW.AddMinutes(-(NOW.Minute % step));
-        var atTheStart = Plan_At(start, null, buried);
+        var atTheStart = Plan_At(start, null, AT_THE_BOTTOM);
 
         for (var minute = 1; minute < step; minute++)
         {
             Assert.Equal(
                 atTheStart.Text,
-                Plan_At(start.AddMinutes(minute), null, buried).Text);
+                Plan_At(start.AddMinutes(minute), null, AT_THE_BOTTOM).Text);
         }
 
-        Assert.NotEqual(atTheStart.Text, Plan_At(start.AddMinutes(step), null, buried).Text);
+        Assert.NotEqual(atTheStart.Text, Plan_At(start.AddMinutes(step), null, AT_THE_BOTTOM).Text);
     }
 
+    /// <summary>
+    /// THE PLANNER DOES NOT GUESS ABOUT TRAFFIC IT WAS NOT TOLD OF: no newest message ⇒ not buried ⇒ an
+    /// edit in place. What answers the restart since 2026-09-30 is the ENGINE's traffic record
+    /// (<c>ITopicTraffic.Find_Newest_OrAssumeBuried</c>), which hands the planner a newest message just
+    /// above a line it has never seen traffic for — so the first eligible tick after a restart moves it
+    /// once. Kept at the planner level because "unknown is not buried" is still the planner's rule; the
+    /// assumption is made, and pinned, where the knowledge is missing.
+    /// </summary>
     [Fact]
-    public void AfterARestartNothingIsRepostedUntilRealTrafficIsSeen()
+    public void APlannerToldOfNoTraffic_DoesNotRepost()
     {
         Assert.Equal(
             TopicStatusActions.Edit,
@@ -876,14 +826,12 @@ public class TopicStatusLinePlannerTests
     {
         Assert.Equal(
             TopicStatusActions.Post,
-            Plan(newestTopicMessage: Newest(9999, NOW.AddMinutes(-2))).Action);
+            Plan(newestTopicMessage: Newest(9999)).Action);
     }
 
     /// <summary>
-    /// AN UNKNOWN TOPIC IS NOT A BURIED ONE. The newest id is remembered in memory, so after an app
-    /// restart it is absent for every topic until traffic repopulates it — and "I do not know" must
-    /// not be answered with a notification. It edits, as it always did, and the first message through
-    /// the mirror restores the knowledge.
+    /// AN UNKNOWN TOPIC IS NOT A BURIED ONE, at the planner — see <see cref="APlannerToldOfNoTraffic_DoesNotRepost"/>
+    /// for where the restart is answered instead.
     /// </summary>
     [Fact]
     public void ATopicWithNoKnownTrafficIsNotReposted()
@@ -896,7 +844,8 @@ public class TopicStatusLinePlannerTests
     /// <summary>
     /// THE DELIVERY GATE APPLIES TO SILENCED, and it falls back to the EDIT rather than to silence:
     /// the edit notifies nobody, so the line stays current instead of freezing, and only the MOVE to
-    /// the bottom waits.
+    /// the bottom waits. Kept through the 2026-09-30 rule: 🔕 means the owner is reading this in a
+    /// terminal, so nothing is put in the topic.
     /// </summary>
     [Fact]
     public void ASilencedTopicIsNotRepostedIntoAndFallsBackToTheEdit()
@@ -904,16 +853,13 @@ public class TopicStatusLinePlannerTests
         Assert.Equal(
             TopicStatusActions.Edit,
             Plan(mode: TelegramDeliveryModes.Silenced, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), sessionSilence: Session_Spoke(NOW.AddMinutes(-2))).Action);
     }
 
     /// <summary>
-    /// A DEFERRED TOPIC STILL MOVES ITS LINE, silently — the repost half of the same ruling. It
-    /// shared a Theory with the Silenced case until 2026-09-10 on the strength of one sentence, "a
-    /// repost NOTIFIES", which stopped being true when every send in this surface became silent.
-    ///
-    /// Under 🌙 the owner is away and will read this topic when they return; a PULSE stranded above
-    /// an hour of later traffic is the one thing they then have to scroll for.
+    /// A DEFERRED TOPIC STILL MOVES ITS LINE, silently — the repost half of the same ruling. Under 🌙 the
+    /// owner is away and will read this topic when they return; a PULSE stranded above an hour of later
+    /// traffic is the one thing they then have to scroll for.
     /// </summary>
     [Fact]
     public void ADeferredTopicStillMovesItsLine_Silently()
@@ -921,7 +867,7 @@ public class TopicStatusLinePlannerTests
         Assert.Equal(
             TopicStatusActions.Repost,
             Plan(mode: TelegramDeliveryModes.Deferred, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), sessionSilence: Session_Spoke(NOW.AddMinutes(-2))).Action);
     }
 
     /// <summary>
@@ -937,14 +883,12 @@ public class TopicStatusLinePlannerTests
         // mode glyph (the planner fills `fields.Mode` in from `mode` before calling the builder — see
         // TopicStatusLine_Planner.Plan's own comment, "THE MODE IS FILLED IN HERE"), so a "previously
         // written" text for an ALREADY-silenced topic would itself read `🔕 PULSE`, never bare `PULSE`.
-        // Building `current` under Normal and comparing it against a Silenced computation was
-        // comparing two different topics' text, not the same topic on two ticks.
         var current = Plan(mode: TelegramDeliveryModes.Silenced, existingMessageId: STATUS_ID).Text;
 
         Assert.Equal(
             TopicStatusActions.None,
             Plan(mode: TelegramDeliveryModes.Silenced, existingMessageId: STATUS_ID, lastWrittenText: current,
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), sessionSilence: Session_Spoke(NOW.AddMinutes(-2))).Action);
     }
 
     /// <summary>
@@ -957,20 +901,19 @@ public class TopicStatusLinePlannerTests
         Assert.Equal(
             TopicStatusActions.None,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), lastFailedAttemptAt: NOW.AddSeconds(-5)).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), lastFailedAttemptAt: NOW.AddSeconds(-5)).Action);
 
         Assert.Equal(
             TopicStatusActions.Repost,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), lastFailedAttemptAt: NOW.AddSeconds(-BACKOFF)).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), lastFailedAttemptAt: NOW.AddSeconds(-BACKOFF)).Action);
     }
 
     // ── TEXT AGAINST TEXT, AND THE BAR BESIDE IT (plan 03 Task 17, 2026-09-23) ──────────────────────
     //
     // The engine remembered only the render key and handed it in as `lastWrittenText`, so the planner
-    // compared "<length>:<text>|…" with the raw text: every tick answered Edit and every buried line
-    // counted as news (plan 03 report §5.3). The engine now remembers both and hands in both; these
-    // pin what the planner does with them. The engine half is PresetPhoneProbeTests' PULSE facts.
+    // compared "<length>:<text>|…" with the raw text: every tick answered Edit (plan 03 report §5.3).
+    // The engine now remembers both and hands in both; these pin what the planner does with them.
 
     static readonly IReadOnlyList<IReadOnlyList<(string Data, string Label)>> THREE_VERB_BAR =
         [[("cmd:screen", "📸 /screen"), ("cmd:show", "👁 /show"), ("cmd:merge", "🔀 /merge")]];
@@ -979,12 +922,12 @@ public class TopicStatusLinePlannerTests
         [[("cmd:screen", "📸 /screen"), ("cmd:show", "👁 /show")]];
 
     /// <summary>
-    /// WHAT WAS WRITTEN, HANDED BACK AS IT WAS WRITTEN, IS NOT NEWS — buried and quiet included. This is
-    /// the state the engine is in on every tick after a successful write, and the defect answered Edit
-    /// (not buried) or Repost (buried) to it for ever.
+    /// WHAT WAS WRITTEN, HANDED BACK AS IT WAS WRITTEN, IS NOT WRITTEN AGAIN — unless the line is buried
+    /// and the session quiet, which since 2026-09-30 moves it regardless of content (this case asserted
+    /// None for the buried half until then).
     /// </summary>
     [Fact]
-    public void TheRenderingJustWritten_IsNotWrittenAgain_EvenWhenBuried()
+    public void TheRenderingJustWritten_IsNotWrittenAgain_UnlessItIsBuried()
     {
         var written = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
 
@@ -996,9 +939,9 @@ public class TopicStatusLinePlannerTests
                  commandButtonRows: THREE_VERB_BAR).Action);
 
         Assert.Equal(
-            TopicStatusActions.None,
+            TopicStatusActions.Repost,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
-                 commandButtonRows: THREE_VERB_BAR, newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+                 commandButtonRows: THREE_VERB_BAR, newestTopicMessage: Newest(STATUS_ID + 20)).Action);
     }
 
     /// <summary>
@@ -1020,18 +963,20 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// THE BAR ALONE CHANGED UNDER A BURIED LINE IN A QUIET TOPIC: it moves. The owner reads the labels,
-    /// so a changed bar is news for the repost gate exactly as a changed row is.
+    /// THE BAR ALONE CHANGED UNDER A BURIED LINE WHILE THE SESSION IS RECENT: an edit in place, not a
+    /// move. Until 2026-09-30 a changed bar was "news" that moved a buried line; a move is now the
+    /// session clock's to decide, and the bar is repainted where the line is.
     /// </summary>
     [Fact]
-    public void AChangeToTheBarAlone_MovesABuriedLine()
+    public void AChangeToTheBarAlone_UnderABuriedLine_IsEditedWhileTheSessionIsRecent()
     {
         var written = Plan(existingMessageId: STATUS_ID, commandButtonRows: THREE_VERB_BAR);
 
         Assert.Equal(
-            TopicStatusActions.Repost,
+            TopicStatusActions.Edit,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: written.Text, lastWrittenRenderKey: written.RenderKey,
-                 commandButtonRows: TWO_VERB_BAR, newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+                 commandButtonRows: TWO_VERB_BAR, newestTopicMessage: Newest(STATUS_ID + 20),
+                 sessionSilence: Session_Spoke(NOW.AddSeconds(-5))).Action);
     }
 
     /// <summary>
@@ -1056,13 +1001,13 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// THE HEARTBEAT, UNDER AN UNCHANGED BAR, IS STILL NOT NEWS: across a five-minute step a buried line
-    /// is edited in place, never moved. Handing the bar in must not turn the clock into a reason to move.
+    /// THE HEARTBEAT, UNDER AN UNCHANGED BAR, IS AN EDIT IN PLACE while the session is recent: handing the
+    /// bar in must not turn the clock into a reason to move early.
     /// </summary>
     [Fact]
-    public void AHeartbeatStep_UnderTheSameBar_EditsABuriedLineInPlace()
+    public void AHeartbeatStep_UnderTheSameBar_EditsABuriedLineInPlace_WhileTheSessionIsRecent()
     {
-        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+        var buried = Newest(STATUS_ID + 3);
 
         var written = TopicStatusLine_Planner.Plan(
             A_Ledger(), [], NOW, STATUS_ID, null, TelegramDeliveryModes.Normal, null, BACKOFF, buried, repostIsImpossible: false,
@@ -1070,56 +1015,49 @@ public class TopicStatusLinePlannerTests
 
         var fiveMinutesLater = TopicStatusLine_Planner.Plan(
             A_Ledger(), [], NOW.AddMinutes(5), STATUS_ID, written.Text, TelegramDeliveryModes.Normal, null, BACKOFF, buried, repostIsImpossible: false,
-            commandButtonRows: THREE_VERB_BAR, lastWrittenRenderKey: written.RenderKey);
+            commandButtonRows: THREE_VERB_BAR, lastWrittenRenderKey: written.RenderKey,
+            sessionSilence: Session_Spoke(NOW.AddMinutes(5).AddSeconds(-20)));
 
         Assert.NotEqual(written.Text, fiveMinutesLater.Text);
         Assert.Equal(TopicStatusActions.Edit, fiveMinutesLater.Action);
     }
 
     /// <summary>
-    /// The predicate on its own, at the three edges Plan cannot show as clearly. EQUAL ids are the
-    /// subtle one: the newest message the app knows of IS the status line itself, which means nothing
-    /// came after it.
+    /// The predicate on its own, at the edges Plan cannot show as clearly. EQUAL ids are the subtle one:
+    /// the newest message the app knows of IS the status line itself — which, since every send is
+    /// recorded (2026-09-30), is the ordinary state right after a post — so nothing came after it.
     /// </summary>
     [Fact]
     public void TheRepostPredicateAtItsEdges()
     {
-        var quiet = NOW.AddMinutes(-5);
+        var quiet = Session_Spoke(NOW.AddMinutes(-5));
 
-        Assert.False(TopicStatusLine_Planner.Is_RepostDue(null, Newest(9999, quiet), NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
-        Assert.False(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, null, NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
-        Assert.False(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, Newest(STATUS_ID, quiet), NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
-        Assert.True(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, Newest(STATUS_ID + 1, quiet), NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(null, Newest(9999), quiet));
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, null, quiet));
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, Newest(STATUS_ID), quiet));
+        Assert.True(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, Newest(STATUS_ID + 1), quiet));
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, Newest(STATUS_ID + 1), Session_Spoke(NOW.AddSeconds(-59))));
+        Assert.True(TopicStatusLine_Planner.Is_RepostDue(STATUS_ID, Newest(STATUS_ID + 1), null));
     }
 
     /// <summary>
-    /// A message stamped in the FUTURE is not a quiet topic. Both stamps are read off the same local
-    /// clock, so this can only come from a clock step — and it must hold the repost rather than
-    /// treat a negative elapsed as "long enough".
+    /// A SESSION MESSAGE STAMPED IN THE FUTURE is not a quiet session. Both stamps come from the same
+    /// clock, so this can only come from a clock step — and it must hold the move rather than treat a
+    /// negative elapsed as "long enough".
     /// </summary>
     [Fact]
-    public void AMessageStampedInTheFutureDoesNotCountAsQuiet()
+    public void ASessionMessageStampedInTheFutureDoesNotCountAsQuiet()
     {
         Assert.False(TopicStatusLine_Planner.Is_RepostDue(
-            STATUS_ID, Newest(STATUS_ID + 1, NOW.AddMinutes(5)), NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+            STATUS_ID, Newest(STATUS_ID + 1), Session_Spoke(NOW.AddMinutes(5))));
     }
 
     /// <summary>
-    /// A REPOST STILL HAS TO HAVE SOMETHING TO SEND. The repost overrides the decider, and the
-    /// decider is where emptiness is refused — so overriding it without re-checking would hand the
-    /// engine a delete followed by a sendMessage with an empty body, which Telegram rejects outright.
-    /// The topic would lose the status line it had and get a 400 in exchange.
-    ///
-    /// THE ROUTE TO AN EMPTY REPOST IS NOW CLOSED BY CONSTRUCTION, which is what this pins instead
-    /// of the old blank-title case. It used to be reached through a topic whose display name was
-    /// blank with nothing else to report — the bare-title fallback was then a bare NOTHING. Since
-    /// 2026-08-24 the opening field is the LITERAL word `PULSE` rather than the topic's name, and a
-    /// repost needs an existing message id to be due at all, which is the same id that makes the
-    /// builder fall back to that word. So the text handed to a repost can no longer be empty, and
-    /// the emptiness guard in the planner is the belt behind these braces rather than the only one.
-    ///
-    /// Asserted on the TEXT as well as the action: "it reposts" alone would still be true of a
-    /// planner that had gone back to sending nothing, and the body is the half Telegram rejects.
+    /// A REPOST STILL HAS TO HAVE SOMETHING TO SEND — nothing happens when there is nothing to show. The
+    /// route to an empty repost is closed by construction (a repost needs an existing id, which makes
+    /// the builder fall back to the literal `PULSE`), and the planner's emptiness guard is the belt
+    /// behind those braces. Asserted on the TEXT as well as the action: the body is the half Telegram
+    /// rejects.
     /// </summary>
     [Fact]
     public void ARepostAlwaysHasSomethingToSend()
@@ -1127,7 +1065,7 @@ public class TopicStatusLinePlannerTests
         var plan = Plan(
             members: [],
             existingMessageId: STATUS_ID,
-            newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)));
+            newestTopicMessage: Newest(STATUS_ID + 20));
 
         Assert.Equal("PULSE", plan.Text);
         Assert.Equal(TopicStatusActions.Repost, plan.Action);
@@ -1137,16 +1075,7 @@ public class TopicStatusLinePlannerTests
     /// THE LATCH, rev-1 F1. A delete that is REFUSED rather than failed loops forever and starves the
     /// edit with it: `Is_MessageGone` matches none of the refusal wordings, so the id is never
     /// cleared, the delete throws before the send every time, and because the repost overrides the
-    /// decider unconditionally the Edit never runs either.
-    ///
-    /// That is a REGRESSION, not a missing improvement, and this is the sentence that decides the
-    /// design: before this branch a buried line at least stayed CURRENT. Un-latched it can now be
-    /// buried AND stale, which is worse than the behaviour it replaced.
-    ///
-    /// The fix is NOT to call the message gone — rev-1 was right that "can't be deleted" is unsound
-    /// for the identical reason "can't be edited" is excluded: the message still EXISTS, so clearing
-    /// the id posts a second line beside an undeletable one, which is the two-lines-in-one-topic
-    /// defect through a third door. Instead the topic stops trying to MOVE its line and keeps
+    /// decider the Edit never runs either. Latched, the topic stops trying to MOVE its line and keeps
     /// updating it in place — degrading to master's behaviour rather than to nothing.
     /// </summary>
     [Fact]
@@ -1155,7 +1084,7 @@ public class TopicStatusLinePlannerTests
         Assert.Equal(
             TopicStatusActions.Edit,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), repostIsImpossible: true).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), repostIsImpossible: true).Action);
     }
 
     /// <summary>
@@ -1171,7 +1100,7 @@ public class TopicStatusLinePlannerTests
         Assert.Equal(
             TopicStatusActions.None,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), repostIsImpossible: true).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), repostIsImpossible: true).Action);
     }
 
     /// <summary>
@@ -1184,21 +1113,28 @@ public class TopicStatusLinePlannerTests
         Assert.Equal(
             TopicStatusActions.Repost,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: "an older line",
-                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)), repostIsImpossible: false).Action);
+                 newestTopicMessage: Newest(STATUS_ID + 20), repostIsImpossible: false).Action);
     }
 
-    /// <summary>A buried line in a topic that has been quiet for exactly this many seconds.</summary>
-    static TopicStatusLine_Planner.TopicStatusPlan Plan_AfterQuietSeconds(int quietSeconds)
+    /// <summary>A buried line whose session last spoke exactly this many seconds before NOW.</summary>
+    static TopicStatusLine_Planner.TopicStatusPlan Plan_WhenTheSessionSpoke(int secondsAgo)
     {
         return Plan(
             existingMessageId: STATUS_ID,
             lastWrittenText: "an older line",
-            newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddSeconds(-quietSeconds)));
+            newestTopicMessage: Newest(STATUS_ID + 20),
+            sessionSilence: Session_Spoke(NOW.AddSeconds(-secondsAgo)));
     }
 
-    static TopicStatusLine_Planner.TopicNewestMessage Newest(long messageId, DateTime arrivedAt)
+    static TopicStatusLine_Planner.TopicNewestMessage Newest(long messageId)
     {
-        return new TopicStatusLine_Planner.TopicNewestMessage(messageId, arrivedAt);
+        return new TopicStatusLine_Planner.TopicNewestMessage(messageId);
+    }
+
+    /// <summary>The session's last message at <paramref name="spokeAt"/>, read against the fixture's NOW on the same clock.</summary>
+    static TopicStatusLine_Planner.TopicSessionSilence Session_Spoke(DateTime spokeAt)
+    {
+        return new TopicStatusLine_Planner.TopicSessionSilence(spokeAt, NOW);
     }
 
     static TopicStatusLine_Planner.TopicStatusPlan Plan(
@@ -1212,7 +1148,7 @@ public class TopicStatusLinePlannerTests
         bool repostIsImpossible = false,
         IReadOnlyList<IReadOnlyList<(string Data, string Label)>>? commandButtonRows = null,
         string? lastWrittenRenderKey = null,
-        string? lastSeenAtBottomKey = null)
+        TopicStatusLine_Planner.TopicSessionSilence? sessionSilence = null)
     {
         return TopicStatusLine_Planner.Plan(
             progress,
@@ -1227,7 +1163,7 @@ public class TopicStatusLinePlannerTests
             repostIsImpossible,
             commandButtonRows: commandButtonRows,
             lastWrittenRenderKey: lastWrittenRenderKey,
-            lastSeenAtBottomKey: lastSeenAtBottomKey);
+            sessionSilence: sessionSilence);
     }
 
     /// <summary>

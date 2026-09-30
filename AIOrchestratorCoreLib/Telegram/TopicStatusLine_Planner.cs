@@ -35,52 +35,74 @@ public static class TopicStatusLine_Planner
     /// value the engine remembers once the write succeeds, so the key is built in one place.
     ///
     /// <para>
-    /// <see cref="SeenAtBottomKey"/> is the third thing the engine remembers after a successful write
-    /// (ruling R27): the rendering, heartbeat stripped, that the owner saw when the line was last at the
-    /// bottom. The planner decides it — the line's burial state is known here and nowhere the suite can
-    /// reach in the engine — so the engine stores it and never computes it. Null only when nothing is
-    /// known (a restart before the first write), which the next plan reads as "compare with the last
-    /// write".
+    /// A FOURTH VALUE, <c>SeenAtBottomKey</c>, lived here from ruling R27 (2026-09-24) until 2026-09-30: the
+    /// rendering the owner last saw at the bottom, which the "buried AND changed" repost gate compared
+    /// against. The owner's 2026-09-30 rule moves a buried line whether or not it changed, so nothing
+    /// reads that memory any more and it went with the gate.
     /// </para>
     /// </summary>
-    public readonly record struct TopicStatusPlan(TopicStatusActions Action, string Text, string RenderKey, string? SeenAtBottomKey);
+    public readonly record struct TopicStatusPlan(TopicStatusActions Action, string Text, string RenderKey);
 
     /// <summary>
-    /// The newest message the app knows of in a topic, and when it learned of it.
+    /// The newest message the app knows of in a topic — the one fact burial is decided on.
     ///
-    /// A RECORD RATHER THAN TWO LOOSE PARAMETERS, and that is the M-G3 lesson applied preventively:
-    /// `existingMessageId` and this id are both `long?` and mean opposite things, so as adjacent
-    /// arguments they could be swapped at the one call site with everything still compiling — and the
-    /// swap is invisible to the suite, because the engine is `internal sealed`. Swapped, the status
-    /// line would be compared against itself and never move again. As a named type the compiler
-    /// refuses it.
+    /// A RECORD RATHER THAN A LOOSE <c>long?</c>, and that is the M-G3 lesson applied preventively:
+    /// `existingMessageId` and this id are both ids and mean opposite things, so as adjacent arguments
+    /// they could be swapped at the one call site with everything still compiling — and the swap is
+    /// invisible to the suite, because the engine is `internal sealed`. Swapped, the status line would
+    /// be compared against itself and never move again. As a named type the compiler refuses it.
+    ///
+    /// <para>
+    /// IT CARRIED AN <c>ArrivedAt</c> UNTIL 2026-09-30, the clock of the ten-second quiet window that
+    /// every message reset. The owner's rule of that day times the move off the SESSION's last message
+    /// alone (<see cref="TopicSessionSilence"/>), so an arrival time that anybody's message moved would
+    /// only be a second, wrong clock for the same decision.
+    /// </para>
     /// </summary>
-    public readonly record struct TopicNewestMessage(long MessageId, DateTime ArrivedAt);
+    public readonly record struct TopicNewestMessage(long MessageId);
 
     /// <summary>
-    /// How long a topic must be quiet before a buried status line is rewritten at the bottom, as the
-    /// owner stated the rule on 2026-08-13. It is what bounds the repost to at most one notification
-    /// per quiet period: every message resets it, so a conversation in progress is never interrupted,
-    /// and the line moves once the exchange is over.
+    /// When the SESSION last put a message in the topic, and "now" read off the SAME clock — the input
+    /// the owner's rule of 2026-09-30 is decided on. <c>LastSessionMessageAtUtc</c> is null when the
+    /// session has put nothing there since the app started counting.
     ///
-    /// TEN SECONDS, NOT TWO MINUTES (owner directive 2026-08-24): *"the topic status message should
-    /// arrive immediately, not after 2 minutes, but more like after 10 seconds"*. At 120 the line was
-    /// correct and invisible — the owner opened the topic, found their own last message above it and
-    /// had to scroll for the state, which is the exact defect the repost was built to remove. Ten is
-    /// long enough to still be a PAUSE: the owner's own multi-message burst, and an agent's mirrored
-    /// entries arriving in chunks, both keep resetting it.
-    ///
-    /// WHAT KEEPS A SHORT WINDOW FROM BEING A WATERFALL IS NOT THIS NUMBER. The status line's own
-    /// message is never recorded as topic traffic (`_newestTopicMessageByThread` in
-    /// `BridgeEngineModel` is written only by `Remember_TopicMessage`, which the status-line refresh
-    /// deliberately does not call), so a fresh post carries a HIGHER id than the newest message the
-    /// app knows of and `Is_RepostDue` reads the line as un-buried from the very next tick. That
-    /// bounds it at ONE repost per burst of real traffic at any window value — shortening the window
-    /// changes WHEN the move happens, never how often it can repeat. The cost of 10 over 120 is
-    /// therefore paid only in a topic that keeps talking with pauses in between: a delete plus a send
-    /// where an edit would have done, once per pause.
+    /// <para>
+    /// BOTH STAMPS IN ONE VALUE, because a stamp from one clock compared against a reading of another
+    /// is how the status line's back-off once went inert for every value it could be given (see
+    /// <see cref="Is_AttemptDue"/>). The engine fills both from its injected <c>IClock</c> — which is
+    /// also what lets an engine test move the minute instead of waiting it out. The planner's own
+    /// <c>now</c> stays LOCAL for the durations it renders against agent-written stamps; this pair never
+    /// meets it.
+    /// </para>
     /// </summary>
-    public const int REPOST_AFTER_QUIET_SECONDS = 10;
+    public readonly record struct TopicSessionSilence(DateTime? LastSessionMessageAtUtc, DateTime NowUtc);
+
+    /// <summary>
+    /// How old the SESSION's last message in the topic must be before a buried status line is moved
+    /// back to the bottom — the owner's rule of 2026-09-30, in their words: *"it should be updated often
+    /// so that is basically always the last message in the conversation. it should not get in the way
+    /// of me speaking with the session, so it should be updated once the last session's message is at
+    /// least 1 minute old. (not my last message, because to the session it quite often take a lot of
+    /// time to reply)"*.
+    ///
+    /// <para>
+    /// IT SUPERSEDES TWO EARLIER RULINGS, both of which left the line buried in the case the owner
+    /// reported (PULSE twenty messages up, its buttons with it, so pressing one meant scrolling):
+    /// </para>
+    /// <list type="bullet">
+    /// <item>the TEN-SECOND QUIET WINDOW (owner, 2026-08-24), which EVERY message reset — the owner's
+    /// included, and the app's receipts and alerts — so a busy topic was never quiet for long enough;</item>
+    /// <item>"BURIED AND CHANGED" (owner, 2026-09-09; ruling R27, 2026-09-24), under which a line whose
+    /// content had not changed since the owner last saw it at the bottom stayed buried indefinitely.</item>
+    /// </list>
+    /// <para>
+    /// WHAT KEEPS IT FROM BEING A WATERFALL is unchanged: every write here is silent, and a fresh post
+    /// carries a higher id than the traffic that buried the old one, so the next tick reads it as the
+    /// bottom and plans an edit (<see cref="Is_Buried"/>, strictly later ids only). One move per burial,
+    /// at most.
+    /// </para>
+    /// </summary>
+    public const int REPOST_AFTER_SESSION_QUIET_SECONDS = 60;
 
     public static TopicStatusPlan Plan(
         IPlanProgress? progress,
@@ -120,13 +142,16 @@ public static class TopicStatusLine_Planner
         IReadOnlyList<IReadOnlyList<(string Data, string Label)>>? commandButtonRows = null,
         string? lastWrittenRenderKey = null,
 
-        // WHAT THE OWNER LAST SAW AT THE BOTTOM — the previous plan's SeenAtBottomKey, handed back
-        // (ruling R27). Null falls back to the rendering last written: the rule as it was before R27.
-        string? lastSeenAtBottomKey = null,
-
         // `pulse.unchangedFor`, resolved by the engine like the other `pulse.*` values (task 19). Null is
         // the builder's shipped default.
-        bool? unchangedFor = null)
+        bool? unchangedFor = null,
+
+        // WHEN THE SESSION LAST SPOKE IN THE TOPIC (owner, 2026-09-30) — the one clock the move waits on.
+        // Null means the same as a record with no message in it: the session has said nothing since the
+        // app started counting, so nothing holds the move. The engine always passes it; a dropped
+        // argument there would move the line in the middle of the session's reply, which the engine
+        // facts in `PresetPhoneProbeTests` ("PULSE's cadence") are there to catch.
+        TopicSessionSilence? sessionSilence = null)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
@@ -147,9 +172,7 @@ public static class TopicStatusLine_Planner
         // TEXT AGAINST TEXT. `lastWrittenText` is the TEXT last written, never the render key: the key
         // opens with "<length>:", so a key compared with raw text never matches, and from the fork's
         // `2143db8` until plan 03 Task 17 (2026-09-23) that is what the engine handed in — every tick
-        // answered Edit (one "not modified" edit per topic every 30 s in production), and the repost
-        // gate below reduced to "buried and quiet", so PULSE was deleted and re-sent ten seconds after
-        // every exchange whether or not anything in it had changed (plan 03 report §5.3).
+        // answered Edit (one "not modified" edit per topic every 30 s in production).
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 
         // HOW A CHANGE TO THE BAR ALONE IS SEEN. The bar is not part of the text — the hold toggle's label
@@ -178,67 +201,30 @@ public static class TopicStatusLine_Planner
         if (decided == TopicStatusActions.None && barChanged && !string.IsNullOrWhiteSpace(text))
             decided = existingMessageId == null ? TopicStatusActions.Post : TopicStatusActions.Edit;
 
-        // THE REPOST RIDES ON THE DECIDER — it no longer overrides it. Owner, 2026-09-09: PULSE is
-        // "deleted and re-posted (silently) only when it is buried by later traffic AND its content
-        // changed". Burial alone used to be enough, and the cost was the surface's own promise: a
-        // quiet orchestration says the same thing minute after minute, so every pause in a talkative
-        // topic bought a delete plus a post that carried no news — the waterfall decision 14 exists to
-        // prevent, arriving one message at a time instead of all at once.
+        // THE MOVE — the owner's rule of 2026-09-30 (see REPOST_AFTER_SESSION_QUIET_SECONDS for their
+        // words): a line BURIED by anything is moved back to the bottom once the SESSION's last message is
+        // a minute old. It OVERRIDES the decider, as the repost did before 2026-09-09, because the point
+        // is where the line is, not what it says: an unchanged PULSE twenty messages up is exactly the
+        // complaint, its buttons out of reach.
         //
-        // "SOMETHING NEW TO SAY" USED TO BE THE DECIDER'S ANSWER — "different from the last write" — and
-        // ruling R27 (2026-09-24) replaced it; see "NEW SINCE THE OWNER LAST SAW IT" below. The two
-        // cases that must not move the line are still refused: blank text, and a rendering that is what
-        // the owner saw at the bottom.
+        // WHAT THIS REPLACED, said once so nobody re-derives it from older comments: from 2026-09-09
+        // (owner: re-posted "only when it is buried by later traffic AND its content changed") to
+        // 2026-09-30 the move also required the content to differ from what the owner last saw at the
+        // bottom (ruling R27, heartbeat stripped, bar included), and until 2026-09-30 the topic had to
+        // have been quiet for ten seconds by ANY message. Both are superseded; neither is checked here.
         //
-        // AFTER A RESTART nothing is remembered (it lives in memory), which counts as news here. That
-        // does NOT produce a restart repost: the newest-message
-        // map is in memory too, so `Find_NewestTopicMessage_OrNull` answers null until the app observes
-        // real traffic, and `Is_RepostDue` refuses a topic it knows nothing about. The two blind spots
-        // cover each other, and the test at the bottom of this file pins the pair.
+        // WHAT STILL HOLDS IT: nothing to show (a blank line is never sent — the decider's emptiness rule,
+        // re-checked because this overrides it), the latch (below), Silenced (below) and the back-off (at
+        // the bottom).
         //
-        // AND THE HEARTBEAT IS NOT NEWS. Field 6 is `updated HH:MM`, emitted unconditionally, so
-        // PULSE's raw text differs from the previous one at every minute boundary however still the
-        // orchestration is — which would have degraded the owner's rule to "buried, then within sixty
-        // seconds". The repost asks the substance question through `Strip_Heartbeat`; the EDIT still
-        // compares the raw text, because keeping the clock ticking in place is the heartbeat's whole
-        // job and an edit notifies nobody.
-        //
-        // A CHANGED BAR IS NEWS (plan 03 Task 17): the owner reads the labels — the held count on the
-        // toggle is the reason the render key exists — so a bar that changed under a buried line moves
-        // it exactly as a changed row would.
-        //
-        // NEW SINCE THE OWNER LAST SAW IT AT THE BOTTOM, NOT SINCE THE LAST WRITE (ruling R27, 2026-09-24).
-        // Asking the decider answered "new since the last write", and the last write of a buried line is
-        // usually the in-place EDIT made during the quiet window — so the common case, an answer that both
-        // buries PULSE and changes its STATE, was edited above the answer and then left there for good:
-        // by the time the topic was quiet it had nothing new to say against itself. The question is now
-        // asked of the SUBSTANCE (heartbeat stripped, bar included) against what the line showed when it
-        // was last unburied, which an edit made while buried does not move. With nothing remembered (a
-        // restart, or a caller that predates R27) the last write stands in for it — the rule as it was.
-        var substanceKey = Build_SubstanceKey(text, buttonRows);
-        var seenAtBottomBefore = lastSeenAtBottomKey
-            ?? (lastWrittenText == null ? null : Build_SubstanceKey(lastWrittenText, buttonRows));
-
-        var somethingNewToSay = !string.IsNullOrWhiteSpace(text)
-            && (seenAtBottomBefore == null
-                || substanceKey != seenAtBottomBefore
-
-                // A bar change is invisible to the fallback, which rebuilds the last write under TODAY'S
-                // bar; a remembered key carries the bar it was seen with, so it needs no help.
-                || (lastSeenAtBottomKey == null && barChanged));
-
-        // THE LATCH COMES FIRST, and it is a fallback rather than a failure. Telegram REFUSES some
-        // deletes permanently — a message past its 48-hour window, or a bot without
-        // `can_delete_messages` — and a refusal is not a gone message, so nothing clears the id and
-        // the delete throws ahead of the send on every tick. Because this promotion overrides the
-        // decider, the Edit was starved too: the line ended up buried AND stale, which is worse than
-        // the behaviour the repost replaced, where it was merely buried.
-        //
-        // Latched, the topic stops trying to MOVE its line and goes on updating it in place. That is
-        // master's behaviour, which is the right floor to degrade to.
-        var action = somethingNewToSay
+        // THE LATCH, and it is a fallback rather than a failure. Telegram REFUSES some deletes
+        // permanently — a message past its 48-hour window, or a bot without `can_delete_messages` — and
+        // a refusal is not a gone message, so nothing clears the id and the delete throws ahead of the
+        // send on every tick. Latched, the topic stops trying to MOVE its line and goes on updating it
+        // in place — master's behaviour, which is the right floor to degrade to.
+        var action = !string.IsNullOrWhiteSpace(text)
                      && !repostIsImpossible
-                     && Is_RepostDue(existingMessageId, newestTopicMessage, now, REPOST_AFTER_QUIET_SECONDS)
+                     && Is_RepostDue(existingMessageId, newestTopicMessage, sessionSilence)
             ? TopicStatusActions.Repost
             : decided;
 
@@ -253,11 +239,11 @@ public static class TopicStatusLine_Planner
         // owner is away and will come back to it; Silenced DROPS it, because they are reading the
         // same thing live in the terminal and do not want it twice.
         //
-        // WHAT "OUT OF THE WAY UNDER SILENCED" MEANS EXACTLY, because the looser wording contradicted
-        // the code two lines below it: 🔕 refuses to PUT A MESSAGE THERE and refuses to MOVE one. It
-        // does not stop the EDIT — an edit notifies nobody and appears nowhere new, and a line left
-        // frozen for the length of a terminal session would be wrong on the owner's next glance. So
-        // Silenced adds no message to the topic and Deferred keeps its line current AND at the bottom.
+        // WHAT "OUT OF THE WAY UNDER SILENCED" MEANS EXACTLY: 🔕 refuses to PUT A MESSAGE THERE and
+        // refuses to MOVE one. It does not stop the EDIT — an edit notifies nobody and appears nowhere
+        // new, and a line left frozen for the length of a terminal session would be wrong on the owner's
+        // next glance. So Silenced adds no message to the topic and Deferred keeps its line current AND
+        // at the bottom.
         //
         // A BLOCKED REPOST FALLS BACK TO WHAT THE DECIDER SAID rather than to silence: the content
         // still updates in place and only the MOVE waits. Falling back to a blanket Edit instead
@@ -266,48 +252,32 @@ public static class TopicStatusLine_Planner
         if (action == TopicStatusActions.Repost && mode == TelegramDeliveryModes.Silenced)
             action = decided;
 
-        // WHAT THE OWNER WILL HAVE SEEN AT THE BOTTOM once this write lands (ruling R27). A repost puts the
-        // line there, and a write to a line that is not buried is written where they are looking; an
-        // edit to a BURIED line is not seen, so the memory stays where it was — that is the whole fix.
-        // A plan that writes nothing hands back what it was given; the engine stores only on a write.
-        var buried = Is_Buried(existingMessageId, newestTopicMessage);
-
-        TopicStatusPlan Planned(TopicStatusActions planned)
-        {
-            var seenAtBottomAfter = planned == TopicStatusActions.Repost || (planned != TopicStatusActions.None && !buried)
-                ? substanceKey
-                : seenAtBottomBefore;
-
-            return new TopicStatusPlan(planned, text, renderKey, seenAtBottomAfter);
-        }
-
         if (action == TopicStatusActions.None)
-            return Planned(TopicStatusActions.None);
+            return new TopicStatusPlan(TopicStatusActions.None, text, renderKey);
 
         if (action == TopicStatusActions.Post && mode == TelegramDeliveryModes.Silenced)
-            return Planned(TopicStatusActions.None);
+            return new TopicStatusPlan(TopicStatusActions.None, text, renderKey);
 
         // THE BACKOFF, last: a 429 answered at the tick rate inverts the cadence from once a minute
         // to thirty times a minute per topic and sustains the throttling that caused it.
         if (!Is_AttemptDue(lastFailedAttemptAt, now, backoffSeconds))
-            return Planned(TopicStatusActions.None);
+            return new TopicStatusPlan(TopicStatusActions.None, text, renderKey);
 
-        return Planned(action);
-    }
-
-    /// <summary>
-    /// The rendering as the repost question reads it: the text with its heartbeat stripped (the clock
-    /// is not news — see Strip_Heartbeat) and the bar's labels, in the render key's own encoding.
-    /// </summary>
-    static string Build_SubstanceKey(string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows)
-    {
-        return TopicStatusLine_RenderKey.Build(TopicStatusLine_Builder.Strip_Heartbeat(text) ?? "", buttonRows);
+        return new TopicStatusPlan(action, text, renderKey);
     }
 
     /// <summary>
     /// Has later traffic landed below the status line? Ids, not counts: Telegram ids rise within a chat.
-    /// UNKNOWN IS NOT BURIED — no line, or no traffic seen since a restart — for the reason
-    /// <see cref="Is_RepostDue"/> gives. Equal is not buried: the newest message IS the line.
+    /// UNKNOWN IS NOT BURIED — no line, or no traffic known — and the planner does not guess: after a
+    /// restart it is the engine's traffic record that decides to assume burial once
+    /// (<c>ITopicTraffic.Find_Newest_OrAssumeBuried</c>), where the missing knowledge is.
+    ///
+    /// <para>
+    /// EQUAL IS NOT BURIED, and since 2026-09-30 that is load-bearing: every message the app sends is
+    /// recorded as topic traffic, the status line's own post included, so right after a post or a
+    /// repost the newest message the app knows of IS the line. Only a strictly later id buries it —
+    /// a `&gt;=` here would read every fresh line as buried by itself and move it on every tick.
+    /// </para>
     /// </summary>
     public static bool Is_Buried(long? existingMessageId, TopicNewestMessage? newestTopicMessage)
     {
@@ -316,6 +286,22 @@ public static class TopicStatusLine_Planner
             && newestTopicMessage.Value.MessageId > existingMessageId.Value;
     }
 
+    /// <summary>
+    /// Has the SESSION been quiet in the topic for the owner's minute (2026-09-30)? No record, or a record
+    /// with no message in it, is a session that has said nothing since the app started counting — quiet.
+    ///
+    /// A message stamped in the FUTURE (a clock step, nothing else can do it) yields a negative elapsed
+    /// and holds the move, which is the safe direction: the line stays where it is and is edited.
+    /// </summary>
+    public static bool Is_SessionQuietLongEnough(TopicSessionSilence? sessionSilence)
+    {
+        if (sessionSilence?.LastSessionMessageAtUtc == null)
+            return true;
+
+        var silence = sessionSilence.Value;
+
+        return silence.NowUtc - silence.LastSessionMessageAtUtc!.Value >= TimeSpan.FromSeconds(REPOST_AFTER_SESSION_QUIET_SECONDS);
+    }
 
     /// <summary>
     /// The most recent real entry across the LIVE members, by the stamp the agent wrote — AND ITS
@@ -405,42 +391,31 @@ public static class TopicStatusLine_Planner
     /// a backoff early and is harmless. The proper answer for an INTERVAL is a monotonic source
     /// rather than either wall clock; it is on the ledger and is not a tonight problem.
     /// </summary>
-    /// <summary>
-    /// Has the status line been BURIED, and has the topic gone quiet since? Both halves are required
-    /// and each answers a different failure.
-    ///
-    /// Buried is decided by comparing message IDS, not by a count or a flag: Telegram ids increase
-    /// within a chat, so an id above the status line's is a message that came after it. The engine
-    /// remembers every id it sends or receives per topic, which is the same set /clear deletes from.
-    ///
-    /// Quiet is what keeps this from being a waterfall. A repost NOTIFIES — Telegram cannot move a
-    /// message, so the only way to put the line at the bottom is to delete and send — and firing it
-    /// the instant a message lands would ping the owner in the middle of their own sentence. Every
-    /// message resets the window, so at most one notification arrives per quiet period.
-    ///
-    /// UNKNOWN IS NOT BURIED. The newest id lives in memory, so after a restart there is none for any
-    /// topic until traffic repopulates it, and a repost is a notification: "I do not know where the
-    /// line is" must not be answered by pushing to a phone. It edits in place, as it always did.
-    ///
-    /// The stamps are both LOCAL, from the one clock this file uses — read the Is_AttemptDue comment
-    /// before touching either. A message stamped in the FUTURE (a clock step, nothing else can do it)
-    /// yields a negative elapsed and holds the repost, which is the safe direction.
-    /// </summary>
-    public static bool Is_RepostDue(long? existingMessageId, TopicNewestMessage? newestTopicMessage, DateTime now, int quietSeconds)
-    {
-        // EQUAL is not buried: the newest message the app knows of IS the status line, so nothing came
-        // after it. Only strictly-later ids bury it — see Is_Buried, the one spelling of that rule.
-        if (!Is_Buried(existingMessageId, newestTopicMessage))
-            return false;
-
-        return now - newestTopicMessage!.Value.ArrivedAt >= TimeSpan.FromSeconds(quietSeconds);
-    }
-
     public static bool Is_AttemptDue(DateTime? lastFailedAttemptAt, DateTime now, int backoffSeconds)
     {
         if (lastFailedAttemptAt == null)
             return true;
 
         return now - lastFailedAttemptAt.Value >= TimeSpan.FromSeconds(backoffSeconds);
+    }
+
+    /// <summary>
+    /// Is the status line due to be MOVED back to the bottom — the owner's rule of 2026-09-30? Buried by
+    /// ANY later message (the owner's, the app's, the session's: every one of them pushes the line and
+    /// its buttons up), AND the SESSION's last message at least <see cref="REPOST_AFTER_SESSION_QUIET_SECONDS"/>
+    /// old, so the move never lands between two messages of a reply still being written.
+    ///
+    /// <para>
+    /// IT ASKED "HAS THE TOPIC GONE QUIET" UNTIL 2026-09-30 — ten seconds since the newest message of
+    /// any author. The owner's words on why that was the wrong clock: *"not my last message, because to
+    /// the session it quite often take a lot of time to reply"*. Their own message and the app's
+    /// receipts, alerts and narration now BURY the line without holding it.
+    /// </para>
+    /// </summary>
+    public static bool Is_RepostDue(long? existingMessageId, TopicNewestMessage? newestTopicMessage, TopicSessionSilence? sessionSilence)
+    {
+        // EQUAL is not buried: the newest message the app knows of IS the status line, so nothing came
+        // after it. Only strictly-later ids bury it — see Is_Buried, the one spelling of that rule.
+        return Is_Buried(existingMessageId, newestTopicMessage) && Is_SessionQuietLongEnough(sessionSilence);
     }
 }
