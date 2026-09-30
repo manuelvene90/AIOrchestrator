@@ -114,63 +114,108 @@ if grep -qE '^[[:space:]]*- \[\?\]' "$PLAN_FILE" 2>/dev/null; then
   exit 0
 fi
 
-# THE SESSION HAS JUST ASKED. Only the LAST entry counts: an old question further up the channel was
-# answered long ago, and treating it as current would let one ancient QUESTION exempt every turn
-# from here to the end of the orchestration.
+# BLOCKED ON A MACHINE — a build, a suite, a sub-agent already running. The block message below has
+# promised this escape since it was written, and the code never implemented it: on 2026-09-11 a solo
+# with one `- [!]` line and thirteen queued `- [ ]` lines behind it was refused its turn end and had
+# to write a WAITING ON entry into the owner's channel purely to satisfy this hook — noise on their
+# phone (owner, entry 37: "too invasive, it keeps firing constantly"). A queue behind a blocked line
+# is the normal state of any plan. Trusted the way `- [?]` is trusted: hooks advise (decision 21).
+if grep -qE '^[[:space:]]*- \[!\]' "$PLAN_FILE" 2>/dev/null; then
+  exit 0
+fi
+
+# THE SESSION HAS JUST ASKED, OR IS WAITING -- read from the SESSION'S OWN LAST ENTRY, never the
+# file's last line. The app writes into this same channel on its own schedule too (a STATUS digest
+# every 30 minutes, an "[agent]" nudge), and "whichever entry happens to be last" let one of those
+# silently void an honest declaration within minutes: observed 2026-09-11 in ai-orchestrator-24, a
+# solo wrote WAITING ON as entries 41, 42 and 43, and app entries 44, 39 and 40 (STATUS, STATUS, a
+# nudge) landed right after each one in turn -- the hook fired again every single time, on a turn
+# where nothing the SESSION had done had changed. The owner, 2026-08-21 and again 2026-09-11: "it
+# keeps firing constantly, there's definitely something wrong with it".
+#
+# An old QUESTION further up the channel is the separate problem this already guarded against --
+# answered long ago, and treating it as current would let one ancient QUESTION exempt every turn to
+# the end of the orchestration. That guard moves with this change rather than being lost by it: see
+# OWNER_REPLIED_AFTER below, which is the same "only the newest thing said" reasoning anchored to the
+# session's own entry instead of the file's last line.
 if [ -f "$CHANNEL_FILE" ]; then
-  LAST_ENTRY="$(awk '/^## \[/{buf=""} {buf = buf $0 "\n"} END{printf "%s", buf}' "$CHANNEL_FILE" 2>/dev/null || true)"
+  ROLE_HEADER_PATTERN="^## \[[0-9]+\] FROM ${AIORCH_ROLE}( |—|-)"
 
-  if printf '%s' "$LAST_ENTRY" | grep -qE '^QUESTION:' 2>/dev/null; then
-    exit 0
-  fi
+  SESSION_HEADER_LINE="$(grep -nE "$ROLE_HEADER_PATTERN" "$CHANNEL_FILE" 2>/dev/null | tail -n1 | cut -d: -f1)"
 
-  # WAITING ON SOMETHING ALREADY RUNNING, which is not the same as giving up and is the case that
-  # made this hook actively harmful (owner, 2026-08-21: it "keeps intervening constantly, essentially
-  # preventing solo from responding to me").
-  #
-  # What happened, from that session's own transcript: it had one open line, was waiting on a full
-  # suite it had already started in the background, and correctly refused to mark `- [?]` because
-  # nothing owner-side blocked it. Its three sanctioned escapes were finish / blocked-on-owner /
-  # ask a question, and NONE of them describes waiting. So, obeying, it converted a free wait into a
-  # NINE-MINUTE foreground poll -- and a session inside one blocking tool call cannot pick up the
-  # owner's messages, which is the mechanism behind their complaint. Their question sat unanswered
-  # for over ten minutes and they had to interrupt the wait by hand.
-  #
-  # ENDING THE TURN IS HOW THE OWNER REACHES YOU. A session waiting on a background job is woken by
-  # the job and by its own monitor; holding the turn open buys nothing and costs the owner their
-  # reply. So waiting is a legitimate reason to stop, and it is declared where they can see it.
-  #
-  # DECLARED, NOT INFERRED, and deliberately so: bash cannot verify that a build is really running,
-  # so this escape rests on the session saying it in the CHANNEL -- in front of the owner, next to
-  # the app's own view of when it last wrote. That is the same bargain the QUESTION: escape above
-  # makes, and the same one the whole kit makes (decision 21: hooks advise, and honesty is visible).
-  # It is self-clearing for free: the moment the session writes anything else, that entry is no
-  # longer the last one and the escape is gone.
-  #
-  # Read the way every marker in this kit is read: in the SUBJECT anywhere, or at the START of a
-  # body line. Mid-sentence prose about waiting is discussion, not a declaration.
-  #
-  # THE TRAILING BOUNDARY IS LOAD-BEARING: "WAITING ONLY" CONTAINS "WAITING ON". Without it, a line
-  # opening "WAITING ONLY for the reviewer" would silently take this exit -- the identical shape to
-  # "MUTATION WINDOW CLOSED" containing "WINDOW CLOSED", which this kit already paid for once and
-  # which its own role commands warn about. Anything that is not a letter counts as the boundary, so
-  # a colon or a dash after the marker still reads as a declaration.
-  FIRST_LINE="$(printf '%s' "$LAST_ENTRY" | head -n1)"
+  # NO ENTRY FROM THIS SESSION AT ALL -- fail open toward NO escape, not toward one: the WAITING ON
+  # and QUESTION escapes are the session's own declaration, and a session that has never said
+  # anything has nothing to be trusted on. Falls straight through to the block message below.
+  if [ -n "${SESSION_HEADER_LINE:-}" ]; then
+    SESSION_LAST_ENTRY="$(awk -v start="$SESSION_HEADER_LINE" '
+      NR == start { print; next }
+      NR > start { if ($0 ~ /^## \[/) exit; print }
+    ' "$CHANNEL_FILE" 2>/dev/null || true)"
 
-  case "$FIRST_LINE" in
-    '## ['*) LAST_SUBJECT="$FIRST_LINE" ;;
-    *)       LAST_SUBJECT="" ;;
-  esac
+    # OWNER_REPLIED_AFTER: has a `## [n] FROM owner` header landed anywhere after the session's last
+    # entry? If so the owner has written since, which is the signal a QUESTION is no longer open --
+    # deliberately NOT checked for the WAITING ON escape below, which the app's own traffic must not
+    # be able to touch either way.
+    OWNER_REPLIED_AFTER="$(awk -v start="$SESSION_HEADER_LINE" '
+      NR > start && /^## \[[0-9]+\] FROM owner( |—|-)/ { found = 1 }
+      END { print found + 0 }
+    ' "$CHANNEL_FILE" 2>/dev/null || true)"
 
-  if printf '%s' "$LAST_SUBJECT" | grep -qE 'WAITING ON([^A-Za-z]|$)' 2>/dev/null; then
-    exit 0
-  fi
+    if [ "${OWNER_REPLIED_AFTER:-0}" -eq 0 ] 2>/dev/null; then
+      if printf '%s' "$SESSION_LAST_ENTRY" | grep -qE '^QUESTION:' 2>/dev/null; then
+        exit 0
+      fi
+    fi
 
-  if printf '%s' "$LAST_ENTRY" | grep -qE '^WAITING ON([^A-Za-z]|$)' 2>/dev/null; then
-    exit 0
+    # WAITING ON SOMETHING ALREADY RUNNING, which is not the same as giving up and is the case that
+    # made this hook actively harmful (owner, 2026-08-21: it "keeps intervening constantly, essentially
+    # preventing solo from responding to me").
+    #
+    # What happened, from that session's own transcript: it had one open line, was waiting on a full
+    # suite it had already started in the background, and correctly refused to mark `- [?]` because
+    # nothing owner-side blocked it. Its three sanctioned escapes were finish / blocked-on-owner /
+    # ask a question, and NONE of them describes waiting. So, obeying, it converted a free wait into a
+    # NINE-MINUTE foreground poll -- and a session inside one blocking tool call cannot pick up the
+    # owner's messages, which is the mechanism behind their complaint. Their question sat unanswered
+    # for over ten minutes and they had to interrupt the wait by hand.
+    #
+    # ENDING THE TURN IS HOW THE OWNER REACHES YOU. A session waiting on a background job is woken by
+    # the job and by its own monitor; holding the turn open buys nothing and costs the owner their
+    # reply. So waiting is a legitimate reason to stop, and it is declared where they can see it.
+    #
+    # DECLARED, NOT INFERRED, and deliberately so: bash cannot verify that a build is really running,
+    # so this escape rests on the session saying it in the CHANNEL -- in front of the owner, next to
+    # the app's own view of when it last wrote. That is the same bargain the QUESTION: escape above
+    # makes, and the same one the whole kit makes (decision 21: hooks advise, and honesty is visible).
+    # It is self-clearing for free: the moment the session writes anything else, THAT becomes its own
+    # new last entry and the escape is gone -- an app entry landing in between no longer resets it,
+    # which is the defect this section now fixes.
+    #
+    # Read the way every marker in this kit is read: in the SUBJECT anywhere, or at the START of a
+    # body line. Mid-sentence prose about waiting is discussion, not a declaration.
+    #
+    # THE TRAILING BOUNDARY IS LOAD-BEARING: "WAITING ONLY" CONTAINS "WAITING ON". Without it, a line
+    # opening "WAITING ONLY for the reviewer" would silently take this exit -- the identical shape to
+    # "MUTATION WINDOW CLOSED" containing "WINDOW CLOSED", which this kit already paid for once and
+    # which its own role commands warn about. Anything that is not a letter counts as the boundary, so
+    # a colon or a dash after the marker still reads as a declaration.
+    FIRST_LINE="$(printf '%s' "$SESSION_LAST_ENTRY" | head -n1)"
+
+    case "$FIRST_LINE" in
+      '## ['*) SESSION_SUBJECT="$FIRST_LINE" ;;
+      *)       SESSION_SUBJECT="" ;;
+    esac
+
+    if printf '%s' "$SESSION_SUBJECT" | grep -qE 'WAITING ON([^A-Za-z]|$)' 2>/dev/null; then
+      exit 0
+    fi
+
+    if printf '%s' "$SESSION_LAST_ENTRY" | grep -qE '^WAITING ON([^A-Za-z]|$)' 2>/dev/null; then
+      exit 0
+    fi
   fi
 fi
 
 cat <<JSON
-{"decision":"block","reason":"DO NOT STOP — $OPEN_LINES ledger line(s) are still open, and none of them is marked as blocked on the owner. The default is to run the endeavour to the end (their directive, 2026-08-20): finishing a phase and reporting is NOT a turn boundary, it only feels like one. Carry straight on with the next open line in $PLAN_FILE.\nIf you truly cannot proceed, say so honestly instead. Every one of these is a STATEMENT, not a way out, and each clears this block:\n  • WAITING on something you already started — a build, a suite, a sub-agent: put 'WAITING ON <what>' in your channel entry's SUBJECT, or at the START of a body line. Then END THE TURN. Do NOT poll it in the foreground: a session sitting inside one long tool call cannot read the owner's messages, and ending the turn is how they reach you — the job and your monitor both wake you.\n  • Blocked on a MACHINE rather than on them: mark the line '- [!] <task>'.\n  • Blocked on the OWNER: mark it '- [?] <task> - blocked on: <what you need from them>'. This is the only one that puts it on their plate, so do not use it for a build.\n  • You need them to CHOOSE: end your channel entry with a 'QUESTION:' line and 2-4 'OPTION:' lines.\n  • They told you to stop, or asked for step-by-step: mark the rest '- [-] not doing' with the reason.\nMarking every line done to escape this is a lie the owner will read on their phone."}
+{"decision":"block","reason":"DO NOT STOP — $OPEN_LINES ledger line(s) are still open, and none of them is marked blocked — '- [?]' on the owner or '- [!]' on a machine. The default is to run the endeavour to the end (their directive, 2026-08-20): finishing a phase and reporting is NOT a turn boundary, it only feels like one. Carry straight on with the next open line in $PLAN_FILE.\nIf you truly cannot proceed, say so honestly instead. Every one of these is a STATEMENT, not a way out, and each clears this block:\n  • WAITING on something you already started — a build, a suite, a sub-agent: put 'WAITING ON <what>' in your channel entry's SUBJECT, or at the START of a body line. Then END THE TURN. Do NOT poll it in the foreground: a session sitting inside one long tool call cannot read the owner's messages, and ending the turn is how they reach you — the job and your monitor both wake you.\n  • Blocked on a MACHINE rather than on them: mark the line '- [!] <task>'.\n  • Blocked on the OWNER: mark it '- [?] <task> - blocked on: <what you need from them>'. This is the only one that puts it on their plate, so do not use it for a build.\n  • You need them to CHOOSE: end your channel entry with a 'QUESTION:' line and 2-4 'OPTION:' lines.\n  • They told you to stop, or asked for step-by-step: mark the rest '- [-] not doing' with the reason.\nMarking every line done to escape this is a lie the owner will read on their phone."}
 JSON
