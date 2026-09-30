@@ -76,6 +76,10 @@ internal sealed class BridgeEngineModel(
     // The session shells, by pid file — what the limit rescue stops so the watchdog restarts them.
     Termination.SessionProcesses.ISessionProcesses sessionProcesses,
 
+    // WHAT HAS LANDED IN EACH TOPIC — the newest message and the session's last one — recorded by the
+    // client this engine is handed, which the factory wraps around every send (owner, 2026-09-30).
+    Telegram.TopicTraffic.ITopicTraffic topicTraffic,
+
     // The OUTBOUND ALLOWANCE the Telegram client spends from, held here only so it can be written
     // into .bridge-state.json beside the cursor (brief F5) — the engine never asks it for a token.
     // Null in file-only mode and on the test seams that hand in their own client.
@@ -899,20 +903,20 @@ internal sealed class BridgeEngineModel(
     readonly Lock _knownMessageIdsLock = new();
 
     /// <summary>
-    /// The NEWEST message id seen in each topic and when it was seen — the two facts the status-line
-    /// planner needs to know whether its message has been buried, and whether the topic has since
-    /// gone quiet. Written by the same one method that records every id, so nothing can be recorded
-    /// as known without also being recorded as newest. Key 0 = the General topic.
+    /// WHAT HAS LANDED IN EACH TOPIC: the newest message (does anything bury the status line?) and when
+    /// the SESSION last spoke there (has it been quiet for the owner's minute?) — see
+    /// <see cref="Telegram.TopicTraffic.ITopicTraffic"/>.
     ///
-    /// IN MEMORY ON PURPOSE, not in session.json. It is a fact about a conversation that is still
-    /// happening; after a restart the planner is told nothing rather than something stale, and it
-    /// answers that by editing in place until the first message repopulates this.
-    ///
-    /// The STATUS LINE'S OWN message is deliberately absent — it is posted through
-    /// Refresh_TopicStatusLines_Async, which does not record it. It must not count as traffic that
-    /// buries itself.
+    /// <para>
+    /// IT REPLACED A MAP THAT LIVED HERE (owner, 2026-09-30). `_newestTopicMessageByThread` was written
+    /// only by <see cref="Remember_TopicMessage"/>, which most send sites never called, and it
+    /// deliberately left the status line's own message out. Every SEND is now recorded by the client
+    /// this engine was handed (the factory wraps it), the status line's post included — harmless,
+    /// because an equal id is not burial. <see cref="Remember_TopicMessage"/> still feeds it, for the
+    /// one kind of message the client never sends: the owner's own.
+    /// </para>
     /// </summary>
-    readonly Dictionary<long, Telegram.TopicStatusLine_Planner.TopicNewestMessage> _newestTopicMessageByThread = [];
+    readonly Telegram.TopicTraffic.ITopicTraffic _topicTraffic = topicTraffic;
 
     /// <summary>
     /// Orchestrations whose status line can never be MOVED, because Telegram refused to delete it —
@@ -1925,8 +1929,8 @@ internal sealed class BridgeEngineModel(
         // they are not all "one message edited in place": a buried PULSE is still MOVED under 🌙, and
         // a move is a delete plus a send, which mints a new message and spends the per-minute send
         // budget. That budget blocks rather than drops, so nothing is lost — the unmute burst simply
-        // shares an allowance PULSE used while nobody was reading. Bounded by the quiet window to one
-        // move per burst of traffic, and by the substance rule to moves that carry news.
+        // shares an allowance PULSE used while nobody was reading. Bounded to one move per burial,
+        // each once the session's last message is a minute old (owner, 2026-09-30).
         //
         // What they cannot do is reach past their own gates: PULSE still refuses to POST or move
         // under 🔕, and both surfaces answer None when their text has not changed, which under a mute
@@ -5415,6 +5419,18 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var attachmentPath in attachmentPaths)
                     await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, entrySound, cancellationToken);
+
+                // THE SESSION SPOKE IN THE TOPIC — the clock the status line's move waits on (owner,
+                // 2026-09-30: moved "once the last session's message is at least 1 minute old … not my
+                // last message"). Stamped once, after EVERYTHING this entry put there (its pieces, its
+                // document, its question card, its photos and files), so the minute runs from the last of
+                // them. Sessions only: an app entry on this channel buries PULSE (the client records every
+                // send) but must not hold it. Off the injected clock, the one the planner compares with.
+                if (ChannelAuthor_Kinds.Is_Session(entry.Author)
+                    && (pieces.Count > 0 || question != null || photoPaths.Count > 0 || attachmentPaths.Count > 0))
+                {
+                    _topicTraffic.Note_SessionMessage(threadId, _clock.UtcNow);
+                }
 
                 // ONLY NOW is the owner's wait consumed: everything this entry had to say is on the
                 // phone, so what follows is narration again. Anything that threw above skipped this
@@ -12574,15 +12590,15 @@ internal sealed class BridgeEngineModel(
     ///     call and, against the 429 limit we already have open on the ledger, a real cost;
     ///   - a RESTART edits the existing message rather than posting a second one — the id is read
     ///     from session.json, not from memory;
-    ///   - a line BURIED by later traffic, in a topic that has since been quiet for
-    ///     TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS, is
-    ///     deleted and written again at the bottom. Telegram cannot move a message, so this is the
-    ///     only way to put the current state where the owner is looking when they enter the chat.
+    ///   - a line BURIED by any later message — the owner's, the app's or the session's — is deleted
+    ///     and written again at the bottom once the SESSION's last message in the topic is
+    ///     TopicStatusLine_Planner.REPOST_AFTER_SESSION_QUIET_SECONDS old (owner, 2026-09-30: PULSE
+    ///     "basically always the last message", its buttons with it). Telegram cannot move a message,
+    ///     so this is the only way to put the current state where the owner is looking.
     ///
-    /// The repost is the ONE action here that notifies, and everything about it is arranged so that
-    /// it cannot become a waterfall: the quiet window bounds it to one ping per quiet period, the
-    /// delivery gate blocks it in a silenced topic exactly as it blocks a first post, and it never
-    /// fires while the line is already last.
+    /// Every write here is silent, and the move cannot become a waterfall: a fresh post is the newest
+    /// message, so it moves again only after something else buries it; the delivery gate blocks it in
+    /// a silenced topic exactly as it blocks a first post; and it never fires while the line is last.
     /// </summary>
     /// <summary>
     /// An entry's own header stamp, or null when it cannot be trusted. Agent-written (decision 12),
@@ -12796,7 +12812,12 @@ internal sealed class BridgeEngineModel(
                 Resolve_EffectiveMode(session.OrchId),
                 _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
                 _timing.MirrorRetryBackoffSeconds,
-                Find_NewestTopicMessage_OrNull(session.TelegramTopicId),
+
+                // THE NEWEST MESSAGE IN THE TOPIC — every send the app makes and every owner message are
+                // recorded, so this buries PULSE whoever wrote below it. With nothing recorded since the
+                // app started and a line up from before, it ASSUMES the line is buried, once: that is the
+                // restart case, where a line twenty messages up would otherwise never be known to be.
+                _topicTraffic.Find_Newest_OrAssumeBuried(session.TelegramTopicId, session.StatusLineMessageId),
                 _repostImpossibleOrchIds.Contains(session.OrchId),
                 Note_FiguresAndDescribe_UnchangedFor(session.OrchId, ledger),
                 UsageTotals_Reader.Read_ContextUsage_OrNull(supervisorUsageFile),
@@ -12812,18 +12833,23 @@ internal sealed class BridgeEngineModel(
                 commandButtonRows,
                 lastWritten?.RenderKey,
 
-                // What the owner last saw at the bottom (ruling R27) — decided by the planner, stored here.
-                lastWritten?.SeenAtBottomKey,
-
                 // `pulse.unchangedFor` (plan 03 task 19), off the same single read as the fields and step.
-                pulse.UnchangedFor);
+                pulse.UnchangedFor,
+
+                // WHEN THE SESSION LAST SPOKE HERE, and now, off the INJECTED clock — both halves from one
+                // clock, as the planner's Is_AttemptDue comment demands of any pair it compares. The move
+                // waits until the session's last message is a minute old (owner, 2026-09-30); the
+                // owner's and the app's own messages never reach this record.
+                new Telegram.TopicStatusLine_Planner.TopicSessionSilence(
+                    _topicTraffic.Find_LastSessionMessageAtUtc_OrNull(session.TelegramTopicId),
+                    _clock.UtcNow));
 
             var action = plan.Action;
             var text = plan.Text;
 
             // Remembered only once the write succeeds — a FAILED edit leaves the last one SENT standing,
             // so the next tick still sees the difference and retries it behind the back-off.
-            var written = new Telegram.WrittenTopicStatusLine(text, plan.RenderKey, plan.SeenAtBottomKey);
+            var written = new Telegram.WrittenTopicStatusLine(text, plan.RenderKey);
 
             if (action == Telegram.TopicStatusActions.None)
                 continue;
@@ -16863,33 +16889,13 @@ internal sealed class BridgeEngineModel(
 
             if (ids.Count > KNOWN_IDS_PER_TOPIC_CAP)
                 ids.RemoveRange(0, ids.Count - KNOWN_IDS_PER_TOPIC_CAP);
-
-            // THE HIGHEST id wins, not the last one recorded: these arrive from a batch of updates
-            // and from concurrent sends, so "most recently handed to this method" is not "latest in
-            // the chat". An out-of-order id overwriting a higher one would tell the status line it is
-            // no longer buried when it still is.
-            //
-            // DateTime.Now, LOCAL, because the planner compares it against the one local clock this
-            // file uses everywhere — read the Is_AttemptDue comment before changing that. Arrival is
-            // when the app learned of the message rather than Telegram's own `date`: for the quiet
-            // window, which asks whether the conversation has stopped, they differ by the poll
-            // latency and never by enough to matter.
-            if (!_newestTopicMessageByThread.TryGetValue(key, out var newest) || messageId.Value > newest.MessageId)
-                _newestTopicMessageByThread[key] = new Telegram.TopicStatusLine_Planner.TopicNewestMessage(messageId.Value, DateTime.Now);
         }
-    }
 
-    /// <summary>
-    /// What the status-line planner is told about the topic's traffic. Absent means the app knows
-    /// nothing about this topic yet — a fresh start, or a topic that has said nothing since — and the
-    /// planner treats that as "not buried" rather than guessing.
-    /// </summary>
-    Telegram.TopicStatusLine_Planner.TopicNewestMessage? Find_NewestTopicMessage_OrNull(long? messageThreadId)
-    {
-        lock (_knownMessageIdsLock)
-        {
-            return _newestTopicMessageByThread.TryGetValue(messageThreadId ?? 0, out var newest) ? newest : null;
-        }
+        // AND IT BURIES THE STATUS LINE. For a message the app sent this is a second recording of what
+        // the client already recorded (the highest id wins, so it changes nothing); for the OWNER's
+        // messages, which no client send ever sees, it is the only one (owner, 2026-09-30: their own
+        // message buries PULSE without holding its move).
+        _topicTraffic.Note_Message(messageThreadId, messageId.Value);
     }
 
     IReadOnlyList<long> Take_KnownTopicMessageIds(long? messageThreadId)

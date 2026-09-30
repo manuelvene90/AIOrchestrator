@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
+using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Configuration.SettingsCatalog;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -100,6 +101,12 @@ public class PresetPhoneProbeTests : IDisposable
     readonly IOrchestrationSessionStore _store;
     readonly RecordingLog_Fake _log = new();
     readonly PhoneTimelineTelegram_Fake _telegram = new(TOPIC_ID);
+
+    /// <summary>
+    /// The engine's clock: the wall clock, which the PULSE facts jump forward past the session's minute
+    /// (owner, 2026-09-30). Every other fact leaves it alone, so it reads as the system clock there.
+    /// </summary>
+    readonly OffsetClock_Fake _clock = new();
 
     // NOT READONLY for one reason: each fact names its preset, and Use_Preset builds these once, before
     // the engine has ever run. Nothing else assigns them.
@@ -326,19 +333,39 @@ public class PresetPhoneProbeTests : IDisposable
     }
 
     /// <summary>
-    /// THE OWNER'S RULE OF 2026-09-09: PULSE is deleted and re-posted only when it is buried AND its content
-    /// changed. The owner asks, the supervisor answers, the topic goes quiet for longer than the repost
-    /// window — and PULSE, which says nothing new, stays where it is. The defect deleted and re-sent it
-    /// about ten seconds after every such exchange.
+    /// THE OWNER'S RULE OF 2026-09-30: PULSE is *"basically always the last message in the conversation"*,
+    /// moved back *"once the last session's message is at least 1 minute old"*. The owner asks, the
+    /// supervisor answers, nothing in PULSE changes: while the answer is fresh the line stays where it is
+    /// (a move would land in the middle of the session's reply); a minute after the answer it is deleted
+    /// and re-sent at the bottom, ONCE, and nothing follows it.
+    ///
+    /// <para>
+    /// UNTIL 2026-09-30 THIS FACT ASSERTED THE OPPOSITE (`…DoesNotMoveIt`): an exchange that changed
+    /// nothing in PULSE left it buried for good, on the owner's 2026-09-09 rule "buried AND changed". That
+    /// is the line the owner then found twenty messages up, its buttons with it.
+    /// </para>
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task UnderClassic_AnExchangeThatChangesNothingInPulse_DoesNotMoveIt()
+    public async Task UnderClassic_AnExchangeThatChangesNothingInPulse_MovesItOnceTheAnswerIsAMinuteOld()
     {
-        var (timeline, mark) = await Run_Pulse_Async(Bury_Pulse_UnderAnExchange_Async);
+        var answered = 0;
+        var aMinuteLater = 0;
 
-        Assert.DoesNotContain(Pulse_Activity(timeline, mark), line => line.StartsWith("delete", StringComparison.Ordinal) || line.StartsWith("post", StringComparison.Ordinal));
-        Assert.Contains(timeline.Skip(mark), e => e.Kind == PhoneEventKinds.Sent && e.Text.Contains(ANSWER_TEXT, StringComparison.Ordinal));
+        var (timeline, _) = await Run_Pulse_Async(async channelFile =>
+        {
+            await Bury_Pulse_UnderAnExchange_Async(channelFile);
+
+            answered = _telegram.Mark();
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(30));
+
+            aMinuteLater = Advance_PastTheSessionsMinute();
+            await Require_PulseComesBack_Async(aMinuteLater);
+        });
+
+        Assert_NotMovedBetween(timeline, answered, aMinuteLater);
+        Assert_MovedOnceAndLast(timeline, aMinuteLater);
+        Assert.Contains(timeline, e => e.Kind == PhoneEventKinds.Sent && e.Text.Contains(ANSWER_TEXT, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -366,15 +393,18 @@ public class PresetPhoneProbeTests : IDisposable
     }
 
     /// <summary>
-    /// A CHANGE WHILE PULSE IS BURIED AND THE TOPIC IS QUIET MOVES IT, ONCE: the old line is deleted and the
-    /// new one is sent at the bottom, and nothing follows it. This is the half of the owner's rule the
-    /// fix must not lose — "changed" still moves the line.
+    /// A CHANGE WHILE PULSE IS BURIED AND THE SESSION'S ANSWER IS FRESH IS AN EDIT IN PLACE; a minute after
+    /// the answer the line moves, ONCE, carrying the change. Until 2026-09-30 this fact expected the move
+    /// straight away (`…IsRepostedOnce`: "changed" moved a buried line as soon as the topic was quiet for
+    /// ten seconds); the move now waits on the session's clock alone, and the edit keeps the content
+    /// current meanwhile.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task UnderClassic_APulseThatChangedWhileBuried_IsRepostedOnce()
+    public async Task UnderClassic_APulseThatChangedWhileBuried_IsEditedInPlace_ThenMovedOnceTheAnswerIsAMinuteOld()
     {
         var changedAt = 0;
+        var aMinuteLater = 0;
 
         var (timeline, _) = await Run_Pulse_Async(async channelFile =>
         {
@@ -385,41 +415,193 @@ public class PresetPhoneProbeTests : IDisposable
             Append_SupervisorEntry(channelFile, 3, "status", $"Still on it.\nSTATE: {DECLARED_STATE}");
 
             await Require_Async(() => Pulse_Activity(_telegram.Events_Since(0), changedAt).Any(line => line.Contains(DECLARED_STATE, StringComparison.Ordinal)), 20_000, "PULSE never showed the declared state", changedAt);
-            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(60));
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(30));
+
+            aMinuteLater = Advance_PastTheSessionsMinute();
+            await Require_PulseComesBack_Async(aMinuteLater);
         });
 
-        var activity = Pulse_Activity(timeline, changedAt);
+        var inTheMinute = Pulse_Activity(timeline.Take(aMinuteLater).ToList(), changedAt);
 
-        Assert.True(activity.Count == 2, Describe_PulseActivity(timeline, changedAt));
-        Assert.Equal("delete", activity[0]);
-        Assert.StartsWith("post", activity[1], StringComparison.Ordinal);
-        Assert.Contains(DECLARED_STATE, activity[1], StringComparison.Ordinal);
+        Assert.True(inTheMinute.Count >= 1 && inTheMinute.All(line => line.StartsWith("edit", StringComparison.Ordinal)), Describe_PulseActivity(timeline, changedAt));
+        Assert.Contains(inTheMinute, line => line.Contains(DECLARED_STATE, StringComparison.Ordinal));
+
+        var moves = Assert_MovedOnceAndLast(timeline, aMinuteLater);
+        Assert.Contains(DECLARED_STATE, moves[1], StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// THE COMMON CASE (ruling R27, 2026-09-24): the supervisor's answer both buries PULSE and changes it —
-    /// its STATE: line redraws the sup row. Inside the ten-second window the line is edited in place; once
-    /// the topic is quiet it has changed since the owner last saw it at the bottom, so it comes back ONCE
-    /// and nothing follows. Task 17 as first committed edited it in place and then left it buried for good,
-    /// because by the time the topic was quiet it had "nothing new to say" against its own last write.
+    /// THE COMMON CASE (ruling R27, 2026-09-24, re-read under the owner's 2026-09-30 rule): the supervisor's
+    /// answer both buries PULSE and changes it — its STATE: line redraws the sup row. While the answer is
+    /// fresh the line is edited in place; a minute later it comes back ONCE and nothing follows. What R27
+    /// fixed (a line edited while buried and then left there for good) cannot recur: content no longer
+    /// decides the move at all.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task UnderClassic_AnAnswerThatBuriesAndChangesPulse_BringsItBackOnce()
+    public async Task UnderClassic_AnAnswerThatBuriesAndChangesPulse_BringsItBackOnceTheAnswerIsAMinuteOld()
     {
-        var (timeline, mark) = await Run_Pulse_Async(channelFile =>
-            Bury_Pulse_UnderAnExchange_Async(channelFile, $"{ANSWER_TEXT}\nSTATE: {DECLARED_STATE}"));
+        var answered = 0;
+        var aMinuteLater = 0;
 
-        var activity = Pulse_Activity(timeline, mark);
-        var moves = activity.Where(line => !line.StartsWith("edit", StringComparison.Ordinal)).ToList();
+        var (timeline, _) = await Run_Pulse_Async(async channelFile =>
+        {
+            await Bury_Pulse_UnderAnExchange_Async(channelFile, $"{ANSWER_TEXT}\nSTATE: {DECLARED_STATE}");
 
-        Assert.True(moves.Count == 2, Describe_PulseActivity(timeline, mark));
-        Assert.Equal("delete", moves[0]);
-        Assert.StartsWith("post", moves[1], StringComparison.Ordinal);
+            answered = _telegram.Mark();
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(30));
+
+            aMinuteLater = Advance_PastTheSessionsMinute();
+            await Require_PulseComesBack_Async(aMinuteLater);
+        });
+
+        Assert_NotMovedBetween(timeline, answered, aMinuteLater);
+
+        var moves = Assert_MovedOnceAndLast(timeline, aMinuteLater);
         Assert.Contains(DECLARED_STATE, moves[1], StringComparison.Ordinal);
+    }
 
-        // Nothing after it: the reposted line is last, and it says what it said.
-        Assert.Equal(moves[1], activity[^1]);
+    /// <summary>
+    /// THE OWNER'S OWN MESSAGE BURIES PULSE AND DOES NOT HOLD IT (owner, 2026-09-30: *"not my last message,
+    /// because to the session it quite often take a lot of time to reply"*). The session has said nothing
+    /// here, so the owner's message — and the app's ✓ under it — are followed straight away by PULSE at the
+    /// bottom, where its buttons are while the owner waits. Before 2026-09-30 every message reset a quiet
+    /// window, and an unchanged line never moved at all.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_TheOwnersMessage_IsFollowedByPulse_WhenTheSessionHasBeenQuiet()
+    {
+        var (timeline, mark) = await Run_Pulse_Async(async _ =>
+        {
+            var queued = _telegram.Mark();
+
+            _telegram.Queue_Updates(Message_Json(OWNER_TEXT, 8101, _telegram.Allocate_IncomingMessageId()));
+
+            await Require_PulseComesBack_Async(queued);
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(30));
+        });
+
+        Assert.Contains(timeline.Skip(mark), e => e.Kind == PhoneEventKinds.Sent && e.Text == "✓");
+
+        // ONCE OR TWICE, and both are right: the owner's message and the ✓ under it are two burials, and
+        // a tick that lands between them (measured: 2 ms apart under a loaded suite) moves the line after
+        // the first and again after the second. Each move is a delete then a post — never two lines up —
+        // and what matters to the owner is the last assertion: PULSE ends at the bottom.
+        var moves = Pulse_Activity(timeline, mark).Where(line => !line.StartsWith("edit", StringComparison.Ordinal)).ToList();
+
+        Assert.True(
+            moves.Count is 2 or 4
+            && moves.Where((_, i) => i % 2 == 0).All(line => line == "delete")
+            && moves.Where((_, i) => i % 2 == 1).All(line => line.StartsWith("post", StringComparison.Ordinal)),
+            Describe_PulseActivity(timeline, mark));
+
+        var lastSent = timeline.Last(e => e.Kind == PhoneEventKinds.Sent && !e.Text.Contains("ALL ORCHESTRATIONS", StringComparison.Ordinal));
+
+        Assert.True(Is_Pulse(lastSent.Text), $"PULSE is not the last message: {lastSent.Describe()}{Environment.NewLine}{Describe_PulseActivity(timeline, mark)}");
+    }
+
+    /// <summary>
+    /// AFTER A RESTART, A LINE LEFT UP BY THE PREVIOUS PROCESS IS MOVED ONCE. Nothing about the topic's
+    /// traffic survives a restart, so a PULSE twenty messages up — the owner's complaint — would never be
+    /// known to be buried and would stay there until something new arrived. The engine assumes it is
+    /// buried the first time it is asked (owner, 2026-09-30), so the first tick deletes the old line and
+    /// posts it at the bottom — once, silently — and the fresh line then stays put.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_ALineLeftUpByThePreviousProcess_IsMovedOnceAtStartup()
+    {
+        const long LINE_FROM_BEFORE = 6999;
+
+        Use_Preset(Presets_Loader.CLASSIC, extraConfigJson: PULSE_WITHOUT_HEARTBEAT);
+
+        var session = Launcher().Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+        _store.Set_StatusLineMessageId(session.OrchId, LINE_FROM_BEFORE);
+
+        Ensure_OwnerChannel(session.OrchId);
+
+        await Run_WhileAsync(async () =>
+        {
+            await Require_Async(() => Pulse_Texts(_telegram.Events_Since(0)).Count > 0, 20_000, "PULSE was never written", 0);
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(60));
+        });
+
+        var timeline = _telegram.Events_Since(0);
+        var pulseWrites = timeline.Where(e => e.Kind is PhoneEventKinds.Sent or PhoneEventKinds.Deleted && (e.Kind == PhoneEventKinds.Deleted || Is_Pulse(e.Text))).ToList();
+
+        Assert.True(
+            pulseWrites.Count == 2
+            && pulseWrites[0].Kind == PhoneEventKinds.Deleted && pulseWrites[0].MessageId == LINE_FROM_BEFORE
+            && pulseWrites[1].Kind == PhoneEventKinds.Sent,
+            string.Join(Environment.NewLine, timeline.Select(e => e.Describe())));
+
+        Assert.Equal(pulseWrites[1].MessageId, _store.Get_Session_OrNull(session.OrchId)?.StatusLineMessageId);
+    }
+
+    /// <summary>
+    /// AN APP MESSAGE BURIES PULSE — through the one chokepoint (owner, 2026-09-30). A ledger line moving
+    /// makes the app send a notice straight to the topic (<c>Tell_LedgerMovement_Async</c>), a send site
+    /// that never recorded its message: before the recording client, the app went on believing PULSE was
+    /// the last message, edited it in place above the notice, and never moved it. The session has said
+    /// nothing, so nothing holds the move: PULSE follows the notice to the bottom, once.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_AnAppNoticeBuriesPulse_AndPulseFollowsItToTheBottom()
+    {
+        var (timeline, mark) = await Run_Pulse_Async(async _ =>
+        {
+            var noticeMark = _telegram.Mark();
+
+            Finish_TheSeededLedgerLine();
+
+            await Require_Async(() => Non_PulseSends(_telegram.Events_Since(noticeMark)).Count > 0, 20_000, "the ledger movement was never told", noticeMark);
+            await Require_PulseComesBack_Async(noticeMark);
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(30));
+        });
+
+        Assert.NotEmpty(Non_PulseSends(timeline.Skip(mark).ToList()));
+        Assert_MovedOnceAndLast(timeline, mark);
+    }
+
+    /// <summary>
+    /// AND AN APP MESSAGE DOES NOT RESTART THE SESSION'S MINUTE. The supervisor answers; thirty seconds
+    /// later the app sends a ledger notice below it; the line stays put, because the SESSION spoke thirty
+    /// seconds ago. Thirty seconds after that — the answer a minute old, the notice only half of one — it
+    /// moves, once, below both. The minute is the session's, never the app's (or the owner's).
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task UnderClassic_AnAppNoticeAfterTheAnswer_DoesNotRestartTheSessionsMinute()
+    {
+        var answered = 0;
+        var halfAMinuteLater = 0;
+        var aMinuteLater = 0;
+
+        var (timeline, _) = await Run_Pulse_Async(async channelFile =>
+        {
+            await Bury_Pulse_UnderAnExchange_Async(channelFile);
+
+            answered = _telegram.Mark();
+            _clock.Advance(TimeSpan.FromSeconds(30));
+
+            halfAMinuteLater = _telegram.Mark();
+            Finish_TheSeededLedgerLine();
+
+            await Require_Async(() => Non_PulseSends(_telegram.Events_Since(halfAMinuteLater)).Count > 0, 20_000, "the ledger movement was never told", halfAMinuteLater);
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(30));
+
+            aMinuteLater = _telegram.Mark();
+            _clock.Advance(TimeSpan.FromSeconds(TopicStatusLine_Planner.REPOST_AFTER_SESSION_QUIET_SECONDS - 30));
+
+            await Require_PulseComesBack_Async(aMinuteLater);
+        });
+
+        Assert.NotEmpty(Non_PulseSends(timeline.Take(aMinuteLater).Skip(halfAMinuteLater).ToList()));
+        Assert_NotMovedBetween(timeline, answered, aMinuteLater);
+        Assert_MovedOnceAndLast(timeline, aMinuteLater);
     }
 
     /// <summary>
@@ -474,8 +656,10 @@ public class PresetPhoneProbeTests : IDisposable
     }
 
     /// <summary>
-    /// The owner asks, the supervisor answers — both land below PULSE — and then the topic stays quiet for
-    /// longer than the repost window, so a line that had anything new to say would move.
+    /// The owner asks, the supervisor answers — both land below PULSE — and a few ticks pass. The owner's
+    /// message moves PULSE at once (the session has not spoken yet); the answer buries it again, and since
+    /// 2026-09-30 it stays there until the SESSION's answer is a minute old — which the facts cross by
+    /// moving the engine's clock (<see cref="Advance_PastTheSessionsMinute"/>), not by waiting it out.
     /// </summary>
     async Task Bury_Pulse_UnderAnExchange_Async(string channelFile) => await Bury_Pulse_UnderAnExchange_Async(channelFile, ANSWER_TEXT);
 
@@ -491,7 +675,80 @@ public class PresetPhoneProbeTests : IDisposable
         Append_SupervisorEntry(channelFile, 2, "the rebuild", answerBody);
 
         await Require_Async(() => _telegram.Has_Sent_Containing(ANSWER_TEXT), 20_000, "the answer never reached the phone", 0);
-        await Wait_Until_Async(() => false, (TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS + 3) * 1000);
+        await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(20));
+    }
+
+    /// <summary>
+    /// Jumps the engine's clock one session-minute forward (owner, 2026-09-30) and returns the timeline mark
+    /// taken just before the jump — everything PULSE does from there is what the minute released.
+    /// </summary>
+    int Advance_PastTheSessionsMinute()
+    {
+        var mark = _telegram.Mark();
+
+        _clock.Advance(TimeSpan.FromSeconds(TopicStatusLine_Planner.REPOST_AFTER_SESSION_QUIET_SECONDS));
+
+        return mark;
+    }
+
+    /// <summary>Waits for PULSE to be posted again from <paramref name="since"/> on, then for the line to settle.</summary>
+    async Task Require_PulseComesBack_Async(int since)
+    {
+        await Require_Async(
+            () => Pulse_Activity(_telegram.Events_Since(0), since).Any(line => line.StartsWith("post", StringComparison.Ordinal)),
+            20_000, "PULSE never came back to the bottom", since);
+
+        await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(30));
+    }
+
+    /// <summary>PULSE was neither deleted nor posted between the two marks — edited in place at most.</summary>
+    void Assert_NotMovedBetween(List<PhoneEvent> timeline, int from, int to)
+    {
+        var activity = Pulse_Activity(timeline.Take(to).ToList(), from);
+
+        Assert.True(
+            !activity.Any(line => line.StartsWith("delete", StringComparison.Ordinal) || line.StartsWith("post", StringComparison.Ordinal)),
+            Describe_PulseActivity(timeline, from));
+    }
+
+    /// <summary>
+    /// From <paramref name="from"/> on PULSE moved exactly ONCE — deleted, then posted — and it is the last
+    /// message in the topic (General's dashboard, which lives elsewhere, aside). Returns the two moves.
+    /// </summary>
+    List<string> Assert_MovedOnceAndLast(List<PhoneEvent> timeline, int from)
+    {
+        var moves = Pulse_Activity(timeline, from).Where(line => !line.StartsWith("edit", StringComparison.Ordinal)).ToList();
+
+        Assert.True(
+            moves.Count == 2 && moves[0] == "delete" && moves[1].StartsWith("post", StringComparison.Ordinal),
+            Describe_PulseActivity(timeline, from));
+
+        var lastSent = timeline.Last(e => e.Kind == PhoneEventKinds.Sent && !e.Text.Contains("ALL ORCHESTRATIONS", StringComparison.Ordinal));
+
+        Assert.True(Is_Pulse(lastSent.Text), $"PULSE is not the last message: {lastSent.Describe()}{Environment.NewLine}{Describe_PulseActivity(timeline, from)}");
+
+        return moves;
+    }
+
+    /// <summary>Everything sent that is not PULSE and not General's dashboard.</summary>
+    static List<PhoneEvent> Non_PulseSends(List<PhoneEvent> events)
+    {
+        return [.. events.Where(e => e.Kind == PhoneEventKinds.Sent && !Is_Pulse(e.Text) && !e.Text.Contains("ALL ORCHESTRATIONS", StringComparison.Ordinal))];
+    }
+
+    /// <summary>
+    /// Marks the launcher's seeded ledger line finished, which makes the app tell the topic so — a notice
+    /// it sends by itself, straight to Telegram, with no session involved.
+    /// </summary>
+    void Finish_TheSeededLedgerLine()
+    {
+        var session = _store.Find_ByTelegramTopicId_OrNull(TOPIC_ID) ?? throw new Exception($"no orchestration owns topic {TOPIC_ID}");
+        var planFile = _paths.Get_PlanFile(session.OrchId);
+        var plan = File.ReadAllText(planFile);
+
+        Assert.Contains("- [>] agree the direction", plan, StringComparison.Ordinal);
+
+        File.WriteAllText(planFile, plan.Replace("- [>] agree the direction", "- [x] agree the direction", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -861,13 +1118,19 @@ public class PresetPhoneProbeTests : IDisposable
             Assert.Equal(SessionRunners.Terminal, config.Runners.Get_ForRole(role).Runner);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(
+        // THE DECISION-STATE SEAM, with exactly what Create_WithTelegramClient passes — the file-backed
+        // engine state and this user's account reader — except the clock, which is the fixture's own so
+        // the PULSE facts can cross the session's minute (owner, 2026-09-30) without waiting it out.
+        _engine = BridgeEngine_Factory.Create_WithDecisionState(
             _paths, configProvider, _store, _launcher, _log, _telegram,
+            EngineStateStore_Factory.Create_File(_paths, _log),
+            _clock,
             BridgeEngineTiming_Factory.Create_Custom_WindowFromSettings(
                 BridgeTestTiming.TICK_MILLISECONDS,
                 BridgeTestTiming.RETRY_BACKOFF_SECONDS,
                 BridgeTestTiming.TICK_LOCK_ALLOWANCE_MILLISECONDS,
-                BridgeTestTiming.TRAILING_ENTRY_QUIET_MILLISECONDS));
+                BridgeTestTiming.TRAILING_ENTRY_QUIET_MILLISECONDS),
+            accountReader: AIOrchestratorCoreLib.Limits.ClaudeAccount.ClaudeAccountReader_Factory.Create_ForThisUser());
     }
 
     /// <summary>
