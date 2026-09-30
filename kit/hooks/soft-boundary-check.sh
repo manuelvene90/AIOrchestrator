@@ -165,32 +165,39 @@ fi
 # would fail to stderr, the stream nobody reads.
 aiorch_log_undecidable() { return 0; }
 
-if [ -f "$(dirname "$0")/hook-log.sh" ]; then
-  . "$(dirname "$0")/hook-log.sh" 2>/dev/null || true
+# EVERY PROCESS THIS HOOK STARTS IS PAID ON EVERY TOOL CALL. Measured 2026-09-30 on the owner's
+# Windows machine under msys: ~70-105 ms per process start (`dirname`, `cat`, `mkdir`), ~6 ms for a
+# builtin. So the per-call path below uses builtins wherever one does the same job — parameter
+# expansion for dirname, `read` for cat, a `[ -d ]` test before each mkdir — and starts jq only.
+HOOK_DIR="${0%/*}"
+[ "$HOOK_DIR" = "$0" ] && HOOK_DIR="."
+
+if [ -f "$HOOK_DIR/hook-log.sh" ]; then
+  . "$HOOK_DIR/hook-log.sh" 2>/dev/null || true
 fi
 
-if ! INPUT=$(cat 2>/dev/null); then
-  aiorch_log_undecidable "how many calls this turn has made" "the payload could not be read from stdin"
-  exit 0
-fi
+# `read -d ''` reads to EOF and so always returns non-zero; the status says nothing here. An unreadable
+# stdin leaves INPUT empty, which the parse below reports as unparseable — still said, still allowed.
+IFS= read -r -d '' INPUT || true
 
 # ONE EXTRACTION, FOUR FIELDS, WRITTEN AS BYTES AND SEPARATED BY 0x1f (see the header: a tab loses an
 # absent field, and `agent_type` is absent on the sessions the app spawns).
 #
-# python3 is what every other hook here uses for its payload, and the bytes matter: on a mixed
-# machine python3 is native Windows python, whose text-mode stdout turns every newline it writes into
-# CRLF — a multi-line `print` would hand back values with a `\r` glued to the end of all but the
-# last, and those values are compared for equality. `sys.stdout.buffer.write` with no trailing
-# newline cannot be translated at all.
-RAW=$(printf '%s' "$INPUT" | python3 -c 'import json,sys
-d = json.load(sys.stdin)
-sys.stdout.buffer.write("\x1f".join([
-    str(d.get("prompt_id") or ""),
-    str(d.get("session_id") or ""),
-    str(d.get("agent_type") or ""),
-    str(d.get("agent_id") or ""),
-    str(d.get("tool_use_id") or ""),
-]).encode("utf-8"))' 2>/dev/null)
+# jq, NOT python3, because this hook runs before EVERY tool call of every implementer, reviewer and
+# solo — sub-agents included. Measured 2026-09-30 on the owner's Windows machine: python3 there is
+# the Microsoft Store alias and costs ~0.5 s just to start, which made this hook ~1.07 s per call
+# (27 hook tests took 4 min 9 s); jq starts in ~0.1 s and the installer already requires it.
+#
+# The bytes still matter: the fields are joined with 0x1f and `-j` writes no newline at all, so there
+# is nothing for Windows text mode to turn into CRLF; the strip below is belt-and-braces. The filter
+# keeps python's contract field for field — a payload that is not a JSON OBJECT yields nothing (python
+# raised on it), and a falsy value (null, false, 0, "", [], {}) becomes "" as `x or ""` did.
+RAW=$(jq -j <<< "$INPUT" '
+  if type != "object" then error("not an object") else . end
+  | [.prompt_id, .session_id, .agent_type, .agent_id, .tool_use_id]
+  | map(if . == null or . == false or . == 0 or . == "" or . == [] or . == {} then "" else tostring end)
+  | join("\u001f")' 2>/dev/null)
+RAW="${RAW//$'\r'/}"
 
 if [ -z "$RAW" ]; then
   aiorch_log_undecidable "which turn this call belongs to" "the payload could not be parsed, so neither prompt_id nor session_id was extracted"
@@ -229,11 +236,13 @@ TURN_DIR="$STATE_ROOT/$TURN"
 AGENT_FILE="$TURN_DIR/agent"
 FIRED_DIR="$TURN_DIR/fired"
 
-mkdir -p "$STATE_ROOT" 2>/dev/null || true
+[ -d "$STATE_ROOT" ] || mkdir -p "$STATE_ROOT" 2>/dev/null || true
 
 # `mkdir` without -p IS the "am I the first call of this turn" test: it succeeds in exactly one
-# process, so two parallel first calls cannot both take this branch.
-if mkdir "$TURN_DIR" 2>/dev/null; then
+# process, so two parallel first calls cannot both take this branch. The `[ -d ]` in front only
+# spares every LATER call of the turn a process start; a call that sees no directory still races on
+# the mkdir, so the latch is exactly as atomic as it was.
+if [ ! -d "$TURN_DIR" ] && mkdir "$TURN_DIR" 2>/dev/null; then
   # THE FIRST CALL OF A TURN IS THE MAIN AGENT'S, always — a sub-agent exists only because the main
   # agent called the Agent tool, which is itself a counted call that arrives here first. So this is
   # recorded once and never rewritten; it is the derived discriminator the header describes. It is
