@@ -1447,8 +1447,29 @@ internal sealed class PhoneTimelineTelegram_Fake(long createdTopicId) : ITelegra
         return Task.FromResult(createdTopicId);
     }
 
+    /// <summary>What each topic is called right now, as Telegram would hold it.</summary>
+    readonly Dictionary<long, string> _topicNames = [];
+
+    /// <summary>
+    /// A RENAME TO THE CURRENT NAME IS REFUSED, AS TELEGRAM REFUSES IT — 400 TOPIC_NOT_MODIFIED, no
+    /// service message, nothing on the owner's phone. The engine pushes the same name twice on purpose
+    /// when /done races the tick's name sync (the owner command drops its memo and pushes regardless,
+    /// "it costs one edit"), and reads this answer as applied. Recording every call made that harmless
+    /// no-op look like a second rename: UnderClassic_TheTopicLooksLikeMastersTopic saw
+    /// ["🔕 crm bug", "✅ crm bug", "✅ crm bug"] on Windows CI (2026-09-30, run on ffa2dc4) and about
+    /// 1 run in 6 locally, whenever the tick won the race.
+    /// </summary>
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken)
     {
+        lock (_lock)
+        {
+            if (_topicNames.TryGetValue(messageThreadId, out var current) && current == newName)
+                return Task.FromException(new TelegramApiException(
+                    400, "Telegram 'editForumTopic' failed with HTTP 400: {\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: TOPIC_NOT_MODIFIED\"}", null));
+
+            _topicNames[messageThreadId] = newName;
+        }
+
         Record(PhoneEventKinds.TopicRenamed, messageThreadId, newName, null, null);
         return Task.CompletedTask;
     }

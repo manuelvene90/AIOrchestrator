@@ -8,6 +8,8 @@ using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
+using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -53,17 +55,22 @@ public class AChannelAppendWakesTheBridgeTests : IDisposable
     const long TOPIC_ID = 4242;
 
     /// <summary>
-    /// A tick is 2000 ms and the measured append is made just after one ended, so anything under this
-    /// is only reachable by reacting to the file. The entry timed against it is complete the instant it
-    /// is read — its successor's header is already on disk — so nothing here is waiting out a quiet
-    /// period, and the number is the notification plus one poll of the loop.
-    /// <para>
-    /// The ceiling is generous against that but still well under half a tick, so a loaded machine has
-    /// room and a REGRESSION — the wake lost, the pulses removed — cannot hide inside it: either puts
-    /// this back above 2 s.
-    /// </para>
+    /// THE TICK IS A MINUTE HERE, not production's 2 s (2026-09-30). The claim is "the bridge reacts to
+    /// the file, it does not wait for the tick", and with a 2 s tick the test could only tell the two
+    /// apart by a margin of a few hundred milliseconds — which a busy 2-core CI runner ate: Windows CI
+    /// on ffa2dc4 measured 2201 ms against a 1200 ms ceiling, the shape of a pickup by the next tick
+    /// OR of a slow tick after the wake, and nothing in the output could say which. With a 60 s tick
+    /// the two are a minute apart: anything under the ceiling below can ONLY be the waker, however
+    /// slow the machine, and a regression — the wake lost — puts the number at the full minute.
     /// </summary>
-    const int WITHOUT_WAITING_A_TICK_MILLISECONDS = 1200;
+    const int LONG_TICK_MILLISECONDS = 60_000;
+
+    /// <summary>
+    /// A quarter of the tick: room for a starved runner many times over, and still unreachable except by
+    /// reacting to the file. The entry timed against it is complete the instant it is read — its
+    /// successor's header is already on disk — so nothing here waits out a quiet period.
+    /// </summary>
+    const int WITHOUT_WAITING_A_TICK_MILLISECONDS = LONG_TICK_MILLISECONDS / 4;
 
     /// <summary>Ends in a question because OwnerPush_Policy keeps pure narration off the phone entirely.</summary>
     const string FIRST_ENTRY = "ALPHA-ENTRY. Shall I proceed?";
@@ -122,11 +129,18 @@ public class AChannelAppendWakesTheBridgeTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task AnAppendedEntry_IsMirroredWithoutWaitingOutTheTick()
     {
-        // PRODUCTION TIMING ON PURPOSE, unlike every other Bridge test: this one measures that an append
-        // is mirrored WITHOUT waiting out the tick, and BridgeTestTiming.Fast() would shrink that tick to
-        // 20 ms — the test would pass with no waker at all and prove nothing.
+        // PRODUCTION TIMING WITH A LONG TICK, unlike every other Bridge test: this one measures that an
+        // append is mirrored WITHOUT waiting out the tick, and BridgeTestTiming.Fast() would shrink that
+        // tick to 20 ms — the test would pass with no waker at all and prove nothing. Everything but the
+        // tick is production's; see LONG_TICK_MILLISECONDS for why the tick is not.
+        var timing = BridgeEngineTiming_Factory.Create_Custom_WindowFromSettings(
+            LONG_TICK_MILLISECONDS,
+            mirrorRetryBackoffSeconds: 30,
+            (int)ChannelWrite_Lock.DEFAULT_TICK_ALLOWANCE.TotalMilliseconds,
+            ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS);
+
         var engine = BridgeEngine_Factory.Create_WithTelegramClient(
-            _paths, _configProvider, _store, _launcher, _log, _telegram, BridgeEngineTiming_Factory.Create_Production());
+            _paths, _configProvider, _store, _launcher, _log, _telegram, timing);
 
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
 
@@ -149,7 +163,11 @@ public class AChannelAppendWakesTheBridgeTests : IDisposable
             // which looks exactly like the defect under test.
             await Task.Delay(2_500);
 
+            // WITH A SUCCESSOR, for the same reason BETA has one below: with a minute-long tick, a
+            // trailing entry would wait out its quiet period AND the next tick before release. The
+            // header behind it proves ALPHA complete, so the waker alone carries it.
             Append_SupervisorEntry(channelFile, 1, "first", FIRST_ENTRY);
+            Append_SupervisorEntry(channelFile, 2, "first-successor", "ALPHA-SUCCESSOR. Shall I proceed?");
 
             Assert.True(
                 await Wait_Until_Async(() => _telegram.AnyHtmlSendContains("ALPHA-ENTRY"), 20_000),
@@ -166,8 +184,8 @@ public class AChannelAppendWakesTheBridgeTests : IDisposable
             // proves BETA complete and lets the tailer release it on the poll that reads it. The last
             // entry of a file is a different subject with a different guarantee — four seconds of no
             // growth — and pinning that one here would only re-pin the tear.
-            Append_SupervisorEntry(channelFile, 2, "second", SECOND_ENTRY);
-            Append_SupervisorEntry(channelFile, 3, "third", THIRD_ENTRY);
+            Append_SupervisorEntry(channelFile, 3, "second", SECOND_ENTRY);
+            Append_SupervisorEntry(channelFile, 4, "third", THIRD_ENTRY);
 
             Assert.True(
                 await Wait_Until_Async(() => _telegram.AnyHtmlSendContains("BETA-ENTRY"), 20_000),
@@ -177,8 +195,8 @@ public class AChannelAppendWakesTheBridgeTests : IDisposable
 
             Assert.True(
                 waited.TotalMilliseconds < WITHOUT_WAITING_A_TICK_MILLISECONDS,
-                $"the append waited for the next tick: {waited.TotalMilliseconds:F0} ms, and the tick is 2000 ms. "
-                    + "The bridge is not reacting to the channel file.");
+                $"the append waited for the next tick: {waited.TotalMilliseconds:F0} ms, and the tick is {LONG_TICK_MILLISECONDS} ms. "
+                    + $"The bridge is not reacting to the channel file.{Environment.NewLine}{_log.Dump()}");
         }
         finally
         {
