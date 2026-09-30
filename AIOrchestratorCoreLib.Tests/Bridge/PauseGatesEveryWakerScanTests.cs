@@ -58,7 +58,13 @@ public class PauseGatesEveryWakerScanTests
         { "async Task Nudge_IdleImplementers_Async", "Nudge_IdleSupervisor", "session.Paused" },
         { "async Task Check_LedgerHealth_Async", "_ledgerDebtSinceUtc", "session.Paused" },
         { "void Flag_IdleMembers", "IdleMember", "session.Paused" },
-        { "async Task Resume_AllSessions_Async", "GO AHEAD — resume", "session.Paused" },
+        // THE WAKE-EVERY-SESSION LOOP (2026-09-30). /resume's loop was lifted into a helper so the
+        // account-switch REGAIN wake reaches exactly the same sessions; the pause gate moved with it.
+        // Three rows, because the gate now lives in ONE method and the two wakes are only safe while
+        // they both go through it — a waker that wrote its own loop would lose the gate silently.
+        { "Append_WakeToEverySession(string subject", "ChannelAppender.Append_AppEntry", "session.Paused" },
+        { "async Task Resume_AllSessions_Async", "GO AHEAD — resume", "Append_WakeToEverySession(" },
+        { "void Write_RegainWake_ToEverySession", "AccountSwitchRegain_Wording.SUBJECT", "Append_WakeToEverySession(" },
 
         // THE NOTE ROUTER'S SECOND ADAPTER (plan 02, 2026-09-15). AppNote_Writer itself is a
         // pass-through — it writes what its caller decided to write — so the row belongs to the

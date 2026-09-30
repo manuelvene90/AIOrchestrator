@@ -196,6 +196,10 @@ explicitly what you are waiting for.
 exactly where you left off, redo the step the limit cut short, and if you were genuinely finished
 say so in one line rather than inventing work.
 
+**`GO AHEAD — REGAIN after an account switch`** entries mean the Claude account changed and your
+earlier reasoning is gone: follow the entry's three steps (rebuild, verify, post `REGAINED`) BEFORE
+acting — see the section of that name in your role's SKILL.md.
+
 ## Ticket mode — when the app decides
 
 Arm it the SAME way — ONE persistent Monitor, `persistent: true` — only the command changes:

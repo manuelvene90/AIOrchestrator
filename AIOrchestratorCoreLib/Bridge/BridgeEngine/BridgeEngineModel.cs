@@ -12460,57 +12460,7 @@ internal sealed class BridgeEngineModel(
             _log.Log_Error(GLOBAL_ORCH_ID, "/resume could not clear the usage-limit appointments — the wake below still ran, so a session that was merely idle is moving; one that is waiting on a limit is NOT, and needs /resume again", ex);
         }
 
-        var wokenSessions = 0;
-        var wokenOrchestrations = 0;
-        List<string> notWoken = [];
-
-        foreach (var session in _store.Load_All())
-        {
-            // PAUSED sessions are not woken and are not counted as not-woken either: /resume means
-            // "the limit reset, carry on", and a paused orchestration has nothing to carry on with
-            // until the owner lifts it. Waking it here would undo the pause from a command aimed at
-            // something else entirely.
-            if (session.ClosedUtc != null || session.Paused)
-                continue;
-
-            wokenOrchestrations++;
-
-            // Every counter increments only on a written entry. The total is reported to the owner
-            // below as "GO AHEAD written to N channels", and /resume is the one command with no retry —
-            // it exists for the usage-limit reset, where nothing else will speak to a session again.
-            // Counting an append that did not happen tells the owner a session was woken and leaves
-            // it asleep, which is the exact failure /resume is the remedy for.
-            if (ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
-                wokenSessions++;
-            else
-                notWoken.Add($"{session.OrchId}/supervisor");
-
-            foreach (var member in session.Members)
-            {
-                if (member.ClosedUtc != null)
-                    continue;
-
-                var memberChannel = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
-
-                // A SOLO'S CHANNEL IS THE OWNER CHANNEL, written just above: one GO AHEAD per basic
-                // orchestration, not two (2026-09-23 — "woke 7" on a morning with four sessions).
-                if (string.Equals(memberChannel, _paths.Get_OwnerChannelFile(session.OrchId), StringComparison.Ordinal))
-                    continue;
-
-                if (ChannelAppender.Append_AppEntry(memberChannel, AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
-                    wokenSessions++;
-                else
-                    notWoken.Add($"{session.OrchId}/{member.MemberId}");
-            }
-
-            Raise_OrchestrationActivity(session.OrchId);
-        }
-
-        // The general supervisor too — it has the same problem and its own channel.
-        if (ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, AppEntryAudiences.Agent, SUBJECT, body, DateTime.Now))
-            wokenSessions++;
-        else
-            notWoken.Add("general");
+        var (wokenSessions, wokenOrchestrations, notWoken) = Append_WakeToEverySession(SUBJECT, body);
 
         _log.Log_Info(GLOBAL_ORCH_ID, $"/resume — GO AHEAD written to {wokenSessions} channel(s) across {wokenOrchestrations} orchestration(s) + general");
 
@@ -12550,6 +12500,88 @@ internal sealed class BridgeEngineModel(
             messageThreadId,
             $"▶ /resume: {sweepNote} — GO AHEAD written to {wokenSessions} channel{(wokenSessions == 1 ? "" : "s")} across {wokenOrchestrations} orchestration{(wokenOrchestrations == 1 ? "" : "s")} (+ general){clearedNote}",
             cancellationToken);
+    }
+
+    /// <summary>
+    /// ONE APP ENTRY INTO EVERY LIVE SESSION'S CHANNEL — each open, unpaused orchestration's owner
+    /// channel, each open member's channel, and the general supervisor's. The loop /resume always had,
+    /// lifted out so the account-switch REGAIN wake reaches exactly the same sessions by the same rules.
+    /// Returns what it wrote: every counter increments only on an entry that is on disk.
+    /// </summary>
+    (int WokenSessions, int WokenOrchestrations, List<string> NotWoken) Append_WakeToEverySession(string subject, string body)
+    {
+        var wokenSessions = 0;
+        var wokenOrchestrations = 0;
+        List<string> notWoken = [];
+
+        foreach (var session in _store.Load_All())
+        {
+            // PAUSED sessions are not woken and are not counted as not-woken either: /resume means
+            // "the limit reset, carry on", and a paused orchestration has nothing to carry on with
+            // until the owner lifts it. Waking it here would undo the pause from a command aimed at
+            // something else entirely.
+            if (session.ClosedUtc != null || session.Paused)
+                continue;
+
+            wokenOrchestrations++;
+
+            // Every counter increments only on a written entry. The total is reported to the owner
+            // below as "GO AHEAD written to N channels", and /resume is the one command with no retry —
+            // it exists for the usage-limit reset, where nothing else will speak to a session again.
+            // Counting an append that did not happen tells the owner a session was woken and leaves
+            // it asleep, which is the exact failure /resume is the remedy for.
+            if (ChannelAppender.Append_AppEntry(_paths.Get_OwnerChannelFile(session.OrchId), AppEntryAudiences.Agent, subject, body, DateTime.Now))
+                wokenSessions++;
+            else
+                notWoken.Add($"{session.OrchId}/supervisor");
+
+            foreach (var member in session.Members)
+            {
+                if (member.ClosedUtc != null)
+                    continue;
+
+                var memberChannel = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
+
+                // A SOLO'S CHANNEL IS THE OWNER CHANNEL, written just above: one GO AHEAD per basic
+                // orchestration, not two (2026-09-23 — "woke 7" on a morning with four sessions).
+                if (string.Equals(memberChannel, _paths.Get_OwnerChannelFile(session.OrchId), StringComparison.Ordinal))
+                    continue;
+
+                if (ChannelAppender.Append_AppEntry(memberChannel, AppEntryAudiences.Agent, subject, body, DateTime.Now))
+                    wokenSessions++;
+                else
+                    notWoken.Add($"{session.OrchId}/{member.MemberId}");
+            }
+
+            Raise_OrchestrationActivity(session.OrchId);
+        }
+
+        // The general supervisor too — it has the same problem and its own channel.
+        if (ChannelAppender.Append_AppEntry(_paths.GeneralChannelFile, AppEntryAudiences.Agent, subject, body, DateTime.Now))
+            wokenSessions++;
+        else
+            notWoken.Add("general");
+
+        return (wokenSessions, wokenOrchestrations, notWoken);
+    }
+
+    /// <summary>
+    /// THE REGAIN WAKE (owner, 2026-09-30): the account changed, so every live session's earlier
+    /// reasoning is gone — see <see cref="Limits.ClaudeAccount.AccountSwitchRegain_Wording"/>. Written
+    /// the moment the app SEES the switch, not on /resume, so it is on disk before the limit rescue
+    /// stops a blocked session and the watchdog resumes it into its channel, and it reaches the sessions
+    /// that never hit a limit at all and are still running on the new login.
+    /// </summary>
+    void Write_RegainWake_ToEverySession(DateTime switchedAtUtc)
+    {
+        var (woken, orchestrations, notWoken) = Append_WakeToEverySession(
+            Limits.ClaudeAccount.AccountSwitchRegain_Wording.SUBJECT,
+            Limits.ClaudeAccount.AccountSwitchRegain_Wording.Build_Body(switchedAtUtc.ToLocalTime()));
+
+        _log.Log_Info(GLOBAL_ORCH_ID, $"Claude account switched — REGAIN wake written to {woken} channel(s) across {orchestrations} orchestration(s) + general");
+
+        if (notWoken.Count > 0)
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"REGAIN wake could NOT be written (channel locked): {string.Join(", ", notWoken)}");
     }
 
     async Task Send_MemberStatusReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
@@ -14610,6 +14642,17 @@ internal sealed class BridgeEngineModel(
 
         if (previousAccountId == null)
             return;
+
+        // Every session's earlier reasoning is gone with the old login: tell each one to rebuild it
+        // before it acts. Guarded — the pause lift below must happen whatever this does.
+        try
+        {
+            Write_RegainWake_ToEverySession(nowUtc);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(GLOBAL_ORCH_ID, "Claude account switched, but the REGAIN wake could not be written — sessions will resume without being told their reasoning is gone", ex);
+        }
 
         if (liftText == null)
         {
