@@ -305,6 +305,80 @@ public class LimitAccountSwitchAndRescueTests : IDisposable
         Assert.True(goAheads == 1, $"the basic orchestration's owner channel carries {goAheads} GO AHEAD entries:{Environment.NewLine}{ownerChannel}");
     }
 
+    /// <summary>
+    /// THE REGAIN WAKE (owner, 2026-09-30, ai-orchestrator-32 entries [57] and [62]). On another account a
+    /// resumed session keeps its messages and tool results but not the reasoning behind them, so the app
+    /// tells every live session — the solo's own channel, a crew's member channels, the general
+    /// supervisor — to rebuild its context before it acts. Written ONCE: the switch is seen once, and a
+    /// wake repeated every tick would be the waterfall the whole system exists to prevent.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AnotherAccountLoggedIn_WritesOneRegainWake_IntoEveryLiveSession()
+    {
+        _engineState.Save(new EngineStateSnapshot { LimitAccountId = ACCOUNT_A });
+
+        var solo = _launcher.Start_BasicOrchestration("Repo", _tempRepo);
+        var crew = _launcher.Start_Orchestration("Repo", _tempRepo);
+        Directory.CreateDirectory(_paths.GeneralFolder);
+        File.WriteAllText(_paths.GeneralChannelFile, "# GENERAL\n\n---\n");
+
+        Log_In(ACCOUNT_B);
+        var engine = Create_Engine();
+
+        Assert.True(
+            await Run_Until_Async(engine, () => Count_RegainWakes(_paths.Get_OwnerChannelFile(solo.OrchId)) > 0, 20_000),
+            $"the account changed and the solo was never told its reasoning is gone.{Environment.NewLine}{_log.Dump()}");
+
+        // A few more ticks: the switch was seen once, so the wake must not be written again.
+        await Run_Until_Async(engine, () => false, BridgeTestTiming.Window_ForTicks(10));
+
+        Assert.Equal(1, Count_RegainWakes(_paths.Get_OwnerChannelFile(solo.OrchId)));
+        Assert.Equal(1, Count_RegainWakes(_paths.Get_OwnerChannelFile(crew.OrchId)));
+        Assert.Equal(1, Count_RegainWakes(_paths.GeneralChannelFile));
+
+        foreach (var member in _store.Load_All().Single(session => session.OrchId == crew.OrchId).Members.Where(member => member.ClosedUtc == null))
+            Assert.Equal(1, Count_RegainWakes(AIOrchestratorCoreLib.Channels.MemberChannel_Locator.Get_ChannelFile(_paths, crew.OrchId, member.MemberId)));
+
+        var soloChannel = File.ReadAllText(_paths.Get_OwnerChannelFile(solo.OrchId));
+        Assert.Contains("YOUR EARLIER REASONING IS GONE", soloChannel, StringComparison.Ordinal);
+        Assert.Contains(AccountSwitchRegain_Wording.REGAINED_MARKER, soloChannel, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// AND ONLY ON A SWITCH. The same account still logged in, or a first sighting with nothing on
+    /// record (the adoption rule above), writes no REGAIN wake: telling a session its reasoning is gone
+    /// when it is not would send it through a rebuild for nothing, on every app restart.
+    /// </summary>
+    [Theory]
+    [Trait("Speed", "Slow")]
+    [InlineData(ACCOUNT_A)]
+    [InlineData(null)]
+    public async Task NoSwitch_WritesNoRegainWake(string? accountOnRecord)
+    {
+        _engineState.Save(new EngineStateSnapshot { LimitAccountId = accountOnRecord });
+
+        var solo = _launcher.Start_BasicOrchestration("Repo", _tempRepo);
+
+        Log_In(ACCOUNT_A);
+        var engine = Create_Engine();
+
+        await Run_Until_Async(engine, () => false, BridgeTestTiming.Window_ForTicks(15));
+
+        Assert.Equal(ACCOUNT_A, _engineState.Load_OrEmpty().LimitAccountId);
+        Assert.Equal(0, Count_RegainWakes(_paths.Get_OwnerChannelFile(solo.OrchId)));
+    }
+
+    static int Count_RegainWakes(string channelFile)
+    {
+        if (!File.Exists(channelFile))
+            return 0;
+
+        return File.ReadAllText(channelFile).Split('\n').Count(line =>
+            line.StartsWith("## [", StringComparison.Ordinal)
+            && line.Contains(AccountSwitchRegain_Wording.SUBJECT, StringComparison.Ordinal));
+    }
+
     IBridgeEngine Create_Engine()
     {
         return BridgeEngine_Factory.Create_WithDecisionState(
