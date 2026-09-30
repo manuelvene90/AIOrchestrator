@@ -83,7 +83,7 @@ public class NothingMovedBecomesInvisible_AdvisoriesTests
     /// </summary>
     [Theory]
     [InlineData("async Task Check_LedgerHealth_Async", "PLAN.md is behind your verdicts")]
-    [InlineData("void Report_LedgerShape", "PLAN.md has lines that cannot show progress")]
+    [InlineData("void Report_LedgerShape", "PLAN.md has lines the owner cannot follow")]
     [InlineData("void Report_StaleInProgress", "PLAN.md claims work that nobody is doing")]
     public void EveryLedgerAdvisory_NamesItsKind(string signatureMark, string subject)
     {

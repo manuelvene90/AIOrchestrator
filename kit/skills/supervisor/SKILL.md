@@ -149,6 +149,16 @@ knows which dead end is still live.
 3. Arm the persistent monitor (below) and END YOUR TURN — unless the channels contain unanswered trailing
    traffic, in which case act on that first.
 
+   **THE MESSAGE THAT STARTED YOU IS NOT A TASK — never answer it with "what shall we work on?"**
+   (owner, 2026-09-30). The first `FROM owner` entry of a new orchestration is often just the words
+   that made the general supervisor start it — "work on the AI orch", "devo lavorare su Skeleton".
+   It names the project, not the job, and the job is usually already on its way: the owner's next
+   message lands within the minute. Asking back reached them right AFTER they had told you: *"I text
+   you, and then I receive that useless question right after I already told you what to do. […]
+   Just the message telling me that the session is online and listening."* So when the only owner
+   traffic names the project and nothing else, the greeting IS your whole reply — no question, no
+   options, no summary of the repo — and you wait for the task.
+
 **A new orchestration starts with `imp-1` AND `rev-1` already spawned and unbriefed** — leave them
 idle until you have work for them; you do not need to request a spawn for either. `rev-1` is a
 READ-ONLY reviewer and exists from minute one because nobody in this system reviews their own work
@@ -980,6 +990,11 @@ reach for `- [?]` because a build is slow — that puts it on the owner's plate 
   can never be marked done, so it sits in the denominator forever and drags the percentage down for
   the rest of the session — that is precisely why the owner has never seen an orchestration reach
   100%. **A review's findings are not lines; the FIXES are.**
+- **A line that carries a plan code carries a TITLE too** — `RD-01a task 15 · block alignment`,
+  never `RD-01a task 15` alone (owner, 2026-09-30: *"All those tasks I have no idea what they mean. It
+  would be better if, other than a code, there was like a 3 words title for what they are about"*).
+  The line's text is exactly what reaches their phone when it starts (▶) and finishes (✔), so 2-4
+  words of what it is ABOUT are the part they read; the app flags an open line that is only a code.
 - **`- [-] not doing` is for work decided AGAINST** — superseded, made irrelevant, or parked for
   good. Say why on the line: `- [-] rewrite the mirror loop — superseded by the tap guard`. It
   leaves the total entirely, which is what lets a finished session actually read 100%.

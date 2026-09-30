@@ -161,4 +161,53 @@ public class PlanShapeValidatorTests
 
         Assert.Single(PlanShape_Validator.Find_UnrepresentableLines(plan));
     }
+    /// <summary>
+    /// A LINE THAT IS ONLY A CODE. The line's text is what reaches the owner's phone when it starts or
+    /// finishes ("▶ RD-01a task 15"), and a plan code on its own tells them nothing. Their words,
+    /// 2026-09-30, on a screenshot of da-vinci-fintech-suite-32's topic: *"All those tasks I have no
+    /// idea what they mean. It would be better if, other than a code, there was like a 3 words title
+    /// for what they are about."*
+    /// </summary>
+    [Theory]
+    [InlineData("- [>] RD-01a task 16")]
+    [InlineData("- [ ] BH-02a task 5")]
+    [InlineData("- [ ] BH-01")]
+    [InlineData("- [!] Stage 1A")]
+    [InlineData("- [?] UC-05d part 2 of 3")]
+    [InlineData("- [ ] #92")]
+    [InlineData("- [ ] SK-M API fix")]
+    public void Find_ALineThatIsOnlyACode(string line)
+    {
+        var complaint = Assert.Single(PlanShape_Validator.Find_UnrepresentableLines(line));
+
+        Assert.Contains("only a code", complaint);
+    }
+
+    /// <summary>The same code WITH a few words of title is exactly the shape asked for.</summary>
+    [Theory]
+    [InlineData("- [>] RD-01a task 16 · block alignment")]
+    [InlineData("- [ ] BH-02a task 5 — order request mapping")]
+    [InlineData("- [ ] BH-01: order contract fixes")]
+    [InlineData("- [!] 4. deploy (waiting on owner)")]
+    [InlineData("- [ ] fix parser")]
+    [InlineData("- [ ] THE TYPE CHECKER HAS NEVER WALKED A METHOD BODY")]
+    public void ACodeWithATitle_IsAccepted(string line)
+    {
+        Assert.Empty(PlanShape_Validator.Find_UnrepresentableLines(line));
+    }
+
+    /// <summary>
+    /// DONE LINES ARE NOT FLAGGED. Their ✔ has already been sent, so retitling them now reaches nobody —
+    /// and a ledger with fifteen finished "RD-01a task n" lines would otherwise open with fifteen
+    /// complaints the session can do nothing useful about. The lines still to be announced are the ones
+    /// worth fixing. Not-doing lines are never matched by this validator at all.
+    /// </summary>
+    [Theory]
+    [InlineData("- [x] RD-01a task 15")]
+    [InlineData("- [X] BH-02a task 2")]
+    [InlineData("- [-] RD-01a task 19")]
+    public void AFinishedOrDroppedCodeOnlyLine_IsNotComplainedAbout(string line)
+    {
+        Assert.Empty(PlanShape_Validator.Find_UnrepresentableLines(line));
+    }
 }
