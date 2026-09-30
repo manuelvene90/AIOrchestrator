@@ -44,14 +44,13 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     command; the code that used to back this paragraph (`/italian` toggled the layer from the phone,
     with the app's status-bar checkbox mirroring it, PERSISTED to config.json so the provider
     reloaded on the file's write stamp rather than keeping an in-memory copy in step) does not exist
-    anymore. **Whether that stays permanent is still open**, and the document that framed the question
-    is GONE — the 2026-09-11 spec's §11.1 asked the owner to confirm dropping the layer in favour of
-    the fork's rule ("with the owner, write in the owner's language"), and that spec no longer exists
-    anywhere (see **Design Spec** below for the search). **So the question is open with no written
-    statement of it left**: the owner never answered, and now nobody can re-read what was asked. Treat
-    the deletion as the tree's *current* state, not a *settled* decision — if the answer is "keep it",
-    a future task re-ports the layer described above from master's history, which is not merely
-    un-deleting a flag.
+    anymore. **It is SETTLED: the owner answered on 2026-09-12 — it stays gone.** Asked by the
+    2026-09-11 spec's §11.1 to confirm dropping the layer in favour of the fork's rule ("with the owner,
+    write in the owner's language"), they said *"Yes — agents write in my language, drop it"*. Nothing
+    re-ports the layer; the rule lives in the role protocols plus the `owner.language` entry in the
+    settings catalogue. (Corrected 2026-09-30: this paragraph spent two weeks saying the owner "never
+    answered" because the commit recording the answer, `7c56be1` on `docs/translator-decision-answered`,
+    was never merged — the same local-only-branch loss as the spec itself, see **Design Spec**.)
 12. **Channel headers WERE agent-written — the allocation is now the TOOL's, and the duplicate-index
     danger has moved rather than gone (corrected 2026-09-15).** As originally written: `[n]` and the
     timestamp were guesses unless the agent re-read the file — on 2026-08-10 `option-lab-2` carried
@@ -264,8 +263,8 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
     features and intent (decisions 8's resume rule, 17's kit delivery rule, the Telegram/pause/
     question-hold decisions above, etc.) were **re-ported by hand across a numbered task series**,
     ledgered in `docs/superpowers/plans/2026-09-11-fork-merge-01-report.md` — that ledger is the
-    audit trail for which side's code is actually running where — **and, the design spec being gone
-    (see **Design Spec** below), it is now the ONLY surviving account of this merge.** Two names for the same repo
+    audit trail for which side's code is actually running where — together with the design spec and
+    plan 01, recovered on 2026-09-30 (see **Design Spec** below). Two names for the same repo
     persist for now: `.claude/rules/` still describes fork/upstream boundaries that a merged repo has
     already outgrown (see the git-and-boundaries rule) — that is a known staleness, not yet resolved.
     **One concrete contradiction it will trip over:** `git-and-boundaries.md` says "Do not modify
@@ -409,21 +408,21 @@ A portable orchestration kit that generalizes a proven two-agent supervision pat
 
 **`docs/superpowers/specs/2026-08-06-ai-orchestrator-design.md` is the approved design** — read it before changing architecture. This file stays the quick context; the spec is the authority.
 
-**`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md` IS GONE, and three
-places in this file used to send a reader to fetch it (corrected 2026-09-15).** It was cited as
-living on branch `feat/fork-merge-and-profiles-spec`. Searched exhaustively on 2026-09-15: **no such
-branch on `origin` or `upstream`** (`git ls-remote --heads` on both), **no such file in any reachable
-commit** (`git rev-list --all` × `git ls-tree`), nothing in the reflog or in any stash. Either it was
-never committed, or it lived only in a worktree that has since been removed.
+**`docs/superpowers/specs/2026-09-11-fork-merge-and-per-user-profiles-design.md` is BACK IN THE TREE
+(recovered 2026-09-30), with its plan `docs/superpowers/plans/2026-09-11-fork-merge-01-prepare-merge-reports.md`.**
+From 2026-09-15 this section said it was gone: a search that day found no such branch on `origin` or
+`upstream` and no such file in any reachable commit. The search was right about the remotes and wrong
+about the owner's machine — the branch `feat/fork-merge-and-profiles-spec` existed all along as a
+LOCAL branch in the main checkout (with a worktree at `../AIOrchestrator-spec`), never pushed. It was
+found during the 2026-09-30 worktree cleanup and merged. The fork merge's authority is the code, this
+spec, and `docs/superpowers/plans/2026-09-11-fork-merge-01-report.md` (the per-task ledger of which
+side's code is running where) with decision 26 below.
 
-**What this means for a reader.** The fork merge's authority is now the code and the two things that
-did survive: `docs/superpowers/plans/2026-09-11-fork-merge-01-report.md` (the per-task ledger of which
-side's code is running where) and decision 26 below. The per-user-profiles half has no surviving
-design document — treat any claim about it as unsourced until someone rewrites it.
-
-**The lesson, which is the reason this paragraph replaces a pointer rather than deleting it:** a spec
-that lives only on a branch nobody merged is a spec that will be lost, and the citation outlives the
-file. The sibling incident is in the same week — the 2026-09-09 review dossier sat untracked for six
+**The lesson, which is the reason this paragraph was rewritten rather than deleted:** a spec that
+lives only on a branch nobody merged is a spec that will be lost, and the citation outlives the file —
+and "searched everywhere" means nothing unless it names the machine. The same cleanup found a second
+casualty of the same shape: the owner's answer to the translator question (decision 11) sat unmerged on
+`docs/translator-decision-answered` for two weeks while this file said they had never answered. The sibling incident is in the same week — the 2026-09-09 review dossier sat untracked for six
 days and was one `git worktree remove` from going the same way; it survives only because it was
 committed on 2026-09-15 (`5810ba4`). Commit the document, or do not cite it.
 
