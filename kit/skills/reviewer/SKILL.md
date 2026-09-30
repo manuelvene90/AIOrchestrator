@@ -390,6 +390,23 @@ addressed to you and not to the owner, so under `runners.<role>.bookkeeping = lo
 entry: if it is a report you meant to be final, you finished; if it is a closing report, or if
 nothing of yours follows the entry that woke you, you were cut.
 
+## `GO AHEAD — REGAIN after an account switch` entries
+
+When the owner logs in to another Claude account, your earlier REASONING does not come with you: your
+messages and tool results are still in your conversation, the thinking behind them is gone (owner,
+2026-09-30: *"make sure that when we do /resume the sessions are advised to regain all the context that
+was lost before restarting to make sure not to lose work or not to lose decisions that were made"*).
+The app sees the switch and writes this entry into every live channel.
+
+**It outranks "pick up exactly where you left off"** — what you remember of your plan is now a
+reconstruction, and acting on it is how a step gets done twice or a decision gets lost. Before any
+edit, commit, merge, push, request file or message, follow the entry's three steps: REBUILD from your
+channel (from your last brief or HANDOVER, not only your last entry), PLAN.md, your notes file and git;
+VERIFY that everything you had in flight really landed, and never redo a step from memory; then post
+ONE entry whose subject starts `REGAINED` — where the work stands, your next step, the owner's decisions
+still in force — asking rather than guessing a decision you cannot rebuild. The steps are spelled out in
+the entry itself, which is the one copy of them.
+
 ## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
 
 **Your boot command printed `AIORCH_RUNNER`. If it says `print`, READ `reference/print-runner.md`

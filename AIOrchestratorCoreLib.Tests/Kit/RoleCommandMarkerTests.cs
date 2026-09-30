@@ -72,6 +72,11 @@ public class RoleCommandMarkerTests
         // reference-file scan met the sibling branch's reference file. HANDOVER is not here: the app
         // does read that one (HandoverEntry_Detector).
         "ASK", "FYI", "CLAIM", "RELEASE", "RELAY", "HANDBACK",
+        // THE REGAIN STEP'S CLOSING WORD (owner, 2026-09-30, ai-orchestrator-32): a session that has
+        // rebuilt its context after an account switch says so in a subject starting REGAINED, for its
+        // reader — the owner or its supervisor. No app code matches it; the app WRITES the wake
+        // (AccountSwitchRegain_Wording) and leaves the answer to the people reading the channel.
+        "REGAINED",
         .. AIOrchestratorCoreLib.Sessions.Platform_Abbreviations.ALL.Select(entry => entry.Code),
     ];
 

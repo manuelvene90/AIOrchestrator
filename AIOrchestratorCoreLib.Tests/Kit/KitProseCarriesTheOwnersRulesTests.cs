@@ -44,6 +44,14 @@ public class KitProseCarriesTheOwnersRulesTests
     // phone shows as it starts and finishes, and "RD-01a task 15" alone told them nothing.
     [InlineData("solo", "A line that carries a plan code carries a TITLE too")]
     [InlineData("supervisor", "A line that carries a plan code carries a TITLE too")]
+    // THE REGAIN STEP AFTER AN ACCOUNT SWITCH (owner, 2026-09-30, ai-orchestrator-32 entries [57] and [62]): every
+    // role the app wakes is told its reasoning is gone and to rebuild before acting.
+    [InlineData("solo", "GO AHEAD — REGAIN after an account switch")]
+    [InlineData("supervisor", "GO AHEAD — REGAIN after an account switch")]
+    [InlineData("implementer", "GO AHEAD — REGAIN after an account switch")]
+    [InlineData("reviewer", "GO AHEAD — REGAIN after an account switch")]
+    [InlineData("general-supervisor", "GO AHEAD — REGAIN after an account switch")]
+    [InlineData("solo", "It outranks \"pick up exactly where you left off\"")]
     public void TheSkill_CarriesTheOwnersRule(string role, string sentence)
     {
         Assert.Contains(sentence, Read_Protocol(role), StringComparison.OrdinalIgnoreCase);
