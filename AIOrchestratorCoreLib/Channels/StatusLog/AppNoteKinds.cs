@@ -33,7 +33,7 @@ public enum AppNoteKinds
     /// </summary>
     TurnMachinery,
 
-    /// <summary>PLAN.md is behind the verdicts / has lines that cannot show progress / claims work nobody is doing.</summary>
+    /// <summary>PLAN.md is behind the verdicts / has lines the owner cannot follow / claims work nobody is doing.</summary>
     LedgerAdvisory,
 
     /// <summary>A member has been nudged and has not moved — <c>OrphanEscalation_Decider.Describe_Report</c>.</summary>

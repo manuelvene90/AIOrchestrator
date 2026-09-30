@@ -4455,8 +4455,8 @@ internal sealed class BridgeEngineModel(
         // supervisor happens to edit those same lines.
         if (!Append_SupervisorAttention_UnlessMeeting(
             session.OrchId,
-            "PLAN.md has lines that cannot show progress",
-            $"{string.Join("\n", complaints)}\n\nUntil these are split, work on them renders as zero movement on the owner's bar no matter how often you update the ledger.",
+            "PLAN.md has lines the owner cannot follow",
+            $"{string.Join("\n", complaints)}\n\nA ledger line's text is what the owner reads on their phone when it starts and finishes, and a lumped line renders as zero movement on their bar no matter how often you update the ledger.",
             presence,
             routedKind: Channels.StatusLog.AppNoteKinds.LedgerAdvisory))
             return;
@@ -4471,7 +4471,7 @@ internal sealed class BridgeEngineModel(
         // Plan.md" (2026-08-25). The actionable copy is the `[agent]` channel entry above, which
         // goes to the session that can split the line; this is only the app saying it sent one.
         // Same shape, and the same level, as the idle-member advisory in Retirement_Advisor.
-        _log.Log_Info(session.OrchId, $"PLAN.md shape advisory sent to the supervisor — {complaints.Count} line(s) cannot show progress");
+        _log.Log_Info(session.OrchId, $"PLAN.md shape advisory sent to the supervisor — {complaints.Count} line(s) to fix");
     }
 
     /// <summary>

@@ -102,10 +102,78 @@ public static partial class PlanShape_Validator
             var separators = taskText.Count(character => character == ',' || character == ';');
 
             if (separators >= MAX_SEPARATORS_PER_TASK)
+            {
                 complaints.Add($"'{Shorten(taskText)}' lists {separators + 1} deliverables in one line — split it, one line per task.");
+                continue;
+            }
+
+            if (Is_StillToBeAnnounced(match.Groups[1].Value) && Is_OnlyACode(taskText))
+                complaints.Add($"'{Shorten(taskText)}' is only a code — add 2-4 words saying what it is about, e.g. '{Shorten(taskText)} · <what it does>': this text is what reaches the owner's phone when the line starts or finishes, and a bare code means nothing to them.");
         }
 
         return complaints;
+    }
+
+    /// <summary>
+    /// Plan-structure words that name WHERE a task sits rather than what it is about: "RD-01a task 15",
+    /// "UC-05d part 2 of 3" and "Stage 1A" say nothing to someone who has not read the plan.
+    /// </summary>
+    static readonly HashSet<string> STRUCTURE_WORDS = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "task", "tasks", "subtask", "subtasks", "step", "steps", "item", "items",
+        "part", "parts", "stage", "stages", "phase", "phases",
+    };
+
+    /// <summary>Below this many describing words, a line is a code with no title.</summary>
+    const int MIN_DESCRIBING_WORDS = 2;
+
+    /// <summary>
+    /// ONLY THE LINES WHOSE ▶ OR ✔ IS STILL TO BE SENT. A done line's ✔ has already reached the phone, so
+    /// retitling it now reaches nobody, and a ledger with fifteen finished "RD-01a task n" lines would
+    /// open with fifteen complaints nobody can usefully act on.
+    /// </summary>
+    static bool Is_StillToBeAnnounced(string marker) => marker is " " or ">" or "!" or "?";
+
+    /// <summary>
+    /// "RD-01a task 15" — plan codes, numbers and structure words, and fewer than two words that say
+    /// what the task is ABOUT. The line's text is sent to the owner verbatim as it starts and finishes
+    /// (LedgerTransition_Wording), and they asked on 2026-09-30 for "like a 3 words title for what
+    /// they are about" besides the code. A describing word has no digit and at least three letters —
+    /// which is what leaves "RD-01a", "1A" and "#92" out. Run over every open line on this machine the
+    /// day it was written it flagged 13 of 1376: the 11 "RD-01a task n" / "BH-02a task n" lines that
+    /// prompted it, "Part B implementation", and one line wrapped onto the next.
+    /// </summary>
+    static bool Is_OnlyACode(string taskText)
+    {
+        var describingWords = taskText
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Select(token => token.Trim(TOKEN_PUNCTUATION))
+            .Count(Is_DescribingWord);
+
+        return describingWords < MIN_DESCRIBING_WORDS;
+    }
+
+    static readonly char[] TOKEN_PUNCTUATION = ".,;:!?()[]{}'\"`·—–-/*_#".ToCharArray();
+
+    static bool Is_DescribingWord(string token)
+    {
+        if (token.Any(char.IsDigit))
+            return false;
+
+        var letters = token.Count(char.IsLetter);
+
+        if (letters < 3)
+            return false;
+
+        // A SHOUTED WORD IS STILL A WORD. Supervisors write whole headline lines in capitals ("THE TYPE
+        // CHECKER HAS NEVER WALKED A CLASS METHOD BODY") — measured 2026-09-30 across this machine's 1376
+        // open ledger lines, requiring a lower-case letter flagged 19 of them for nothing. An all-capital
+        // token counts when it is four letters or more and nothing else, which still leaves out "BH",
+        // "API" and "SK-M" — the length and the hyphen are what make those codes.
+        if (!token.Any(char.IsLower) && !(letters >= 4 && token.All(char.IsLetter)))
+            return false;
+
+        return !STRUCTURE_WORDS.Contains(token);
     }
 
     static string Shorten(string text)
