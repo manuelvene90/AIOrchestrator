@@ -318,6 +318,25 @@ internal sealed class BridgeEngineModel(
     /// <summary>Say a crossing once, and absorb the ones already there when the file was first read.</summary>
     readonly HashSet<string> _screenedIndexCrossings = [];
 
+    /// <summary>
+    /// Per channel: when a refused compaction rewrite was last logged, and how many refusals have
+    /// happened since. The refusal repeats on every tick while its cause lasts, so it is said on the
+    /// first one and then at most once per <see cref="COMPACTION_REFUSAL_LOG_INTERVAL"/>.
+    /// </summary>
+    readonly Dictionary<string, (DateTime LoggedUtc, int SinceLogged)> _compactionRefusals = [];
+
+    static readonly TimeSpan COMPACTION_REFUSAL_LOG_INTERVAL = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Per archive file: the header lines the index screen last read from it, keyed by the length and
+    /// stamp it had then — the same invalidation rule as <see cref="ChannelHistory_Cache"/>, never a
+    /// clock. The screen used to read every archive WHOLE on every tick; on 2026-09-30 that was ~675 MB
+    /// of text per tick, ticks of 60-97 s, and an app that stopped responding. An archive changes only
+    /// when a compaction appends to it, so the live file — small by construction — is the only one
+    /// read on an ordinary tick.
+    /// </summary>
+    readonly Dictionary<string, (long Length, DateTime LastWriteUtc, IReadOnlyList<ChannelHeaderLine> Headers)> _archiveHeaders = [];
+
     readonly Lock _buttonLock = new();
 
     /// <summary>
@@ -3114,13 +3133,43 @@ internal sealed class BridgeEngineModel(
             // sound and it is the only one: the sentence that used to sit here — "this engine cannot
             // be constructed from a test" — was FALSE. BridgeEngine_Factory.Create is public, and
             // ChannelCompactionLoopProbeTests drives this very loop through it.
-            var newLength = Channel_CompactionStep.Compact_IfAllowed(_tailer, channel.FilePath, _log, channel.OrchId);
+            var newLength = Channel_CompactionStep.Compact_IfAllowed(_tailer, channel.FilePath, _log, channel.OrchId, out var rewriteFailure);
+
+            if (rewriteFailure != null)
+                Report_CompactionRefusal(channel.OrchId, channel.FilePath, rewriteFailure);
 
             if (newLength == null)
                 continue;
 
+            _compactionRefusals.Remove(channel.FilePath);
             _log.Log_Info(channel.OrchId, $"Channel compacted — older entries archived beside it ({Path.GetFileName(channel.FilePath)})");
         }
+    }
+
+    /// <summary>
+    /// Harmless now — the compactor undoes its archive append when the rewrite is refused — but not
+    /// silent: a channel that never compacts keeps growing and costs every reader of it, and a
+    /// refusal that lasts is something holding the live file open, which is worth knowing about.
+    /// </summary>
+    void Report_CompactionRefusal(string orchId, string channelFilePath, string rewriteFailure)
+    {
+        var nowUtc = _clock.UtcNow;
+        var known = _compactionRefusals.TryGetValue(channelFilePath, out var previous);
+
+        if (known && nowUtc - previous.LoggedUtc < COMPACTION_REFUSAL_LOG_INTERVAL)
+        {
+            _compactionRefusals[channelFilePath] = (previous.LoggedUtc, previous.SinceLogged + 1);
+            return;
+        }
+
+        var repeats = known ? $" ({previous.SinceLogged} more refusal(s) since the last line)" : string.Empty;
+
+        _log.Log_Warning(
+            orchId,
+            $"{Channel_CompactionStep.REWRITE_REFUSED_PHRASE} '{Channel_CompactionStep.Describe_Channel(channelFilePath)}' — {rewriteFailure}. "
+            + $"Its archive append was undone, so nothing is duplicated; it retries every tick and this line repeats at most every {COMPACTION_REFUSAL_LOG_INTERVAL.TotalMinutes:F0} min{repeats}");
+
+        _compactionRefusals[channelFilePath] = (nowUtc, 0);
     }
 
     /// <summary>
@@ -3909,10 +3958,15 @@ internal sealed class BridgeEngineModel(
             // reaches the file first, and it is taken before this read.
             Baseline_IfUnseen(channel);
 
-            var crossings = ChannelIndexSequence_Screen.Find_Crossings(
-                ChannelIndexSequence_Screen.Read_Headers(
-                    UsageTotals_Reader.Read_Text_Safe(Channel_Compactor.Build_ArchiveFilePath(channel.FilePath)),
-                    UsageTotals_Reader.Read_Text_Safe(channel.FilePath)));
+            // Archive first, then live — exactly the order Read_Headers(archive, live) produces, since
+            // it numbers each source's lines on their own.
+            List<ChannelHeaderLine> headers =
+            [
+                .. Read_ArchiveHeaders_Cached(Channel_Compactor.Build_ArchiveFilePath(channel.FilePath)),
+                .. ChannelIndexSequence_Screen.Read_Headers(string.Empty, UsageTotals_Reader.Read_Text_Safe(channel.FilePath)),
+            ];
+
+            var crossings = ChannelIndexSequence_Screen.Find_Crossings(headers);
 
             if (crossings.Count == 0)
                 continue;
@@ -3925,6 +3979,33 @@ internal sealed class BridgeEngineModel(
                     _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {ChannelIndexSequence_Screen.Describe_Crossing(crossing)}");
             }
         }
+    }
+
+    /// <summary>
+    /// The archive's header lines, read from disk only when its length or stamp moved since the last
+    /// read (see <see cref="_archiveHeaders"/>). A missing archive is not cached: it has no stamp to
+    /// invalidate against, and "no headers" costs one stat to find out again.
+    /// </summary>
+    IReadOnlyList<ChannelHeaderLine> Read_ArchiveHeaders_Cached(string archiveFilePath)
+    {
+        var archive = new FileInfo(archiveFilePath);
+
+        if (!archive.Exists)
+        {
+            _archiveHeaders.Remove(archiveFilePath);
+            return [];
+        }
+
+        if (_archiveHeaders.TryGetValue(archiveFilePath, out var cached)
+            && cached.Length == archive.Length
+            && cached.LastWriteUtc == archive.LastWriteTimeUtc)
+            return cached.Headers;
+
+        var headers = ChannelIndexSequence_Screen.Read_Headers(UsageTotals_Reader.Read_Text_Safe(archiveFilePath), string.Empty);
+
+        _archiveHeaders[archiveFilePath] = (archive.Length, archive.LastWriteTimeUtc, headers);
+
+        return headers;
     }
 
     /// <summary>

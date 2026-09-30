@@ -37,6 +37,9 @@ namespace AIOrchestratorCoreLib.Tailing;
 /// </summary>
 public static class Channel_CompactionStep
 {
+    /// <summary>The words that open the refused-rewrite log line; tests find the line by them.</summary>
+    public const string REWRITE_REFUSED_PHRASE = "Compaction could not rewrite";
+
     /// <summary>
     /// Archives the older entries of this channel and re-anchors the tailer to the rewritten file.
     /// Returns the new file length, or null when nothing was done — the channel was not eligible,
@@ -48,6 +51,24 @@ public static class Channel_CompactionStep
         IOrchestrationLog log,
         string orchId)
     {
+        return Compact_IfAllowed(tailer, channelFilePath, log, orchId, out _);
+    }
+
+    /// <summary>
+    /// As above, and <paramref name="rewriteFailure"/> says why an attempted compaction failed (see
+    /// <see cref="Channel_Compactor.Compact_IfNeeded(string, Func{bool}, out string?)"/>). It is NOT
+    /// logged here: the failure repeats on every tick for as long as its cause lasts, so the caller —
+    /// the one that lives across ticks — decides how often it is worth a line.
+    /// </summary>
+    public static long? Compact_IfAllowed(
+        IChannelTailer tailer,
+        string channelFilePath,
+        IOrchestrationLog log,
+        string orchId,
+        out string? rewriteFailure)
+    {
+        rewriteFailure = null;
+
         // A channel the poll SKIPPED has a frozen cursor — Find_ActiveChannels drops deferred topics
         // and held owner channels precisely so their offsets freeze and everything they produced
         // replays as a catch-up burst. Discovery is wider than the poll, so without this the frozen
@@ -75,7 +96,8 @@ public static class Channel_CompactionStep
                 guardAsked = true;
 
                 return !tailer.Has_UndeliveredEntries(channelFilePath, out unevaluableReason);
-            });
+            },
+            out rewriteFailure);
 
         // The compactor asks only once it holds the gate over an existing file. When it declined
         // before asking — nothing to stat, or a gate it could not take — the guard is still put to
@@ -116,7 +138,7 @@ public static class Channel_CompactionStep
     /// the file name alone names all of them equally — a log line that says "could not evaluate
     /// 'channel.md'" in a six-member orchestration has told the reader nothing they can act on.
     /// </summary>
-    static string Describe_Channel(string channelFilePath)
+    public static string Describe_Channel(string channelFilePath)
     {
         var folder = Path.GetFileName(Path.GetDirectoryName(channelFilePath));
 

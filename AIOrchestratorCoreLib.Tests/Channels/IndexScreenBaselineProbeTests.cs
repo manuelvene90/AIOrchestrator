@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
+using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
@@ -178,6 +179,61 @@ public class IndexScreenBaselineProbeTests : IDisposable
     /// the guards the only thing establishing the invariants' precondition, which is a coupling worth
     /// removing rather than documenting.
     /// </summary>
+    /// <summary>
+    /// AN UNCHANGED ARCHIVE IS NOT READ AGAIN. The screen read every archive WHOLE on every tick; on
+    /// 2026-09-30 that was ~675 MB of text per tick and ticks of 60-97 s, with the app unresponsive.
+    /// Proven by planting a crossing the only way a re-read could see it: rewriting the archive in
+    /// place to the SAME length and putting its stamp back. A screen that re-reads reports it; one that
+    /// trusts the unchanged stamp — the rule `ChannelHistory_Cache` already lives by — does not.
+    /// </summary>
+    [Fact]
+    public async Task AnArchiveWhoseLengthAndStampAreUnchanged_IsNotReadAgain()
+    {
+        var (orchId, archiveFile) = Start_WithACleanArchive();
+
+        await Tick_Once_Async();
+        Assert_ATickActuallyRan();
+
+        var stamp = File.GetLastWriteTimeUtc(archiveFile);
+        File.WriteAllText(archiveFile, File.ReadAllText(archiveFile).Replace("## [2] FROM", "## [1] FROM"));
+        File.SetLastWriteTimeUtc(archiveFile, stamp);
+
+        await Tick_Once_Async();
+        await Tick_Once_Async();
+
+        Assert.DoesNotContain(Read_LogLines(orchId), line => line.Contains("archived second"));
+    }
+
+    /// <summary>The other side of the same rule: an archive that DID change is read, and screened.</summary>
+    [Fact]
+    public async Task AnArchiveThatGrew_IsScreenedAgain()
+    {
+        var (orchId, archiveFile) = Start_WithACleanArchive();
+
+        await Tick_Once_Async();
+
+        File.AppendAllText(archiveFile, "\n## [1] FROM supervisor — 2026-08-13 08:40 — planted in the archive\nbody\n");
+
+        await Tick_Once_Async();
+
+        Assert.Contains("planted in the archive", Wait_For_LogLine(orchId, "planted in the archive"));
+    }
+
+    (string OrchId, string ArchiveFile) Start_WithACleanArchive()
+    {
+        var (orchId, channelFile) = Start_WithACleanChannel();
+        var archiveFile = Channel_Compactor.Build_ArchiveFilePath(channelFile);
+
+        File.WriteAllText(
+            channelFile,
+            "## [3] FROM supervisor — 2026-08-13 09:10 — live\nbody\n");
+        File.WriteAllText(
+            archiveFile,
+            "## [1] FROM supervisor — 2026-08-13 08:50 — archived first\nbody\n\n## [2] FROM supervisor — 2026-08-13 08:55 — archived second\nbody\n");
+
+        return (orchId, archiveFile);
+    }
+
     void Assert_ATickActuallyRan()
     {
         Assert.True(
