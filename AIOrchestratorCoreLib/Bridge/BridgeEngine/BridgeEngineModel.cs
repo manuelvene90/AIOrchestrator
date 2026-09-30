@@ -4820,12 +4820,10 @@ internal sealed class BridgeEngineModel(
 
         Load_GeneralDashboardMessageId_Once();
 
-        // ONE snapshot for the text's glyph and the bar's verbs, read here at the point of effect.
+        // ONE snapshot for the bar's verbs, read here at the point of effect.
         var current = _configProvider.Get_Current();
 
-        var text = Telegram.GeneralDashboard_Composer.Compose(
-            Build_ProgressReportText(null),
-            current.TelegramStatusScreenshots);
+        var text = Telegram.GeneralDashboard_Composer.Compose(Build_ProgressReportText(null));
 
         // GENERAL'S COMMAND BAR RIDES ON THE DASHBOARD, for the reason the topic bar rides on
         // PULSE: this is the one message in General the app already keeps current and already
@@ -17077,28 +17075,30 @@ internal sealed class BridgeEngineModel(
     DateTime? _generalTopicNameRetryAfterUtc;
 
     /// <summary>
-    /// KEEPS THE GENERAL TOPIC CALLED "General", and nothing else — since 2026-09-10.
+    /// PUTS THE CAMERA ON THE GENERAL TOPIC'S NAME while status screenshots are on — "📸 General" —
+    /// and takes it off again: "General".
     ///
     /// <para>
-    /// It used to put the camera here while status screenshots were on (owner, 2026-08-24), because
-    /// the topic list is the one surface visible without opening anything. The owner moved it to the
-    /// DASHBOARD's header instead, and the reason is the one that moved the other five mode glyphs
-    /// off the orchestration names: a name change is an `editForumTopic` plus a service message in
-    /// the thread, so flipping a setting announced itself back to the owner who had just flipped it.
-    /// The dashboard is the message General already keeps current, and its header costs a silent edit.
+    /// THE CAMERA HAS LIVED HERE TWICE. First from 2026-08-24, because the topic list is the one
+    /// surface visible without opening anything. On 2026-09-10 the owner moved it to the dashboard's
+    /// header, since a name change is an `editForumTopic` plus a service message in the thread. On
+    /// 2026-09-30 they asked for it back: toggling /screens, they looked for it on the title and did
+    /// not find it (ai-orchestrator-32 entry [16]), and chose "Back on the title" over "Keep it in the
+    /// dashboard" (entry [20]). /screens is a rare toggle, so one service message per flip is the price
+    /// of seeing it on the list. It is in ONE place — the dashboard no longer draws it.
     /// </para>
     /// <para>
-    /// THE METHOD STAYS, and it is not dead: it is the MIGRATION. Every existing supergroup has its
-    /// General topic named "📸 General" right now, and this is the only code that can rename it back.
-    /// It also keeps doing the job it always did — re-asserting the name once per process, so a topic
-    /// renamed by hand or by an older build converges. WRITING A KNOWN NAME rather than decorating
-    /// what is there is still the design: Telegram offers no cheap read of General's name, and a
-    /// decorate-in-place that cannot read the previous value is how an emoji gets applied twice.
+    /// WRITING A KNOWN NAME rather than decorating what is there: Telegram offers no cheap read of
+    /// General's name, and a decorate-in-place that cannot read the previous value is how an emoji gets
+    /// applied twice. The cost is that a General topic renamed by hand is overwritten. Re-asserted once
+    /// per process, so a topic renamed by an older build converges.
     /// </para>
     /// </summary>
     async Task Sync_GeneralTopicName_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
     {
-        var desired = GENERAL_TOPIC_BASE_NAME;
+        var desired = _configProvider.Get_Current().TelegramStatusScreenshots
+            ? $"{Telegram.TelegramDeliveryMode_Glyphs.STATUS_SCREENSHOTS} {GENERAL_TOPIC_BASE_NAME}"
+            : GENERAL_TOPIC_BASE_NAME;
 
         if (_appliedGeneralTopicName == desired)
             return;

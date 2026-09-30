@@ -164,18 +164,13 @@ public static class TelegramDeliveryMode_Glyphs
     public const string AWAY = "✈";
 
     /// <summary>
-    /// STATUS SCREENSHOTS ARE ON — a delivery setting, so since 2026-09-10 it lives in the GENERAL
-    /// DASHBOARD's header rather than in the General topic's name, which is the same move the five
-    /// mode glyphs made off the orchestration topics' names.
+    /// STATUS SCREENSHOTS ARE ON — drawn on the GENERAL topic's name ("📸 General"). From 2026-09-10
+    /// it sat in the General dashboard's header instead; on 2026-09-30 the owner asked for it back on
+    /// the title ("Back on the title", ai-orchestrator-32 entry [20]), because the topic list is where
+    /// they look for it. The dashboard no longer draws it — one place only.
     ///
-    /// It was the one glyph point 2 missed: the rule said every mode glyph leaves the name, and this
-    /// is a mode glyph on General's name, written by a second composition site that the rule never
-    /// visited. The dashboard is General's PULSE — the one message the app already keeps current
-    /// there — so its header is where this belongs.
-    ///
-    /// IT MOVED HOUSE FROM `BridgeEngineModel`, where it was a private const, because it now has
-    /// three readers: the dashboard that draws it, the name sync that must no longer draw it, and
-    /// <see cref="Strip_Glyph"/>, which has to be able to take it off a name an older build wrote.
+    /// <see cref="Strip_Glyph"/> still knows it, so an orchestration topic that somehow carries it is
+    /// read back to its bare name.
     /// </summary>
     public const string STATUS_SCREENSHOTS = "📸";
 
