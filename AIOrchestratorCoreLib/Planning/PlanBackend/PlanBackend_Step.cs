@@ -307,7 +307,9 @@ public static class PlanBackend_Step
         if (stamp == null)
             return false;
 
-        state = state with { AppPlanWriteStampUtc = stamp };
+        // The hash of the bytes just written, beside the stamp: the stamp alone cannot tell this write
+        // from a session's inside the same Windows timestamp tick (PlanBackendState.AppPlanWriteHash).
+        state = state with { AppPlanWriteStampUtc = stamp, AppPlanWriteHash = PlanBackendState_Store.Hash_File_OrNull(planFile) };
         PlanBackendState_Store.Write(paths, orchId, state);
 
         return true;

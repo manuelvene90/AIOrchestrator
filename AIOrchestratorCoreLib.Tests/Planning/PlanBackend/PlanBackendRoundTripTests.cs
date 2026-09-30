@@ -350,6 +350,33 @@ public class PlanBackendRoundTripTests : IDisposable
     }
 
     /// <summary>
+    /// AND A SESSION WRITE INSIDE THE APP'S OWN TIMESTAMP TICK STILL PAYS IT. Windows moves a last-write
+    /// time only every ~15.6 ms, so a session writing PLAN.md 6 ms after an ingestion left the app's
+    /// stamp on the file and was read as the app's write — the debt stood although it was paid (Windows
+    /// CI, 2026-09-30, the test above). Forced here by pinning the session's write to the app's stamp:
+    /// the recorded hash is what tells the two writes apart.
+    /// </summary>
+    [Fact]
+    public void ASessionWriteCarryingTheAppsStamp_StillPaysTheLedgerDebt()
+    {
+        var planFile = _paths.Get_PlanFile(ORCH_ID);
+        File.SetLastWriteTimeUtc(planFile, DateTime.UtcNow.AddMinutes(-20));
+
+        var verdictUtc = DateTime.UtcNow.AddMinutes(-10);
+
+        Sync();
+
+        var appStamp = File.GetLastWriteTimeUtc(planFile);
+
+        Assert.True(AIOrchestratorCoreLib.Planning.LedgerHealth_Tracker.Is_LedgerBehind(_paths, ORCH_ID, verdictUtc));
+
+        File.WriteAllText(planFile, Plan() + "\n- [ ] something the supervisor wrote\n");
+        File.SetLastWriteTimeUtc(planFile, appStamp);
+
+        Assert.False(AIOrchestratorCoreLib.Planning.LedgerHealth_Tracker.Is_LedgerBehind(_paths, ORCH_ID, verdictUtc));
+    }
+
+    /// <summary>
     /// A PLAN THAT MOVED BETWEEN THE READ AND THE WRITE IS LEFT ALONE. The session that owns PLAN.md
     /// edits it continuously and the app rewrites it whole: without this, a supervisor's save landing in
     /// that window is silently discarded — its `[x]` marks lost and the bar going backwards.
