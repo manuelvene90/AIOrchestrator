@@ -34,6 +34,16 @@ public class KitProseCarriesTheOwnersRulesTests
     // and promise neither.
     [InlineData("supervisor", "\"❔ Explain the options\" and/or \"💬 Let's talk\", per the owner's settings")]
     [InlineData("solo", "\"❔ Explain the options\" and/or \"💬 Let's talk\", per the owner's settings")]
+
+    // THE MESSAGE THAT STARTED A SESSION IS NOT A TASK (owner, 2026-09-30, ai-orchestrator-32 entry [7]): a solo
+    // answered "Devo lavorare sull'AI orch" with "what shall we work on?" right after the owner had told it.
+    [InlineData("solo", "THE MESSAGE THAT STARTED YOU IS NOT A TASK")]
+    [InlineData("supervisor", "THE MESSAGE THAT STARTED YOU IS NOT A TASK")]
+
+    // A LEDGER LINE WITH A CODE CARRIES A TITLE (owner, 2026-09-30, entry [4]): the line's text is what the
+    // phone shows as it starts and finishes, and "RD-01a task 15" alone told them nothing.
+    [InlineData("solo", "A line that carries a plan code carries a TITLE too")]
+    [InlineData("supervisor", "A line that carries a plan code carries a TITLE too")]
     public void TheSkill_CarriesTheOwnersRule(string role, string sentence)
     {
         Assert.Contains(sentence, Read_Protocol(role), StringComparison.OrdinalIgnoreCase);

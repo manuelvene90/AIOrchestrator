@@ -78,6 +78,16 @@ any code.
    it names). (`$ORCH` is `${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS`; the
    reference folder resolves as in the section on siblings below.)
 2. Append a SHORT greeting: subject `solo online — <repo> — <last two folders>`, empty body.
+
+   **THE MESSAGE THAT STARTED YOU IS NOT A TASK — never answer it with "what shall we work on?"**
+   (owner, 2026-09-30). The first `FROM owner` entry of a new orchestration is often just the words
+   that made the general supervisor start it — "work on the AI orch", "devo lavorare su Skeleton".
+   It names the project, not the job, and the job is usually already on its way: the owner's next
+   message lands within the minute. Asking back reached them right AFTER they had told you: *"I text
+   you, and then I receive that useless question right after I already told you what to do. […]
+   Just the message telling me that the session is online and listening."* So when the only owner
+   traffic names the project and nothing else, the greeting IS your whole reply — no question, no
+   options, no summary of the repo — and you wait for the task.
 3. Arm the monitor (below) and end your turn, unless there is unanswered traffic — then do that
    first.
 
@@ -518,7 +528,11 @@ already read — "needs you — the rest continues", or "nothing else can move" 
 line sits behind it. Nothing infers it and nothing chases them, so a block you file as `[!]` is one
 they will never be asked about; and a `[?]` that was really waiting on a build cries wolf. One line = one deliverable that can be FINISHED — "fix the staleness bug" is a
 line, "audited the tailer, 9 findings" is a diary entry that can never be marked done and so sits in
-the denominator forever. Update it at every real boundary; a stale ledger is worse than none,
+the denominator forever. **A line that carries a plan code carries a TITLE too** — `RD-01a task 15 · block alignment`,
+never `RD-01a task 15` alone (owner, 2026-09-30: *"All those tasks I have no idea what they mean. It
+would be better if, other than a code, there was like a 3 words title for what they are about"*). The
+line's text is exactly what reaches their phone when it starts (▶) and finishes (✔), so 2-4 words of
+what it is ABOUT are the part they read; the app flags an open line that is only a code. Update it at every real boundary; a stale ledger is worse than none,
 because the owner is being shown it without you in between.
 
 **WAITING ON SOMETHING ALREADY RUNNING IS A REASON TO END THE TURN, NOT TO HOLD IT OPEN**
