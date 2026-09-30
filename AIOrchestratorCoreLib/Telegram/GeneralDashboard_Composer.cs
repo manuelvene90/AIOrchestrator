@@ -24,27 +24,15 @@ public static class GeneralDashboard_Composer
     /// changed, so a timestamp would make every single tick a change: an edit every two seconds
     /// against a rate limit already on the ledger, saying nothing new. The owner reads freshness from
     /// the content, which is what actually moves.
+    ///
+    /// <para>
+    /// NO 📸 HERE. From 2026-09-10 the header carried the status-screenshots camera; on 2026-09-30 the
+    /// owner put it back on the General topic's NAME ("Back on the title", ai-orchestrator-32 entry
+    /// [20]) and it lives in one place only — see Sync_GeneralTopicName_BestEffort_Async.
+    /// </para>
     /// </summary>
     public static string Compose(string progressReportText)
     {
-        return Compose(progressReportText, statusScreenshotsOn: false);
-    }
-
-    /// <summary>
-    /// THE DASHBOARD IS GENERAL'S PULSE, so it carries General's mode glyph — 📸 while status
-    /// screenshots are on (owner, 2026-09-10). It used to decorate the General TOPIC'S NAME, which
-    /// meant a rename and a service message every time the owner flipped the setting they had just
-    /// flipped themselves; here it is one silent edit of a message that is being edited anyway.
-    ///
-    /// AHEAD OF THE HEADING, not after it, for the reason the topic names give ❓ the front: a glyph
-    /// the reader is meant to notice goes where their eye lands first. The heading itself is
-    /// unchanged, so <see cref="HEADING"/> still identifies this message by substring — which is
-    /// what the probes and the decider's memo rely on.
-    /// </summary>
-    public static string Compose(string progressReportText, bool statusScreenshotsOn)
-    {
-        var glyph = statusScreenshotsOn ? $"{TelegramDeliveryMode_Glyphs.STATUS_SCREENSHOTS} " : "";
-
-        return $"{glyph}{HEADING}\n{progressReportText}";
+        return $"{HEADING}\n{progressReportText}";
     }
 }

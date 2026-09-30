@@ -81,6 +81,54 @@ public class StatusScreenshotsCommandTests : IDisposable
     }
 
     /// <summary>
+    /// THE CAMERA IS ON GENERAL'S NAME WHILE SCREENSHOTS ARE ON (owner, 2026-09-30, ai-orchestrator-32
+    /// entries [16] and [20]: "Back on the title"). They toggled /screens, looked for 📸 on the topic
+    /// list and did not find it — the 2026-09-10 build had moved it to the dashboard header. Both
+    /// directions, through the real engine: on puts "📸 General", off puts "General" back, and the name
+    /// the engine pushes LAST is the one the topic list shows.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task Screens_PutsTheCameraOnGeneralsName_AndTakesItOffAgain()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var loop = _engine.Run_Async(cancellation.Token);
+
+        try
+        {
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.UpdateCalls >= 1, 15_000),
+                $"the inbound loop never polled.{Environment.NewLine}{_log.Dump()}");
+
+            _telegram.Queue_Updates("{\"ok\":true,\"result\":[" + Message_Json("/screens", 9201, 401) + "]}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.GeneralTopicNames.LastOrDefault() == "📸 General", 20_000),
+                $"turning screenshots on never put the camera on General's name: [{string.Join(" | ", _telegram.GeneralTopicNames)}]{Environment.NewLine}{_log.Dump()}");
+
+            _telegram.Queue_Updates("{\"ok\":true,\"result\":[" + Message_Json("/screens", 9202, 402) + "]}");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("Status screenshots OFF") == 1
+                    && _telegram.GeneralTopicNames.LastOrDefault() == "General", 20_000),
+                $"turning screenshots off never took the camera off General's name: [{string.Join(" | ", _telegram.GeneralTopicNames)}]{Environment.NewLine}{_log.Dump()}");
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+
+            try
+            {
+                await loop;
+            }
+            catch (OperationCanceledException)
+            {
+                // The loop ends by cancellation; that is the expected way out.
+            }
+        }
+    }
+
+    /// <summary>
     /// HELD: the owner is told the toggle was not saved, one warning names why, nothing throws out of the update,
     /// and config.json is byte for byte. RELEASED: the same command turns screenshots on and keeps the owner's
     /// hand-edited key.

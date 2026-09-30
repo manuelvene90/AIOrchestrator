@@ -907,7 +907,26 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
     }
 
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken) => Task.CompletedTask;
+    readonly List<string> _generalTopicNames = [];
+
+    /// <summary>Every name the engine pushed onto the General topic, in order.</summary>
+    public IReadOnlyList<string> GeneralTopicNames
+    {
+        get
+        {
+            lock (_lock)
+                return [.. _generalTopicNames];
+        }
+    }
+
+    public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            _generalTopicNames.Add(newName);
+
+        return Task.CompletedTask;
+    }
+
     public Task Close_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
