@@ -54,8 +54,16 @@ internal sealed class OrchestratorConfigProviderModel(ISupervisionPaths paths, I
             if (stampsMatch && !Is_Racy(configStamp, secretsStamp))
                 return _cached!;
 
-            var configText = Read_Text_OrNull(_paths.ConfigFile);
-            var secretsText = Read_Text_OrNull(_paths.SecretsFile);
+            var (configReadable, configText) = Try_Read_Text(_paths.ConfigFile);
+            var (secretsReadable, secretsText) = Try_Read_Text(_paths.SecretsFile);
+
+            // AN UNREADABLE FILE IS UNKNOWN, NEVER A CHANGE. With the stamps unchanged, the cached config
+            // is the last good reading and it stands: reloading here would hand the loader a file held
+            // open without sharing, which it reads as EMPTY — and the engine would lose its Telegram
+            // chat id for as long as the file was held. Caught the day this rule was written
+            // (StatusScreenshotsCommandTests.Screens_WithConfigJsonHeld_…, red twice in a row).
+            if (stampsMatch && (!configReadable || !secretsReadable))
+                return _cached!;
 
             if (stampsMatch && configText == _cachedConfigText && secretsText == _cachedSecretsText)
                 return _cached!;
@@ -79,26 +87,31 @@ internal sealed class OrchestratorConfigProviderModel(ISupervisionPaths paths, I
     }
 
     /// <summary>
-    /// The file's text for the racy comparison, or null when it is absent or cannot be read. A null that
-    /// differs from the remembered text simply reloads, and the loader has its own answer for a file it
-    /// cannot read — this read never decides what the config IS, only whether to ask again.
+    /// The file's text for the racy comparison: (true, null) when the file is absent, (false, null) when
+    /// it exists and cannot be read right now. ONE attempt, no retry loop — this runs on every tick's
+    /// config read for two seconds after a write, and a retry budget spent here is a slow tick; an
+    /// unreadable file simply keeps the cache (see Get_Current). This read never decides what the config
+    /// IS, only whether to ask the loader again.
     /// </summary>
-    static string? Read_Text_OrNull(string filePath)
+    static (bool Readable, string? Text) Try_Read_Text(string filePath)
     {
         if (!File.Exists(filePath))
-            return null;
+            return (true, null);
 
         try
         {
-            return Storage.Tolerant_FileReader.Read_AllText(filePath);
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+
+            return (true, reader.ReadToEnd());
         }
         catch (IOException)
         {
-            return null;
+            return (false, null);
         }
         catch (UnauthorizedAccessException)
         {
-            return null;
+            return (false, null);
         }
     }
 
