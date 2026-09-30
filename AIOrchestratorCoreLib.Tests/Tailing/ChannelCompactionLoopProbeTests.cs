@@ -7,6 +7,7 @@ using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Tailing;
 using AIOrchestratorCoreLib.Tests.Launching;
 using System.Text;
 using Xunit;
@@ -144,6 +145,47 @@ public class ChannelCompactionLoopProbeTests : IDisposable
             "the reviewer's channel was still not compacted, so discovery is not reaching it — F5 is back.");
 
         Assert.True(Count_Entries(reviewerChannel) < ENTRIES_ABOVE_THRESHOLD);
+    }
+
+    /// <summary>
+    /// A refused rewrite is SAID, and said once, not every tick. It used to be said nowhere: the
+    /// compactor swallowed it, and on 2026-09-30 it had been repeating every 2 seconds for days
+    /// (a 427 MB archive) without one line in any log. Throttled because the tick is what repeats —
+    /// while something holds the live file open, every pass fails the same way.
+    /// </summary>
+    [RequiresFileShareEnforcementFact]
+    public async Task ARefusedRewrite_IsLogged_OnceAcrossRepeatedTicks()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        var channelFile = _paths.Get_ImplementerChannelFile(session.OrchId, Find_MemberId(session, MemberKinds.Implementer));
+
+        Write_Entries(channelFile, ENTRIES_ABOVE_THRESHOLD);
+
+        using (var liveFileHolder = new FileStream(channelFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            for (var tick = 0; tick < 3; tick++)
+                await Tick_Once_Async();
+
+            Assert.True(
+                Wait_Until(() => Count_LogLines(session.OrchId, Channel_CompactionStep.REWRITE_REFUSED_PHRASE) > 0),
+                "a refused compaction rewrite was not recorded in the orchestration log");
+        }
+
+        Assert.Equal(1, Count_LogLines(session.OrchId, Channel_CompactionStep.REWRITE_REFUSED_PHRASE));
+        Assert.False(File.Exists(Channel_Compactor.Build_ArchiveFilePath(channelFile)), "a refused pass must leave no archive behind");
+    }
+
+    int Count_LogLines(string orchId, string fragment)
+    {
+        var logFile = _paths.Get_OrchestrationLogFile(orchId);
+
+        if (!File.Exists(logFile))
+            return 0;
+
+        using var stream = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+
+        return reader.ReadToEnd().Split('\n').Count(line => line.Contains(fragment));
     }
 
     /// <summary>

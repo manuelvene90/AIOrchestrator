@@ -318,6 +318,15 @@ internal sealed class BridgeEngineModel(
     /// <summary>Say a crossing once, and absorb the ones already there when the file was first read.</summary>
     readonly HashSet<string> _screenedIndexCrossings = [];
 
+    /// <summary>
+    /// Per channel: when a refused compaction rewrite was last logged, and how many refusals have
+    /// happened since. The refusal repeats on every tick while its cause lasts, so it is said on the
+    /// first one and then at most once per <see cref="COMPACTION_REFUSAL_LOG_INTERVAL"/>.
+    /// </summary>
+    readonly Dictionary<string, (DateTime LoggedUtc, int SinceLogged)> _compactionRefusals = [];
+
+    static readonly TimeSpan COMPACTION_REFUSAL_LOG_INTERVAL = TimeSpan.FromMinutes(30);
+
     readonly Lock _buttonLock = new();
 
     /// <summary>
@@ -3114,13 +3123,43 @@ internal sealed class BridgeEngineModel(
             // sound and it is the only one: the sentence that used to sit here — "this engine cannot
             // be constructed from a test" — was FALSE. BridgeEngine_Factory.Create is public, and
             // ChannelCompactionLoopProbeTests drives this very loop through it.
-            var newLength = Channel_CompactionStep.Compact_IfAllowed(_tailer, channel.FilePath, _log, channel.OrchId);
+            var newLength = Channel_CompactionStep.Compact_IfAllowed(_tailer, channel.FilePath, _log, channel.OrchId, out var rewriteFailure);
+
+            if (rewriteFailure != null)
+                Report_CompactionRefusal(channel.OrchId, channel.FilePath, rewriteFailure);
 
             if (newLength == null)
                 continue;
 
+            _compactionRefusals.Remove(channel.FilePath);
             _log.Log_Info(channel.OrchId, $"Channel compacted — older entries archived beside it ({Path.GetFileName(channel.FilePath)})");
         }
+    }
+
+    /// <summary>
+    /// Harmless now — the compactor undoes its archive append when the rewrite is refused — but not
+    /// silent: a channel that never compacts keeps growing and costs every reader of it, and a
+    /// refusal that lasts is something holding the live file open, which is worth knowing about.
+    /// </summary>
+    void Report_CompactionRefusal(string orchId, string channelFilePath, string rewriteFailure)
+    {
+        var nowUtc = _clock.UtcNow;
+        var known = _compactionRefusals.TryGetValue(channelFilePath, out var previous);
+
+        if (known && nowUtc - previous.LoggedUtc < COMPACTION_REFUSAL_LOG_INTERVAL)
+        {
+            _compactionRefusals[channelFilePath] = (previous.LoggedUtc, previous.SinceLogged + 1);
+            return;
+        }
+
+        var repeats = known ? $" ({previous.SinceLogged} more refusal(s) since the last line)" : string.Empty;
+
+        _log.Log_Warning(
+            orchId,
+            $"{Channel_CompactionStep.REWRITE_REFUSED_PHRASE} '{Channel_CompactionStep.Describe_Channel(channelFilePath)}' — {rewriteFailure}. "
+            + $"Its archive append was undone, so nothing is duplicated; it retries every tick and this line repeats at most every {COMPACTION_REFUSAL_LOG_INTERVAL.TotalMinutes:F0} min{repeats}");
+
+        _compactionRefusals[channelFilePath] = (nowUtc, 0);
     }
 
     /// <summary>

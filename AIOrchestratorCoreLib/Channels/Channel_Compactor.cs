@@ -74,6 +74,20 @@ public static class Channel_Compactor
     /// </summary>
     public static long? Compact_IfNeeded(string channelFilePath, Func<bool> mayRewrite)
     {
+        return Compact_IfNeeded(channelFilePath, mayRewrite, out _);
+    }
+
+    /// <summary>
+    /// <paramref name="failure"/> is non-null only when a compaction was ATTEMPTED and threw — the
+    /// usual one being Windows refusing the rename-over because something holds the live file open.
+    /// Every benign "not this pass" (short channel, gate busy, guard said no) leaves it null. It exists
+    /// because this failure used to vanish into the catch below, and it repeated on every tick for
+    /// days without a single line anywhere saying so.
+    /// </summary>
+    public static long? Compact_IfNeeded(string channelFilePath, Func<bool> mayRewrite, out string? failure)
+    {
+        failure = null;
+
         try
         {
             var file = new FileInfo(channelFilePath);
@@ -110,13 +124,16 @@ public static class Channel_Compactor
             // already means "nothing happened, the offset is unchanged". It retries next tick.
             return acquired ? newLength : null;
         }
-        catch
+        catch (Exception e)
         {
             // Broad by design: a channel being written right now, a locked file, a full disk — all
             // mean the same thing here, "not this pass". Safe to swallow only because of the order
             // inside: the archive is verified before the live file is touched, and the live rewrite
             // is a rename, so it either happened completely or not at all. The live file therefore
             // still holds every entry, and returning null tells the caller its offset is unchanged.
+            // Swallowed for the CHANNEL, never for the caller: the reason goes back out.
+            failure = $"{e.GetType().Name}: {e.Message}";
+
             return null;
         }
     }
@@ -146,25 +163,72 @@ public static class Channel_Compactor
         var keptEntries = entries.Skip(archivedCount).ToList();
 
         var archiveFile = Build_ArchiveFilePath(channelFilePath);
+        var archiveLengthBefore = File.Exists(archiveFile) ? new FileInfo(archiveFile).Length : (long?)null;
 
         // Order is the whole point: the entries about to leave the live file must be PROVEN to
         // exist elsewhere before the live file is rewritten. A half-written archive plus a
         // rewritten live file is permanent data loss; channel files are the audit trail and the
         // agents' memory, and nothing regenerates them.
         if (!Try_Append_ToArchive_Verified(archiveFile, $"{Build_Block(archivedEntries)}\n"))
+        {
+            Undo_ArchiveAppend_IfLiveUnchanged(channelFilePath, text, archiveFile, archiveLengthBefore);
             return null;
+        }
 
         var header =
             $"> Entries 1–{archivedEntries[^1].Index} are archived in '{Path.GetFileName(archiveFile)}' "
             + $"(read it only if you need older context). This file keeps the most recent {keptEntries.Count}.\n\n";
 
         // Rename-over, never truncate-then-write: the live file is either the old one or the
-        // new one. If this throws, the archive already holds a copy of the entries that are
-        // still in the live file, and the next pass appends that same block again — a duplicate
-        // block in the append-only history a human reads is survivable; a lost entry is not.
-        Atomic_FileWriter.Write_AllText(channelFilePath, $"{header}{Build_Block(keptEntries)}\n");
+        // new one. If this throws, the live file still holds every entry just appended to the
+        // archive, so the append is UNDONE before the exception goes on — otherwise the next pass
+        // appends the same block again, and so does every pass after it. That was once accepted
+        // here as "a duplicate block is survivable"; it is not when the pass runs every 2 seconds
+        // and Windows refuses the rename whenever anything holds the live file open (2026-09-30:
+        // a 427 MB archive of 844 distinct entries, and an app frozen reading it).
+        try
+        {
+            Atomic_FileWriter.Write_AllText(channelFilePath, $"{header}{Build_Block(keptEntries)}\n");
+        }
+        catch
+        {
+            Undo_ArchiveAppend_IfLiveUnchanged(channelFilePath, text, archiveFile, archiveLengthBefore);
+            throw;
+        }
 
         return new FileInfo(channelFilePath).Length;
+    }
+
+    /// <summary>
+    /// Puts the archive back to the length it had before this pass — or removes it, if this pass
+    /// created it — but ONLY when the live file provably still holds what was read under the gate,
+    /// which is the proof that no entry exists solely in the part being cut. If the live file cannot
+    /// be read, or reads differently, the append stays: a duplicate is still survivable, a lost entry
+    /// is not. Best-effort by the same rule — a failed undo leaves the duplicate this pass would have
+    /// left anyway, and the caller's exception is the one that matters.
+    /// </summary>
+    static void Undo_ArchiveAppend_IfLiveUnchanged(string channelFilePath, string textReadUnderTheGate, string archiveFilePath, long? archiveLengthBefore)
+    {
+        try
+        {
+            if (Read_Text_Safe(channelFilePath) != textReadUnderTheGate)
+                return;
+
+            if (archiveLengthBefore == null)
+            {
+                File.Delete(archiveFilePath);
+                return;
+            }
+
+            using var archive = new FileStream(archiveFilePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+
+            if (archive.Length > archiveLengthBefore.Value)
+                archive.SetLength(archiveLengthBefore.Value);
+        }
+        catch
+        {
+            // See the summary: leaving the duplicate is the safe side of this failure.
+        }
     }
 
     /// <summary>
