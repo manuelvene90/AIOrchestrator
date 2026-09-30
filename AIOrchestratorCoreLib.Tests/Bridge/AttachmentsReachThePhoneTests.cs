@@ -199,7 +199,7 @@ public class AttachmentsReachThePhoneTests : IDisposable
 
     string Channel_Text(string orchId)
     {
-        return File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));
+        return TestFile_Reader.Read_AllText(_paths.Get_OwnerChannelFile(orchId));
     }
 
     IBridgeEngine Build_Engine()
