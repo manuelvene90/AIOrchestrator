@@ -327,6 +327,16 @@ internal sealed class BridgeEngineModel(
 
     static readonly TimeSpan COMPACTION_REFUSAL_LOG_INTERVAL = TimeSpan.FromMinutes(30);
 
+    /// <summary>
+    /// Per archive file: the header lines the index screen last read from it, keyed by the length and
+    /// stamp it had then — the same invalidation rule as <see cref="ChannelHistory_Cache"/>, never a
+    /// clock. The screen used to read every archive WHOLE on every tick; on 2026-09-30 that was ~675 MB
+    /// of text per tick, ticks of 60-97 s, and an app that stopped responding. An archive changes only
+    /// when a compaction appends to it, so the live file — small by construction — is the only one
+    /// read on an ordinary tick.
+    /// </summary>
+    readonly Dictionary<string, (long Length, DateTime LastWriteUtc, IReadOnlyList<ChannelHeaderLine> Headers)> _archiveHeaders = [];
+
     readonly Lock _buttonLock = new();
 
     /// <summary>
@@ -3948,10 +3958,15 @@ internal sealed class BridgeEngineModel(
             // reaches the file first, and it is taken before this read.
             Baseline_IfUnseen(channel);
 
-            var crossings = ChannelIndexSequence_Screen.Find_Crossings(
-                ChannelIndexSequence_Screen.Read_Headers(
-                    UsageTotals_Reader.Read_Text_Safe(Channel_Compactor.Build_ArchiveFilePath(channel.FilePath)),
-                    UsageTotals_Reader.Read_Text_Safe(channel.FilePath)));
+            // Archive first, then live — exactly the order Read_Headers(archive, live) produces, since
+            // it numbers each source's lines on their own.
+            List<ChannelHeaderLine> headers =
+            [
+                .. Read_ArchiveHeaders_Cached(Channel_Compactor.Build_ArchiveFilePath(channel.FilePath)),
+                .. ChannelIndexSequence_Screen.Read_Headers(string.Empty, UsageTotals_Reader.Read_Text_Safe(channel.FilePath)),
+            ];
+
+            var crossings = ChannelIndexSequence_Screen.Find_Crossings(headers);
 
             if (crossings.Count == 0)
                 continue;
@@ -3964,6 +3979,33 @@ internal sealed class BridgeEngineModel(
                     _log.Log_Warning(channel.OrchId, $"{Path.GetFileName(channel.FilePath)}: {ChannelIndexSequence_Screen.Describe_Crossing(crossing)}");
             }
         }
+    }
+
+    /// <summary>
+    /// The archive's header lines, read from disk only when its length or stamp moved since the last
+    /// read (see <see cref="_archiveHeaders"/>). A missing archive is not cached: it has no stamp to
+    /// invalidate against, and "no headers" costs one stat to find out again.
+    /// </summary>
+    IReadOnlyList<ChannelHeaderLine> Read_ArchiveHeaders_Cached(string archiveFilePath)
+    {
+        var archive = new FileInfo(archiveFilePath);
+
+        if (!archive.Exists)
+        {
+            _archiveHeaders.Remove(archiveFilePath);
+            return [];
+        }
+
+        if (_archiveHeaders.TryGetValue(archiveFilePath, out var cached)
+            && cached.Length == archive.Length
+            && cached.LastWriteUtc == archive.LastWriteTimeUtc)
+            return cached.Headers;
+
+        var headers = ChannelIndexSequence_Screen.Read_Headers(UsageTotals_Reader.Read_Text_Safe(archiveFilePath), string.Empty);
+
+        _archiveHeaders[archiveFilePath] = (archive.Length, archive.LastWriteTimeUtc, headers);
+
+        return headers;
     }
 
     /// <summary>
