@@ -301,9 +301,21 @@ public class SiblingConfirmationTests
     {
         using var harness = new SiblingEngine_Harness();
 
-        // Starts the loop. The requester below gets no topic until the test gives it one, so the ask
-        // sweep cannot reach its request while the world is being changed underneath it.
+        // Starts the loop — unmuted, because Start_Solo_Async waits for the tailer to see its channel and
+        // the tailer's poll sits below the DND gate.
         await harness.Start_Solo_Async("AI-Orch · loop starter");
+
+        // THE WORLD IS ARRANGED UNDER A MUTE (2026-09-30, CI red on ubuntu in 6/6 recent runs). This test
+        // used to rely on the requester having NO TOPIC until it was given 7999 below, so the ask sweep
+        // could not draw the prompt while the world changed underneath it. False since 2487499:
+        // Ensure_TopicsForNewOrchestrations_Async creates a topic for any open orchestration lacking one,
+        // every tick — the sweep logged its no-topic notice, the next tick drew the prompt, and with 20 ms
+        // engine ticks against this test's 100 ms polling the request was ASKED before the promotion
+        // below, so the not-a-solo refusal this test waits for never came. The mute holds both topic
+        // creation and the prompt sweep (both below the DND return in the mirror tick), while request
+        // processing — the parking waited on below — runs above it and still happens. The first sweep
+        // after the unmute finds the topic and the crew, and refuses.
+        harness.Engine.Set_TelegramMuted(true);
 
         var solo = harness.Launcher.Start_BasicOrchestration(SiblingEngine_Harness.REPO_NAME, harness.RepoPath).OrchId;
         harness.Store.Set_DisplayName(solo, PARENT_NAME);
@@ -317,6 +329,7 @@ public class SiblingConfirmationTests
 
         harness.Launcher.Promote_ToFullCrew(solo);
         harness.Store.Set_TelegramTopicId(solo, 7999);
+        harness.Engine.Set_TelegramMuted(false);
 
         Assert.True(
             await SiblingEngine_Harness.Wait_Until_Async(() => Has_Archived(harness, SiblingRefusals.NOT_A_SOLO), WAIT_MILLISECONDS),
@@ -368,8 +381,14 @@ public class SiblingConfirmationTests
     {
         using var harness = new SiblingEngine_Harness();
 
-        // As ARequesterPromotedToACrewWhileParked_…: no topic until the world is arranged.
+        // As ARequesterPromotedToACrewWhileParked_…: the world is arranged under a mute (2026-09-30, CI red
+        // on ubuntu in 6/6 recent runs). The old premise — "no topic until the world is arranged" — has
+        // been false since 2487499, when the tick began creating a topic for any open orchestration
+        // lacking one: the prompt was drawn before Set_Paused below, and the Assert.Null on the button
+        // failed. The mute holds topic creation and the prompt sweep; parking runs above the DND gate.
         await harness.Start_Solo_Async("AI-Orch · loop starter");
+
+        harness.Engine.Set_TelegramMuted(true);
 
         var solo = harness.Launcher.Start_BasicOrchestration(SiblingEngine_Harness.REPO_NAME, harness.RepoPath).OrchId;
         harness.Store.Set_DisplayName(solo, PARENT_NAME);
@@ -381,16 +400,15 @@ public class SiblingConfirmationTests
             await SiblingEngine_Harness.Wait_Until_Async(() => CloseConfirmation_Parking.Find_Parked(harness.Paths).Count == 1, WAIT_MILLISECONDS),
             $"the request was never parked.{Environment.NewLine}{harness.Log.Dump()}");
 
-        // The topic guard's one "cannot be put to the owner yet" notice lands before the pause, so the
-        // channel captured below is final unless something the pause should have stopped writes to it.
-        Assert.True(
-            await SiblingEngine_Harness.Wait_Until_Async(() => harness.Channel(solo).Contains("cannot be put to the owner yet", StringComparison.Ordinal), WAIT_MILLISECONDS),
-            $"the topic guard never spoke.{Environment.NewLine}{harness.Channel(solo)}");
-
+        // No wait for the topic guard's "cannot be put to the owner yet" notice any more: that notice is
+        // written by the prompt sweep, which the mute holds, and by the unmute the requester has its topic
+        // — so it never fires, and the channel captured below is final unless something the pause should
+        // have stopped writes to it.
         harness.Launcher.Promote_ToFullCrew(solo);
         harness.Store.Set_Paused(solo, true);
         var pausedChannel = harness.Channel(solo);
         harness.Store.Set_TelegramTopicId(solo, 7999);
+        harness.Engine.Set_TelegramMuted(false);
 
         await Task.Delay(BridgeTestTiming.Window_ForTicks(6));
 
