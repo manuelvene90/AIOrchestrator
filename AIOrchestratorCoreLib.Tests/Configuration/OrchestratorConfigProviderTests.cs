@@ -69,4 +69,39 @@ public class OrchestratorConfigProviderTests : IDisposable
         Assert.NotSame(first, second);
         Assert.Equal(2, second.Repos.Count);
     }
+
+    /// <summary>
+    /// TWO WRITES INSIDE ONE TIMESTAMP TICK. Windows moves a last-write time only every ~15.6 ms, so a
+    /// rewrite that lands in the same tick carries the same stamp — and a cache keyed on the stamp kept
+    /// the first version. On the Windows CI runner (2026-09-30) that served a stale
+    /// `highRiskConfirmation` to a whole engine probe. Forced here by pinning the second write's stamp
+    /// to the first's; the SAME LENGTH as well, so a size check alone could not pass it either.
+    /// </summary>
+    [Fact]
+    public void Get_Current_RewriteInsideTheSameStamp_IsStillPickedUp()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[{"name":"CRM","path":"C:\\somewhere"}]}""");
+        var stamp = File.GetLastWriteTimeUtc(_paths.ConfigFile);
+
+        Assert.Equal("CRM", _provider.Get_Current().Repos[0].Name);
+
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[{"name":"CRX","path":"C:\\somewhere"}]}""");
+        File.SetLastWriteTimeUtc(_paths.ConfigFile, stamp);
+
+        Assert.Equal("CRX", _provider.Get_Current().Repos[0].Name);
+    }
+
+    /// <summary>
+    /// AND A YOUNG FILE THAT DID NOT CHANGE KEEPS ITS INSTANCE. Inside the racy window the text is
+    /// compared, and equal text must not become a new instance — callers read a new instance as "the
+    /// config changed".
+    /// </summary>
+    [Fact]
+    public void Get_Current_YoungButUnchangedFile_KeepsTheSameInstance()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[{"name":"CRM","path":"C:\\somewhere"}]}""");
+        File.SetLastWriteTimeUtc(_paths.ConfigFile, DateTime.UtcNow);
+
+        Assert.Same(_provider.Get_Current(), _provider.Get_Current());
+    }
 }

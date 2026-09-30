@@ -489,7 +489,15 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     public async Task TheOwnerTypesResumeDispatch_ThePauseLifts_AndTheCutoffIsRecorded()
     {
         var resetsAtUtc = _clock.UtcNow.AddDays(4);
-        Write_UsageProbe("seven_day", 98, resetsAtUtc);
+        var oldAccountsProbe = Write_UsageProbe("seven_day", 98, resetsAtUtc);
+
+        // Pinned before the lift's instant, exactly as the button test above does. The test clock was
+        // frozen when the fixture was built and the cutoff is taken from it, while the probe's stamp is
+        // real wall-clock time and therefore LATER than that cutoff: the probe still counted, and the
+        // tick after the lift paused the dispatcher again. The assertion below only passed when its
+        // 100 ms poll fell inside that one-tick gap — about 1 run in 4 failed, locally and on master
+        // (2026-09-30).
+        File.SetLastWriteTimeUtc(oldAccountsProbe, _clock.UtcNow.AddMinutes(-10));
 
         Assert.True(
             await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc != null, 20_000),
@@ -503,6 +511,12 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
         Assert.True(
             await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc == null, 20_000),
             $"/resume_dispatch did not lift the pause.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        // AND IT STAYS LIFTED. Without this, a lift re-paused on the very next tick passed whenever the
+        // poll above happened to land between the two — the race this test used to lose by chance is
+        // now asserted directly.
+        await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(8));
+        Assert.Null(_engineState.Load_OrEmpty().DispatchPausedUntilUtc);
 
         Assert.NotNull(_engineState.Load_OrEmpty().LimitProbeCutoffUtc);
         Assert.True(_telegram.Has_Sent_Containing("Pause lifted by the owner"), _telegram.Dump_Sent());

@@ -52,7 +52,8 @@ public static class PlanBackendState_Store
             return new PlanBackendState(
                 requests,
                 Read_Utc_OrNull(root, "orchestrationClosedReportedUtc"),
-                Read_Utc_OrNull(root, "appPlanWriteStampUtc"));
+                Read_Utc_OrNull(root, "appPlanWriteStampUtc"),
+                Read_String_OrNull(root, "appPlanWriteHash"));
         }
         catch
         {
@@ -81,6 +82,7 @@ public static class PlanBackendState_Store
             ["requests"] = array,
             ["orchestrationClosedReportedUtc"] = Write_Utc_OrNull(state.OrchestrationClosedReportedUtc),
             ["appPlanWriteStampUtc"] = Write_Utc_OrNull(state.AppPlanWriteStampUtc),
+            ["appPlanWriteHash"] = state.AppPlanWriteHash,
         };
 
         Atomic_FileWriter.Write_AllText(paths.Get_PlanBackendStateFile(orchId), root.ToJsonString(JsonWriting.INDENTED));
@@ -92,12 +94,49 @@ public static class PlanBackendState_Store
     ///
     /// Read by <see cref="LedgerHealth_Tracker.Is_LedgerBehind"/>, which would otherwise take that write
     /// as the supervisor paying its ledger debt.
+    ///
+    /// <para>
+    /// THE STAMP IS NECESSARY, NOT SUFFICIENT: a session write inside the same ~15.6 ms Windows timestamp
+    /// tick carries the app's stamp too (see <see cref="PlanBackendState.AppPlanWriteHash"/>). When the
+    /// stamps agree the file's bytes decide. The file is read only on that path — a stamp that differs
+    /// answers without touching it.
+    /// </para>
     /// </summary>
     public static bool Wrote_ThePlan_Itself(ISupervisionPaths paths, string orchId, DateTime planWriteUtc)
     {
-        var stamp = Read(paths, orchId).AppPlanWriteStampUtc;
+        var state = Read(paths, orchId);
 
-        return stamp != null && stamp.Value == planWriteUtc;
+        if (state.AppPlanWriteStampUtc == null || state.AppPlanWriteStampUtc.Value != planWriteUtc)
+            return false;
+
+        if (state.AppPlanWriteHash == null)
+            return true;
+
+        return state.AppPlanWriteHash == Hash_File_OrNull(paths.Get_PlanFile(orchId));
+    }
+
+    /// <summary>
+    /// SHA-256 of a file's bytes, lower-case hex; null when it cannot be read — which never matches a
+    /// recorded hash, so an unreadable plan reads as "not the app's write" and the debt clears only
+    /// through the stamp comparison the caller already made. Read with FileShare.ReadWrite so a session
+    /// mid-write is not blocked by it.
+    /// </summary>
+    public static string? Hash_File_OrNull(string filePath)
+    {
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+            return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     static TrackedPlanRequest? Read_Request_OrNull(JsonObject? entry)

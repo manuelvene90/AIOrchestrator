@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using AIOrchestratorCoreLib.Storage;
 using Xunit;
 
@@ -74,7 +75,8 @@ public class TolerantFileReaderTests : IDisposable
     /// carries the same backoff, and this pins it.
     /// <para>
     /// The reader is released on another thread partway through that backoff, because that is the real
-    /// shape: a read of these files is microseconds, never a hold.
+    /// shape: a read of these files is microseconds, never a hold. WHEN it is released is the writer's
+    /// own first backoff, not a wall-clock delay — see <see cref="Run_ReleasingOnTheFirstBackoff{T}"/>.
     /// </para>
     /// </summary>
     [Fact]
@@ -82,15 +84,9 @@ public class TolerantFileReaderTests : IDisposable
     {
         var readerHandle = new FileStream(_file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
-        var release = Task.Run(async () =>
-        {
-            await Task.Delay(50);
-            readerHandle.Dispose();
-        });
-
-        Atomic_FileWriter.Write_AllText(_file, "{\"session_id\":\"def\"}");
-
-        release.Wait();
+        Run_ReleasingOnTheFirstBackoff(
+            operation: () => Atomic_FileWriter.Write_AllText(_file, "{\"session_id\":\"def\"}"),
+            release: readerHandle.Dispose);
 
         Assert.Equal("{\"session_id\":\"def\"}", Tolerant_FileReader.Read_AllText(_file));
     }
@@ -115,22 +111,17 @@ public class TolerantFileReaderTests : IDisposable
     /// <summary>
     /// A file that is unopenable only for a moment is READ, not defaulted. The exclusive hold below is
     /// released on another thread partway through the backoff, which is the writer's rename in
-    /// miniature.
+    /// miniature — on the reader's first backoff, not after a wall-clock delay (see
+    /// <see cref="Run_ReleasingOnTheFirstBackoff{T}"/>).
     /// </summary>
     [Fact]
     public void AFileLockedExclusivelyForAMoment_IsReadOnceTheLockGoes()
     {
         var exclusive = new FileStream(_file, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 
-        var release = Task.Run(async () =>
-        {
-            await Task.Delay(50);
-            exclusive.Dispose();
-        });
-
-        var contents = Tolerant_FileReader.Read_AllText(_file);
-
-        release.Wait();
+        var contents = Run_ReleasingOnTheFirstBackoff(
+            operation: () => Tolerant_FileReader.Read_AllText(_file),
+            release: exclusive.Dispose);
 
         Assert.Equal("{\"session_id\":\"abc\"}", contents);
     }
@@ -178,16 +169,17 @@ public class TolerantFileReaderTests : IDisposable
         var path = Path.Combine(_folder, "becomes-a-file.json");
         Directory.CreateDirectory(path);
 
-        var release = Task.Run(async () =>
-        {
-            await Task.Delay(50);
-            Directory.Delete(path);
-            File.WriteAllText(path, "{\"session_id\":\"ghi\"}");
-        });
-
-        var contents = Tolerant_FileReader.Read_AllText(path);
-
-        release.Wait();
+        // The swap is two calls, and between them the path does not exist — an attempt landing there
+        // would get FileNotFoundException, which is deliberately NOT retried. Releasing inside the
+        // reader's sleep is what keeps an attempt from landing there; a wall-clock release had no such
+        // guarantee.
+        var contents = Run_ReleasingOnTheFirstBackoff(
+            operation: () => Tolerant_FileReader.Read_AllText(path),
+            release: () =>
+            {
+                Directory.Delete(path);
+                File.WriteAllText(path, "{\"session_id\":\"ghi\"}");
+            });
 
         Assert.Equal("{\"session_id\":\"ghi\"}", contents);
     }
@@ -247,5 +239,115 @@ public class TolerantFileReaderTests : IDisposable
         using var writerHandle = new FileStream(_file, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
 
         Assert.Equal("{\"session_id\":\"abc\"}", Safe_FileReader.Read_AllText_OrEmpty(_file));
+    }
+
+    /// <summary>
+    /// RELEASES THE HOLD ON THE CALLER'S OWN BACKOFF, NOT ON A TIMER. Runs <paramref name="operation"/>
+    /// on this thread and <paramref name="release"/> on a dedicated one, the moment this thread is
+    /// observed asleep — which, inside <see cref="Tolerant_FileReader"/> and
+    /// <see cref="Atomic_FileWriter"/>, happens only in the <c>Thread.Sleep</c> between two attempts.
+    /// <para>
+    /// WHY, MEASURED (2026-09-30, the Windows CI leg — 2 cores, busy): the three "for a moment" cases
+    /// failed intermittently with the very IOException / UnauthorizedAccessException they exist to
+    /// rule out, after 205-237 ms — i.e. after the reader's whole ~200 ms budget
+    /// (<see cref="Tolerant_FileReader.ATTEMPTS"/> × <see cref="Tolerant_FileReader.BACKOFF_STEP_MILLISECONDS"/>).
+    /// They released the hold from <c>Task.Run(async () =&gt; { await Task.Delay(50); … })</c>: a
+    /// thread-pool work item whose continuation is a timer callback, also on the pool. On a starved
+    /// runner the pool injects threads at about one a second, so "50 ms" meant "whenever the pool got
+    /// round to it" and the hold outlived the budget — a red about the scheduler, not the reader. Plan
+    /// 03 Task 11's rule applies: fix the MECHANISM, never raise the budget, never loosen the assertion.
+    /// </para>
+    /// <para>
+    /// THE MECHANISM: the production retry loops expose no seam (no injectable sleep, clock or
+    /// on-retry hook — deliberately not added from a test file), but their backoff IS observable: a
+    /// thread in <c>Thread.Sleep</c> reports <see cref="System.Threading.ThreadState.WaitSleepJoin"/>.
+    /// So the release is ORDERED after the first failed attempt instead of timed against it, and the
+    /// releaser never touches the thread pool. It is armed only once this thread is past its own setup,
+    /// so a wait of ours cannot be mistaken for the caller's backoff; an early sighting would in any
+    /// case only release before the first attempt, which makes the case weaker, never red. Where the
+    /// hold is not enforced (Linux) the operation succeeds at once, this thread reaches the Join below
+    /// — also WaitSleepJoin — and the hold is released there, so the releaser always ends.
+    /// </para>
+    /// <para>
+    /// STATED HONESTLY, IT IS NOT FULLY DETERMINISTIC. What is left is a time dependence of a different
+    /// order: the releaser, already running and spinning at AboveNormal, would have to be preempted for
+    /// the whole remaining backoff (~180 ms) between seeing the sleep and finishing the release.
+    /// Closing that needs a production seam — an on-backoff callback, or an injectable sleep, on
+    /// <c>Tolerant_FileReader.Read_AllText</c> and <c>Atomic_FileWriter</c>'s rename loop — so the
+    /// release could run synchronously INSIDE the first backoff. That is a production change and
+    /// was not made here.
+    /// </para>
+    /// </summary>
+    static T Run_ReleasingOnTheFirstBackoff<T>(Func<T> operation, Action release)
+    {
+        var caller = Thread.CurrentThread;
+        using var armed = new ManualResetEventSlim();
+        Exception? releaseFailure = null;
+
+        var releaser = new Thread(() =>
+        {
+            try
+            {
+                armed.Wait();
+
+                var spin = new SpinWait();
+
+                while ((caller.ThreadState & System.Threading.ThreadState.WaitSleepJoin) == 0)
+                    spin.SpinOnce();
+
+                release();
+            }
+            catch (Exception e)
+            {
+                releaseFailure = e;
+            }
+        })
+        {
+            IsBackground = true,
+            Priority = ThreadPriority.AboveNormal,
+            Name = "tolerant-reader-test-releaser",
+        };
+
+        releaser.Start();
+
+        T result = default!;
+        Exception? operationFailure = null;
+
+        armed.Set();
+
+        try
+        {
+            result = operation();
+        }
+        catch (Exception e)
+        {
+            operationFailure = e;
+        }
+
+        // Always joined, success or failure: this is also the wait that releases the hold on a platform
+        // where the operation never had to back off.
+        releaser.Join();
+
+        // A failed release is reported as itself — it is the cause of whatever the operation then did,
+        // and reporting the operation's lock error instead would send the reader of the log after the
+        // wrong code.
+        if (releaseFailure is not null)
+            throw new InvalidOperationException("The test's own release of the hold failed; the operation's result says nothing.", releaseFailure);
+
+        if (operationFailure is not null)
+            ExceptionDispatchInfo.Throw(operationFailure);
+
+        return result;
+    }
+
+    static void Run_ReleasingOnTheFirstBackoff(Action operation, Action release)
+    {
+        Run_ReleasingOnTheFirstBackoff(
+            operation: () =>
+            {
+                operation();
+                return true;
+            },
+            release: release);
     }
 }

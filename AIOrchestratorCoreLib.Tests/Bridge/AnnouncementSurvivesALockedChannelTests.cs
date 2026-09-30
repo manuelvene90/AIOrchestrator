@@ -97,14 +97,14 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
             "the /dnd never reached a blocked announcement, so nothing below means anything."
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
 
-        Assert.DoesNotContain(ANNOUNCEMENT_MARKER, File.ReadAllText(ownerChannel));
+        Assert.DoesNotContain(ANNOUNCEMENT_MARKER, TestFile_Reader.Read_AllText(ownerChannel));
 
         // Now the only copy is whatever the engine kept. Before the queue this announcement was gone
         // for good: the mode had already flipped, so nothing would ever announce it again.
         Directory.Delete(lockDirectory, recursive: true);
 
         Assert.True(
-            await Run_Until_Async(() => File.ReadAllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
+            await Run_Until_Async(() => TestFile_Reader.Read_AllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
             "THE DEFECT: the announcement was lost to a locked channel. The mode had already flipped, so the "
             + "supervisor is never told the owner went away and keeps asking them questions — which is exactly "
             + "what away mode exists to stop."
@@ -151,7 +151,7 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
             _log.Has_Line_Containing("it is queued and the next tick retries"),
             $"nothing was ever queued, so the exit drain has nothing to prove.{Environment.NewLine}{_log.Dump()}");
 
-        Assert.DoesNotContain(ANNOUNCEMENT_MARKER, File.ReadAllText(ownerChannel));
+        Assert.DoesNotContain(ANNOUNCEMENT_MARKER, TestFile_Reader.Read_AllText(ownerChannel));
 
         // Free the channel and stop the engine in the same breath: the ONLY remaining chance to write
         // this announcement is the drain on the way out.
@@ -170,7 +170,7 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
 
         Assert.Contains(
             ANNOUNCEMENT_MARKER,
-            File.ReadAllText(ownerChannel));
+            TestFile_Reader.Read_AllText(ownerChannel));
     }
 
     /// <summary>
@@ -203,7 +203,7 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
         _telegram.Queue_OwnerMessage(Build_OwnerMessageJson("/dnd"));
 
         Assert.True(
-            await Run_Until_Async(() => File.ReadAllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
+            await Run_Until_Async(() => TestFile_Reader.Read_AllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
             $"the announcement never arrived, so there is nothing to count.{Environment.NewLine}{_log.Dump()}");
 
         // NOT "let more ticks run" — the harness has already cancelled the token and awaited the loop,
@@ -213,7 +213,7 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
         // drain, so removing it would look safely covered while silently making THIS case vacuous.
         await Task.Delay(500);
 
-        var occurrences = File.ReadAllText(ownerChannel).Split(ANNOUNCEMENT_MARKER).Length - 1;
+        var occurrences = TestFile_Reader.Read_AllText(ownerChannel).Split(ANNOUNCEMENT_MARKER).Length - 1;
 
         Assert.Equal(1, occurrences);
     }
@@ -254,7 +254,7 @@ public class AnnouncementSurvivesALockedChannelTests : IDisposable
 
         // ARRIVAL FIRST, so a run where nothing happened cannot pass the provenance assertion below.
         Assert.True(
-            await Run_Until_Async(() => File.ReadAllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
+            await Run_Until_Async(() => TestFile_Reader.Read_AllText(ownerChannel).Contains(ANNOUNCEMENT_MARKER), 40_000),
             $"the announcement never arrived, so there is no provenance to check.{Environment.NewLine}{_log.Dump()}");
 
         Assert.True(

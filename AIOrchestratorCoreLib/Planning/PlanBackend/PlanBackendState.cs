@@ -37,14 +37,26 @@ public sealed record TrackedPlanRequest(
 /// `supervisor.md` promises ("you cannot end a turn while it is unpaid").
 /// </para>
 /// </param>
+/// <param name="AppPlanWriteHash">
+/// The SHA-256 of the plan file's bytes as the app left them, beside <paramref name="AppPlanWriteStampUtc"/>.
+/// <para>
+/// THE STAMP ALONE CANNOT TELL TWO WRITES APART. Windows moves a last-write time only every ~15.6 ms,
+/// so a session writing PLAN.md within that tick of the app's ingestion leaves the app's own stamp on
+/// the file, and the session's write was read as the app's — its debt left standing. Caught on the
+/// Windows CI runner (2026-09-30, PlanBackendRoundTripTests.AnIngestionDoesNotClearTheLedgerDebtFlag,
+/// a session write 6 ms after the app's). The hash decides whenever the stamps agree; null (a state
+/// file written before it existed) falls back to the stamp alone, which is the old behaviour.
+/// </para>
+/// </param>
 public sealed record PlanBackendState(
     IReadOnlyList<TrackedPlanRequest> Requests,
     DateTime? OrchestrationClosedReportedUtc,
-    DateTime? AppPlanWriteStampUtc)
+    DateTime? AppPlanWriteStampUtc,
+    string? AppPlanWriteHash = null)
 {
     public static PlanBackendState Empty()
     {
-        return new PlanBackendState([], null, null);
+        return new PlanBackendState([], null, null, null);
     }
 
     public bool Knows(string requestId)
